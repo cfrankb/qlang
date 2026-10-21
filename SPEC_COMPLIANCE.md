@@ -88,7 +88,7 @@ All items previously listed as "Broken / missing vs spec" are now resolved:
 | §207 | `%` modulo | `unexpected character '%'` | Added `TokenType::Modulo`, precedence 10, `MOD` opcode in VM (`fmod` for float, `%` for int) |
 | §208 | `!` not | `unexpected character '!'` | Added `TokenType::Not`, included in `parseUnary`, `NOT` opcode in VM |
 | §38 | `str` reserved word | `unknown type after ':'` | Added `TokenType::StrType` alias + recognized in `parseDeclaration`/`parseConst` as `String` type |
-| §233–263 | `def` functions | assertion crash on call | Added `callDest` to Frame, fixed `RETURN` to write to caller's dest register; added `Def`/`Return` tokens, parser, compiler, VM dispatch |
+| §233–263 | `def` named global functions | assertion crash on call | Added `callDest` to Frame, fixed `RETURN` to write to caller's dest register; added `Def`/`Return` tokens, parser, compiler, VM dispatch |
 
 ## Harness
 - `examples/spec_check.cpp` — original cases (const, nil, float, concat, for, if,
@@ -97,3 +97,10 @@ All items previously listed as "Broken / missing vs spec" are now resolved:
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc`
 Re-run after each fix to confirm counts. Current result: **26 passed, 0 failed**.
+
+## Open Items (not yet verified vs spec)
+
+- [ ] `str(var)` / `int(var)` aliases (§236–237) — spec defines these alongside `toStr`/`toInt`; harness covers only `toStr`/`toInt`.
+- [ ] Brace-form loops (§174–187) — `for x = 1 to 32 { ... }` and `while (a > 0) { ... }` with braces are in spec but not explicitly tested; harness covers only `while ... end` / `for ... next` forms.
+- (!) `|||` operator — implemented and tested, but **not documented in SPEC.md** (spec only lists `||` at §213). Undocumented extension.
+- (!) Closure live-binding — captured variables store a reference in the closure activation record, but `seqGet` for captured vars may not re-read the outer register on each access. Reassignment in the outer scope may not propagate into the closure. Partially working; needs regression test.

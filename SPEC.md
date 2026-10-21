@@ -152,7 +152,7 @@ if (b in [5,7,4]) {
 if b in [1,3,5] {
 
 } else if b in [2,6,7] {
-   
+
 }
 
 ```
@@ -160,16 +160,7 @@ if b in [1,3,5] {
 loops
 =======================================
 
-while (a > 0)
- --a
-end
-
-
-for x = 1 to 32 
-next x
-
-for x =1 to a
-next x
+```
 
 for x =1 to 32 {
    if x == 4 {
@@ -196,6 +187,7 @@ for i in a {
 for i in [4,6,8,9] {
    printf("i=%d\n", i) # can look up an array
 }
+```
 
 
 |operators||
@@ -221,20 +213,19 @@ for i in [4,6,8,9] {
 |;  |silent separator (optional)
 
 
-helpers
-=========
-
-toStr(var)       # convert to string
-toInt(var)       # convert to int
-type(var)        # return a string representation of the type
-print(var)       # print a string
-println(var)     # print a string with carriage return
-printf(str, ...) # mirror C printf
-len(var)         # return string, table, blob or array length; other type return 1; error on undefined/nil.
-substr(str, start, lenght) # return a substring fron index start. lenght is optional
-delete var      # delete variable
-str(var)        # return string representation of variable
-int(var)        # return variable cast to int; string are parsed as decimal. other types return 0
+|helpers||
+|--------|-|
+|toStr(var)     |  convert to string|
+|toInt(var)     |  convert to int|
+|type(var)      |   return a string representation of the type|
+|print(var)       | print a string|
+|println(var)     | print a string with carriage return
+|printf(str, ...) | mirror C printf
+|len(var)         | return string, table, blob or array |length; other type return 1; error on undefined/nil.
+|substr(str, start, lenght) | return a substring fron index start. lenght is optional
+|delete var      | delete variable
+|str(var)        | return string representation of variable
+|int(var)        | return variable cast to int; string are parsed as decimal. other types return 0
 
 
 functions (native)

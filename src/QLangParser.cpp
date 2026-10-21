@@ -71,7 +71,8 @@ static int precedence(TokenType t) {
   case TokenType::Plus:
   case TokenType::Minus: return 9;
   case TokenType::Star:
-  case TokenType::Slash: return 10;
+  case TokenType::Slash:
+  case TokenType::Modulo: return 10;
   default: return -1;
   }
 }
@@ -234,14 +235,21 @@ StmtPtr QLangParser::parseDeclaration() {
   // Optional typed declaration: local b:byte = 32
   if (match(TokenType::Colon)) {
     TokenType tt = current().type;
-    if (tt >= TokenType::TypeByte && tt <= TokenType::TypeTable) {
-      stmt->declaredType = static_cast<QLangValue::Type>(
-          static_cast<int>(tt) - static_cast<int>(TokenType::TypeByte) +
-          static_cast<int>(QLangValue::Type::Byte));
+    bool isType =
+        (tt >= TokenType::TypeByte && tt <= TokenType::TypeTable) ||
+        tt == TokenType::StrType;
+    if (isType) {
+      QLangValue::Type vt =
+          (tt == TokenType::StrType)
+              ? QLangValue::Type::String
+              : static_cast<QLangValue::Type>(
+                    static_cast<int>(tt) - static_cast<int>(TokenType::TypeByte) +
+                    static_cast<int>(QLangValue::Type::Byte));
+      stmt->declaredType = vt;
       m_pos++;
     } else {
       throw QLangError(QLangErrorKind::Parse, current().line, current().col,
-                       "unknown type after ':'");
+                        "unknown type after ':'");
     }
   }
 
@@ -267,14 +275,21 @@ StmtPtr QLangParser::parseConst() {
 
   if (match(TokenType::Colon)) {
     TokenType tt = current().type;
-    if (tt >= TokenType::TypeByte && tt <= TokenType::TypeTable) {
-      stmt->declaredType = static_cast<QLangValue::Type>(
-          static_cast<int>(tt) - static_cast<int>(TokenType::TypeByte) +
-          static_cast<int>(QLangValue::Type::Byte));
+    bool isType =
+        (tt >= TokenType::TypeByte && tt <= TokenType::TypeTable) ||
+        tt == TokenType::StrType;
+    if (isType) {
+      QLangValue::Type vt =
+          (tt == TokenType::StrType)
+              ? QLangValue::Type::String
+              : static_cast<QLangValue::Type>(
+                    static_cast<int>(tt) - static_cast<int>(TokenType::TypeByte) +
+                    static_cast<int>(QLangValue::Type::Byte));
+      stmt->declaredType = vt;
       m_pos++;
     } else {
       throw QLangError(QLangErrorKind::Parse, current().line, current().col,
-                       "unknown type after ':'");
+                        "unknown type after ':'");
     }
   }
 
@@ -526,7 +541,7 @@ ExprPtr QLangParser::parseBinary(int minPrec) {
 
 ExprPtr QLangParser::parseUnary() {
   if (check(TokenType::Decrement) || check(TokenType::Increment) ||
-      check(TokenType::Minus)) {
+      check(TokenType::Minus) || check(TokenType::Not)) {
     Token op = current();
     m_pos++;
     auto node = std::make_shared<Expr>();
