@@ -1,0 +1,111 @@
+#pragma once
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace qlang {
+
+// Token categories produced by the lexer.
+enum class TokenType {
+  // Literals and names
+  Integer,
+  Float,
+  String,
+  Char,   // single-quoted literal, e.g. ' ' -> byte
+  Ident,
+
+  // Keywords
+  Local,
+  For,
+  To,
+  Next,
+  If,
+  Then,
+  While,
+  End,
+
+  // Type keywords (used in typed declarations: local b:byte = 32)
+  TypeByte,
+  TypeWord,
+  TypeShort,
+  TypeInt,
+  TypeUnsigned,
+  TypeString,
+  TypeBlob,
+  TypeArray,
+
+  // Operators
+  Assign,        // =
+  Equal,         // ==
+  NotEqual,      // !=
+  Less,          // <
+  Greater,       // >
+  LessEqual,     // <=
+  GreaterEqual,  // >=
+  ShiftLeft,     // <<
+  ShiftRight,    // >>
+  Xor,           // ^
+  And,           // &
+  Or,            // |
+  LogicalAnd,    // &&
+  LogicalOr,     // ||
+  Plus,          // +
+  Minus,         // -
+  Star,          // *
+  Slash,         // /
+  Increment,     // ++
+  Decrement,     // --
+
+  // Punctuation
+  LParen,   // (
+  RParen,   // )
+  LBrace,   // {
+  RBrace,   // }
+  LBracket, // [
+  RBracket, // ]
+  Semicolon, // ;
+  Colon,     // :
+  Comma,     // ,
+
+  EndOfFile
+};
+
+// A single lexical token with source location for error reporting.
+struct Token {
+  TokenType type = TokenType::EndOfFile;
+  std::string text;   // raw source text of the token
+  std::string value;  // semantic value (number text, string content, ident name)
+  int line = 1;
+  int col = 1;
+};
+
+// Turns source text into a flat token stream. Handles whitespace, `#` line
+// comments, single/double/triple-quoted strings, char literals, numbers and
+// every operator/punctuation in the spec.
+class QLangLexer {
+public:
+  explicit QLangLexer(std::string source);
+
+  std::vector<Token> tokenize();
+
+private:
+  char peek(int offset = 0) const;
+  char advance();
+  bool atEnd() const;
+  void skipWhitespaceAndComments();
+  Token number();
+  Token stringLiteral(bool triple, char delim, bool singleQuote);
+  Token identifier();
+  Token operatorToken();
+
+  std::string m_src;
+  size_t m_pos = 0;
+  int m_line = 1;
+  int m_col = 1;
+};
+
+// Maps an identifier text to its keyword token type (falls back to Ident).
+TokenType keywordType(const std::string &text);
+
+} // namespace qlang
