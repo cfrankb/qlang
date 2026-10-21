@@ -96,7 +96,7 @@ All items previously listed as "Broken / missing vs spec" are now resolved:
 - `examples/spec_check2.cpp` — 38 cases covering all spec features.
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc`
-Re-run after each fix to confirm counts. Current result: **69 passed, 3 failed** (3 pre-existing: `else if` chained, nested `def` — unrelated).
+Re-run after each fix to confirm counts. Current result: **72 passed, 0 failed**.
 
 ## Fixes applied this round
 
@@ -113,8 +113,10 @@ Re-run after each fix to confirm counts. Current result: **69 passed, 3 failed**
 The 38-case harness covers the items listed under "Working" above, but the
 following spec sections were **not exercised** and may be missing or broken:
 
-| Spec § | Item | Status |
-|--------|------|--------|
+|| Spec § | Item | Status |
+||--------|------|--------|
+|| §139–161 | `else if` chained | **Fixed** — compiler emitted else body before if body, causing unconditional execution; moved JMP emission before else body compile |
+|| §292–297 | nested `def` (function closure) | **Fixed** — three issues: (1) `collectIds`/`collectStmtIds` collected nested-def params as free vars of the outer func; added `skip` set to `collectIds`/`collectStmtIds` to exclude nested-param names at each recursion level, (2) capture detection ran before `m_regs` was cleared so outer params appeared as inner locals; moved capture detection after fresh-context setup, (3) `builtinId()` threw on unknown names instead of returning -1, blocking free-var detection; changed to `return -1`, (4) CALLFN did not bind enclosing-frame registers for REFLOAD/REFSTORE; added `Function::captures` spec and VM CALLFN handler to copy capture table + bind frame pointers from caller frame |
 | §207–222 | `goto` / `:label` (same-scope only) | **Verified** — 5 cases passing (unconditional goto, countdown loop, same-scope counter, `if cond goto label`, undefined-label error) |
 | §222 | `slice(array, start, length)` builtin | **Verified** — 4 cases passing (basic, from-zero, tail, out-of-range) |
 | §201–204 | `range(1,10)` builtin + `in range(...)` | **Verified** — 6 cases passing (basic, first/last, empty, for-in, in-if) |

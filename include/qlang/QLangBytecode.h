@@ -139,6 +139,10 @@ struct Function {
   int registerCount = 0;
   std::vector<Instruction> instructions;
   std::vector<QLangValue> constants;
+  // Capture spec for nested `def` functions: each entry maps a captured
+  // variable name to the register index in the enclosing frame where its value
+  // lives at the time the closure is constructed.
+  std::vector<CaptureRef> captures;
 };
 
 // The compiled program: an instruction stream plus a constant pool.

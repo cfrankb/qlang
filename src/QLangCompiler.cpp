@@ -84,59 +84,63 @@ CompiledProgram QLangCompiler::compile() {
 // its function index. The enclosing function's compilation state is saved and
 // restored so nested definitions work.
 // Collect all variable names referenced in an expression.
-static void collectIds(const ExprPtr &e, std::unordered_set<std::string> &ids) {
+static void collectIds(const ExprPtr &e, std::unordered_set<std::string> &ids,
+                       const std::unordered_set<std::string> *skip = nullptr) {
   if (!e) return;
   if (e->kind == ExprKind::Variable) {
-    ids.insert(e->name);
+    if (!skip || !skip->count(e->name))
+      ids.insert(e->name);
     return;
   }
   if (e->kind == ExprKind::Binary) {
-    collectIds(e->left, ids);
-    collectIds(e->right, ids);
+    collectIds(e->left, ids, skip);
+    collectIds(e->right, ids, skip);
   } else if (e->kind == ExprKind::Unary) {
-    collectIds(e->operand, ids);
+    collectIds(e->operand, ids, skip);
   } else if (e->kind == ExprKind::Call) {
-    for (auto &a : e->args) collectIds(a, ids);
+    for (auto &a : e->args) collectIds(a, ids, skip);
   } else if (e->kind == ExprKind::Index) {
-    collectIds(e->indexBase, ids);
-    if (e->indexExpr) collectIds(e->indexExpr, ids);
+    collectIds(e->indexBase, ids, skip);
+    if (e->indexExpr) collectIds(e->indexExpr, ids, skip);
   } else if (e->kind == ExprKind::Array) {
-    for (auto &el : e->elements) collectIds(el, ids);
+    for (auto &el : e->elements) collectIds(el, ids, skip);
   } else if (e->kind == ExprKind::Table) {
     for (auto &item : e->items) {
-      collectIds(item.second, ids);
+      collectIds(item.second, ids, skip);
     }
   }
 }
 
-static void collectStmtIds(const StmtPtr &s, std::unordered_set<std::string> &ids) {
+static void collectStmtIds(const StmtPtr &s, std::unordered_set<std::string> &ids,
+                           const std::unordered_set<std::string> *skip = nullptr) {
   if (!s) return;
   if (s->kind == StmtKind::Declaration || s->kind == StmtKind::Const) {
-    if (s->value) collectIds(s->value, ids);
+    if (s->value) collectIds(s->value, ids, skip);
   } else if (s->kind == StmtKind::Assignment) {
-    if (s->assignValue) collectIds(s->assignValue, ids);
-    if (s->target) collectIds(s->target, ids);
+    if (s->assignValue) collectIds(s->assignValue, ids, skip);
+    if (s->target) collectIds(s->target, ids, skip);
   } else if (s->kind == StmtKind::If) {
-    collectIds(s->ifCond, ids);
-    for (auto &b : s->ifBody) collectStmtIds(b, ids);
-    for (auto &b : s->elseBody) collectStmtIds(b, ids);
+    collectIds(s->ifCond, ids, skip);
+    for (auto &b : s->ifBody) collectStmtIds(b, ids, skip);
+    for (auto &b : s->elseBody) collectStmtIds(b, ids, skip);
   } else if (s->kind == StmtKind::For) {
-    if (s->forStart) collectIds(s->forStart, ids);
-    if (s->forEnd) collectIds(s->forEnd, ids);
-    for (auto &b : s->body) collectStmtIds(b, ids);
+    if (s->forStart) collectIds(s->forStart, ids, skip);
+    if (s->forEnd) collectIds(s->forEnd, ids, skip);
+    for (auto &b : s->body) collectStmtIds(b, ids, skip);
   } else if (s->kind == StmtKind::ForIn) {
-    if (s->forEnd) collectIds(s->forEnd, ids);
-    for (auto &b : s->body) collectStmtIds(b, ids);
+    if (s->forEnd) collectIds(s->forEnd, ids, skip);
+    for (auto &b : s->body) collectStmtIds(b, ids, skip);
   } else if (s->kind == StmtKind::While) {
-    collectIds(s->cond, ids);
-    for (auto &b : s->whileBody) collectStmtIds(b, ids);
+    collectIds(s->cond, ids, skip);
+    for (auto &b : s->whileBody) collectStmtIds(b, ids, skip);
   } else if (s->kind == StmtKind::Return) {
-    if (s->returnValue) collectIds(s->returnValue, ids);
+    if (s->returnValue) collectIds(s->returnValue, ids, skip);
   } else if (s->kind == StmtKind::ExprStmt) {
-    if (s->value) collectIds(s->value, ids);
+    if (s->value) collectIds(s->value, ids, skip);
   } else if (s->kind == StmtKind::Def) {
-    // Don't collect params of nested defs
-    for (auto &b : s->body) collectStmtIds(b, ids);
+    // Skip params of this nested def (and recursively deeper nested defs).
+    std::unordered_set<std::string> nestedParams(s->params.begin(), s->params.end());
+    for (auto &b : s->body) collectStmtIds(b, ids, &nestedParams);
   }
 }
 
@@ -150,16 +154,6 @@ int QLangCompiler::buildFunction(const std::string &name,
   for (auto &s : body)
     collectStmtIds(s, allIds);
   std::unordered_set<std::string> paramSet(params.begin(), params.end());
-  std::vector<std::string> updatedCaptures = captures;
-  for (auto &id : allIds) {
-    if (paramSet.count(id)) continue;
-    if (m_regs.count(id)) continue; // already declared in this function
-    if (m_userFuncs.count(id)) continue; // user function name
-    if (builtinId(id) >= 0) continue; // builtin
-    // This is a free variable — capture it.
-    if (std::find(updatedCaptures.begin(), updatedCaptures.end(), id) == updatedCaptures.end())
-      updatedCaptures.push_back(id);
-  }
 
   // Save the enclosing function's compilation state.
   Bytecode savedCode = m_code;
@@ -189,6 +183,18 @@ int QLangCompiler::buildFunction(const std::string &name,
       m_nextReg = r + 1;
   }
 
+  // Now detect free variables in the fresh context.
+  std::vector<std::string> updatedCaptures = captures;
+  for (auto &id : allIds) {
+    if (paramSet.count(id)) continue;
+    if (m_regs.count(id)) continue; // already declared in this function
+    if (m_userFuncs.count(id)) continue; // user function name
+    if (builtinId(id) >= 0) continue; // builtin
+    // This is a free variable — capture it.
+    if (std::find(updatedCaptures.begin(), updatedCaptures.end(), id) == updatedCaptures.end())
+      updatedCaptures.push_back(id);
+  }
+
   // Register the explicit capture list (name -> refId).
   for (size_t i = 0; i < updatedCaptures.size(); i++)
     m_captureRegs[updatedCaptures[i]] = static_cast<int>(i);
@@ -204,6 +210,13 @@ int QLangCompiler::buildFunction(const std::string &name,
   fn.name = name;
   fn.paramCount = static_cast<int>(params.size());
   fn.registerCount = m_nextReg;
+  // Populate the capture spec so the VM can bind enclosing-frame registers
+  // when this function is called.
+  fn.captures.resize(updatedCaptures.size());
+  for (size_t i = 0; i < updatedCaptures.size(); i++) {
+    fn.captures[i].reg = m_captureRegs[updatedCaptures[i]];
+    fn.captures[i].frame = nullptr; // bound at call time by the VM
+  }
 
   int funcIndex = static_cast<int>(m_functions.size()) + 1; // +1 for prepended mainFn
   Bytecode fnCode = std::move(m_code);
@@ -426,12 +439,12 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
       compileStmt(body);
 
     if (!s->elseBody.empty()) {
-      // Compile else body first, then emit a jump past it.
+      // Emit JMP after if body to skip else body; patch target after else body compiles.
+      emit(Opcode::JMP, 0);
+      int jumpPastIdx = static_cast<int>(m_code.size()) - 1;
       int elseBodyStart = static_cast<int>(m_code.size());
       for (auto &body : s->elseBody)
         compileStmt(body);
-      emit(Opcode::JMP, 0);
-      int jumpPastIdx = static_cast<int>(m_code.size()) - 1;
       m_code.instructions()[jumpPastIdx].a = static_cast<int>(m_code.size());
       m_code.instructions()[jumpFalseIdx].b = elseBodyStart;
     } else {
@@ -656,7 +669,7 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "substr") return static_cast<int>(Builtin::Substr);
   if (name == "slice") return static_cast<int>(Builtin::Slice);
   if (name == "range") return static_cast<int>(Builtin::Range);
-  throw QLangError(QLangErrorKind::Parse, 0, 0, "unknown function '" + name + "'");
+  return -1;
 }
 
 QLangValue QLangCompiler::evalConstExpr(const ExprPtr &e) {

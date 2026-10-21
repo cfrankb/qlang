@@ -630,6 +630,12 @@ void QLangVM::run() {
       // returns we resume at the next instruction.
       frame.pc += 1;
       pushCall(i.b, frame.regs, i.a, i.c);
+      // Bind capture refs to the current (caller) frame so REFLOAD/REFSTORE
+      // inside the callee address the correct enclosing-frame registers.
+      const Function &calleeFn = m_prog.functions[i.b];
+      m_frames[m_cur].captures = calleeFn.captures;
+      for (auto &cr : m_frames[m_cur].captures)
+        cr.frame = &m_frames[m_cur - 1];
       continue; // m_cur now points at the new frame; skip the trailing increment
     }
     case Opcode::CALLCLOS: {

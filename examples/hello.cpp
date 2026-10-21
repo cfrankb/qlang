@@ -168,6 +168,10 @@ local hello = (name) {
 
 hello("Sonia")
 
+for i in [1,2,3,4] {
+  printf("coundown: %d\n",i)
+}
+
 )";
 
   QLangContext ctx;
