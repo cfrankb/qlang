@@ -1,9 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <string>
-#include <vector>
 #include <variant>
+#include <vector>
 
 namespace qlang {
 
@@ -13,8 +14,11 @@ class QLangValue; // forward declaration: ArrayValue references it recursively
 // The value itself is recursively a QLangValue, so arrays nest freely.
 using ArrayValue = std::vector<QLangValue>;
 
+// A script table is a keyed map of string -> script value (spec: table).
+using TableValue = std::map<std::string, QLangValue>;
+
 // The storage type of every script variable. Mirrors the spec's variable
-// types: string, blob, byte, word, short, int, unsigned, array.
+// types: string, blob, byte, word, short, int, unsigned, array, float, table.
 class QLangValue {
 public:
   enum class Type {
@@ -26,7 +30,9 @@ public:
     Unsigned, // uint32_t
     String,   // null-terminated text
     Blob,     // arbitrary binary data
-    Array     // list of mixed values
+    Array,    // list of mixed values
+    Float,    // double
+    Table     // keyed string -> value map
   };
 
   QLangValue() : m_type(Type::Nil) {}
@@ -73,6 +79,16 @@ public:
     q.m_storage = std::move(v);
     return q;
   }
+  static QLangValue Float(double v) {
+    QLangValue q(Type::Float);
+    q.m_storage = v;
+    return q;
+  }
+  static QLangValue Table(TableValue v) {
+    QLangValue q(Type::Table);
+    q.m_storage = std::move(v);
+    return q;
+  }
 
   Type type() const { return m_type; }
   bool isNil() const { return m_type == Type::Nil; }
@@ -96,11 +112,16 @@ public:
   std::vector<uint8_t> &asBlob();
   const ArrayValue &asArray() const;
   ArrayValue &asArray();
+  const double &asFloat() const;
+  double &asFloat();
+  const TableValue &asTable() const;
+  TableValue &asTable();
 
 private:
   Type m_type;
   std::variant<std::monostate, uint8_t, uint16_t, int16_t, int32_t, uint32_t,
-               std::string, std::vector<uint8_t>, ArrayValue>
+               double, std::string, std::vector<uint8_t>, ArrayValue,
+               TableValue>
       m_storage;
 };
 

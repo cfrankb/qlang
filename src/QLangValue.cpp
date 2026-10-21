@@ -15,6 +15,8 @@ const char *QLangValue::typeName() const {
   case Type::String: return "string";
   case Type::Blob: return "blob";
   case Type::Array: return "array";
+  case Type::Float: return "float";
+  case Type::Table: return "table";
   }
   return "?";
 }
@@ -36,6 +38,8 @@ QL_ACCESSOR_GETTER(uint32_t, Unsigned, uint32_t)
 QL_ACCESSOR_GETTER(std::string, String, std::string)
 QL_ACCESSOR_GETTER(std::vector<uint8_t>, Blob, std::vector<uint8_t>)
 QL_ACCESSOR_GETTER(ArrayValue, Array, ArrayValue)
+QL_ACCESSOR_GETTER(double, Float, double)
+QL_ACCESSOR_GETTER(TableValue, Table, TableValue)
 
 #undef QL_ACCESSOR_GETTER
 
@@ -56,6 +60,8 @@ QL_ACCESSOR_MUT(uint32_t, Unsigned, uint32_t)
 QL_ACCESSOR_MUT(std::string, String, std::string)
 QL_ACCESSOR_MUT(std::vector<uint8_t>, Blob, std::vector<uint8_t>)
 QL_ACCESSOR_MUT(ArrayValue, Array, ArrayValue)
+QL_ACCESSOR_MUT(double, Float, double)
+QL_ACCESSOR_MUT(TableValue, Table, TableValue)
 
 #undef QL_ACCESSOR_MUT
 

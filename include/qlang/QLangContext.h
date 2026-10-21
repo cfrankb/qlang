@@ -29,6 +29,7 @@ public:
   bool has(const std::string &name) const;
   QLangValue get(const std::string &name) const;
   void set(const std::string &name, const QLangValue &value);
+  void remove(const std::string &name);
   void clear();
 
 private:

@@ -8,6 +8,19 @@
 
 namespace qlang {
 
+// Built-in function ids shared by the compiler (emits CALL with one of these)
+// and the VM (dispatches on them). Order is stable and used as the operand.
+enum class Builtin : int {
+  ToStr = 0,
+  ToInt,
+  Type,
+  Print,
+  Println,
+  Printf,
+  Len,   // len(var) -> string/array/table length; other -> 1
+  Blob   // blob() -> empty binary blob
+};
+
 // Register-machine opcodes. This is a small register VM: each script variable
 // maps to a register, and arithmetic/comparison results are written to a
 // register. Constants live in a separate pool and are loaded with CONST.
@@ -44,6 +57,23 @@ enum class Opcode {
   GT,
   LE,
   GE,
+
+  // Built-in function call. r[a] = call(funcId=b, args in r[a+1 .. a+c]).
+  CALL, // r[a] = builtin(b, r[a+1 .. a+c])
+
+  // Variable removal. r[a] is dropped from the scope at end-of-run.
+  DELETE, // remove script variable mapped to register a
+
+  // Array operations (register holds an ArrayValue).
+  ARRGET, // r[a] = arrays[b][c]               (subscript read)
+  ARRPUT, // arrays[a][b] = c                   (subscript write)
+  ARRAPP, // arrays[a].push_back(c)             (append single element)
+  ARRAPPV, // arrays[a] += arrays[b]            (extend with another array)
+  ARRLEN, // r[a] = arrays[b].size()            (length)
+
+  // Table operations (register holds a TableValue).
+  TABGET, // r[a] = tables[b][c]                (member read)
+  TABPUT, // tables[a][b] = c                   (member write)
 
   // Control flow
   JMP,       // pc = a

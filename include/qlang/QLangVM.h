@@ -1,6 +1,7 @@
 #pragma once
 
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "QLangBytecode.h"
@@ -31,6 +32,7 @@ private:
   const CompiledProgram &m_prog;
   QLangContext &m_scope;
   std::vector<QLangValue> m_registers;
+  std::unordered_set<int> m_deleted; // registers removed by `delete`
   size_t m_steps = 0;
 
   static constexpr std::size_t kMaxSteps = 100000000u; // infinite-loop guard

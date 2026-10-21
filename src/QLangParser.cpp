@@ -53,7 +53,8 @@ const Token &QLangParser::consume(TokenType t, const char *what) {
 
 static int precedence(TokenType t) {
   switch (t) {
-  case TokenType::LogicalOr: return 1;
+  case TokenType::LogicalOr:
+  case TokenType::LogicalOr3: return 1;
   case TokenType::LogicalAnd: return 2;
   case TokenType::Or: return 3;
   case TokenType::Xor: return 4;
@@ -88,23 +89,63 @@ std::vector<StmtPtr> QLangParser::parseProgram() {
 
 StmtPtr QLangParser::parseStatement() {
   if (check(TokenType::Local)) return parseDeclaration();
+  if (check(TokenType::Const)) return parseConst();
+  if (check(TokenType::Delete)) return parseDelete();
   if (check(TokenType::For)) return parseFor();
   if (check(TokenType::While)) return parseWhile();
   if (check(TokenType::If)) return parseIf();
 
+  // Statement-form prefix inc/dec: ++a / --a
+  if (check(TokenType::Increment) || check(TokenType::Decrement)) {
+    auto expr = parseExpression();
+    auto stmt = std::make_shared<Stmt>();
+    stmt->kind = StmtKind::ExprStmt;
+    stmt->value = expr;
+    match(TokenType::Semicolon);
+    return stmt;
+  }
+
+  // Bare literal expression statement (e.g. a standalone multiline string).
+  if (check(TokenType::String) || check(TokenType::Char) ||
+      check(TokenType::Integer) || check(TokenType::Float)) {
+    auto expr = parseExpression();
+    match(TokenType::Semicolon);
+    auto stmt = std::make_shared<Stmt>();
+    stmt->kind = StmtKind::ExprStmt;
+    stmt->value = expr;
+    return stmt;
+  }
+
   // Expression statement or assignment.
   if (check(TokenType::Ident)) {
     const Token &idt = current();
-    size_t save = m_pos;
     m_pos++; // consume the identifier
     TokenType nxt = current().type;
+
+    // Postfix inc/dec as a statement: a++ / a--
+    if (nxt == TokenType::Increment || nxt == TokenType::Decrement) {
+      Token op = current();
+      m_pos++; // consume ++ / --
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Unary;
+      node->uop = op;
+      auto var = std::make_shared<Expr>();
+      var->kind = ExprKind::Variable;
+      var->name = idt.value;
+      node->operand = var;
+      auto stmt = std::make_shared<Stmt>();
+      stmt->kind = StmtKind::ExprStmt;
+      stmt->value = node;
+      match(TokenType::Semicolon);
+      return stmt;
+    }
+
     bool isAssign =
         nxt == TokenType::Assign || nxt == TokenType::Plus ||
         nxt == TokenType::Minus || nxt == TokenType::Star ||
         nxt == TokenType::Slash || nxt == TokenType::And || nxt == TokenType::Or ||
         nxt == TokenType::Xor || nxt == TokenType::ShiftLeft ||
-        nxt == TokenType::ShiftRight || nxt == TokenType::Increment ||
-        nxt == TokenType::Decrement;
+        nxt == TokenType::ShiftRight;
     if (isAssign) {
       auto stmt = std::make_shared<Stmt>();
       stmt->kind = StmtKind::Assignment;
@@ -115,8 +156,56 @@ StmtPtr QLangParser::parseStatement() {
       match(TokenType::Semicolon);
       return stmt;
     }
+    // Index assignment target: ab[expr] = value  (or ab[] = value -> append).
+    if (nxt == TokenType::LBracket) {
+      m_pos++; // consume '['
+      ExprPtr idx;
+      if (check(TokenType::RBracket))
+        idx = nullptr; // empty subscript ab[] = v -> append
+      else
+        idx = parseExpression();
+      consume(TokenType::RBracket, "']' after subscript");
+      auto stmt = std::make_shared<Stmt>();
+      stmt->kind = StmtKind::Assignment;
+      stmt->name = idt.value;
+      stmt->assignOp = current();
+      m_pos++; // consume the operator (= or +=)
+      stmt->assignValue = parseExpression();
+      auto idxNode = std::make_shared<Expr>();
+      idxNode->kind = ExprKind::Index;
+      auto base = std::make_shared<Expr>();
+      base->kind = ExprKind::Variable;
+      base->name = idt.value;
+      idxNode->indexBase = base;
+      idxNode->indexExpr = idx;
+      stmt->target = idxNode;
+      match(TokenType::Semicolon);
+      return stmt;
+    }
+    // Member assignment target: t.name = value.
+    if (nxt == TokenType::Dot) {
+      m_pos++; // consume '.'
+      std::string name = current().value;
+      m_pos++; // consume the member-name token
+      auto stmt = std::make_shared<Stmt>();
+      stmt->kind = StmtKind::Assignment;
+      stmt->name = idt.value;
+      stmt->assignOp = current();
+      m_pos++; // consume the operator (= or +=)
+      stmt->assignValue = parseExpression();
+      auto mNode = std::make_shared<Expr>();
+      mNode->kind = ExprKind::Member;
+      auto base = std::make_shared<Expr>();
+      base->kind = ExprKind::Variable;
+      base->name = idt.value;
+      mNode->memberBase = base;
+      mNode->memberName = name;
+      stmt->target = mNode;
+      match(TokenType::Semicolon);
+      return stmt;
+    }
     // Not an assignment: rewind and parse an expression statement.
-    m_pos = save;
+    m_pos--; // step back onto the identifier
     auto expr = parseExpression();
     match(TokenType::Semicolon);
     auto stmt = std::make_shared<Stmt>();
@@ -140,7 +229,7 @@ StmtPtr QLangParser::parseDeclaration() {
   // Optional typed declaration: local b:byte = 32
   if (match(TokenType::Colon)) {
     TokenType tt = current().type;
-    if (tt >= TokenType::TypeByte && tt <= TokenType::TypeArray) {
+    if (tt >= TokenType::TypeByte && tt <= TokenType::TypeTable) {
       stmt->declaredType = static_cast<QLangValue::Type>(
           static_cast<int>(tt) - static_cast<int>(TokenType::TypeByte) +
           static_cast<int>(QLangValue::Type::Byte));
@@ -151,13 +240,50 @@ StmtPtr QLangParser::parseDeclaration() {
     }
   }
 
-  // Optional compound-assignment declaration is unusual; require plain '='.
+  // Optional value: `local z` declares a nil; `local x = expr` initializes.
+  if (check(TokenType::Assign) && current().text == "=") {
+    m_pos++; // consume '='
+    stmt->value = parseExpression();
+  }
+  match(TokenType::Semicolon);
+  return stmt;
+}
+
+StmtPtr QLangParser::parseConst() {
+  consume(TokenType::Const, "'const'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Const;
+  stmt->isConst = true;
+  stmt->name = consume(TokenType::Ident, "variable name").value;
+
+  if (match(TokenType::Colon)) {
+    TokenType tt = current().type;
+    if (tt >= TokenType::TypeByte && tt <= TokenType::TypeTable) {
+      stmt->declaredType = static_cast<QLangValue::Type>(
+          static_cast<int>(tt) - static_cast<int>(TokenType::TypeByte) +
+          static_cast<int>(QLangValue::Type::Byte));
+      m_pos++;
+    } else {
+      throw QLangError(QLangErrorKind::Parse, current().line, current().col,
+                       "unknown type after ':'");
+    }
+  }
+
   if (!check(TokenType::Assign) || current().text != "=") {
     throw QLangError(QLangErrorKind::Parse, current().line, current().col,
-                     "expected '=' in declaration");
+                     "expected '=' in const declaration");
   }
   m_pos++; // consume '='
   stmt->value = parseExpression();
+  match(TokenType::Semicolon);
+  return stmt;
+}
+
+StmtPtr QLangParser::parseDelete() {
+  consume(TokenType::Delete, "'delete'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Delete;
+  stmt->delName = consume(TokenType::Ident, "variable name").value;
   match(TokenType::Semicolon);
   return stmt;
 }
@@ -258,7 +384,11 @@ ExprPtr QLangParser::parseUnary() {
 
 ExprPtr QLangParser::parsePostfix() {
   ExprPtr e = parsePrimary();
-  while (check(TokenType::Increment) || check(TokenType::Decrement)) {
+  // Postfix inc/dec binds only to a bare variable (e.g. a++). Restricting to a
+  // Variable prevents a following statement-level ++/-- from being greedily
+  // swallowed as a prefix on a parenthesized/sub-expression operand.
+  while ((check(TokenType::Increment) || check(TokenType::Decrement)) &&
+         e->kind == ExprKind::Variable) {
     Token op = current();
     m_pos++;
     auto node = std::make_shared<Expr>();
@@ -266,6 +396,34 @@ ExprPtr QLangParser::parsePostfix() {
     node->uop = op;
     node->operand = e;
     e = std::move(node);
+  }
+  // Subscript (array) and member (table) access, which may chain (a.b[0], a[0].b).
+  while (true) {
+    if (check(TokenType::LBracket)) {
+      m_pos++; // consume '['
+      ExprPtr idx;
+      if (check(TokenType::RBracket))
+        idx = nullptr; // empty subscript ab[] (append target)
+      else
+        idx = parseExpression();
+      consume(TokenType::RBracket, "']' after subscript");
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Index;
+      node->indexBase = e;
+      node->indexExpr = idx;
+      e = std::move(node);
+    } else if (check(TokenType::Dot)) {
+      m_pos++; // consume '.'
+      const Token &nameTok = current();
+      m_pos++; // consume the member-name token (Ident or keyword)
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Member;
+      node->memberBase = e;
+      node->memberName = nameTok.value;
+      e = std::move(node);
+    } else {
+      break;
+    }
   }
   return e;
 }
@@ -284,8 +442,7 @@ ExprPtr QLangParser::parsePrimary() {
     m_pos++;
     auto node = std::make_shared<Expr>();
     node->kind = ExprKind::Literal;
-    // No float type in the spec yet: truncate to int for this version.
-    node->literal = QLangValue::Int(static_cast<int32_t>(std::stod(tok.value)));
+    node->literal = QLangValue::Float(std::stod(tok.value));
     return node;
   }
   case TokenType::String: {
@@ -306,6 +463,20 @@ ExprPtr QLangParser::parsePrimary() {
   }
   case TokenType::Ident: {
     m_pos++;
+    // Call expression: name(args)
+    if (check(TokenType::LParen)) {
+      m_pos++; // consume '('
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Call;
+      node->callee = tok.value;
+      if (!check(TokenType::RParen)) {
+        do {
+          node->args.push_back(parseExpression());
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RParen, "')'");
+      return node;
+    }
     auto node = std::make_shared<Expr>();
     node->kind = ExprKind::Variable;
     node->name = tok.value;
@@ -317,6 +488,28 @@ ExprPtr QLangParser::parsePrimary() {
     consume(TokenType::RParen, "')'");
     return inner;
   }
+  case TokenType::TypeBlob: {
+    // blob() call -> create an empty binary blob.
+    if (check(TokenType::LParen)) {
+      m_pos++; // consume '('
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Call;
+      node->callee = "blob";
+      if (!check(TokenType::RParen)) {
+        do {
+          node->args.push_back(parseExpression());
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RParen, "')'");
+      return node;
+    }
+    throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
+                     std::string("expected '(' after 'blob'"));
+  }
+  case TokenType::LBracket:
+    return parseArrayLiteral();
+  case TokenType::LBrace:
+    return parseTableLiteral();
   default:
     break;
   }
@@ -324,6 +517,45 @@ ExprPtr QLangParser::parsePrimary() {
   throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
                    std::string("unexpected token '") + tok.text +
                        "' in expression");
+}
+
+ExprPtr QLangParser::parseArrayLiteral() {
+  consume(TokenType::LBracket, "'['");
+  auto node = std::make_shared<Expr>();
+  node->kind = ExprKind::Array;
+  if (!check(TokenType::RBracket)) {
+    do {
+      node->elements.push_back(parseExpression());
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RBracket, "]''");
+  return node;
+}
+
+ExprPtr QLangParser::parseTableLiteral() {
+  consume(TokenType::LBrace, "'{'");
+  auto node = std::make_shared<Expr>();
+  node->kind = ExprKind::Table;
+  if (!check(TokenType::RBrace)) {
+    do {
+      std::string key = consume(TokenType::Ident, "table key").value;
+      ExprPtr val;
+      // Optional :type annotation on the value: key:byte = expr
+      if (match(TokenType::Colon)) {
+        if (current().type >= TokenType::TypeByte &&
+            current().type <= TokenType::TypeTable)
+          m_pos++;
+        else
+          throw QLangError(QLangErrorKind::Parse, current().line, current().col,
+                           "unknown type after ':' in table entry");
+      }
+      consume(TokenType::Assign, "'=' in table entry");
+      val = parseExpression();
+      node->items.emplace_back(key, val);
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RBrace, "}''");
+  return node;
 }
 
 } // namespace qlang

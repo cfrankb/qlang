@@ -44,6 +44,15 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::GT: return "gt";
   case Opcode::LE: return "le";
   case Opcode::GE: return "ge";
+  case Opcode::CALL: return "call";
+  case Opcode::DELETE: return "delete";
+  case Opcode::ARRGET: return "arrget";
+  case Opcode::ARRPUT: return "arrput";
+  case Opcode::ARRAPP: return "arrapp";
+  case Opcode::ARRAPPV: return "arrappv";
+  case Opcode::ARRLEN: return "arrlen";
+  case Opcode::TABGET: return "tabget";
+  case Opcode::TABPUT: return "tabput";
   case Opcode::JMP: return "jmp";
   case Opcode::JMPIFFALSE: return "jmpfalse";
   }

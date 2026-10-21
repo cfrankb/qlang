@@ -8,6 +8,8 @@ namespace qlang {
 
 TokenType keywordType(const std::string &text) {
   if (text == "local") return TokenType::Local;
+  if (text == "const") return TokenType::Const;
+  if (text == "delete") return TokenType::Delete;
   if (text == "for") return TokenType::For;
   if (text == "to") return TokenType::To;
   if (text == "next") return TokenType::Next;
@@ -23,6 +25,8 @@ TokenType keywordType(const std::string &text) {
   if (text == "string") return TokenType::TypeString;
   if (text == "blob") return TokenType::TypeBlob;
   if (text == "array") return TokenType::TypeArray;
+  if (text == "float") return TokenType::TypeFloat;
+  if (text == "table") return TokenType::TypeTable;
   return TokenType::Ident;
 }
 
@@ -93,16 +97,19 @@ Token QLangLexer::stringLiteral(bool triple, char delim, bool singleQuote) {
 
   if (triple) {
     // Read until the closing triple delimiter (or EOF).
+    bool closed = false;
     while (!atEnd()) {
       if (peek() == delim && peek(1) == delim && peek(2) == delim) {
         advance();
         advance();
         advance();
+        closed = true;
         break;
       }
       text.push_back(advance());
     }
-    if (atEnd())
+    // Only unterminated if we ran off EOF without finding the closing delimiter.
+    if (!closed)
       throw QLangError(QLangErrorKind::Lex, line, col,
                        "unterminated multiline string");
   } else {
@@ -205,6 +212,8 @@ Token QLangLexer::operatorToken() {
   if (c == '<' && n == '<') return make(TokenType::ShiftLeft, "<<", 2);
   if (c == '>' && n == '>') return make(TokenType::ShiftRight, ">>", 2);
   if (c == '&' && n == '&') return make(TokenType::LogicalAnd, "&&", 2);
+  if (c == '|' && n == '|' && t == '|')
+    return make(TokenType::LogicalOr3, "|||", 3);
   if (c == '|' && n == '|') return make(TokenType::LogicalOr, "||", 2);
   if (c == '+' && n == '+') return make(TokenType::Increment, "++", 2);
   if (c == '-' && n == '-') return make(TokenType::Decrement, "--", 2);
@@ -230,6 +239,7 @@ Token QLangLexer::operatorToken() {
   case ';': return make(TokenType::Semicolon, ";", 1);
   case ':': return make(TokenType::Colon, ":", 1);
   case ',': return make(TokenType::Comma, ",", 1);
+  case '.': return make(TokenType::Dot, ".", 1);
   }
 
   throw QLangError(QLangErrorKind::Lex, line, col,

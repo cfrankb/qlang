@@ -13,7 +13,20 @@ namespace qlang {
 // ---------------------------------------------------------------------------
 // Expression AST
 // ---------------------------------------------------------------------------
-enum class ExprKind { Literal, Variable, Binary, Unary };
+enum class ExprKind {
+  Literal,
+  Variable,
+  Binary,
+  Unary,
+  Call,
+  Array,
+  Table,
+  Index,   // base[index]  (array subscript read)
+  Member   // base.name    (table member read)
+};
+
+struct Expr; // forward declaration so ExprPtr can be used inside Expr
+using ExprPtr = std::shared_ptr<Expr>;
 
 // Base expression node. Concrete nodes are allocated on the heap and held by
 // shared_ptr so the tree can be traversed/mutated freely.
@@ -34,14 +47,39 @@ struct Expr {
   // Unary: single operand and the op token (e.g. --x).
   Token uop;
   std::shared_ptr<Expr> operand;
-};
 
-using ExprPtr = std::shared_ptr<Expr>;
+  // Call: callee(name) with positional args.
+  std::string callee;
+  std::vector<ExprPtr> args;
+
+  // Array literal: [e0, e1, ...].
+  std::vector<ExprPtr> elements;
+
+  // Table literal: { key = value, ... } (value may carry an optional :type).
+  std::vector<std::pair<std::string, ExprPtr>> items;
+
+  // Index: base[index]  (array subscript access).
+  ExprPtr indexBase;
+  ExprPtr indexExpr;
+
+  // Member: base.name  (table member access).
+  ExprPtr memberBase;
+  std::string memberName;
+};
 
 // ---------------------------------------------------------------------------
 // Statement AST
 // ---------------------------------------------------------------------------
-enum class StmtKind { Declaration, Assignment, For, While, If, ExprStmt };
+enum class StmtKind {
+  Declaration,
+  Const,     // const name[:type] = value
+  Assignment,
+  Delete,    // delete var
+  For,
+  While,
+  If,
+  ExprStmt
+};
 
 // Base statement node. Forward-declared so StmtPtr can be used inside Stmt.
 struct Stmt;
@@ -56,9 +94,19 @@ struct Stmt {
   std::optional<QLangValue::Type> declaredType;
   ExprPtr value;
 
+  // Const: const name[:type] = value (immutable after init)
+  bool isConst = false;
+
+  // Delete: delete var
+  std::string delName;
+
   // Assignment: name op value  (op includes compound forms like +=)
   Token assignOp;
   ExprPtr assignValue;
+  // Optional full left-hand expression for index/member assignment
+  // (e.g. a[i] = v or t.name = v). When set, `name` holds the base variable
+  // name and `target` is an Index or Member expression describing the LHS.
+  ExprPtr target;
 
   // For: for x = start to end ... next x
   std::string loopVar;
@@ -90,6 +138,8 @@ public:
 private:
   StmtPtr parseStatement();
   StmtPtr parseDeclaration();
+  StmtPtr parseConst();
+  StmtPtr parseDelete();
   StmtPtr parseFor();
   StmtPtr parseWhile();
   StmtPtr parseIf();
@@ -98,6 +148,8 @@ private:
   ExprPtr parseUnary();
   ExprPtr parsePostfix();
   ExprPtr parsePrimary();
+  ExprPtr parseArrayLiteral();
+  ExprPtr parseTableLiteral();
 
   // Helpers
   const Token &peek(int offset = 0) const;

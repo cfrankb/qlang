@@ -56,6 +56,27 @@ static void expectVal(const std::string &name, const std::string &src,
   }
 }
 
+// Expect a specific final string value.
+static void expectStr(const std::string &name, const std::string &src,
+                      const std::string &var, const std::string &expect) {
+  QLangContext ctx;
+  try {
+    ctx.run(src);
+    std::string got = ctx.get(var).asString();
+    if (got == expect) {
+      std::cout << "[PASS] str:  " << name << " (" << var << "=\"" << got << "\")\n";
+      passes++;
+    } else {
+      std::cout << "[FAIL] str:  " << name << " (" << var << "=\"" << got
+                << "\" expected \"" << expect << "\")\n";
+      fails++;
+    }
+  } catch (const QLangError &e) {
+    std::cout << "[FAIL] str:  " << name << " -> " << e.what() << "\n";
+    fails++;
+  }
+}
+
 int main() {
   // --- constants keyword (spec line 24-27) ---
   expectRun("const int", "const year = 2026;");
@@ -77,7 +98,7 @@ int main() {
   // --- copy / compound assign ---
   expectVal("copy a to c", "local a = 5;\nlocal c = a;", "c", 5);
   expectVal("a += 12", "local a = 32;\na += 12;", "a", 44);
-  expectVal("string append", "local s = \"a\";\ns += \"abc\";", "s", 0); // just runs
+  expectStr("string append", "local s = \"a\";\ns += \"abc\";", "s", "aabc");
 
   // --- type error cases ---
   expectThrow("sv += test (int+=string error)", "sv = 123\nsv += \"test\"");

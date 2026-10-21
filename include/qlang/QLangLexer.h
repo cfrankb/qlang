@@ -17,6 +17,8 @@ enum class TokenType {
 
   // Keywords
   Local,
+  Const,   // const
+  Delete,  // delete
   For,
   To,
   Next,
@@ -34,8 +36,11 @@ enum class TokenType {
   TypeString,
   TypeBlob,
   TypeArray,
+  TypeFloat,   // float
+  TypeTable,   // table
 
   // Operators
+  Dot,           // .  (table member access: t.name)
   Assign,        // =
   Equal,         // ==
   NotEqual,      // !=
@@ -50,6 +55,7 @@ enum class TokenType {
   Or,            // |
   LogicalAnd,    // &&
   LogicalOr,     // ||
+  LogicalOr3,    // |||  (logical or, three bars)
   Plus,          // +
   Minus,         // -
   Star,          // *

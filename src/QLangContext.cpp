@@ -42,6 +42,8 @@ void QLangContext::set(const std::string &name, const QLangValue &value) {
   m_vars[name] = value;
 }
 
+void QLangContext::remove(const std::string &name) { m_vars.erase(name); }
+
 void QLangContext::clear() { m_vars.clear(); }
 
 } // namespace qlang
