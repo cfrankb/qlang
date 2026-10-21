@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <deque>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -324,114 +325,145 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
   }
 }
 
+void QLangVM::pushCall(int calleeIndex, std::vector<QLangValue> &callerRegs,
+                       int dest, int argc) {
+  fprintf(stderr, "[pushCall] calleeIndex=%d functions.size()=%zu dest=%d argc=%d callerRegs=%zu\n", calleeIndex, m_prog.functions.size(), dest, argc, callerRegs.size());
+  const Function &callee = m_prog.functions[calleeIndex];
+  Frame cf;
+  cf.funcIndex = calleeIndex;
+  cf.regs.resize(callee.registerCount, QLangValue());
+  // Copy the call arguments (caller regs dest+1..dest+argc) into the callee's
+  // parameter registers 0..argc-1.
+  for (int k = 0; k < argc; k++)
+    cf.regs[k] = callerRegs[dest + 1 + k];
+  fprintf(stderr, "[pushCall] after arg copy, argc=%d\n", argc);
+  m_frames.push_back(std::move(cf));
+  fprintf(stderr, "[pushCall] after push_back\n");
+  m_cur = static_cast<int>(m_frames.size()) - 1;
+  m_frames[m_cur].pc = 0;
+  fprintf(stderr, "[pushCall] done\n");
+}
+
 void QLangVM::run() {
-  // Seed registers from any pre-existing scope variables.
+  // Set up the main frame (functions[0]).
+  Frame mainFrame;
+  mainFrame.funcIndex = 0;
+  mainFrame.regs.resize(m_prog.registerCount, QLangValue());
+  // Seed from any pre-existing scope variables.
   for (const auto &[name, reg] : m_prog.vars)
     if (m_scope.has(name))
-      m_registers[reg] = m_scope.get(name);
+      mainFrame.regs[reg] = m_scope.get(name);
+  m_frames.push_back(std::move(mainFrame));
+  m_cur = 0;
 
-  const auto &instrs = m_prog.code.instructions();
-  const auto &consts = m_prog.code.constants();
+  while (m_cur >= 0) {
+    Frame &frame = m_frames[m_cur];
+    const Function &fn = m_prog.functions[frame.funcIndex];
+    const auto &instrs = fn.instructions;
+    const auto &consts = fn.constants;
 
-  size_t pc = 0;
-  while (pc < instrs.size()) {
+    if (frame.pc >= instrs.size()) {
+      // Fell off the end without an explicit return: unwind with nil.
+      fprintf(stderr, "[DBG] fell off end at func %d, pc=%zu instrs=%zu\n", frame.funcIndex, frame.pc, instrs.size());
+      m_returnValue = frame.regs[0];
+      m_frames.pop_back();
+      m_cur--;
+      continue;
+    }
+
     if (++m_steps > kMaxSteps)
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "max instruction steps exceeded (possible infinite loop)");
 
-    const Instruction &i = instrs[pc];
-    switch (i.op) {
-    case Opcode::CONST: m_registers[i.a] = consts[i.b]; break;
-    case Opcode::MOV: m_registers[i.a] = m_registers[i.b]; break;
-    case Opcode::NEG: m_registers[i.a] = doUnary(i.op, m_registers[i.b]); break;
-    case Opcode::INC: m_registers[i.a] = doUnary(i.op, m_registers[i.b]); break;
-    case Opcode::DEC: m_registers[i.a] = doUnary(i.op, m_registers[i.b]); break;
+    const Instruction &i = instrs[frame.pc];
+    Opcode op = i.op;
+    fprintf(stderr, "[VM] func=%d pc=%zu op=%d a=%d b=%d c=%d regs=%zu\n", frame.funcIndex, frame.pc, (int)op, i.a, i.b, i.c, frame.regs.size());
+
+    switch (op) {
+    case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
+    case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
+    case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::CONV:
-      m_registers[i.a] = convert(m_registers[i.b],
-                                 static_cast<QLangValue::Type>(i.c));
+      frame.regs[i.a] = convert(frame.regs[i.b],
+                                static_cast<QLangValue::Type>(i.c));
       break;
     case Opcode::DELETE:
       m_deleted.insert(i.a);
       break;
     case Opcode::ARRGET: {
-      // r[a] = arrays[b][c]
-      QLangValue &base = m_registers[i.b];
+      QLangValue &base = frame.regs[i.b];
       if (base.type() != QLangValue::Type::Array)
         throw QLangError(QLangErrorKind::Type, 0, 0,
                          "cannot subscript non-array value");
-      int64_t idx = toInt64(m_registers[i.c]);
+      int64_t idx = toInt64(frame.regs[i.c]);
       const auto &elems = base.asArray();
       if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
         throw QLangError(QLangErrorKind::Runtime, 0, 0,
                          "array index out of range");
-      m_registers[i.a] = elems[static_cast<size_t>(idx)];
+      frame.regs[i.a] = elems[static_cast<size_t>(idx)];
       break;
     }
     case Opcode::ARRPUT: {
-      // arrays[a][b] = c
-      QLangValue &base = m_registers[i.a];
+      QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Array)
         throw QLangError(QLangErrorKind::Type, 0, 0,
                          "cannot subscript non-array value");
-      int64_t idx = toInt64(m_registers[i.b]);
+      int64_t idx = toInt64(frame.regs[i.b]);
       auto &elems = base.asArray();
       if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
         throw QLangError(QLangErrorKind::Runtime, 0, 0,
                          "array index out of range");
-      elems[static_cast<size_t>(idx)] = m_registers[i.c];
+      elems[static_cast<size_t>(idx)] = frame.regs[i.c];
       break;
     }
     case Opcode::ARRAPP: {
-      // arrays[a].push_back(c)
-      QLangValue &base = m_registers[i.a];
+      QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Array)
         throw QLangError(QLangErrorKind::Type, 0, 0,
                          "cannot append to non-array value");
-      base.asArray().push_back(m_registers[i.b]);
+      base.asArray().push_back(frame.regs[i.b]);
       break;
     }
     case Opcode::ARRAPPV: {
-      // arrays[a] += arrays[b]  (extend)
-      QLangValue &base = m_registers[i.a];
+      QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Array)
         throw QLangError(QLangErrorKind::Type, 0, 0,
                          "cannot append to non-array value");
-      if (m_registers[i.b].type() != QLangValue::Type::Array)
+      if (frame.regs[i.b].type() != QLangValue::Type::Array)
         throw QLangError(QLangErrorKind::Type, 0, 0,
                          "cannot append non-array to array");
       auto &elems = base.asArray();
-      const auto &extra = m_registers[i.b].asArray();
+      const auto &extra = frame.regs[i.b].asArray();
       elems.insert(elems.end(), extra.begin(), extra.end());
       break;
     }
     case Opcode::ARRLEN:
-      // r[a] = arrays[b].size()
-      m_registers[i.a] =
-          QLangValue::Int(static_cast<int32_t>(lenOf(m_registers[i.b])));
+      frame.regs[i.a] =
+          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
       break;
     case Opcode::TABGET: {
-      // r[a] = tables[b][c]
-      QLangValue &base = m_registers[i.b];
+      QLangValue &base = frame.regs[i.b];
       if (base.type() != QLangValue::Type::Table)
         throw QLangError(QLangErrorKind::Type, 0, 0,
                          "cannot access member of non-table value");
-      const std::string &key = valueToString(m_registers[i.c]);
+      const std::string &key = valueToString(frame.regs[i.c]);
       const auto &kv = base.asTable();
       auto it = kv.find(key);
       if (it == kv.end())
         throw QLangError(QLangErrorKind::Runtime, 0, 0,
                          "table has no member '" + key + "'");
-      m_registers[i.a] = it->second;
+      frame.regs[i.a] = it->second;
       break;
     }
     case Opcode::TABPUT: {
-      // tables[a][b] = c
-      QLangValue &base = m_registers[i.a];
+      QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Table)
         throw QLangError(QLangErrorKind::Type, 0, 0,
                          "cannot assign member of non-table value");
-      const std::string &key = valueToString(m_registers[i.b]);
-      base.asTable()[key] = m_registers[i.c];
+      const std::string &key = valueToString(frame.regs[i.b]);
+      base.asTable()[key] = frame.regs[i.c];
       break;
     }
     case Opcode::CALL: {
@@ -440,9 +472,78 @@ void QLangVM::run() {
       std::vector<QLangValue> args;
       args.reserve(argCount);
       for (int k = 0; k < argCount; k++)
-        args.push_back(m_registers[dest + 1 + k]);
-      m_registers[dest] = callBuiltin(static_cast<Builtin>(i.b), args);
+        args.push_back(frame.regs[dest + 1 + k]);
+      frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), args);
       break;
+    }
+    case Opcode::CALLFN: {
+      // User `def` function; callee index is operand b.
+      // Advance the caller past the call *before* pushCall (which may
+      // reallocate m_frames and invalidate `frame`), so that when the callee
+      // returns we resume at the next instruction.
+      frame.pc += 1;
+      pushCall(i.b, frame.regs, i.a, i.c);
+      continue; // m_cur now points at the new frame; skip the trailing increment
+    }
+    case Opcode::CALLCLOS: {
+      // Arrow-closure value in register a; its funcIndex is read at runtime.
+      const QLangValue &cv = frame.regs[i.a];
+      if (cv.type() != QLangValue::Type::Function)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "attempt to call a non-function value");
+      frame.pc += 1;
+      pushCall(cv.asFunction().funcIndex, frame.regs, i.a, i.c);
+      continue; // m_cur now points at the new frame; skip the trailing increment
+    }
+    case Opcode::MAKEFUNC: {
+      const QLangValue &cv = consts[i.b];
+      if (cv.type() != QLangValue::Type::Function)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "invalid function constant");
+      const Closure &spec = cv.asFunction();
+      auto closure = std::make_shared<Closure>();
+      closure->funcIndex = spec.funcIndex;
+      // Bind each captured register by reference to the enclosing frame.
+      for (const CaptureRef &cr : spec.captures) {
+        CaptureRef bound;
+        bound.frame = &m_frames[m_cur];
+        bound.reg = cr.reg;
+        closure->captures.push_back(bound);
+      }
+      frame.regs[i.a] = QLangValue::Function(std::move(closure));
+      break;
+    }
+    case Opcode::REFLOAD: {
+      // r[a] = captures[b].frame->regs[captures[b].reg]  (live read).
+      const CaptureRef &cr = frame.captures[i.b];
+      auto *framePtr = static_cast<Frame *>(cr.frame);
+      frame.regs[i.a] = framePtr->regs[cr.reg];
+      break;
+    }
+    case Opcode::REFSTORE: {
+      // captures[b].frame->regs[captures[b].reg] = r[a]  (write-back).
+      CaptureRef &cr = frame.captures[i.b];
+      auto *framePtr = static_cast<Frame *>(cr.frame);
+      framePtr->regs[cr.reg] = frame.regs[i.a];
+      break;
+    }
+    case Opcode::RETURN: {
+      m_returnValue = frame.regs[i.a];
+      if (m_cur == 0) {
+        // Returning from main: sync the frame back into the scope before
+        // unwinding so script variables persist.
+        fprintf(stderr, "[DBG] main RETURN sync: vars=%zu regCount=%d\n", m_prog.vars.size(), m_prog.registerCount);
+        for (const auto &[name, reg] : m_prog.vars) {
+          fprintf(stderr, "[DBG]   var '%s' reg=%d val=%s\n", name.c_str(), reg, frame.regs[reg].typeName());
+          if (m_deleted.count(reg))
+            m_scope.remove(name);
+          else
+            m_scope.set(name, frame.regs[reg]);
+        }
+      }
+      m_frames.pop_back();
+      m_cur--;
+      continue; // caller frame is re-fetched next iteration; skip trailing increment
     }
     case Opcode::ADD:
     case Opcode::SUB:
@@ -461,28 +562,19 @@ void QLangVM::run() {
     case Opcode::GT:
     case Opcode::LE:
     case Opcode::GE:
-      m_registers[i.a] = doBinary(i.op, m_registers[i.b], m_registers[i.c]);
+      frame.regs[i.a] = doBinary(op, frame.regs[i.b], frame.regs[i.c]);
       break;
     case Opcode::JMP:
-      pc = static_cast<size_t>(i.a);
+      frame.pc = static_cast<size_t>(i.a);
       continue;
     case Opcode::JMPIFFALSE:
-      if (!isTrue(m_registers[i.a]))
-        pc = static_cast<size_t>(i.b);
+      if (!isTrue(frame.regs[i.a]))
+        frame.pc = static_cast<size_t>(i.b);
       else
-        pc = pc + 1;
+        frame.pc = frame.pc + 1;
       continue;
     }
-    pc += 1;
-  }
-
-  // Capture final variable state back into the scope. Variables removed by
-  // `delete` are taken out of the scope rather than written back.
-  for (const auto &[name, reg] : m_prog.vars) {
-    if (m_deleted.count(reg))
-      m_scope.remove(name);
-    else
-      m_scope.set(name, m_registers[reg]);
+    frame.pc += 1;
   }
 }
 

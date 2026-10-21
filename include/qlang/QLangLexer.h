@@ -26,6 +26,8 @@ enum class TokenType {
   Then,
   While,
   End,
+  Def,      // def
+  Return,   // return
 
   // Type keywords (used in typed declarations: local b:byte = 32)
   TypeByte,

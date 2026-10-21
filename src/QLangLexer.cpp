@@ -17,6 +17,8 @@ TokenType keywordType(const std::string &text) {
   if (text == "then") return TokenType::Then;
   if (text == "while") return TokenType::While;
   if (text == "end") return TokenType::End;
+  if (text == "def") return TokenType::Def;
+  if (text == "return") return TokenType::Return;
   if (text == "byte") return TokenType::TypeByte;
   if (text == "word") return TokenType::TypeWord;
   if (text == "short") return TokenType::TypeShort;

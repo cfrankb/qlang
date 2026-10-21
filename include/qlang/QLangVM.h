@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -25,13 +26,35 @@ public:
   int registerCount() const { return static_cast<int>(m_registers.size()); }
 
 private:
+  // One activation frame. `regs` is the frame's register file; `captures` is
+  // this function's explicit capture table (pointers into enclosing frames);
+  // `pc` is the instruction pointer within the function's stream.
+  struct Frame {
+    int funcIndex = 0;
+    std::vector<QLangValue> regs;
+    std::vector<CaptureRef> captures;
+    size_t pc = 0;
+  };
+
   static bool isTrue(const QLangValue &v);
   static QLangValue doBinary(Opcode op, const QLangValue &a, const QLangValue &b);
   static QLangValue doUnary(Opcode op, const QLangValue &a);
 
+  // Push a callee frame, copying args into its parameter registers, and advance
+  // the frame pointer onto it. `dest` is the caller register holding the
+  // closure (for CALLCLOS) / the call destination (for CALLFN).
+  void pushCall(int calleeIndex, std::vector<QLangValue> &callerRegs,
+                int dest, int argc);
+
   const CompiledProgram &m_prog;
   QLangContext &m_scope;
   std::vector<QLangValue> m_registers;
+  // Frame stack. A deque keeps pointers to frames stable so captured-by-
+  // reference variables remain valid across calls. `m_cur` indexes the live
+  // frame; CALLFN/CALLCLOS push and advance it, RETURN pops and decrements it.
+  std::deque<Frame> m_frames;
+  int m_cur = -1;
+  QLangValue m_returnValue; // result handed back to the caller of a call
   std::unordered_set<int> m_deleted; // registers removed by `delete`
   size_t m_steps = 0;
 

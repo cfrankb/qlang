@@ -13,7 +13,8 @@ namespace qlang {
 // The output of compilation: a compiled program plus the variable-to-register
 // map the VM needs to sync the scope.
 struct CompiledProgram {
-  Bytecode code;
+  Bytecode code;                 // scratch for main; functions() holds all fns
+  std::vector<Function> functions; // functions[0] == the implicit "main"
   std::unordered_map<std::string, int> vars; // script name -> register index
   int registerCount = 0;
 };
@@ -39,6 +40,19 @@ private:
   Opcode binOp(const std::string &text) const;
   Opcode unOp(const std::string &text) const;
 
+  // Compile a function body (a `def` body or an arrow-closure body) into its
+  // own instruction stream and constant pool, append it to the program, and
+  // return its function index. `captures` is the explicit capture list.
+  int buildFunction(const std::string &name,
+                    const std::vector<std::string> &params,
+                    const std::vector<std::string> &captures,
+                    const std::vector<StmtPtr> &body);
+
+  // Compile a statement inside a function body (used by buildFunction for the
+  // body and by compileStmt for the main program). The current function's
+  // register space, capture table, and instruction stream are the active ones.
+  void compileBodyStmt(const StmtPtr &s);
+
   // Throw if `name` was declared with `const` (guards against reassignment).
   void guardNotConst(const std::string &name, const char *op) const;
 
@@ -58,6 +72,17 @@ private:
   std::vector<StmtPtr> m_program;
   std::unordered_map<std::string, int> m_regs;
   std::unordered_set<std::string> m_constVars; // names declared with `const`
+  // Compiled user functions (index 0 is reserved for the implicit "main"
+  // function and is filled in at the end of compile()). `def` bodies and
+  // arrow-closure bodies are appended here as they are compiled.
+  std::vector<Function> m_functions;
+  // User-defined functions: name -> function index (for `def` calls).
+  std::unordered_map<std::string, int> m_userFuncs;
+  // Variable names that currently hold an arrow-closure value.
+  std::unordered_set<std::string> m_closureVars;
+  // Active closure capture table: captured variable name -> refId (index into
+  // the current function's explicit capture list).
+  std::unordered_map<std::string, int> m_captureRegs;
   // Runtime type tracking: lets the compiler choose the right opcode for
   // `+=` (array append vs. string/number add) and array/table access.
   std::unordered_map<std::string, QLangValue::Type> m_varTypes;

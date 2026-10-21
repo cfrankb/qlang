@@ -94,6 +94,8 @@ StmtPtr QLangParser::parseStatement() {
   if (check(TokenType::For)) return parseFor();
   if (check(TokenType::While)) return parseWhile();
   if (check(TokenType::If)) return parseIf();
+  if (check(TokenType::Def)) return parseFunction();
+  if (check(TokenType::Return)) return parseReturn();
 
   // Statement-form prefix inc/dec: ++a / --a
   if (check(TokenType::Increment) || check(TokenType::Decrement)) {
@@ -240,9 +242,13 @@ StmtPtr QLangParser::parseDeclaration() {
     }
   }
 
-  // Optional value: `local z` declares a nil; `local x = expr` initializes.
+  // Optional value: `local z` declares a nil. `local name = (params)...{}`
+  // is an arrow-closure assignment; otherwise it is a normal expression.
   if (check(TokenType::Assign) && current().text == "=") {
     m_pos++; // consume '='
+    if (check(TokenType::LParen) && looksLikeArrow()) {
+      return parseArrowClosure(stmt->name);
+    }
     stmt->value = parseExpression();
   }
   match(TokenType::Semicolon);
@@ -340,6 +346,106 @@ StmtPtr QLangParser::parseIf() {
     stmt->ifBody.push_back(parseStatement());
   }
   consume(TokenType::End, "'end' to close 'if'");
+  return stmt;
+}
+
+StmtPtr QLangParser::parseReturn() {
+  consume(TokenType::Return, "'return'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Return;
+  // Optional value; a bare `return` (or `return` before a terminator) yields nil.
+  if (!check(TokenType::Semicolon) && !check(TokenType::End) &&
+      !check(TokenType::RBrace) && !atEnd()) {
+    stmt->returnValue = parseExpression();
+  }
+  match(TokenType::Semicolon);
+  return stmt;
+}
+
+StmtPtr QLangParser::parseFunction() {
+  consume(TokenType::Def, "'def'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Def;
+  stmt->funcName = consume(TokenType::Ident, "function name").value;
+  consume(TokenType::LParen, "'(' after function name");
+  if (!check(TokenType::RParen)) {
+    do {
+      stmt->params.push_back(consume(TokenType::Ident, "parameter name").value);
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RParen, "')'");
+
+  if (match(TokenType::LBrace)) {
+    // Brace form: def name(params) { ... }
+    while (!check(TokenType::RBrace) && !atEnd())
+      stmt->body.push_back(parseStatement());
+    consume(TokenType::RBrace, "'}' to close function");
+  } else {
+    // End form: def name(params) ... end
+    while (!check(TokenType::End) && !atEnd())
+      stmt->body.push_back(parseStatement());
+    consume(TokenType::End, "'end' to close function");
+  }
+  match(TokenType::Semicolon);
+  return stmt;
+}
+
+// True when the parenthesized group beginning at the current token is an arrow
+// function parameter list, i.e. it is followed by an explicit capture list
+// '[' or a body '{'. Used to disambiguate `local f = (a) { }` from
+// `local x = (a + b)`.
+bool QLangParser::looksLikeArrow() const {
+  int depth = 0;
+  size_t j = m_pos;
+  while (j < m_tokens.size()) {
+    if (m_tokens[j].type == TokenType::LParen)
+      depth++;
+    else if (m_tokens[j].type == TokenType::RParen) {
+      depth--;
+      if (depth == 0) {
+        j++;
+        break;
+      }
+    }
+    j++;
+  }
+  return j < m_tokens.size() &&
+         (m_tokens[j].type == TokenType::LBracket ||
+          m_tokens[j].type == TokenType::LBrace);
+}
+
+StmtPtr QLangParser::parseArrowClosure(const std::string &varName) {
+  int line = current().line, col = current().col;
+  (void)line;
+  (void)col;
+  consume(TokenType::LParen, "'(' of arrow function");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Arrow;
+  stmt->name = varName;
+  if (!check(TokenType::RParen)) {
+    do {
+      stmt->params.push_back(consume(TokenType::Ident, "parameter name").value);
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RParen, "')' of arrow function");
+
+  // Optional explicit capture list: [x, y, ...]
+  if (match(TokenType::LBracket)) {
+    if (!check(TokenType::RBracket)) {
+      do {
+        stmt->captures.push_back(
+          consume(TokenType::Ident, "captured variable").value);
+      } while (match(TokenType::Comma));
+    }
+    consume(TokenType::RBracket, "']' to close capture list");
+  }
+
+  // Body in braces.
+  consume(TokenType::LBrace, "'{' to open arrow function body");
+  while (!check(TokenType::RBrace) && !atEnd())
+    stmt->body.push_back(parseStatement());
+  consume(TokenType::RBrace, "'}' to close arrow function body");
+  match(TokenType::Semicolon);
   return stmt;
 }
 

@@ -17,6 +17,7 @@ const char *QLangValue::typeName() const {
   case Type::Array: return "array";
   case Type::Float: return "float";
   case Type::Table: return "table";
+  case Type::Function: return "function";
   }
   return "?";
 }
@@ -64,5 +65,19 @@ QL_ACCESSOR_MUT(double, Float, double)
 QL_ACCESSOR_MUT(TableValue, Table, TableValue)
 
 #undef QL_ACCESSOR_MUT
+
+const Closure &QLangValue::asFunction() const {
+  if (m_type != Type::Function)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected Function but value is ") + typeName());
+  return *std::get<ClosurePtr>(m_storage);
+}
+
+Closure &QLangValue::asFunction() {
+  if (m_type != Type::Function)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected Function but value is ") + typeName());
+  return *std::get<ClosurePtr>(m_storage);
+}
 
 } // namespace qlang

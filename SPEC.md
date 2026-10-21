@@ -12,7 +12,7 @@ this first version will parse text within a context.
 
 variable types
 ===============
-string (zero terminated)
+string/str (zero terminated)
 blob  (binary data)
 byte (uint8_t)
 word (uint16_t)
@@ -48,7 +48,8 @@ table
 bool
 true
 false
-
+def
+let
 
 constants
 =========
@@ -220,10 +221,12 @@ printf(str, ...) # mirror C printf
 len(var)         # return string, table, blob or array length; other type return 1; error on undefined/nil.
 substr(str, start, lenght) # return a substring fron index start. lenght is optional
 delete var      # delete variable
+str(var)        # return string representation of variable
+int(var)        # return variable cast to int; string are parsed as decimal. other types return 0
 
 
-functions
-==========
+functions (native)
+==================
 
 examples
 
@@ -244,10 +247,26 @@ def hello2(name, year) {
    return true
 }
 
-local func1 = (name, year) {
+def is only valid in global scope. no closure.
+
+local func1 = (name, year) { # no capture
    println("hello world")
    printf("hi %s it is %d\n", name, year)
    return true
 }
-
 func1("Frank", 2026)
+
+local world = "world"
+local func2 = (name, year)[world] {  # explicit capture passed by reference
+   println("hello " + world)
+   printf("hi %s it is %d\n", name, year)
+   return true
+}
+
+func2("Nana", "2003")
+
+only explicit capture being passed from caller context;
+closure list is optional []. closure only available in function scope.
+reference still maintained even after reassignment 
+return value is optiona. defaults to nil
+local always apply to the current scope.

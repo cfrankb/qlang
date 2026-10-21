@@ -78,7 +78,10 @@ enum class StmtKind {
   For,
   While,
   If,
-  ExprStmt
+  ExprStmt,
+  Def,       // def name(params) ... end  /  def name(params) { ... }
+  Arrow,     // local name = (params)[captures] { ... }  (closure assignment)
+  Return     // return [value]
 };
 
 // Base statement node. Forward-declared so StmtPtr can be used inside Stmt.
@@ -121,6 +124,17 @@ struct Stmt {
   // If: if (cond) then ... end
   ExprPtr ifCond;
   std::vector<StmtPtr> ifBody;
+
+  // Def: def name(params) { ... } / def name(params) ... end  (global fn).
+  std::string funcName;
+  std::vector<std::string> params;
+  // `body` (shared with For) holds the function's statements.
+
+  // Arrow: local name = (params)[captures] { ... }  (closure assignment).
+  std::vector<std::string> captures;
+
+  // Return: return [value]  (value optional; defaults to nil).
+  ExprPtr returnValue;
 };
 
 using StmtPtr = std::shared_ptr<Stmt>;
@@ -143,6 +157,10 @@ private:
   StmtPtr parseFor();
   StmtPtr parseWhile();
   StmtPtr parseIf();
+  StmtPtr parseReturn();
+  StmtPtr parseFunction();
+  StmtPtr parseArrowClosure(const std::string &varName);
+  bool looksLikeArrow() const;
   ExprPtr parseExpression();
   ExprPtr parseBinary(int minPrecedence);
   ExprPtr parseUnary();

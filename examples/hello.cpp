@@ -19,21 +19,27 @@ static void printExpr(const ExprPtr &e, int indent);
 static void printStmt(const StmtPtr &s, int indent);
 static void dumpBytecode(const CompiledProgram &cp);
 
-static const char *indentStr(int n) {
+static const char *indentStr(int n)
+{
   static char buf[64] = {0};
   int n2 = n * 2;
-  if (n2 > 60) n2 = 60;
-  for (int i = 0; i < n2; i++) buf[i] = ' ';
+  if (n2 > 60)
+    n2 = 60;
+  for (int i = 0; i < n2; i++)
+    buf[i] = ' ';
   buf[n2] = '\0';
   return buf;
 }
 
-static void printExpr(const ExprPtr &e, int indent) {
-  if (!e) {
+static void printExpr(const ExprPtr &e, int indent)
+{
+  if (!e)
+  {
     std::cout << indentStr(indent) << "(null expr)\n";
     return;
   }
-  switch (e->kind) {
+  switch (e->kind)
+  {
   case ExprKind::Literal:
     std::cout << indentStr(indent) << "literal: " << e->literal.typeName()
               << "\n";
@@ -53,12 +59,16 @@ static void printExpr(const ExprPtr &e, int indent) {
   }
 }
 
-static void printStmt(const StmtPtr &s, int indent) {
-  if (!s) return;
-  switch (s->kind) {
+static void printStmt(const StmtPtr &s, int indent)
+{
+  if (!s)
+    return;
+  switch (s->kind)
+  {
   case StmtKind::Declaration:
     std::cout << indentStr(indent) << "local " << s->name;
-    if (s->declaredType) {
+    if (s->declaredType)
+    {
       QLangValue tmp(*s->declaredType);
       std::cout << ":" << tmp.typeName();
     }
@@ -75,17 +85,20 @@ static void printStmt(const StmtPtr &s, int indent) {
     printExpr(s->forStart, indent + 1);
     std::cout << indentStr(indent + 1) << "to\n";
     printExpr(s->forEnd, indent + 1);
-    for (auto &st : s->body) printStmt(st, indent + 1);
+    for (auto &st : s->body)
+      printStmt(st, indent + 1);
     break;
   case StmtKind::While:
     std::cout << indentStr(indent) << "while\n";
     printExpr(s->cond, indent + 1);
-    for (auto &st : s->whileBody) printStmt(st, indent + 1);
+    for (auto &st : s->whileBody)
+      printStmt(st, indent + 1);
     break;
   case StmtKind::If:
     std::cout << indentStr(indent) << "if\n";
     printExpr(s->ifCond, indent + 1);
-    for (auto &st : s->ifBody) printStmt(st, indent + 1);
+    for (auto &st : s->ifBody)
+      printStmt(st, indent + 1);
     break;
   case StmtKind::ExprStmt:
     std::cout << indentStr(indent) << "expr\n";
@@ -94,13 +107,15 @@ static void printStmt(const StmtPtr &s, int indent) {
   }
 }
 
-static void dumpBytecode(const CompiledProgram &cp) {
+static void dumpBytecode(const CompiledProgram &cp)
+{
   const auto &ins = cp.code.instructions();
   const auto &consts = cp.code.constants();
   std::cout << "\nBytecode (" << ins.size() << " instructions, "
             << cp.registerCount << " registers, " << consts.size()
             << " constants):\n";
-  for (size_t i = 0; i < ins.size(); i++) {
+  for (size_t i = 0; i < ins.size(); i++)
+  {
     std::cout << "  " << i << ": " << Bytecode::name(ins[i].op);
     if (ins[i].op == Opcode::CONST)
       std::cout << " r[" << ins[i].a << "] = const[" << ins[i].b << "] ("
@@ -119,7 +134,8 @@ static void dumpBytecode(const CompiledProgram &cp) {
     std::cout << "  [" << i << "] " << consts[i].typeName() << "\n";
 }
 
-int main() {
+int main()
+{
   // Program mirroring the grammar in spec.md.
   std::string src = R"(
 local a = 32                 # int
@@ -142,22 +158,37 @@ local n = 3
 while (n > 0)                 # while with manual decrement
   n = n - 1
 end
+
+printf("Louis is TOTO\n")
+
+local hello = (name) {
+  printf("hello %s\n", name)
+  return true
+}
+
+hello("Sonia")
+
 )";
 
   QLangContext ctx;
-  try {
+  try
+  {
     std::vector<StmtPtr> program = ctx.parse(src);
     std::cout << "Parsed " << program.size() << " statements.\n";
-    for (auto &st : program) printStmt(st, 0);
+    for (auto &st : program)
+      printStmt(st, 0);
 
     CompiledProgram cp = QLangCompiler(program).compile();
     dumpBytecode(cp);
-  } catch (const QLangError &e) {
+  }
+  catch (const QLangError &e)
+  {
     std::cerr << e.what() << "\n";
     return 1;
   }
 
-  try {
+  try
+  {
     ctx.run(src);
     std::cout << "\nAfter run:\n";
     std::cout << "  a    = " << ctx.get("a").asInt() << "\n";
@@ -170,8 +201,11 @@ end
               ctx.get("s").asString() == "hello world ok" &&
               ctx.get("sum").asInt() == 15 && ctx.get("n").asInt() == 0;
     std::cout << "\nVM result: " << (ok ? "OK" : "MISMATCH") << "\n";
-    if (!ok) return 1;
-  } catch (const QLangError &e) {
+    if (!ok)
+      return 1;
+  }
+  catch (const QLangError &e)
+  {
     std::cerr << e.what() << "\n";
     return 1;
   }

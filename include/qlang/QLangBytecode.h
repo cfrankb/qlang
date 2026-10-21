@@ -78,6 +78,32 @@ enum class Opcode {
   // Control flow
   JMP,       // pc = a
   JMPIFFALSE, // if !truth(r[a]) pc = b
+
+  // User-defined function call. r[a] = call function b, with arguments in
+  // r[a+1 .. a+c] (c == paramCount). The callee runs in a fresh frame; its
+  // return register (0) becomes the result stored in r[a].
+  CALLFN, // r[a] = userfn(b, r[a+1 .. a+c])
+
+  // Call a closure value held in r[a]; its funcIndex is read at runtime.
+  // Arguments are r[a+1 .. a+c]. The result is written back into r[a].
+  CALLCLOS, // r[a] = closure(r[a])(r[a+1 .. a+c])
+
+  // Return from the current function: the value in r[a] is the result.
+  RETURN, // return r[a]
+
+  // Construct an arrow closure in r[a] from the constant at index b. The
+  // constant holds the closure's function index and the enclosing-frame
+  // register indices of its explicit capture list; the closure binds those
+  // registers by reference at construction time.
+  MAKEFUNC, // r[a] = closure(const[b])
+
+  // Load a captured-by-reference variable into r[a] via the closure capture
+  // table entry at index b (live: reads the current value of the outer reg).
+  REFLOAD, // r[a] = captures[b].frame->regs[captures[b].reg]
+
+  // Store r[a] through the closure capture table entry at index b, writing the
+  // enclosing frame's register (reference semantics / write-back).
+  REFSTORE // captures[b].frame->regs[captures[b].reg] = r[a]
 };
 
 // A single instruction. Operands are plain ints interpreted per-opcode:
@@ -91,6 +117,18 @@ struct Instruction {
   int c = 0;
 };
 
+// A compiled user-defined function: its instruction stream, constant pool, and
+// calling metadata. Index 0 of Bytecode::functions is the implicit "main"
+// function (the top-level program). `registerCount` is the number of registers
+// the callee frame must allocate (params + temporaries).
+struct Function {
+  std::string name;
+  int paramCount = 0;
+  int registerCount = 0;
+  std::vector<Instruction> instructions;
+  std::vector<QLangValue> constants;
+};
+
 // The compiled program: an instruction stream plus a constant pool.
 class Bytecode {
 public:
@@ -100,9 +138,19 @@ public:
   // Append a constant, returning its pool index.
   int addConstant(QLangValue value);
 
+  // Append a compiled function (a `def` body or an arrow-closure body). The
+  // caller fills in the name/paramCount/registerCount; this appends the
+  // instruction stream and constant pool and returns the new function index.
+  int addFunction(const std::string &name, int paramCount, int registerCount,
+                  std::vector<Instruction> instrs,
+                  std::vector<QLangValue> constants);
+
   const std::vector<Instruction> &instructions() const { return m_instr; }
   std::vector<Instruction> &instructions() { return m_instr; }
+  void setInstructions(std::vector<Instruction> instrs) { m_instr = std::move(instrs); }
   const std::vector<QLangValue> &constants() const { return m_consts; }
+  void setConstants(std::vector<QLangValue> consts) { m_consts = std::move(consts); }
+  const std::vector<Function> &functions() const { return m_functions; }
   size_t size() const { return m_instr.size(); }
 
   // Mutable access to instruction i (used to patch jump targets after a
@@ -115,6 +163,7 @@ public:
 private:
   std::vector<Instruction> m_instr;
   std::vector<QLangValue> m_consts;
+  std::vector<Function> m_functions;
 };
 
 } // namespace qlang

@@ -41,14 +41,106 @@ void QLangCompiler::emit(Opcode op, int a, int b, int c) {
 }
 
 CompiledProgram QLangCompiler::compile() {
+  fprintf(stderr, "[DBG-C] m_program.size()=%zu\n", m_program.size());
+  // Compile the top-level program into the main (scratch) function context.
   for (auto &s : m_program) {
     compileStmt(s);
   }
+  // Implicit `return nil` at the end of the main program.
+  emit(Opcode::RETURN, 0);
+  fprintf(stderr, "[DBG-C] after compile: m_code.instructions().size()=%zu m_nextReg=%d\n", m_code.instructions().size(), m_nextReg);
+
+  // Wrap the main scratch stream into functions[0].
+  Bytecode mainScratch = std::move(m_code);
+  fprintf(stderr, "[DBG-C] mainScratch.instructions().size()=%zu\n", mainScratch.instructions().size());
+  Function mainFn;
+  mainFn.name = "main";
+  mainFn.paramCount = 0;
+  mainFn.registerCount = m_nextReg;
+  mainFn.instructions = std::move(mainScratch.instructions());
+  mainFn.constants = std::move(mainScratch.constants());
+
   CompiledProgram out;
-  out.code = std::move(m_code);
+  out.functions.push_back(std::move(mainFn));
+  for (auto &fn : m_functions)
+    out.functions.push_back(std::move(fn));
+
+  Bytecode outCode;
+  outCode.setInstructions(out.functions[0].instructions);
+  outCode.setConstants(out.functions[0].constants);
+  // Copy (not move) so out.functions retains its instruction streams for the VM.
+  for (auto &fn : out.functions)
+    outCode.addFunction(fn.name, fn.paramCount, fn.registerCount,
+                        fn.instructions, fn.constants);
+  out.code = std::move(outCode);
   out.vars = std::move(m_regs);
   out.registerCount = m_nextReg;
   return out;
+}
+
+// Compile a function body (def body or arrow-closure body) into its own
+// instruction stream and constant pool, append it as a new function, and return
+// its function index. The enclosing function's compilation state is saved and
+// restored so nested definitions work.
+int QLangCompiler::buildFunction(const std::string &name,
+                                 const std::vector<std::string> &params,
+                                 const std::vector<std::string> &captures,
+                                 const std::vector<StmtPtr> &body) {
+  // Save the enclosing function's compilation state.
+  Bytecode savedCode = m_code;
+  auto savedRegs = m_regs;
+  auto savedConstVars = m_constVars;
+  auto savedVarTypes = m_varTypes;
+  auto savedUserFuncs = m_userFuncs;
+  auto savedClosureVars = m_closureVars;
+  auto savedCaptureRegs = m_captureRegs;
+  int savedNextReg = m_nextReg;
+
+  // Fresh function context: params occupy registers 0..paramCount-1.
+  m_code = Bytecode();
+  m_regs.clear();
+  m_constVars.clear();
+  m_varTypes.clear();
+  m_userFuncs.clear();
+  m_closureVars.clear();
+  m_captureRegs.clear();
+  m_nextReg = 0;
+  for (size_t i = 0; i < params.size(); i++)
+    m_regs[params[i]] = static_cast<int>(i);
+
+  // Register the explicit capture list (name -> refId).
+  for (size_t i = 0; i < captures.size(); i++)
+    m_captureRegs[captures[i]] = static_cast<int>(i);
+
+  // Compile the body.
+  for (auto &s : body)
+    compileStmt(s);
+
+  // Implicit `return nil`.
+  emit(Opcode::RETURN, 0);
+
+  Function fn;
+  fn.name = name;
+  fn.paramCount = static_cast<int>(params.size());
+  fn.registerCount = m_nextReg;
+
+  int funcIndex = static_cast<int>(m_functions.size()) + 1; // +1 for prepended mainFn
+  Bytecode fnCode = std::move(m_code);
+  fn.instructions = std::move(fnCode.instructions());
+  fn.constants = std::move(fnCode.constants());
+  m_functions.push_back(std::move(fn));
+
+  // Restore the enclosing function's compilation state.
+  m_code = std::move(savedCode);
+  m_regs = std::move(savedRegs);
+  m_constVars = std::move(savedConstVars);
+  m_varTypes = std::move(savedVarTypes);
+  m_userFuncs = std::move(savedUserFuncs);
+  m_closureVars = std::move(savedClosureVars);
+  m_captureRegs = std::move(savedCaptureRegs);
+  m_nextReg = savedNextReg;
+
+  return funcIndex;
 }
 
 void QLangCompiler::compileStmt(const StmtPtr &s) {
@@ -85,6 +177,25 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
     break;
   }
   case StmtKind::Assignment: {
+    // Direct assignment to a captured variable (write-back / reference).
+    auto cit = m_captureRegs.find(s->name);
+    if (cit != m_captureRegs.end() && !s->target) {
+      const std::string &op = s->assignOp.text;
+      if (op == "=") {
+        int t = tmpRegister();
+        compileExpr(s->assignValue, t);
+        emit(Opcode::REFSTORE, cit->second, t, 0);
+      } else {
+        int cur = tmpRegister();
+        emit(Opcode::REFLOAD, cur, cit->second, 0);
+        int t = tmpRegister();
+        compileExpr(s->assignValue, t);
+        Opcode opCode = (op == "++") ? Opcode::INC : Opcode::DEC;
+        emit(opCode, cur, cur, t);
+        emit(Opcode::REFSTORE, cit->second, cur, 0);
+      }
+      break;
+    }
     // Index/member assignment target (e.g. a[i] = v, t.name = v).
     if (s->target) {
       compileAssignTarget(s->target, s->assignOp, s->assignValue);
@@ -196,6 +307,49 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
     compileExpr(s->value, t);
     break;
   }
+  case StmtKind::Def: {
+    // `def name(params) ... end` (or brace form): a global function.
+    int funcIndex = buildFunction(s->funcName, s->params, {}, s->body);
+    m_userFuncs[s->funcName] = funcIndex;
+    break;
+  }
+  case StmtKind::Arrow: {
+    // `local name = (params)[captures] { ... }`: an arrow-closure value.
+    int funcIndex = buildFunction(s->name, s->params, s->captures, s->body);
+    m_closureVars.insert(s->name);
+    m_varTypes[s->name] = QLangValue::Type::Function;
+    int r = declareVar(s->name);
+    int t = tmpRegister();
+    // Constant describing the closure: funcIndex + enclosing capture registers.
+    auto closure = std::make_shared<Closure>();
+    closure->funcIndex = funcIndex;
+    for (auto &cap : s->captures) {
+      int reg = regOf(cap);
+      if (reg < 0)
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "capture of undeclared variable '" + cap + "'");
+      CaptureRef cr;
+      cr.reg = reg;
+      cr.frame = nullptr; // filled in by MAKEFUNC at runtime
+      closure->captures.push_back(cr);
+    }
+    int constIdx = emitConst(QLangValue::Function(closure));
+    emit(Opcode::MAKEFUNC, t, constIdx);
+    emit(Opcode::MOV, r, t);
+    break;
+  }
+  case StmtKind::Return: {
+    // Return value goes into register 0 (the frame's return register).
+    if (s->returnValue) {
+      int t = tmpRegister();
+      compileExpr(s->returnValue, t);
+      emit(Opcode::MOV, 0, t);
+    } else {
+      emit(Opcode::CONST, 0, emitConst(QLangValue())); // nil
+    }
+    emit(Opcode::RETURN, 0);
+    break;
+  }
   }
 }
 
@@ -208,6 +362,12 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     emit(Opcode::CONST, dest, emitConst(e->literal));
     break;
   case ExprKind::Variable: {
+    // Captured variable: load through the closure reference (live binding).
+    auto cit = m_captureRegs.find(e->name);
+    if (cit != m_captureRegs.end()) {
+      emit(Opcode::REFLOAD, dest, cit->second, 0);
+      break;
+    }
     int r = regOf(e->name);
     if (r < 0)
       throw QLangError(QLangErrorKind::Parse, 0, 0,
@@ -231,13 +391,30 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     break;
   }
   case ExprKind::Call: {
-    int funcId = builtinId(e->callee);
     int argCount = static_cast<int>(e->args.size());
     std::vector<int> argRegs(argCount);
     for (int i = 0; i < argCount; i++)
       argRegs[i] = tmpRegister();
     for (int i = 0; i < argCount; i++)
       compileExpr(e->args[i], argRegs[i]);
+
+    // User `def` function: funcIndex known at compile time.
+    auto uit = m_userFuncs.find(e->callee);
+    if (uit != m_userFuncs.end()) {
+      emit(Opcode::CALLFN, dest, uit->second, argCount);
+      break;
+    }
+    // Arrow-closure variable: the closure value (with its funcIndex) is loaded
+    // from the variable register and dispatched at runtime.
+    auto cif = m_closureVars.find(e->callee);
+    if (cif != m_closureVars.end()) {
+      int cr = regOf(e->callee);
+      emit(Opcode::MOV, dest, cr);
+      emit(Opcode::CALLCLOS, dest, argCount, argCount);
+      break;
+    }
+    // Built-in function.
+    int funcId = builtinId(e->callee);
     emit(Opcode::CALL, dest, funcId, argCount);
     break;
   }
@@ -342,9 +519,18 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
   if (target->kind == ExprKind::Index) {
     // base is a variable; use its register directly so the mutation persists.
     const std::string &baseName = target->indexBase->name;
-    int baseR = regOf(baseName);
-    if (baseR < 0)
-      baseR = declareVar(baseName); // bare `ab[1]=5` auto-declares ab
+    int baseR;
+    // Base may be a captured variable: load it through the reference so the
+    // read-modify-write mutates the shared (enclosing) array.
+    auto cit = m_captureRegs.find(baseName);
+    if (cit != m_captureRegs.end()) {
+      baseR = tmpRegister();
+      emit(Opcode::REFLOAD, baseR, cit->second, 0);
+    } else {
+      baseR = regOf(baseName);
+      if (baseR < 0)
+        baseR = declareVar(baseName); // bare `ab[1]=5` auto-declares ab
+    }
     int idxR = tmpRegister();
     if (target->indexExpr)
       compileExpr(target->indexExpr, idxR);
@@ -367,9 +553,16 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
     }
   } else if (target->kind == ExprKind::Member) {
     const std::string &baseName = target->memberBase->name;
-    int baseR = regOf(baseName);
-    if (baseR < 0)
-      baseR = declareVar(baseName);
+    int baseR;
+    auto cit = m_captureRegs.find(baseName);
+    if (cit != m_captureRegs.end()) {
+      baseR = tmpRegister();
+      emit(Opcode::REFLOAD, baseR, cit->second, 0);
+    } else {
+      baseR = regOf(baseName);
+      if (baseR < 0)
+        baseR = declareVar(baseName);
+    }
     int keyR = tmpRegister();
     emit(Opcode::CONST, keyR, emitConst(QLangValue::String(target->memberName)));
     int valR = tmpRegister();

@@ -19,6 +19,20 @@ int Bytecode::addConstant(QLangValue value) {
   return idx;
 }
 
+int Bytecode::addFunction(const std::string &name, int paramCount,
+                          int registerCount, std::vector<Instruction> instrs,
+                          std::vector<QLangValue> constants) {
+  Function fn;
+  fn.name = name;
+  fn.paramCount = paramCount;
+  fn.registerCount = registerCount;
+  fn.instructions = std::move(instrs);
+  fn.constants = std::move(constants);
+  int idx = static_cast<int>(m_functions.size());
+  m_functions.push_back(std::move(fn));
+  return idx;
+}
+
 const char *Bytecode::name(Opcode op) {
   switch (op) {
   case Opcode::CONST: return "const";
@@ -55,6 +69,12 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::TABPUT: return "tabput";
   case Opcode::JMP: return "jmp";
   case Opcode::JMPIFFALSE: return "jmpfalse";
+  case Opcode::CALLFN: return "callfn";
+  case Opcode::CALLCLOS: return "callclo";
+  case Opcode::RETURN: return "return";
+  case Opcode::MAKEFUNC: return "makefunc";
+  case Opcode::REFLOAD: return "refload";
+  case Opcode::REFSTORE: return "refstore";
   }
   return "?";
 }

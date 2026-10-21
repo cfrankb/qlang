@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <string>
 #include <variant>
 #include <vector>
@@ -9,6 +10,24 @@
 namespace qlang {
 
 class QLangValue; // forward declaration: ArrayValue references it recursively
+
+// A captured-by-reference variable: an opaque pointer to the enclosing frame's
+// register file plus the register index within it. The VM stores a real frame
+// pointer here (see QLangVM); the pointer is intentionally opaque so the value
+// layer does not depend on the VM. The reference stays live across reassignment
+// of the outer variable because it addresses the register, not a snapshot.
+struct CaptureRef {
+  void* frame = nullptr; // opaque: VM stores Frame*
+  int reg = 0;
+};
+
+// A user-defined function value (arrow closure). `funcIndex` selects the
+// compiled Function in the program; `captures` is the explicit capture list.
+struct Closure {
+  int funcIndex = -1;
+  std::vector<CaptureRef> captures;
+};
+using ClosurePtr = std::shared_ptr<Closure>;
 
 // A script array is a homogeneous C++ container of mixed script values.
 // The value itself is recursively a QLangValue, so arrays nest freely.
@@ -32,7 +51,8 @@ public:
     Blob,     // arbitrary binary data
     Array,    // list of mixed values
     Float,    // double
-    Table     // keyed string -> value map
+    Table,    // keyed string -> value map
+    Function  // user-defined function (arrow closure)
   };
 
   QLangValue() : m_type(Type::Nil) {}
@@ -89,6 +109,11 @@ public:
     q.m_storage = std::move(v);
     return q;
   }
+  static QLangValue Function(ClosurePtr v) {
+    QLangValue q(Type::Function);
+    q.m_storage = std::move(v);
+    return q;
+  }
 
   Type type() const { return m_type; }
   bool isNil() const { return m_type == Type::Nil; }
@@ -116,12 +141,14 @@ public:
   double &asFloat();
   const TableValue &asTable() const;
   TableValue &asTable();
+  const Closure &asFunction() const;
+  Closure &asFunction();
 
 private:
   Type m_type;
   std::variant<std::monostate, uint8_t, uint16_t, int16_t, int32_t, uint32_t,
                double, std::string, std::vector<uint8_t>, ArrayValue,
-               TableValue>
+               TableValue, ClosurePtr>
       m_storage;
 };
 
