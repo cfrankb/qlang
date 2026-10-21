@@ -20,13 +20,15 @@ namespace {
 
 bool isNumeric(const QLangValue &v) {
   auto t = v.type();
-  return t == QLangValue::Type::Byte || t == QLangValue::Type::Word ||
-         t == QLangValue::Type::Short || t == QLangValue::Type::Int ||
-         t == QLangValue::Type::Unsigned || t == QLangValue::Type::Float;
+  return t == QLangValue::Type::Bool || t == QLangValue::Type::Byte ||
+         t == QLangValue::Type::Word || t == QLangValue::Type::Short ||
+         t == QLangValue::Type::Int || t == QLangValue::Type::Unsigned ||
+         t == QLangValue::Type::Float;
 }
 
 int64_t toInt64(const QLangValue &v) {
   switch (v.type()) {
+  case QLangValue::Type::Bool: return static_cast<int64_t>(v.asInt());
   case QLangValue::Type::Byte: return static_cast<int64_t>(v.asByte());
   case QLangValue::Type::Word: return static_cast<int64_t>(v.asWord());
   case QLangValue::Type::Short: return static_cast<int64_t>(v.asShort());
@@ -49,6 +51,7 @@ std::string valueToString(const QLangValue &v) {
   switch (v.type()) {
   case QLangValue::Type::Nil: return "nil";
   case QLangValue::Type::String: return v.asString();
+  case QLangValue::Type::Bool: return std::to_string(static_cast<int32_t>(v.asInt()));
   case QLangValue::Type::Byte: return std::to_string(v.asByte());
   case QLangValue::Type::Word: return std::to_string(v.asWord());
   case QLangValue::Type::Short: return std::to_string(v.asShort());
@@ -312,6 +315,8 @@ bool QLangVM::isTrue(const QLangValue &v) {
 // (C-style cast semantics); other types pass through unchanged.
 QLangValue convert(const QLangValue &v, QLangValue::Type type) {
   switch (type) {
+  case QLangValue::Type::Bool:
+    return QLangValue::Bool(toInt64(v) ? 1 : 0);
   case QLangValue::Type::Byte:
     return QLangValue::Byte(static_cast<uint8_t>(toInt64(v)));
   case QLangValue::Type::Word:

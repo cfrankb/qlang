@@ -7,6 +7,7 @@ namespace qlang {
 const char *QLangValue::typeName() const {
   switch (m_type) {
   case Type::Nil: return "nil";
+  case Type::Bool: return "bool";
   case Type::Byte: return "byte";
   case Type::Word: return "word";
   case Type::Short: return "short";
@@ -34,7 +35,14 @@ const char *QLangValue::typeName() const {
 QL_ACCESSOR_GETTER(uint8_t, Byte, uint8_t)
 QL_ACCESSOR_GETTER(uint16_t, Word, uint16_t)
 QL_ACCESSOR_GETTER(int16_t, Short, int16_t)
-QL_ACCESSOR_GETTER(int32_t, Int, int32_t)
+// asInt accepts both Int and Bool (they share int32_t storage).
+const int32_t &QLangValue::asInt() const {
+  if (m_type != Type::Int && m_type != Type::Bool)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected Int or Bool but value is ") +
+                         typeName());
+  return std::get<int32_t>(m_storage);
+}
 QL_ACCESSOR_GETTER(uint32_t, Unsigned, uint32_t)
 QL_ACCESSOR_GETTER(std::string, String, std::string)
 QL_ACCESSOR_GETTER(std::vector<uint8_t>, Blob, std::vector<uint8_t>)
@@ -56,7 +64,14 @@ QL_ACCESSOR_GETTER(TableValue, Table, TableValue)
 QL_ACCESSOR_MUT(uint8_t, Byte, uint8_t)
 QL_ACCESSOR_MUT(uint16_t, Word, uint16_t)
 QL_ACCESSOR_MUT(int16_t, Short, int16_t)
-QL_ACCESSOR_MUT(int32_t, Int, int32_t)
+// asInt mut accepts both Int and Bool (they share int32_t storage).
+int32_t &QLangValue::asInt() {
+  if (m_type != Type::Int && m_type != Type::Bool)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected Int or Bool but value is ") +
+                         typeName());
+  return std::get<int32_t>(m_storage);
+}
 QL_ACCESSOR_MUT(uint32_t, Unsigned, uint32_t)
 QL_ACCESSOR_MUT(std::string, String, std::string)
 QL_ACCESSOR_MUT(std::vector<uint8_t>, Blob, std::vector<uint8_t>)

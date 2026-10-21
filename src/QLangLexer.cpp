@@ -27,6 +27,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "goto") return TokenType::Goto;
   if (text == "true") return TokenType::True;
   if (text == "false") return TokenType::False;
+  if (text == "bool") return TokenType::TypeBool;
   if (text == "byte") return TokenType::TypeByte;
   if (text == "word") return TokenType::TypeWord;
   if (text == "short") return TokenType::TypeShort;

@@ -168,6 +168,15 @@ int main() {
   expectVal("method call via var", "local f = (x)[] { return x * 2 }\nlocal r = f(21);", "r", 42);
   expectVal("member call no args", "local t:table = { val = 99 }\nlocal r = t.val;", "r", 99);
 
+  // -- NEW: bool type (spec §18-28) --
+  expectVal("bool typed true", "local b:bool = true\nlocal r = b;", "r", 1);
+  expectVal("bool typed false", "local b:bool = false\nlocal r = b;", "r", 0);
+  expectStr("bool type returns bool", "local b:bool = true\nlocal s = type(b);", "s", "bool");
+  expectVal("bool in comparison", "local b:bool = true\nlocal r = (b == 1);", "r", 1);
+  expectVal("bool arithmetic", "local b:bool = true\nlocal r = b + 1;", "r", 2);
+  expectVal("bool in if", "local b:bool = false\nlocal r = 0\nif !b then r = 1 end\nlocal result = r;", "result", 1);
+  expectRun("bool const", "const flag:bool = true");
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

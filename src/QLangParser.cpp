@@ -266,15 +266,15 @@ StmtPtr QLangParser::parseDeclaration() {
   if (match(TokenType::Colon)) {
     TokenType tt = current().type;
     bool isType =
-        (tt >= TokenType::TypeByte && tt <= TokenType::TypeTable) ||
+        (tt >= TokenType::TypeBool && tt <= TokenType::TypeTable) ||
         tt == TokenType::StrType;
     if (isType) {
       QLangValue::Type vt =
           (tt == TokenType::StrType)
               ? QLangValue::Type::String
               : static_cast<QLangValue::Type>(
-                    static_cast<int>(tt) - static_cast<int>(TokenType::TypeByte) +
-                    static_cast<int>(QLangValue::Type::Byte));
+                    static_cast<int>(tt) - static_cast<int>(TokenType::TypeBool) +
+                    static_cast<int>(QLangValue::Type::Bool));
       stmt->declaredType = vt;
       m_pos++;
     } else {
@@ -306,15 +306,15 @@ StmtPtr QLangParser::parseConst() {
   if (match(TokenType::Colon)) {
     TokenType tt = current().type;
     bool isType =
-        (tt >= TokenType::TypeByte && tt <= TokenType::TypeTable) ||
+        (tt >= TokenType::TypeBool && tt <= TokenType::TypeTable) ||
         tt == TokenType::StrType;
     if (isType) {
       QLangValue::Type vt =
           (tt == TokenType::StrType)
               ? QLangValue::Type::String
               : static_cast<QLangValue::Type>(
-                    static_cast<int>(tt) - static_cast<int>(TokenType::TypeByte) +
-                    static_cast<int>(QLangValue::Type::Byte));
+                    static_cast<int>(tt) - static_cast<int>(TokenType::TypeBool) +
+                    static_cast<int>(QLangValue::Type::Bool));
       stmt->declaredType = vt;
       m_pos++;
     } else {
@@ -933,7 +933,7 @@ ExprPtr QLangParser::parseTableLiteral() {
       ExprPtr val;
       // Optional :type annotation on the value: key:byte = expr
       if (match(TokenType::Colon)) {
-        if (current().type >= TokenType::TypeByte &&
+        if (current().type >= TokenType::TypeBool &&
             current().type <= TokenType::TypeTable)
           m_pos++;
         else

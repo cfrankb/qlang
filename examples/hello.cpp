@@ -199,8 +199,17 @@ local human = {
   age = 65
 }
 
-printf("human: %s age=%d", human.name, human.age)
+printf("human: %s age=%d\n", human.name, human.age)
 
+printf("space %d\n", 0x20)
+
+println([1,2,3])
+ar = [1,2,3]
+ar += [4,5]
+for i in ar {
+  printf("%d", i)
+}
+println("")
 
 )";
 

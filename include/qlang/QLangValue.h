@@ -42,6 +42,7 @@ class QLangValue {
 public:
   enum class Type {
     Nil,      // unset / absent
+    Bool,     // bool (true/false; stored as Int 1/0 at runtime)
     Byte,     // uint8_t
     Word,     // uint16_t
     Short,    // int16_t
@@ -76,6 +77,11 @@ public:
   }
   static QLangValue Int(int32_t v) {
     QLangValue q(Type::Int);
+    q.m_storage = v;
+    return q;
+  }
+  static QLangValue Bool(int32_t v) {
+    QLangValue q(Type::Bool);
     q.m_storage = v;
     return q;
   }
