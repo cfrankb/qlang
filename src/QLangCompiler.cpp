@@ -96,7 +96,8 @@ int QLangCompiler::buildFunction(const std::string &name,
   auto savedCaptureRegs = m_captureRegs;
   int savedNextReg = m_nextReg;
 
-  // Fresh function context: params occupy registers 0..paramCount-1.
+  // Fresh function context: params occupy registers 0..paramCount-1 and must
+  // reserve those registers so temporaries never collide with a parameter.
   m_code = Bytecode();
   m_regs.clear();
   m_constVars.clear();
@@ -105,8 +106,12 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_closureVars.clear();
   m_captureRegs.clear();
   m_nextReg = 0;
-  for (size_t i = 0; i < params.size(); i++)
-    m_regs[params[i]] = static_cast<int>(i);
+  for (size_t i = 0; i < params.size(); i++) {
+    int r = static_cast<int>(i);
+    m_regs[params[i]] = r;
+    if (r >= m_nextReg)
+      m_nextReg = r + 1;
+  }
 
   // Register the explicit capture list (name -> refId).
   for (size_t i = 0; i < captures.size(); i++)
@@ -252,12 +257,63 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
     emit(Opcode::JMPIFFALSE, cmpReg, 0); // target fixed up below
     int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
 
+    // Body jump targets (continue -> increment, break -> exit) live AFTER the
+    // body, so patch the CONTINUE/BREAK instructions emitted inside the body
+    // once we know their addresses.
+    m_loops.push_back({0, 0});
+    int bodyStart = static_cast<int>(m_code.instructions().size());
     for (auto &body : s->body)
       compileStmt(body);
+    int bodyEnd = static_cast<int>(m_code.instructions().size());
 
+    int incLabel = bodyEnd;
     emit(Opcode::INC, x, x);
     emit(Opcode::JMP, testLabel);
-    m_code.instructions()[jumpFalseIdx].b = static_cast<int>(m_code.size());
+    int exitLabel = static_cast<int>(m_code.size());
+    m_code.instructions()[jumpFalseIdx].b = exitLabel;
+    for (int j = bodyStart; j < bodyEnd; j++) {
+      auto &ci = m_code.instructions()[j];
+      if (ci.op == Opcode::CONTINUE) ci.a = incLabel;
+      else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
+    }
+    m_loops.pop_back();
+    break;
+  }
+  case StmtKind::ForIn: {
+    // for i in <collection> ... next i : iterate array elements / table keys.
+    int x = declareVar(s->loopVar); // loopVar holds each element/key
+    int idx = tmpRegister();        // index counter
+    emit(Opcode::CONST, idx, emitConst(QLangValue::Int(0)));
+    int colReg = tmpRegister();
+    compileExpr(s->forEnd, colReg); // load the collection once
+    int lenReg = tmpRegister();
+    emit(Opcode::LEN, lenReg, colReg, 0);
+
+    int testLabel = static_cast<int>(m_code.size());
+    int cmpReg = tmpRegister();
+    emit(Opcode::LT, cmpReg, idx, lenReg); // idx < len(collection)
+    emit(Opcode::JMPIFFALSE, cmpReg, 0);
+    int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+    // Assign loopVar = collection[idx] at the top of each iteration.
+    emit(Opcode::SEQGET, x, colReg, idx);
+
+    m_loops.push_back({0, 0});
+    int bodyStart = static_cast<int>(m_code.instructions().size());
+    for (auto &body : s->body)
+      compileStmt(body);
+    int bodyEnd = static_cast<int>(m_code.instructions().size());
+
+    int incLabel = bodyEnd;
+    emit(Opcode::INC, idx, idx);
+    emit(Opcode::JMP, testLabel);
+    int exitLabel = static_cast<int>(m_code.size());
+    m_code.instructions()[jumpFalseIdx].b = exitLabel;
+    for (int j = bodyStart; j < bodyEnd; j++) {
+      auto &ci = m_code.instructions()[j];
+      if (ci.op == Opcode::CONTINUE) ci.a = incLabel;
+      else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
+    }
+    m_loops.pop_back();
     break;
   }
   case StmtKind::While: {
@@ -267,11 +323,21 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
     emit(Opcode::JMPIFFALSE, condReg, 0);
     int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
 
+    // continue -> re-evaluate the condition (testLabel is known before the body);
+    // break -> exit (post-body), so patch BREAK instructions after the body.
+    m_loops.push_back({testLabel, 0});
+    int bodyStart = static_cast<int>(m_code.instructions().size());
     for (auto &body : s->whileBody)
       compileStmt(body);
+    int bodyEnd = static_cast<int>(m_code.instructions().size());
 
     emit(Opcode::JMP, testLabel);
-    m_code.instructions()[jumpFalseIdx].b = static_cast<int>(m_code.size());
+    int exitLabel = static_cast<int>(m_code.size());
+    m_code.instructions()[jumpFalseIdx].b = exitLabel;
+    for (int j = bodyStart; j < bodyEnd; j++)
+      if (m_code.instructions()[j].op == Opcode::BREAK)
+        m_code.instructions()[j].a = exitLabel;
+    m_loops.pop_back();
     break;
   }
   case StmtKind::If: {
@@ -348,6 +414,20 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
       emit(Opcode::CONST, 0, emitConst(QLangValue())); // nil
     }
     emit(Opcode::RETURN, 0);
+    break;
+  }
+  case StmtKind::Continue: {
+    if (m_loops.empty())
+      throw QLangError(QLangErrorKind::Parse, 0, 0,
+                       "'continue' outside of a loop");
+    emit(Opcode::CONTINUE, m_loops.back().contAddr);
+    break;
+  }
+  case StmtKind::Break: {
+    if (m_loops.empty())
+      throw QLangError(QLangErrorKind::Parse, 0, 0,
+                       "'break' outside of a loop");
+    emit(Opcode::BREAK, m_loops.back().breakAddr);
     break;
   }
   }
@@ -463,6 +543,7 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "printf") return static_cast<int>(Builtin::Printf);
   if (name == "len") return static_cast<int>(Builtin::Len);
   if (name == "blob") return static_cast<int>(Builtin::Blob);
+  if (name == "substr") return static_cast<int>(Builtin::Substr);
   throw QLangError(QLangErrorKind::Parse, 0, 0, "unknown function '" + name + "'");
 }
 
@@ -599,6 +680,8 @@ Opcode QLangCompiler::binOp(const std::string &text) const {
   if (text == ">>") return Opcode::SHR;
   if (text == "&&") return Opcode::LAND;
   if (text == "|||" || text == "||") return Opcode::LOR;
+  if (text == "%") return Opcode::MOD;
+  if (text == "in") return Opcode::IN;
   throw QLangError(QLangErrorKind::Parse, 0, 0, "unsupported operator '" + text + "'");
 }
 
@@ -606,6 +689,7 @@ Opcode QLangCompiler::unOp(const std::string &text) const {
   if (text == "--") return Opcode::DEC;
   if (text == "++") return Opcode::INC;
   if (text == "-") return Opcode::NEG;
+  if (text == "!") return Opcode::NOT;
   throw QLangError(QLangErrorKind::Parse, 0, 0, "unsupported unary operator '" + text + "'");
 }
 

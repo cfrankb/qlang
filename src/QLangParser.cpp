@@ -61,6 +61,7 @@ static int precedence(TokenType t) {
   case TokenType::And: return 5;
   case TokenType::Equal:
   case TokenType::NotEqual: return 6;
+  case TokenType::In: return 6;
   case TokenType::Less:
   case TokenType::Greater:
   case TokenType::LessEqual:
@@ -94,6 +95,8 @@ StmtPtr QLangParser::parseStatement() {
   if (check(TokenType::For)) return parseFor();
   if (check(TokenType::While)) return parseWhile();
   if (check(TokenType::If)) return parseIf();
+  if (check(TokenType::Continue)) return parseContinue();
+  if (check(TokenType::Break)) return parseBreak();
   if (check(TokenType::Def)) return parseFunction();
   if (check(TokenType::Return)) return parseReturn();
 
@@ -298,14 +301,39 @@ StmtPtr QLangParser::parseFor() {
   int line = current().line, col = current().col;
   consume(TokenType::For, "'for'");
   auto stmt = std::make_shared<Stmt>();
-  stmt->kind = StmtKind::For;
   stmt->loopVar = consume(TokenType::Ident, "loop variable").value;
+
+  // for i in <collection> ... next i  (sequential iteration)
+  if (check(TokenType::In)) {
+    m_pos++; // consume 'in'
+    stmt->kind = StmtKind::ForIn;
+    stmt->forEnd = parseExpression(); // the collection
+
+    while (!check(TokenType::Next) && !check(TokenType::End) && !atEnd())
+      stmt->body.push_back(parseStatement());
+    if (check(TokenType::Next)) {
+      consume(TokenType::Next, "'next'");
+      Token var = consume(TokenType::Ident, "loop variable in 'next'");
+      if (var.value != stmt->loopVar)
+        throw QLangError(QLangErrorKind::Parse, var.line, var.col,
+                         std::string("'next '") + var.value +
+                             "' does not match loop variable '" +
+                             stmt->loopVar + "'");
+    } else if (atEnd()) {
+      throw QLangError(QLangErrorKind::Parse, line, col,
+                       "expected 'next' to close 'for' loop");
+    }
+    return stmt;
+  }
+
+  // for x = start to end ... next x  (numeric iteration)
   consume(TokenType::Assign, "'='");
+  stmt->kind = StmtKind::For;
   stmt->forStart = parseExpression();
   consume(TokenType::To, "'to'");
   stmt->forEnd = parseExpression();
 
-  while (!check(TokenType::Next) && !atEnd()) {
+  while (!check(TokenType::Next) && !check(TokenType::End) && !atEnd()) {
     stmt->body.push_back(parseStatement());
   }
   if (check(TokenType::Next)) {
@@ -358,6 +386,28 @@ StmtPtr QLangParser::parseReturn() {
       !check(TokenType::RBrace) && !atEnd()) {
     stmt->returnValue = parseExpression();
   }
+  match(TokenType::Semicolon);
+  return stmt;
+}
+
+StmtPtr QLangParser::parseContinue() {
+  int line = current().line, col = current().col;
+  (void)line;
+  (void)col;
+  consume(TokenType::Continue, "'continue'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Continue;
+  match(TokenType::Semicolon);
+  return stmt;
+}
+
+StmtPtr QLangParser::parseBreak() {
+  int line = current().line, col = current().col;
+  (void)line;
+  (void)col;
+  consume(TokenType::Break, "'break'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Break;
   match(TokenType::Semicolon);
   return stmt;
 }
@@ -539,9 +589,27 @@ ExprPtr QLangParser::parsePrimary() {
   switch (tok.type) {
   case TokenType::Integer: {
     m_pos++;
+    long long v = std::stoll(tok.value); // decimal
+    if (tok.value.size() > 2 && tok.value[0] == '0' &&
+        (tok.value[1] == 'x' || tok.value[1] == 'X'))
+      v = std::stoll(tok.value, nullptr, 16); // 0x... hexadecimal
     auto node = std::make_shared<Expr>();
     node->kind = ExprKind::Literal;
-    node->literal = QLangValue::Int(static_cast<int32_t>(std::stoll(tok.value)));
+    node->literal = QLangValue::Int(static_cast<int32_t>(v));
+    return node;
+  }
+  case TokenType::True: {
+    m_pos++;
+    auto node = std::make_shared<Expr>();
+    node->kind = ExprKind::Literal;
+    node->literal = QLangValue::Int(1); // bool true -> 1 (spec: 1/0 stored as Int)
+    return node;
+  }
+  case TokenType::False: {
+    m_pos++;
+    auto node = std::make_shared<Expr>();
+    node->kind = ExprKind::Literal;
+    node->literal = QLangValue::Int(0);
     return node;
   }
   case TokenType::Float: {
@@ -596,6 +664,7 @@ ExprPtr QLangParser::parsePrimary() {
   }
   case TokenType::TypeBlob: {
     // blob() call -> create an empty binary blob.
+    m_pos++; // consume 'blob' first, then expect '('
     if (check(TokenType::LParen)) {
       m_pos++; // consume '('
       auto node = std::make_shared<Expr>();

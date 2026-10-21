@@ -34,6 +34,9 @@ private:
     std::vector<QLangValue> regs;
     std::vector<CaptureRef> captures;
     size_t pc = 0;
+    // Caller register to receive this frame's return value (>= 0), or -1 for
+    // the top-level main frame / a bare call used only for side effects.
+    int callDest = -1;
   };
 
   static bool isTrue(const QLangValue &v);

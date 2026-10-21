@@ -12,6 +12,7 @@ this first version will parse text within a context.
 
 variable types
 ===============
+```
 string/str (zero terminated)
 blob  (binary data)
 byte (uint8_t)
@@ -23,9 +24,11 @@ array (contain list of mixed variable)
 float
 table
 bool (true, false)
+```
 
 reserved words
 ===============
+```
 for
 to
 in
@@ -50,24 +53,30 @@ true
 false
 def
 let
+else
+```
 
 constants
 =========
 
+```
 const # declare a constant
 
 const year = 2026;
 const month:byte = 10;
-
+```
 
 comments 
 =======================
 
-\# comment
+```
+# comment
+```
 
 declaration examples
 =======================
 
+```
 local a1  # default variable type int. default value 0
 local result = true # boolean
 result = false # boolean
@@ -119,25 +128,17 @@ sx += 123 # sx = test123
 
 sz = year # valid. constants can be copied to vars
 year = sx # error; constants cannot be assigned to
+```
 
 conditional
 =======================
 
-if a == 32 then
-end
-
-if a < 32 then
-end
-
-if  a >= 32 then
-end
-
-if (a == 32) || (b==32) then
-end
+```
 
 if (a == 32) || (b==32) {
 
 }
+
 
 a = [1,4,6]
 if (b in a) {
@@ -147,6 +148,14 @@ if (b in a) {
 if (b in [5,7,4]) {
 
 }
+
+if b in [1,3,5] {
+
+} else if b in [2,6,7] {
+   
+}
+
+```
 
 loops
 =======================================
@@ -189,24 +198,27 @@ for i in [4,6,8,9] {
 }
 
 
-operators
-===============================
-=  assign
-== equal
-+= add or append
-!= not equal
-<  > <= >= comparison
-<< >> bit shift
-^ binary xor
-& binary and
-| binary or
-&& logical and
-|| logical or
-() parenthesis
--- ++ decremental/incremental
-%  modulo
-! not (inverse)
-;  silent separator (optional)
+|operators||
+|---------|--|
+|=  | assign |
+|== |equal |
+|+= |add or append
+|!= |not equal
+|<  > <= >= |comparison
+|<< >> |bit shift
+|^ |binary xor
+|& |binary and
+| \| |binary or
+|&& |logical and
+| \|\| |logical or
+|() |parenthesis
+|-- ++ |decremental/incremental
+|%  |modulo
+|/ |division
+|* |multiplication
+|** |exponential
+|! |not (inverse)
+|;  |silent separator (optional)
 
 
 helpers
@@ -228,7 +240,7 @@ int(var)        # return variable cast to int; string are parsed as decimal. oth
 functions (native)
 ==================
 
-examples
+```
 
 def function_name(param1, param2)
 end
@@ -264,6 +276,8 @@ local func2 = (name, year)[world] {  # explicit capture passed by reference
 }
 
 func2("Nana", "2003")
+
+```
 
 only explicit capture being passed from caller context;
 closure list is optional []. closure only available in function scope.

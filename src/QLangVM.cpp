@@ -4,10 +4,12 @@
 #include <cstdio>
 #include <deque>
 #include <iostream>
+#include <iterator>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
 #include <vector>
+#include <cmath>
 
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
@@ -106,6 +108,28 @@ int64_t lenOf(const QLangValue &v) {
   }
 }
 
+// Sequential access for `for i in <collection>`: returns the idx-th element of
+// an array, or the idx-th table value in insertion (std::map) order.
+QLangValue seqGet(const QLangValue &col, int64_t idx) {
+  if (col.type() == QLangValue::Type::Array) {
+    const auto &elems = col.asArray();
+    if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0, "array index out of range");
+    return elems[static_cast<size_t>(idx)];
+  }
+  if (col.type() == QLangValue::Type::Table) {
+    const auto &kv = col.asTable();
+    if (idx < 0 || idx >= static_cast<int64_t>(kv.size()))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0, "index out of range");
+    auto it = kv.begin();
+    std::advance(it, static_cast<std::ptrdiff_t>(idx));
+    return it->second;
+  }
+  throw QLangError(QLangErrorKind::Type, 0, 0,
+                   std::string("cannot iterate non-collection of type ") +
+                       col.typeName());
+}
+
 // Dispatch a built-in function call. `args` are the evaluated operands; the
 // return value is stored by the caller into the call's destination register.
 QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args) {
@@ -197,6 +221,29 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args) {
     need(0, "blob");
     return QLangValue::Blob(std::vector<uint8_t>{});
   }
+  case Builtin::Substr: {
+    // substr(str, start, [length]) — 0-based start (consistent with array
+    // indexing, spec §100); length optional (defaults to end of string).
+    if (args.size() < 2 || args.size() > 3)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "substr expects 2 or 3 args (str, start, [length])");
+    if (args[0].type() != QLangValue::Type::String)
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "substr: first argument must be a string");
+    const std::string &s = args[0].asString();
+    int64_t start = toInt64(args[1]);
+    int64_t len = (args.size() == 3)
+                      ? toInt64(args[2])
+                      : static_cast<int64_t>(s.size()) - start;
+    if (start < 0) start = 0;
+    if (len < 0) len = 0;
+    if (start > static_cast<int64_t>(s.size()))
+      return QLangValue::String("");
+    if (start + len > static_cast<int64_t>(s.size()))
+      len = static_cast<int64_t>(s.size()) - start;
+    return QLangValue::String(
+        s.substr(static_cast<size_t>(start), static_cast<size_t>(len)));
+  }
   }
   throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown builtin");
 }
@@ -237,6 +284,8 @@ QLangValue QLangVM::doUnary(Opcode op, const QLangValue &a) {
   switch (op) {
   case Opcode::NEG:
     return QLangValue::Int(static_cast<int32_t>(-num(a, "-")));
+  case Opcode::NOT:
+    return QLangValue::Int(isTrue(a) ? 0 : 1);
   case Opcode::INC:
     return QLangValue::Int(static_cast<int32_t>(num(a, "+") + 1));
   case Opcode::DEC:
@@ -292,6 +341,19 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
       throw QLangError(QLangErrorKind::Type, 0, 0, "division by zero");
     return QLangValue::Int(static_cast<int32_t>(num(a, "/") / d));
   }
+  case Opcode::MOD: {
+    if (a.type() == QLangValue::Type::Float ||
+        b.type() == QLangValue::Type::Float) {
+      double d = toDouble(b);
+      if (d == 0.0)
+        throw QLangError(QLangErrorKind::Type, 0, 0, "modulo by zero");
+      return QLangValue::Float(std::fmod(toDouble(a), d));
+    }
+    int64_t d = num(b, "%");
+    if (d == 0)
+      throw QLangError(QLangErrorKind::Type, 0, 0, "modulo by zero");
+    return QLangValue::Int(static_cast<int32_t>(num(a, "%") % d));
+  }
   case Opcode::AND:
     return QLangValue::Int(static_cast<int32_t>(num(a, "&") & num(b, "&")));
   case Opcode::OR:
@@ -318,6 +380,24 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
     return QLangValue::Int(cmp(a, b, "<=") <= 0 ? 1 : 0);
   case Opcode::GE:
     return QLangValue::Int(cmp(a, b, ">=") >= 0 ? 1 : 0);
+  case Opcode::IN: {
+    // Membership test: `a in b` where b is an array (element match) or a
+    // table (key match). Returns boolean 1/0 (spec §143-147).
+    const QLangValue &col = b;
+    if (col.type() == QLangValue::Type::Array) {
+      for (const QLangValue &e : col.asArray())
+        if (cmp(a, e, "in") == 0)
+          return QLangValue::Int(1);
+      return QLangValue::Int(0);
+    }
+    if (col.type() == QLangValue::Type::Table) {
+      std::string key = valueToString(a);
+      return QLangValue::Int(col.asTable().count(key) ? 1 : 0);
+    }
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("operator 'in' requires an array or table, got ") +
+                         col.typeName());
+  }
   default:
     throw QLangError(QLangErrorKind::Runtime, 0, 0,
                      std::string("binary operation not implemented: ") +
@@ -331,6 +411,7 @@ void QLangVM::pushCall(int calleeIndex, std::vector<QLangValue> &callerRegs,
   const Function &callee = m_prog.functions[calleeIndex];
   Frame cf;
   cf.funcIndex = calleeIndex;
+  cf.callDest = dest;
   cf.regs.resize(callee.registerCount, QLangValue());
   // Copy the call arguments (caller regs dest+1..dest+argc) into the callee's
   // parameter registers 0..argc-1.
@@ -383,6 +464,7 @@ void QLangVM::run() {
     case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
     case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
     case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::CONV:
@@ -442,6 +524,13 @@ void QLangVM::run() {
     case Opcode::ARRLEN:
       frame.regs[i.a] =
           QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+      break;
+    case Opcode::LEN:
+      frame.regs[i.a] =
+          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+      break;
+    case Opcode::SEQGET:
+      frame.regs[i.a] = seqGet(frame.regs[i.b], toInt64(frame.regs[i.c]));
       break;
     case Opcode::TABGET: {
       QLangValue &base = frame.regs[i.b];
@@ -528,13 +617,14 @@ void QLangVM::run() {
       break;
     }
     case Opcode::RETURN: {
-      m_returnValue = frame.regs[i.a];
+      // Capture the callee's return value and its caller-dest before unwinding
+      // (the deque keeps frame pointers stable, so the caller frame is valid).
+      QLangValue retVal = frame.regs[0];
+      int dest = frame.callDest;
       if (m_cur == 0) {
         // Returning from main: sync the frame back into the scope before
         // unwinding so script variables persist.
-        fprintf(stderr, "[DBG] main RETURN sync: vars=%zu regCount=%d\n", m_prog.vars.size(), m_prog.registerCount);
         for (const auto &[name, reg] : m_prog.vars) {
-          fprintf(stderr, "[DBG]   var '%s' reg=%d val=%s\n", name.c_str(), reg, frame.regs[reg].typeName());
           if (m_deleted.count(reg))
             m_scope.remove(name);
           else
@@ -543,6 +633,8 @@ void QLangVM::run() {
       }
       m_frames.pop_back();
       m_cur--;
+      if (dest >= 0 && m_cur >= 0)
+        m_frames[m_cur].regs[dest] = retVal;
       continue; // caller frame is re-fetched next iteration; skip trailing increment
     }
     case Opcode::ADD:
@@ -562,9 +654,17 @@ void QLangVM::run() {
     case Opcode::GT:
     case Opcode::LE:
     case Opcode::GE:
+    case Opcode::MOD:
+    case Opcode::IN:
       frame.regs[i.a] = doBinary(op, frame.regs[i.b], frame.regs[i.c]);
       break;
     case Opcode::JMP:
+      frame.pc = static_cast<size_t>(i.a);
+      continue;
+    case Opcode::CONTINUE:
+      frame.pc = static_cast<size_t>(i.a);
+      continue;
+    case Opcode::BREAK:
       frame.pc = static_cast<size_t>(i.a);
       continue;
     case Opcode::JMPIFFALSE:

@@ -18,7 +18,8 @@ enum class Builtin : int {
   Println,
   Printf,
   Len,   // len(var) -> string/array/table length; other -> 1
-  Blob   // blob() -> empty binary blob
+  Blob,  // blob() -> empty binary blob
+  Substr // substr(str, start, len) -> substring
 };
 
 // Register-machine opcodes. This is a small register VM: each script variable
@@ -38,6 +39,7 @@ enum class Opcode {
   SUB,
   MUL,
   DIV,
+  MOD, // r[a] = r[b] % r[c]  (modulo; integer or float)
 
   // Bitwise / shifts
   AND, // r[a] = r[b] & r[c]
@@ -49,6 +51,7 @@ enum class Opcode {
   // Logical (combine truthiness; non-short-circuit)
   LAND, // r[a] = truth(r[b]) && truth(r[c])
   LOR,  // r[a] = truth(r[b]) || truth(r[c])
+  NOT,  // r[a] = !truth(r[b])  (logical not)
 
   // Comparison -> boolean (1/0 stored as Int)
   EQ, // r[a] = (r[b] == r[c])
@@ -57,6 +60,7 @@ enum class Opcode {
   GT,
   LE,
   GE,
+  IN,   // r[a] = (r[b] in r[c])  membership: array element / table key
 
   // Built-in function call. r[a] = call(funcId=b, args in r[a+1 .. a+c]).
   CALL, // r[a] = builtin(b, r[a+1 .. a+c])
@@ -70,6 +74,8 @@ enum class Opcode {
   ARRAPP, // arrays[a].push_back(c)             (append single element)
   ARRAPPV, // arrays[a] += arrays[b]            (extend with another array)
   ARRLEN, // r[a] = arrays[b].size()            (length)
+  LEN,    // r[a] = length(r[b])               — string/array/table/blob
+  SEQGET, // r[a] = seqGet(collect[b], c)      — array[c] or the c-th table key
 
   // Table operations (register holds a TableValue).
   TABGET, // r[a] = tables[b][c]                (member read)
@@ -78,6 +84,8 @@ enum class Opcode {
   // Control flow
   JMP,       // pc = a
   JMPIFFALSE, // if !truth(r[a]) pc = b
+  CONTINUE,  // pc = loop test label (next iteration)
+  BREAK,     // pc = loop exit label
 
   // User-defined function call. r[a] = call function b, with arguments in
   // r[a+1 .. a+c] (c == paramCount). The callee runs in a fresh frame; its

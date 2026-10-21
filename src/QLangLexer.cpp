@@ -19,12 +19,18 @@ TokenType keywordType(const std::string &text) {
   if (text == "end") return TokenType::End;
   if (text == "def") return TokenType::Def;
   if (text == "return") return TokenType::Return;
+  if (text == "in") return TokenType::In;
+  if (text == "continue") return TokenType::Continue;
+  if (text == "break") return TokenType::Break;
+  if (text == "true") return TokenType::True;
+  if (text == "false") return TokenType::False;
   if (text == "byte") return TokenType::TypeByte;
   if (text == "word") return TokenType::TypeWord;
   if (text == "short") return TokenType::TypeShort;
   if (text == "int") return TokenType::TypeInt;
   if (text == "unsigned") return TokenType::TypeUnsigned;
   if (text == "string") return TokenType::TypeString;
+  if (text == "str") return TokenType::StrType;
   if (text == "blob") return TokenType::TypeBlob;
   if (text == "array") return TokenType::TypeArray;
   if (text == "float") return TokenType::TypeFloat;
@@ -72,6 +78,23 @@ Token QLangLexer::number() {
   int line = m_line, col = m_col;
   std::string text;
   bool isFloat = false;
+
+  // Hexadecimal integer literal: 0x[0-9a-fA-F]+
+  if (peek() == '0' && (peek(1) == 'x' || peek(1) == 'X')) {
+    advance(); // '0'
+    advance(); // 'x'
+    std::string digits;
+    while (!atEnd() && std::isxdigit(static_cast<unsigned char>(peek())))
+      digits.push_back(advance());
+    Token tok;
+    tok.type = TokenType::Integer;
+    tok.text = "0x" + digits;
+    tok.value = tok.text;
+    tok.line = line;
+    tok.col = col;
+    return tok;
+  }
+
   while (!atEnd()) {
     char c = peek();
     if (std::isdigit(static_cast<unsigned char>(c))) {
@@ -209,6 +232,7 @@ Token QLangLexer::operatorToken() {
   // Two-character operators.
   if (c == '=' && n == '=') return make(TokenType::Equal, "==", 2);
   if (c == '!' && n == '=') return make(TokenType::NotEqual, "!=", 2);
+  if (c == '!' && n != '=') return make(TokenType::Not, "!", 1);
   if (c == '<' && n == '=') return make(TokenType::LessEqual, "<=", 2);
   if (c == '>' && n == '=') return make(TokenType::GreaterEqual, ">=", 2);
   if (c == '<' && n == '<') return make(TokenType::ShiftLeft, "<<", 2);
@@ -232,6 +256,7 @@ Token QLangLexer::operatorToken() {
   case '-': return make(TokenType::Minus, "-", 1);
   case '*': return make(TokenType::Star, "*", 1);
   case '/': return make(TokenType::Slash, "/", 1);
+  case '%': return make(TokenType::Modulo, "%", 1);
   case '(': return make(TokenType::LParen, "(", 1);
   case ')': return make(TokenType::RParen, ")", 1);
   case '{': return make(TokenType::LBrace, "{", 1);

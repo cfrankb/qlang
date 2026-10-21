@@ -10,6 +10,14 @@
 
 namespace qlang {
 
+// Compile-time context for the innermost loop being compiled. The CONTINUE /
+// BREAK targets are baked into those instructions as operand `a`, so the VM
+// only needs to load pc = i.a — no runtime loop stack required.
+struct LoopCtx {
+  int contAddr; // target for `continue` (loop test / increment)
+  int breakAddr; // target for `break` (just past the loop)
+};
+
 // The output of compilation: a compiled program plus the variable-to-register
 // map the VM needs to sync the scope.
 struct CompiledProgram {
@@ -86,6 +94,7 @@ private:
   // Runtime type tracking: lets the compiler choose the right opcode for
   // `+=` (array append vs. string/number add) and array/table access.
   std::unordered_map<std::string, QLangValue::Type> m_varTypes;
+  std::vector<LoopCtx> m_loops; // enclosing-loop targets for continue/break
   int m_nextReg = 0;
 };
 

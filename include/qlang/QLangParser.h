@@ -76,12 +76,15 @@ enum class StmtKind {
   Assignment,
   Delete,    // delete var
   For,
+  ForIn,   // for i in <collection> ... next i
   While,
   If,
   ExprStmt,
   Def,       // def name(params) ... end  /  def name(params) { ... }
   Arrow,     // local name = (params)[captures] { ... }  (closure assignment)
-  Return     // return [value]
+  Return,    // return [value]
+  Continue,  // continue
+  Break      // break
 };
 
 // Base statement node. Forward-declared so StmtPtr can be used inside Stmt.
@@ -115,6 +118,7 @@ struct Stmt {
   std::string loopVar;
   ExprPtr forStart;
   ExprPtr forEnd;
+  bool forIn = false; // for i in <collection> (forEnd holds the collection)
   std::vector<StmtPtr> body;
 
   // While: while (cond) ... end
@@ -158,6 +162,8 @@ private:
   StmtPtr parseWhile();
   StmtPtr parseIf();
   StmtPtr parseReturn();
+  StmtPtr parseContinue();
+  StmtPtr parseBreak();
   StmtPtr parseFunction();
   StmtPtr parseArrowClosure(const std::string &varName);
   bool looksLikeArrow() const;

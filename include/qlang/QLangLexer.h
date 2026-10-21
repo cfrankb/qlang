@@ -29,7 +29,8 @@ enum class TokenType {
   Def,      // def
   Return,   // return
 
-  // Type keywords (used in typed declarations: local b:byte = 32)
+  // Type keywords (used in typed declarations: local b:byte = 32). The range
+  // TypeByte..TypeTable maps 1:1 onto QLangValue::Type Byte..Table.
   TypeByte,
   TypeWord,
   TypeShort,
@@ -40,12 +41,21 @@ enum class TokenType {
   TypeArray,
   TypeFloat,   // float
   TypeTable,   // table
+  StrType,     // str (alias for string; kept outside the range above)
+
+  // Keywords / operators
+  In,          // in (membership / for-in)
+  Continue,    // continue
+  Break,       // break
+  True,        // true
+  False,       // false
 
   // Operators
   Dot,           // .  (table member access: t.name)
   Assign,        // =
   Equal,         // ==
   NotEqual,      // !=
+  Not,           // !  (logical not)
   Less,          // <
   Greater,       // >
   LessEqual,     // <=
@@ -58,6 +68,7 @@ enum class TokenType {
   LogicalAnd,    // &&
   LogicalOr,     // ||
   LogicalOr3,    // |||  (logical or, three bars)
+  Modulo,        // %
   Plus,          // +
   Minus,         // -
   Star,          // *
