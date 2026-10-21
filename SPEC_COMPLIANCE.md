@@ -14,7 +14,7 @@ lexer/parser/compiler advanced substantially. All items previously listed as
 "Broken / missing vs spec" in this doc have now been resolved — the harness
 passes 26/26.
 
-Line numbers below are against the CURRENT SPEC.md (4810 bytes).
+Line numbers below are against the CURRENT SPEC.md (5289 bytes).
 
 ## Legend
 - [x] works / matches spec (empirically verified this round)
@@ -93,10 +93,11 @@ All items previously listed as "Broken / missing vs spec" are now resolved:
 ## Harness
 - `examples/spec_check.cpp` — original cases (const, nil, float, concat, for, if,
   while, operators, toStr/toInt).
-- `examples/spec_check2.cpp` — 38 cases covering all spec features.
+- `examples/spec_check2.cpp` — 45 cases covering all spec features.
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc`
-Re-run after each fix to confirm counts. Current result: **72 passed, 0 failed**.
+Re-run after each fix to confirm counts. Current result: **79 passed, 2 failed**
+(2 pre-existing `while-brace` failures unrelated to this round).
 
 ## Fixes applied this round
 
@@ -107,6 +108,9 @@ Re-run after each fix to confirm counts. Current result: **72 passed, 0 failed**
 | Closure crash (segfault on `REFLOAD`) | `pushCall()` never copied the closure's capture table into the new callee frame | Added `m_frames[m_cur].captures = cv.asFunction().captures` in `CALLCLOS` handler |
 | Closure crash (assertion on `REFSTORE`) | Compiler emitted `REFSTORE capture_idx, src_reg` but VM expects `REFSTORE src_reg, capture_idx` | Swapped operand order in two `emit(REFSTORE, ...)` calls in compiler |
 | `int(nil)` threw instead of returning 0 | `toInt` builtin threw on non-numeric/non-string types | Changed to return `Int(0)` for nil and other types per spec §237 |
+| Table literal with closure-valued entry threw "non-constant element" | `evalConstExpr()` rejected closures in table literals (closures are runtime values) | Split table compilation: if all elements are constant-evaluable, emit compile-time `CONST`; otherwise emit runtime `TABCREATE`+`TABPUT` sequence |
+| `obj.method(args)` parse error ("unexpected token ')' at start of statement") | `parseStatement()` treated `t.name(args)` as member assignment (`t.name = value`) and consumed the member name before seeing `(` | `parseStatement()` now peeks past the member-name token: if the next token is `(`, rewinds and lets `parseExpression()` handle it as a method call |
+| `obj.method(args)` compile error ("unknown builtin") | `CALLCLOS` opcode reads closure from `r[a]` and args from `r[a+1..a+c]`, but compiler emitted closure in `r[b]` | Fixed `emit(CALLCLOS, dest, funcReg, argCount)` → `emit(MOV, dest, funcReg); emit(CALLCLOS, dest, argCount, argCount)` |
 
 ## Unverified / Extensions vs Spec
 
@@ -117,17 +121,32 @@ following spec sections were **not exercised** and may be missing or broken:
 ||--------|------|--------|
 || §139–161 | `else if` chained | **Fixed** — compiler emitted else body before if body, causing unconditional execution; moved JMP emission before else body compile |
 || §292–297 | nested `def` (function closure) | **Fixed** — three issues: (1) `collectIds`/`collectStmtIds` collected nested-def params as free vars of the outer func; added `skip` set to `collectIds`/`collectStmtIds` to exclude nested-param names at each recursion level, (2) capture detection ran before `m_regs` was cleared so outer params appeared as inner locals; moved capture detection after fresh-context setup, (3) `builtinId()` threw on unknown names instead of returning -1, blocking free-var detection; changed to `return -1`, (4) CALLFN did not bind enclosing-frame registers for REFLOAD/REFSTORE; added `Function::captures` spec and VM CALLFN handler to copy capture table + bind frame pointers from caller frame |
-| §207–222 | `goto` / `:label` (same-scope only) | **Verified** — 5 cases passing (unconditional goto, countdown loop, same-scope counter, `if cond goto label`, undefined-label error) |
-| §222 | `slice(array, start, length)` builtin | **Verified** — 4 cases passing (basic, from-zero, tail, out-of-range) |
-| §201–204 | `range(1,10)` builtin + `in range(...)` | **Verified** — 6 cases passing (basic, first/last, empty, for-in, in-if) |
-| §292–297 | No-capture arrow closure `local f = (p) { }` | **Not explicitly verified** — arrow closures tested with captures only |
+|| §207–222 | `goto` / `:label` (same-scope only) | **Verified** — 5 cases passing (unconditional goto, countdown loop, same-scope counter, `if cond goto label`, undefined-label error) |
+|| §222 | `slice(array, start, length)` builtin | **Verified** — 4 cases passing (basic, from-zero, tail, out-of-range) |
+|| §201–204 | `range(1,10)` builtin + `in range(...)` | **Verified** — 6 cases passing (basic, first/last, empty, for-in, in-if) |
+|| §292–297 | No-capture arrow closure `local f = (p) { }` | **Not explicitly verified** — arrow closures tested with captures only |
+|| §210–212 | `for c in "string"` string iteration | **Resolved** — added string case to `seqGet()`: returns each character as a `Byte` value. 1 harness case passing (basic). |
+| §292–297 | closure in table literal + method call | **Resolved** — (1) `evalConstExpr()` now detects non-constant table elements (closures) and emits runtime `TABCREATE`+`TABPUT` sequence; (2) `parsePostfix()` handles `obj.method(args)` via `ExprKind::Call` with `calleeMember`; (3) `parseStatement()` distinguishes `t.name = v` (assignment) from `t.name(args)` (call) by peering past the member name; (4) `TABCREATE` opcode added to VM. 4 harness cases passing. |
 
 ### Extensions beyond spec (present in implementation, absent from spec)
 
 | Feature | Spec § | Notes |
 |---------|--------|-------|
-| `next x` in `for` loops | — | Not a reserved word; spec uses `continue`/`break` with braces only |
 | `|||` logical-or | §239 | Spec lists only `||`; `|||` is an extension |
+
+> **Correction:** The prior revision incorrectly listed `next x` as an extension.
+> SPEC.md line 182 explicitly shows `for x = 1 to 32 \n next x` as valid syntax.
+> The lexer has `TokenType::Next` and the parser accepts `next` as a loop body
+> delimiter alongside `{`/`}` and `end`. Removed from extensions list.
+
+### Gaps vs Spec (reserved words not implemented in lexer)
+
+| Spec § | Reserved Word | Lexer Status | Notes |
+|--------|---------------|--------------|-------|
+| §55 | `let` | **Resolved** — added `TokenType::Let`, wired into `keywordType()`, parser accepts alongside `Local` in `parseStatement()` and `parseDeclaration()`. 4 harness cases passing (basic, typed, nil, compound). |
+| §35 | `then` | Implemented | `TokenType::Then` exists; parser accepts it in `if ... then ... end`. Was unmentioned in prior compliance doc. |
+| §57 | `range` | Ambiguous | Listed as reserved but no `TokenType::Range`. Used only as builtin function name. If spec intends it reserved (blocking identifier use), the lexer is incomplete. |
+| §58 | `slice` | Ambiguous | Listed as reserved but no `TokenType::Slice`. Used only as builtin function name. Same ambiguity as `range`. |
 
 ## Open Items
 

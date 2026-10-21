@@ -103,7 +103,7 @@ int main() {
   expectVal("closure live-bind read", "local x = 1\nlocal f = (y)[x] { return x + y }\nx = 10\nlocal r = f(20);\n", "r", 30);
   expectVal("closure live-bind write", "local x = 1\nlocal f = (y)[x] { x = x + y; return x }\nx = 10\nlocal r = f(5);\n", "r", 15);
   expectVal("closure live-bind outer change", "local x = 1\nlocal f = (y)[x] { return x + y }\nx = 100\nlocal r = f(1);\n", "r", 101);
-  expectVal("closure no capture", "local f = (a, b) { return a + b }\nlocal r = f(7, 8);\n", "r", 15);
+  expectVal("closure no capture", "local f = (a, b)[] { return a + b }\nlocal r = f(7, 8);\n", "r", 15);
 
   // -- NEW: ** exponential (spec 223) --
   expectVal("pow int", "local r = 2 ** 8;", "r", 256);
@@ -150,8 +150,23 @@ int main() {
   // -- NEW: nested functions --
   expectVal("nested fn", "def outer(a)\n  def inner(b)\n    return a + b\n  end\n  return inner(10)\nend\nlocal r = outer(5);", "r", 15);
 
+  // -- NEW: let alias for local (spec §55) --
+  expectVal("let basic", "let n = 42\nlocal r = n;", "r", 42);
+  expectStr("let typed", "let s:str = \"hello\"\nlocal g = s;", "g", "hello");
+  expectRun("let nil", "let z");
+  expectVal("let compound", "let a = 10\na += 5\nlocal r = a;", "r", 15);
+
+  // -- NEW: for-in over string (spec §210-212) --
+  expectVal("for-in string", "local total = 0\nfor c in \"abc\"\ntotal = total + c\nnext c\nlocal r = total;", "r", 294);
+
   // -- NEW: array in table --
   expectVal("array in table", "local t = {data=[1,2,3]}\nlocal r = t.data[1];", "r", 2);
+
+  // -- NEW: closure in table literal + method call (spec §292–297) --
+  expectRun("closure in table", "local events:table = { onLoad = (name)[] { printf(\"onLOAD -->%s\\n\", name) } }\nevents.onLoad(\"test\")");
+  expectStr("closure in table return", "local events:table = { greet = (who)[] { return \"hi \" + who } }\nlocal r = events.greet(\"world\");", "r", "hi world");
+  expectVal("method call via var", "local f = (x)[] { return x * 2 }\nlocal r = f(21);", "r", 42);
+  expectVal("member call no args", "local t:table = { val = 99 }\nlocal r = t.val;", "r", 99);
 
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;

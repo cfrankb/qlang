@@ -161,7 +161,7 @@ end
 
 printf("Louis is TOTO\n")
 
-local hello = (name) {
+local hello = (name)[] {
   printf("hello %s\n", name)
   return true
 }
@@ -171,6 +171,36 @@ hello("Sonia")
 for i in [1,2,3,4] {
   printf("coundown: %d\n",i)
 }
+
+for c in "string" {
+   printf("char: %c\n", c)
+}
+
+aa = 5
+if (aa==4) {
+
+} else if aa == 5{
+  println("ELSE")
+}
+
+local events:table = {
+  onLoad = (name)[] {
+    printf("onLOaD -->%s\n", name);
+  },
+  onDeath = ()[] {
+  }
+}
+
+events.onLoad("Tam Tam")
+
+
+local human = {
+  name = "Denise",
+  age = 65
+}
+
+printf("human: %s age=%d", human.name, human.age)
+
 
 )";
 

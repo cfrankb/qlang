@@ -81,6 +81,7 @@ enum class Opcode {
   SEQGET, // r[a] = seqGet(collect[b], c)      — array[c] or the c-th table key
 
   // Table operations (register holds a TableValue).
+  TABCREATE, // r[a] = new empty table
   TABGET, // r[a] = tables[b][c]                (member read)
   TABPUT, // tables[a][b] = c                   (member write)
 

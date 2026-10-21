@@ -22,10 +22,12 @@ enum class ExprKind {
   Array,
   Table,
   Index,   // base[index]  (array subscript read)
-  Member   // base.name    (table member read)
+  Member,   // base.name    (table member read)
+  Closure   // (params)[captures] { ... }  (anonymous closure expression)
 };
 
 struct Expr; // forward declaration so ExprPtr can be used inside Expr
+struct Stmt; // forward declaration so StmtPtr can be used inside Expr
 using ExprPtr = std::shared_ptr<Expr>;
 
 // Base expression node. Concrete nodes are allocated on the heap and held by
@@ -50,6 +52,7 @@ struct Expr {
 
   // Call: callee(name) with positional args.
   std::string callee;
+  ExprPtr calleeMember; // for method calls: obj.method(args)
   std::vector<ExprPtr> args;
 
   // Array literal: [e0, e1, ...].
@@ -65,6 +68,11 @@ struct Expr {
   // Member: base.name  (table member access).
   ExprPtr memberBase;
   std::string memberName;
+
+  // Closure: (params)[captures] { ... }  (anonymous arrow closure expression).
+  std::vector<std::string> params;
+  std::vector<std::string> captures;
+  std::vector<std::shared_ptr<Stmt>> body;
 };
 
 // ---------------------------------------------------------------------------

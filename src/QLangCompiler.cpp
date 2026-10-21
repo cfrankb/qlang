@@ -84,6 +84,8 @@ CompiledProgram QLangCompiler::compile() {
 // its function index. The enclosing function's compilation state is saved and
 // restored so nested definitions work.
 // Collect all variable names referenced in an expression.
+static void collectStmtIds(const StmtPtr &s, std::unordered_set<std::string> &ids,
+                           const std::unordered_set<std::string> *skip);
 static void collectIds(const ExprPtr &e, std::unordered_set<std::string> &ids,
                        const std::unordered_set<std::string> *skip = nullptr) {
   if (!e) return;
@@ -108,6 +110,8 @@ static void collectIds(const ExprPtr &e, std::unordered_set<std::string> &ids,
     for (auto &item : e->items) {
       collectIds(item.second, ids, skip);
     }
+  } else if (e->kind == ExprKind::Closure) {
+    for (auto &st : e->body) collectStmtIds(st, ids, skip);
   }
 }
 
@@ -601,6 +605,15 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     for (int i = 0; i < argCount; i++)
       compileExpr(e->args[i], argRegs[i]);
 
+    // Method call: obj.method(args) -> load the member (closure) first.
+    if (e->calleeMember) {
+      int funcReg = tmpRegister();
+      compileExpr(e->calleeMember, funcReg);
+      emit(Opcode::MOV, dest, funcReg);
+      emit(Opcode::CALLCLOS, dest, argCount, argCount);
+      break;
+    }
+
     // User `def` function: funcIndex known at compile time.
     auto uit = m_userFuncs.find(e->callee);
     if (uit != m_userFuncs.end()) {
@@ -630,10 +643,53 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     break;
   }
   case ExprKind::Table: {
-    TableValue kv;
-    for (auto &item : e->items)
-      kv[item.first] = evalConstExpr(item.second);
-    emit(Opcode::CONST, dest, emitConst(QLangValue::Table(std::move(kv))));
+    // Check if all elements are constant-evaluable.
+    bool allConst = true;
+    for (auto &item : e->items) {
+      try {
+        evalConstExpr(item.second);
+      } catch (...) {
+        allConst = false;
+        break;
+      }
+    }
+    if (allConst) {
+      TableValue kv;
+      for (auto &item : e->items)
+        kv[item.first] = evalConstExpr(item.second);
+      emit(Opcode::CONST, dest, emitConst(QLangValue::Table(std::move(kv))));
+      break;
+    }
+    // Runtime table construction.
+    int baseR = tmpRegister();
+    emit(Opcode::TABCREATE, baseR);
+    for (auto &item : e->items) {
+      int keyR = tmpRegister();
+      emit(Opcode::CONST, keyR, emitConst(QLangValue::String(item.first)));
+      int valR = tmpRegister();
+      compileExpr(item.second, valR);
+      emit(Opcode::TABPUT, baseR, keyR, valR);
+    }
+    emit(Opcode::MOV, dest, baseR);
+    break;
+  }
+  case ExprKind::Closure: {
+    // Anonymous arrow closure: build the function and emit MAKEFUNC.
+    int funcIndex = buildFunction("closure", e->params, e->captures, e->body);
+    auto closure = std::make_shared<Closure>();
+    closure->funcIndex = funcIndex;
+    for (auto &cap : e->captures) {
+      int reg = regOf(cap);
+      if (reg < 0)
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "capture of undeclared variable '" + cap + "'");
+      CaptureRef cr;
+      cr.reg = reg;
+      cr.frame = nullptr;
+      closure->captures.push_back(cr);
+    }
+    int constIdx = emitConst(QLangValue::Function(closure));
+    emit(Opcode::MAKEFUNC, dest, constIdx);
     break;
   }
   case ExprKind::Index: {

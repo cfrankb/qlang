@@ -91,7 +91,7 @@ std::vector<StmtPtr> QLangParser::parseProgram() {
 }
 
 StmtPtr QLangParser::parseStatement() {
-  if (check(TokenType::Local)) return parseDeclaration();
+  if (check(TokenType::Local) || check(TokenType::Let)) return parseDeclaration();
   if (check(TokenType::Const)) return parseConst();
   if (check(TokenType::Delete)) return parseDelete();
   if (check(TokenType::For)) return parseFor();
@@ -202,8 +202,24 @@ StmtPtr QLangParser::parseStatement() {
       return stmt;
     }
     // Member assignment target: t.name = value.
+    // But if the token after the member name is '(' it's a method call, not assignment.
     if (nxt == TokenType::Dot) {
       m_pos++; // consume '.'
+      // Peek past the member-name token to check for '(' vs assignment op.
+      size_t saved = m_pos;
+      m_pos++; // consume the member-name token
+      TokenType afterMember = current().type;
+      m_pos = saved; // rewind to after '.'
+      if (afterMember == TokenType::LParen) {
+        // Method call: not an assignment. Rewind fully and let parseExpression handle it.
+        m_pos = m_pos - 2; // step back onto the identifier
+        auto expr = parseExpression();
+        match(TokenType::Semicolon);
+        auto stmt = std::make_shared<Stmt>();
+        stmt->kind = StmtKind::ExprStmt;
+        stmt->value = expr;
+        return stmt;
+      }
       std::string name = current().value;
       m_pos++; // consume the member-name token
       auto stmt = std::make_shared<Stmt>();
@@ -240,7 +256,8 @@ StmtPtr QLangParser::parseStatement() {
 }
 
 StmtPtr QLangParser::parseDeclaration() {
-  consume(TokenType::Local, "'local'");
+  match(TokenType::Local);
+  match(TokenType::Let);
   auto stmt = std::make_shared<Stmt>();
   stmt->kind = StmtKind::Declaration;
   stmt->name = consume(TokenType::Ident, "variable name").value;
@@ -553,8 +570,8 @@ StmtPtr QLangParser::parseFunction() {
 
 // True when the parenthesized group beginning at the current token is an arrow
 // function parameter list, i.e. it is followed by an explicit capture list
-// '[' or a body '{'. Used to disambiguate `local f = (a) { }` from
-// `local x = (a + b)`.
+// '['. The capture list is mandatory. Used to disambiguate `local f = (a)[] { }`
+// from `local x = (a + b)`.
 bool QLangParser::looksLikeArrow() const {
   int depth = 0;
   size_t j = m_pos;
@@ -571,8 +588,7 @@ bool QLangParser::looksLikeArrow() const {
     j++;
   }
   return j < m_tokens.size() &&
-         (m_tokens[j].type == TokenType::LBracket ||
-          m_tokens[j].type == TokenType::LBrace);
+         m_tokens[j].type == TokenType::LBracket;
 }
 
 StmtPtr QLangParser::parseArrowClosure(const std::string &varName) {
@@ -590,16 +606,15 @@ StmtPtr QLangParser::parseArrowClosure(const std::string &varName) {
   }
   consume(TokenType::RParen, "')' of arrow function");
 
-  // Optional explicit capture list: [x, y, ...]
-  if (match(TokenType::LBracket)) {
-    if (!check(TokenType::RBracket)) {
-      do {
-        stmt->captures.push_back(
-          consume(TokenType::Ident, "captured variable").value);
-      } while (match(TokenType::Comma));
-    }
-    consume(TokenType::RBracket, "']' to close capture list");
+  // Mandatory explicit capture list: [x, y, ...]
+  consume(TokenType::LBracket, "'[' to open capture list");
+  if (!check(TokenType::RBracket)) {
+    do {
+      stmt->captures.push_back(
+        consume(TokenType::Ident, "captured variable").value);
+    } while (match(TokenType::Comma));
   }
+  consume(TokenType::RBracket, "']' to close capture list");
 
   // Body in braces.
   consume(TokenType::LBrace, "'{' to open arrow function body");
@@ -694,6 +709,21 @@ ExprPtr QLangParser::parsePostfix() {
     } else {
       break;
     }
+  }
+  // Call on member: obj.method(args) -> wrap in Call with Member as callee.
+  if (check(TokenType::LParen)) {
+    m_pos++; // consume '('
+    auto node = std::make_shared<Expr>();
+    node->kind = ExprKind::Call;
+    node->callee = e->memberName;
+    node->calleeMember = e;
+    if (!check(TokenType::RParen)) {
+      do {
+        node->args.push_back(parseExpression());
+      } while (match(TokenType::Comma));
+    }
+    consume(TokenType::RParen, "')'");
+    e = std::move(node);
   }
   return e;
 }
@@ -811,6 +841,38 @@ ExprPtr QLangParser::parsePrimary() {
                      "' in expression");
   }
   case TokenType::LParen: {
+    // Check for anonymous arrow closure: (params)[captures] { ... }
+    if (looksLikeArrow()) {
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Closure;
+      consume(TokenType::LParen, "'(' of arrow function");
+      if (!check(TokenType::RParen)) {
+        do {
+          node->params.push_back(consume(TokenType::Ident, "parameter name").value);
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RParen, "')' of arrow function");
+      // Mandatory explicit capture list: [x, y, ...]
+      consume(TokenType::LBracket, "'[' to open capture list");
+      if (!check(TokenType::RBracket)) {
+        do {
+          node->captures.push_back(consume(TokenType::Ident, "capture name").value);
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RBracket, "']' after capture list");
+      // Body: { ... } or ... end
+      if (match(TokenType::LBrace)) {
+        while (!check(TokenType::RBrace) && !atEnd())
+          node->body.push_back(parseStatement());
+        consume(TokenType::RBrace, "'}' to close closure");
+      } else {
+        while (!check(TokenType::End) && !atEnd())
+          node->body.push_back(parseStatement());
+        consume(TokenType::End, "'end' to close closure");
+      }
+      match(TokenType::Semicolon);
+      return node;
+    }
     m_pos++;
     ExprPtr inner = parseExpression();
     consume(TokenType::RParen, "')'");

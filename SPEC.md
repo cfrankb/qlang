@@ -15,11 +15,13 @@ variable types
 ```
 string/str (zero terminated)
 blob  (binary data)
+char (int8_t)
 byte (uint8_t)
 word (uint16_t)
-short  (int16_t)
+short (int16_t)
 int (int32_t)
 unsigned (uint32_t)
+dword (uint64_t)
 array (contain list of mixed variable)
 float
 table
@@ -38,7 +40,7 @@ continue
 break
 return
 string
-str
+str (alias string)
 byte
 blob
 word
@@ -52,11 +54,16 @@ bool
 true
 false
 def
-let
+let (alias local)
 else
 range
 slice
 goto
+char
+dword
+switch
+case
+default
 ```
 
 constants
@@ -76,7 +83,20 @@ comments
 # comment
 ```
 
-declaration examples
+boolean evaluation
+=======================
+
+|type||
+|----|-|
+|boolean| true or false|
+|string| empty => false; non-empty => true
+|array| empty => false; non-empty => true
+|table| empty => false; non-empty => true
+|number| 0 => false; non-zero => true
+
+
+
+declarations
 =======================
 
 ```
@@ -131,6 +151,16 @@ sx += 123 # sx = test123
 
 sz = year # valid. constants can be copied to vars
 year = sx # error; constants cannot be assigned to
+
+# anonymous functions inside a table
+local events:table = {
+  onLoad = (name)[] {
+    printf("""onLOaD -->%s\n""");
+  }, 
+  onDeath = ()[] {
+  }
+}
+
 ```
 
 conditional
@@ -158,6 +188,12 @@ if b in [1,3,5] {
 
 }
 
+if (a == 4) {
+
+} else {
+
+}
+
 # check if a between 1 and 10 (inclusive)
 if a in range (1,10) {
 
@@ -165,6 +201,21 @@ if a in range (1,10) {
 
 if a == 1 return false;
 
+```
+
+switch
+=======
+```
+switch (var) {
+   case "string2":
+   case "string1":
+      break;
+   case 123:
+      break;
+   case in [1,2,3]:
+   case in range(10,20):   
+   default:
+}
 ```
 
 loops
@@ -199,6 +250,10 @@ for i in a {
 
 for i in [4,6,8,9] {
    printf("i=%d\n", i) # can look up an array
+}
+
+for c in "string" {
+   printf("char: %c\n", c)
 }
 
 # loops i from 1 to 10
@@ -292,7 +347,7 @@ def hello2(name, year) {
 
 def is only valid in global scope. no closure.
 
-local func1 = (name, year) { # no capture
+local func1 = (name, year)[] { # no capture
    println("hello world")
    printf("hi %s it is %d\n", name, year)
    return true
@@ -300,6 +355,7 @@ local func1 = (name, year) { # no capture
 func1("Frank", 2026)
 
 local world = "world"
+# this is the lambda implementation
 local func2 = (name, year)[world] {  # explicit capture passed by reference
    println("hello " + world)
    printf("hi %s it is %d\n", name, year)
@@ -311,7 +367,7 @@ func2("Nana", "2003")
 ```
 
 only explicit capture being passed from caller context;
-closure list is optional []. closure only available in function scope.
+closure list is mandatory []. closure only available in function scope.
 reference still maintained even after reassignment 
 return value is optiona. defaults to nil
 local always apply to the current scope.

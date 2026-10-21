@@ -17,6 +17,7 @@ enum class TokenType {
 
   // Keywords
   Local,
+  Let,       // let (alias for local)
   Const,   // const
   Delete,  // delete
   For,

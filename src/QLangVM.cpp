@@ -109,8 +109,15 @@ int64_t lenOf(const QLangValue &v) {
 }
 
 // Sequential access for `for i in <collection>`: returns the idx-th element of
-// an array, or the idx-th table value in insertion (std::map) order.
+// an array, the idx-th table value in insertion (std::map) order, or the
+// idx-th character of a string (returned as a byte value).
 QLangValue seqGet(const QLangValue &col, int64_t idx) {
+  if (col.type() == QLangValue::Type::String) {
+    const auto &s = col.asString();
+    if (idx < 0 || idx >= static_cast<int64_t>(s.size()))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0, "string index out of range");
+    return QLangValue::Byte(static_cast<uint8_t>(s[static_cast<size_t>(idx)]));
+  }
   if (col.type() == QLangValue::Type::Array) {
     const auto &elems = col.asArray();
     if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
@@ -602,6 +609,10 @@ void QLangVM::run() {
         throw QLangError(QLangErrorKind::Runtime, 0, 0,
                          "table has no member '" + key + "'");
       frame.regs[i.a] = it->second;
+      break;
+    }
+    case Opcode::TABCREATE: {
+      frame.regs[i.a] = QLangValue::Table(TableValue{});
       break;
     }
     case Opcode::TABPUT: {

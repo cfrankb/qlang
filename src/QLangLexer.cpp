@@ -8,6 +8,7 @@ namespace qlang {
 
 TokenType keywordType(const std::string &text) {
   if (text == "local") return TokenType::Local;
+  if (text == "let") return TokenType::Let;
   if (text == "const") return TokenType::Const;
   if (text == "delete") return TokenType::Delete;
   if (text == "for") return TokenType::For;
