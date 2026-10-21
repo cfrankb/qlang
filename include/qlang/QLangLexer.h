@@ -52,6 +52,8 @@ enum class TokenType {
   Break,       // break
   Goto,        // goto keyword
   Label,       // :label (label declaration)
+  Range,       // range (reserved; used as builtin function)
+  Slice,       // slice (reserved; used as builtin function)
   True,        // true
   False,       // false
 

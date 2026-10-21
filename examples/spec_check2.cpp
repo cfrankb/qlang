@@ -177,6 +177,10 @@ int main() {
   expectVal("bool in if", "local b:bool = false\nlocal r = 0\nif !b then r = 1 end\nlocal result = r;", "result", 1);
   expectRun("bool const", "const flag:bool = true");
 
+  // -- NEW: range/slice reserved-word status --
+  expectThrow("range as ident", "local range = 1");
+  expectThrow("slice as ident", "local slice = 1");
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

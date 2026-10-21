@@ -64,6 +64,8 @@ dword
 switch
 case
 default
+type
+join
 ```
 
 constants
@@ -315,13 +317,29 @@ build-in functions
 |type(var)      |   return a string representation of the type|
 |print(var)       | print a string|
 |println(var)     | print a string with carriage return
-|printf(str, ...) | mirror C printf
+|printf(fmt, ...) | mirror C printf
+|sprintf(fmt, ...) |same format as sprintf. return new string
 |len(var)         | return string, table, blob or array |length; other type return 1; error on undefined/nil.
 |substr(str, start, lenght) | return a substring fron index start. lenght is optional
 |delete var      | delete variable
 |str(var)        | return string representation of variable
 |int(var)        | return variable cast to int; string are parsed as decimal. other types return 0
 |slice(array, start, length) | return an array slice
+|isset(var)| return true if variable, array index or table field exists. otherwise returns false
+|join(separator, arr)| join the array element using separator
+
+```
+a = [1,2,3]
+println(join(", ", a))
+# output: 1, 2, 3
+
+a = [1,2,3,4,5]
+b = slice(a, 0, 2)
+# b = [1,2]
+
+
+```
+
 
 functions (native)
 ==================
@@ -345,7 +363,7 @@ def hello2(name, year) {
    return true
 }
 
-def is only valid in global scope. no closure.
+# def is only valid in global scope. no closure.
 
 local func1 = (name, year)[] { # no capture
    println("hello world")

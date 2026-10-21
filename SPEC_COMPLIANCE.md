@@ -127,8 +127,8 @@ Line numbers below are against the CURRENT SPEC.md (5993 bytes, 373 lines).
 | `def` | `Def` | ✓ | |
 | `let` | `Let` | ✓ | alias for `local` |
 | `else` | `Else` | ✓ | |
-| `range` | — | ✗ | Builtin name only; not a keyword token |
-| `slice` | — | ✗ | Builtin name only; not a keyword token |
+| `range` | `Range` | ✓ | Reserved word in spec; lexer recognizes it. Used as builtin `range()` function. Cannot be used as identifier. |
+| `slice` | `Slice` | ✓ | Reserved word in spec; lexer recognizes it. Used as builtin `slice()` function. Cannot be used as identifier. |
 | `goto` | `Goto` | ✓ | |
 | `char` | — | ✗ | Listed as type; `TokenType::Char` exists for literals but `char` keyword not in `keywordType()` |
 | `dword` | — | ✗ | Listed as type but no `TypeDword` or `DwordType` token |
@@ -161,7 +161,7 @@ Line numbers below are against the CURRENT SPEC.md (5993 bytes, 373 lines).
 - `examples/spec_check2.cpp` — 81 cases covering all spec features tested.
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
-Result: **88 passed, 0 failed**.
+Result: **90 passed, 0 failed**.
 
 ## Fixes Applied This Round (since prior audit)
 

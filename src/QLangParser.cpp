@@ -897,6 +897,44 @@ ExprPtr QLangParser::parsePrimary() {
     throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
                      std::string("expected '(' after 'blob'"));
   }
+  case TokenType::Range: {
+    // range() builtin call.
+    m_pos++;
+    if (check(TokenType::LParen)) {
+      m_pos++;
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Call;
+      node->callee = "range";
+      if (!check(TokenType::RParen)) {
+        do {
+          node->args.push_back(parseExpression());
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RParen, "')'");
+      return node;
+    }
+    throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
+                     std::string("expected '(' after 'range'"));
+  }
+  case TokenType::Slice: {
+    // slice() builtin call.
+    m_pos++;
+    if (check(TokenType::LParen)) {
+      m_pos++;
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Call;
+      node->callee = "slice";
+      if (!check(TokenType::RParen)) {
+        do {
+          node->args.push_back(parseExpression());
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RParen, "')'");
+      return node;
+    }
+    throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
+                     std::string("expected '(' after 'slice'"));
+  }
   case TokenType::LBracket:
     return parseArrayLiteral();
   case TokenType::LBrace:
