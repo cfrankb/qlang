@@ -84,7 +84,10 @@ enum class StmtKind {
   Arrow,     // local name = (params)[captures] { ... }  (closure assignment)
   Return,    // return [value]
   Continue,  // continue
-  Break      // break
+  Break,     // break
+  Label,     // :labelname (no-op marker, records PC for goto)
+  Goto,      // goto labelname
+  GotoIf     // if cond goto label (conditional jump)
 };
 
 // Base statement node. Forward-declared so StmtPtr can be used inside Stmt.
@@ -140,6 +143,16 @@ struct Stmt {
 
   // Return: return [value]  (value optional; defaults to nil).
   ExprPtr returnValue;
+
+  // Label: :labelname (records a PC target for goto).
+  std::string labelName;
+
+  // Goto: goto labelname (unconditional jump to a label).
+  std::string gotoLabel;
+
+  // GotoIf: if cond goto label (conditional jump).
+  ExprPtr gotoIfCond;
+  std::string gotoIfLabel;
 };
 
 using StmtPtr = std::shared_ptr<Stmt>;
@@ -165,6 +178,7 @@ private:
   StmtPtr parseReturn();
   StmtPtr parseContinue();
   StmtPtr parseBreak();
+  StmtPtr parseGoto();
   StmtPtr parseFunction();
   StmtPtr parseArrowClosure(const std::string &varName);
   bool looksLikeArrow() const;

@@ -23,6 +23,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "in") return TokenType::In;
   if (text == "continue") return TokenType::Continue;
   if (text == "break") return TokenType::Break;
+  if (text == "goto") return TokenType::Goto;
   if (text == "true") return TokenType::True;
   if (text == "false") return TokenType::False;
   if (text == "byte") return TokenType::TypeByte;

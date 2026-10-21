@@ -724,6 +724,12 @@ void QLangVM::run() {
     case Opcode::JMP:
       frame.pc = static_cast<size_t>(i.a);
       continue;
+    case Opcode::JMPIFTRUE:
+      if (isTrue(frame.regs[i.a]))
+        frame.pc = static_cast<size_t>(i.b);
+      else
+        frame.pc = frame.pc + 1;
+      continue;
     case Opcode::CONTINUE:
       frame.pc = static_cast<size_t>(i.a);
       continue;

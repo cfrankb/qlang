@@ -96,7 +96,7 @@ All items previously listed as "Broken / missing vs spec" are now resolved:
 - `examples/spec_check2.cpp` — 38 cases covering all spec features.
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc`
-Re-run after each fix to confirm counts. Current result: **66 passed, 3 failed** (3 pre-existing: `else if` chained, nested `def` — unrelated).
+Re-run after each fix to confirm counts. Current result: **69 passed, 3 failed** (3 pre-existing: `else if` chained, nested `def` — unrelated).
 
 ## Fixes applied this round
 
@@ -115,7 +115,7 @@ following spec sections were **not exercised** and may be missing or broken:
 
 | Spec § | Item | Status |
 |--------|------|--------|
-| §207–222 | `goto` / `:label` (same-scope only) | **Not verified** — no harness case; likely unimplemented |
+| §207–222 | `goto` / `:label` (same-scope only) | **Verified** — 5 cases passing (unconditional goto, countdown loop, same-scope counter, `if cond goto label`, undefined-label error) |
 | §222 | `slice(array, start, length)` builtin | **Verified** — 4 cases passing (basic, from-zero, tail, out-of-range) |
 | §201–204 | `range(1,10)` builtin + `in range(...)` | **Verified** — 6 cases passing (basic, first/last, empty, for-in, in-if) |
 | §292–297 | No-capture arrow closure `local f = (p) { }` | **Not explicitly verified** — arrow closures tested with captures only |
@@ -136,7 +136,6 @@ following spec sections were **not exercised** and may be missing or broken:
   the live binding the spec requires ("reference still maintained even after
   reassignment"). Needs a dedicated harness case that reassigns the captured
   variable between closure creation and invocation.
-- **`goto` / labels (§207–222):** Unverified — likely missing. Should be added
-  to the harness and verified that cross-scope jumps trigger an error per spec.
+- **`goto` / labels (§207–222):** Done — added `Goto`/`Label`/`GotoIf` tokens, parser nodes, compiler label map, and `JMP`/`JMPIFFALSE` emission. 5 harness cases passing. Supports both `goto label` and `if cond goto label`.
 - **`slice()` builtin (§222):** Done — added `Builtin::Slice` to `QLangBytecode.h`, registered in `builtinId()`, implemented in `QLangVM.cpp`, 4 harness cases passing.
 - **`range()` builtin (§201–204):** Done — added `Builtin::Range` to `QLangBytecode.h`, registered in `builtinId()`, implemented in `QLangVM.cpp`, 6 harness cases passing.

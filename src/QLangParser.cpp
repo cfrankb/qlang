@@ -99,8 +99,20 @@ StmtPtr QLangParser::parseStatement() {
   if (check(TokenType::If)) return parseIf();
   if (check(TokenType::Continue)) return parseContinue();
   if (check(TokenType::Break)) return parseBreak();
+  if (check(TokenType::Goto)) return parseGoto();
+
   if (check(TokenType::Def)) return parseFunction();
   if (check(TokenType::Return)) return parseReturn();
+
+  // Label statement: :labelname
+  if (check(TokenType::Colon)) {
+    consume(TokenType::Colon, "':' before label name");
+    auto stmt = std::make_shared<Stmt>();
+    stmt->kind = StmtKind::Label;
+    stmt->labelName = consume(TokenType::Ident, "label name after ':'").value;
+    match(TokenType::Semicolon);
+    return stmt;
+  }
 
   // Statement-form prefix inc/dec: ++a / --a
   if (check(TokenType::Increment) || check(TokenType::Decrement)) {
@@ -410,6 +422,18 @@ StmtPtr QLangParser::parseIf() {
   auto stmt = std::make_shared<Stmt>();
   stmt->kind = StmtKind::If;
   stmt->ifCond = parseExpression();
+
+  // Short-circuit form: `if cond goto label`
+  if (check(TokenType::Goto)) {
+    m_pos++; // consume 'goto'
+    auto gotoStmt = std::make_shared<Stmt>();
+    gotoStmt->kind = StmtKind::GotoIf;
+    gotoStmt->gotoIfCond = stmt->ifCond;
+    gotoStmt->gotoIfLabel = consume(TokenType::Ident, "label name after 'goto'").value;
+    match(TokenType::Semicolon);
+    return gotoStmt;
+  }
+
   match(TokenType::Then);
 
   // Accept either 'end' or '{' as body delimiter
@@ -483,6 +507,18 @@ StmtPtr QLangParser::parseBreak() {
   consume(TokenType::Break, "'break'");
   auto stmt = std::make_shared<Stmt>();
   stmt->kind = StmtKind::Break;
+  match(TokenType::Semicolon);
+  return stmt;
+}
+
+StmtPtr QLangParser::parseGoto() {
+  int line = current().line, col = current().col;
+  (void)line;
+  (void)col;
+  consume(TokenType::Goto, "'goto'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Goto;
+  stmt->gotoLabel = consume(TokenType::Ident, "label name after 'goto'").value;
   match(TokenType::Semicolon);
   return stmt;
 }

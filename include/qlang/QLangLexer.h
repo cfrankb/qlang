@@ -48,6 +48,8 @@ enum class TokenType {
   In,          // in (membership / for-in)
   Continue,    // continue
   Break,       // break
+  Goto,        // goto keyword
+  Label,       // :label (label declaration)
   True,        // true
   False,       // false
 

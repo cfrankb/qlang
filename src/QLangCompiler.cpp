@@ -180,6 +180,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_userFuncs.clear();
   m_closureVars.clear();
   m_captureRegs.clear();
+  m_labels.clear();
   m_nextReg = 0;
   for (size_t i = 0; i < params.size(); i++) {
     int r = static_cast<int>(i);
@@ -438,6 +439,16 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
     }
     break;
   }
+  case StmtKind::GotoIf: {
+    int condReg = tmpRegister();
+    compileExpr(s->gotoIfCond, condReg);
+    auto lit = m_labels.find(s->gotoIfLabel);
+    if (lit == m_labels.end())
+      throw QLangError(QLangErrorKind::Parse, 0, 0,
+                       "undefined label '" + s->gotoIfLabel + "'");
+    emit(Opcode::JMPIFTRUE, condReg, lit->second);
+    break;
+  }
   case StmtKind::ExprStmt: {
     // Statement-form prefix/postfix inc/dec on a variable must write back to
     // that variable's register (e.g. --a, a++). Otherwise the inc/dec result
@@ -514,6 +525,19 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
       throw QLangError(QLangErrorKind::Parse, 0, 0,
                        "'break' outside of a loop");
     emit(Opcode::BREAK, m_loops.back().breakAddr);
+    break;
+  }
+  case StmtKind::Label: {
+    // Record the current instruction index as the target for this label.
+    m_labels[s->labelName] = static_cast<int>(m_code.size());
+    break;
+  }
+  case StmtKind::Goto: {
+    auto lit = m_labels.find(s->gotoLabel);
+    if (lit == m_labels.end())
+      throw QLangError(QLangErrorKind::Parse, 0, 0,
+                       "undefined label '" + s->gotoLabel + "'");
+    emit(Opcode::JMP, lit->second);
     break;
   }
   }

@@ -135,6 +135,11 @@ int main() {
   expectVal("range in for", "local total = 0\nfor i in range(1,4)\ntotal = total + i\nnext i\nlocal r = total;", "r", 10);
   expectVal("in range", "local a = 0\nif (3 in range(1,5))\na = 1\nend\nlocal r = a;", "r", 1);
 
+  // -- NEW: goto / labels (spec §207–222) --
+  expectVal("goto basic", "local a = 10\n:label1\n--a\nif a > 1 goto label1\nlocal r = a;", "r", 1);
+  expectVal("goto same scope", "local x = 0\n:inc\nx = x + 1\nif x < 5 goto inc\nlocal r = x;", "r", 5);
+  expectThrow("goto undefined label", "goto nonexistent");
+
   // -- NEW: complex expressions --
   expectVal("complex expr", "local r = (2 + 3) * (4 - 1);", "r", 15);
   expectVal("bitwise mix", "local r = (5 & 3) | 4;", "r", 5);

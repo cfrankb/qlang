@@ -87,6 +87,7 @@ enum class Opcode {
   // Control flow
   JMP,       // pc = a
   JMPIFFALSE, // if !truth(r[a]) pc = b
+  JMPIFTRUE,  // if truth(r[a]) pc = b
   CONTINUE,  // pc = loop test label (next iteration)
   BREAK,     // pc = loop exit label
 
