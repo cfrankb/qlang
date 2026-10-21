@@ -1,7 +1,7 @@
 overview
 ==========
 
-create the skeleton for a scripting language that interfaces with C++
+scripting language that interfaces with C++
 this language will compile to bytecode.
 
 new class QLangContext will host the interpreter context. 
@@ -54,6 +54,9 @@ false
 def
 let
 else
+range
+slice
+goto
 ```
 
 constants
@@ -155,6 +158,13 @@ if b in [1,3,5] {
 
 }
 
+# check if a between 1 and 10 (inclusive)
+if a in range (1,10) {
+
+}
+
+if a == 1 return false;
+
 ```
 
 loops
@@ -162,7 +172,10 @@ loops
 
 ```
 
-for x =1 to 32 {
+for x = 1 to 32 
+next x
+
+for x = 1 to 32 {
    if x == 4 {
       continue # skip iteration
    }
@@ -187,10 +200,34 @@ for i in a {
 for i in [4,6,8,9] {
    printf("i=%d\n", i) # can look up an array
 }
+
+# loops i from 1 to 10
+for i in range(1,10) {
+
+}
 ```
 
+label/goto
+================
 
-|operators||
+```
+
+a = 10
+
+:label1
+--a
+
+if a > 1 goto label1
+
+```
+
+label and goto must reside in the same scope.
+if they cross a boundary, trigger an error.
+
+operators
+==========
+
+|operator|role|
 |---------|--|
 |=  | assign |
 |== |equal |
@@ -200,7 +237,7 @@ for i in [4,6,8,9] {
 |<< >> |bit shift
 |^ |binary xor
 |& |binary and
-| \| |binary or
+|\| |binary or
 |&& |logical and
 | \|\| |logical or
 |() |parenthesis
@@ -212,6 +249,9 @@ for i in [4,6,8,9] {
 |! |not (inverse)
 |;  |silent separator (optional)
 
+
+build-in functions
+===================
 
 |helpers||
 |--------|-|
@@ -226,7 +266,7 @@ for i in [4,6,8,9] {
 |delete var      | delete variable
 |str(var)        | return string representation of variable
 |int(var)        | return variable cast to int; string are parsed as decimal. other types return 0
-
+|slice(array, start, length) | return an array slice
 
 functions (native)
 ==================

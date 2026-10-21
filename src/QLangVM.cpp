@@ -152,14 +152,11 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args) {
       try {
         return QLangValue::Int(static_cast<int32_t>(std::stoi(args[0].asString())));
       } catch (...) {
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                         std::string("toInt: cannot convert '") +
-                             args[0].asString() + "' to int");
+        return QLangValue::Int(0);
       }
     }
-    throw QLangError(QLangErrorKind::Type, 0, 0,
-                     std::string("toInt: expected numeric or string, got ") +
-                         args[0].typeName());
+    // nil and other non-numeric types return 0 per spec §237
+    return QLangValue::Int(0);
   case Builtin::Type:
     need(1, "type");
     return QLangValue::String(args[0].typeName());
@@ -243,6 +240,32 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args) {
       len = static_cast<int64_t>(s.size()) - start;
     return QLangValue::String(
         s.substr(static_cast<size_t>(start), static_cast<size_t>(len)));
+  }
+  case Builtin::Slice: {
+    // slice(array, start, [length]) — 0-based start; length optional (defaults
+    // to rest of array). Returns a new array.
+    if (args.size() < 2 || args.size() > 3)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "slice expects 2 or 3 args (array, start, [length])");
+    if (args[0].type() != QLangValue::Type::Array)
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "slice: first argument must be an array");
+    const std::vector<QLangValue> &arr = args[0].asArray();
+    int64_t start = toInt64(args[1]);
+    int64_t len = (args.size() == 3)
+                      ? toInt64(args[2])
+                      : static_cast<int64_t>(arr.size()) - start;
+    if (start < 0) start = 0;
+    if (len < 0) len = 0;
+    if (start >= static_cast<int64_t>(arr.size()))
+      return QLangValue::Array({});
+    if (start + len > static_cast<int64_t>(arr.size()))
+      len = static_cast<int64_t>(arr.size()) - start;
+    std::vector<QLangValue> result;
+    result.reserve(static_cast<size_t>(len));
+    for (int64_t i = 0; i < len; ++i)
+      result.push_back(arr[static_cast<size_t>(start) + i]);
+    return QLangValue::Array(result);
   }
   }
   throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown builtin");
@@ -353,6 +376,25 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
     if (d == 0)
       throw QLangError(QLangErrorKind::Type, 0, 0, "modulo by zero");
     return QLangValue::Int(static_cast<int32_t>(num(a, "%") % d));
+  }
+  case Opcode::POW: {
+    // Exponential: pow(base, exp)
+    if (a.type() == QLangValue::Type::Float ||
+        b.type() == QLangValue::Type::Float) {
+      return QLangValue::Float(std::pow(toDouble(a), toDouble(b)));
+    }
+    int64_t base = num(a, "**");
+    int64_t exp = num(b, "**");
+    if (exp < 0) {
+      // Negative exponent with integer operands: return 0 (integer arithmetic)
+      if (base == 1) return QLangValue::Int(1);
+      if (base == -1) return QLangValue::Int(exp % 2 == 0 ? 1 : -1);
+      return QLangValue::Int(0);
+    }
+    int64_t result = 1;
+    for (int64_t i = 0; i < exp; i++)
+      result *= base;
+    return QLangValue::Int(static_cast<int32_t>(result));
   }
   case Opcode::AND:
     return QLangValue::Int(static_cast<int32_t>(num(a, "&") & num(b, "&")));
@@ -582,6 +624,10 @@ void QLangVM::run() {
                          "attempt to call a non-function value");
       frame.pc += 1;
       pushCall(cv.asFunction().funcIndex, frame.regs, i.a, i.c);
+      // Copy the closure's live-binding capture table into the new callee frame
+      // so that REFLOAD/REFSTORE inside the closure address the correct enclosing
+      // frame registers.
+      m_frames[m_cur].captures = cv.asFunction().captures;
       continue; // m_cur now points at the new frame; skip the trailing increment
     }
     case Opcode::MAKEFUNC: {
@@ -655,6 +701,7 @@ void QLangVM::run() {
     case Opcode::LE:
     case Opcode::GE:
     case Opcode::MOD:
+    case Opcode::POW:
     case Opcode::IN:
       frame.regs[i.a] = doBinary(op, frame.regs[i.b], frame.regs[i.c]);
       break;

@@ -28,6 +28,7 @@ enum class TokenType {
   End,
   Def,      // def
   Return,   // return
+  Else,     // else
 
   // Type keywords (used in typed declarations: local b:byte = 32). The range
   // TypeByte..TypeTable maps 1:1 onto QLangValue::Type Byte..Table.
@@ -68,6 +69,7 @@ enum class TokenType {
   LogicalAnd,    // &&
   LogicalOr,     // ||
   LogicalOr3,    // |||  (logical or, three bars)
+  Exponential,   // ** (exponential/power)
   Modulo,        // %
   Plus,          // +
   Minus,         // -

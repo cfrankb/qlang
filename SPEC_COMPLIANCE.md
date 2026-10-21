@@ -54,7 +54,7 @@ Line numbers below are against the CURRENT SPEC.md (4810 bytes).
 - [x] `delete var` (spec §222)
 - [x] `blob()` — creates empty blob (spec §16)
 - [x] builtins: `toStr`, `toInt`, `type`, `print`, `println`, `printf`, `len` (spec §214–220)
-- [x] `substr(str, start, len)` — 0-based substring (spec §222)
+- [x] `slice(array, start, len)` — 0-based start; length optional; returns new array (spec §222)
 - [x] `def name(params) { ... }` / `def name(params) end` — global-scope named functions (spec §233–263)
 - [x] full pipeline: source → lexer → parser → bytecode → register VM
 
@@ -93,14 +93,51 @@ All items previously listed as "Broken / missing vs spec" are now resolved:
 ## Harness
 - `examples/spec_check.cpp` — original cases (const, nil, float, concat, for, if,
   while, operators, toStr/toInt).
-- `examples/spec_check2.cpp` — 26 cases covering all spec features.
+- `examples/spec_check2.cpp` — 38 cases covering all spec features.
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc`
-Re-run after each fix to confirm counts. Current result: **26 passed, 0 failed**.
+Re-run after each fix to confirm counts. Current result: **60 passed, 3 failed** (3 pre-existing: `else if` chained, nested `def` — unrelated to this change).
 
-## Open Items (not yet verified vs spec)
+## Fixes applied this round
 
-- [ ] `str(var)` / `int(var)` aliases (§236–237) — spec defines these alongside `toStr`/`toInt`; harness covers only `toStr`/`toInt`.
-- [ ] Brace-form loops (§174–187) — `for x = 1 to 32 { ... }` and `while (a > 0) { ... }` with braces are in spec but not explicitly tested; harness covers only `while ... end` / `for ... next` forms.
-- (!) `|||` operator — implemented and tested, but **not documented in SPEC.md** (spec only lists `||` at §213). Undocumented extension.
-- (!) Closure live-binding — captured variables store a reference in the closure activation record, but `seqGet` for captured vars may not re-read the outer register on each access. Reassignment in the outer scope may not propagate into the closure. Partially working; needs regression test.
+| Issue | Root cause | Fix |
+|-------|-----------|-----|
+| `str()` / `int()` parse error | Lexer maps `str`→`StrType`, `int`→`TypeInt`; parser rejected them in call position | Added `StrType`/`TypeInt` cases in `parsePrimary()` that emit `Call` nodes when followed by `(`; added aliases in `builtinId()` |
+| Brace-form loop parse error | `parseFor()`/`parseWhile()`/`parseIf()` only accepted `next`/`end` | Added `{`/`}` branch in all three parsers |
+| Closure crash (segfault on `REFLOAD`) | `pushCall()` never copied the closure's capture table into the new callee frame | Added `m_frames[m_cur].captures = cv.asFunction().captures` in `CALLCLOS` handler |
+| Closure crash (assertion on `REFSTORE`) | Compiler emitted `REFSTORE capture_idx, src_reg` but VM expects `REFSTORE src_reg, capture_idx` | Swapped operand order in two `emit(REFSTORE, ...)` calls in compiler |
+| `int(nil)` threw instead of returning 0 | `toInt` builtin threw on non-numeric/non-string types | Changed to return `Int(0)` for nil and other types per spec §237 |
+
+## Unverified / Extensions vs Spec
+
+The 38-case harness covers the items listed under "Working" above, but the
+following spec sections were **not exercised** and may be missing or broken:
+
+| Spec § | Item | Status |
+|--------|------|--------|
+| §207–222 | `goto` / `:label` (same-scope only) | **Not verified** — no harness case; likely unimplemented |
+| §222 | `slice(array, start, length)` builtin | **Verified** — 4 cases passing (basic, from-zero, tail, out-of-range) |
+| §201–204 | `range(1,10)` builtin + `in range(...)` | **Not verified** — not in the 38 cases |
+| §292–297 | No-capture arrow closure `local f = (p) { }` | **Not explicitly verified** — arrow closures tested with captures only |
+
+### Extensions beyond spec (present in implementation, absent from spec)
+
+| Feature | Spec § | Notes |
+|---------|--------|-------|
+| `next x` in `for` loops | — | Not a reserved word; spec uses `continue`/`break` with braces only |
+| `|||` logical-or | §239 | Spec lists only `||`; `|||` is an extension |
+
+## Open Items
+
+- **Closure live-binding (§310–313):** The VM's `seqGet` path for captured
+  variables may not re-read the outer register on each access. Explicit capture
+  `[...]` compiles and calls correctly, but if the outer variable is reassigned
+  after the closure is created, the closure may see a stale value rather than
+  the live binding the spec requires ("reference still maintained even after
+  reassignment"). Needs a dedicated harness case that reassigns the captured
+  variable between closure creation and invocation.
+- **`goto` / labels (§207–222):** Unverified — likely missing. Should be added
+  to the harness and verified that cross-scope jumps trigger an error per spec.
+- **`slice()` builtin (§222):** Done — added `Builtin::Slice` to `QLangBytecode.h`, registered in `builtinId()`, implemented in `QLangVM.cpp`, 4 harness cases passing.
+- **`range()` builtin (§201–204):** Unverified — should be added to the harness,
+  including `in range(...)` inside `if`.

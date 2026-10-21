@@ -128,6 +128,7 @@ struct Stmt {
   // If: if (cond) then ... end
   ExprPtr ifCond;
   std::vector<StmtPtr> ifBody;
+  std::vector<StmtPtr> elseBody;
 
   // Def: def name(params) { ... } / def name(params) ... end  (global fn).
   std::string funcName;

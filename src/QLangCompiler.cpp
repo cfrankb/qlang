@@ -1,5 +1,6 @@
 #include "qlang/QLangCompiler.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 #include "qlang/QLangErrors.h"
@@ -82,10 +83,84 @@ CompiledProgram QLangCompiler::compile() {
 // instruction stream and constant pool, append it as a new function, and return
 // its function index. The enclosing function's compilation state is saved and
 // restored so nested definitions work.
+// Collect all variable names referenced in an expression.
+static void collectIds(const ExprPtr &e, std::unordered_set<std::string> &ids) {
+  if (!e) return;
+  if (e->kind == ExprKind::Variable) {
+    ids.insert(e->name);
+    return;
+  }
+  if (e->kind == ExprKind::Binary) {
+    collectIds(e->left, ids);
+    collectIds(e->right, ids);
+  } else if (e->kind == ExprKind::Unary) {
+    collectIds(e->operand, ids);
+  } else if (e->kind == ExprKind::Call) {
+    for (auto &a : e->args) collectIds(a, ids);
+  } else if (e->kind == ExprKind::Index) {
+    collectIds(e->indexBase, ids);
+    if (e->indexExpr) collectIds(e->indexExpr, ids);
+  } else if (e->kind == ExprKind::Array) {
+    for (auto &el : e->elements) collectIds(el, ids);
+  } else if (e->kind == ExprKind::Table) {
+    for (auto &item : e->items) {
+      collectIds(item.second, ids);
+    }
+  }
+}
+
+static void collectStmtIds(const StmtPtr &s, std::unordered_set<std::string> &ids) {
+  if (!s) return;
+  if (s->kind == StmtKind::Declaration || s->kind == StmtKind::Const) {
+    if (s->value) collectIds(s->value, ids);
+  } else if (s->kind == StmtKind::Assignment) {
+    if (s->assignValue) collectIds(s->assignValue, ids);
+    if (s->target) collectIds(s->target, ids);
+  } else if (s->kind == StmtKind::If) {
+    collectIds(s->ifCond, ids);
+    for (auto &b : s->ifBody) collectStmtIds(b, ids);
+    for (auto &b : s->elseBody) collectStmtIds(b, ids);
+  } else if (s->kind == StmtKind::For) {
+    if (s->forStart) collectIds(s->forStart, ids);
+    if (s->forEnd) collectIds(s->forEnd, ids);
+    for (auto &b : s->body) collectStmtIds(b, ids);
+  } else if (s->kind == StmtKind::ForIn) {
+    if (s->forEnd) collectIds(s->forEnd, ids);
+    for (auto &b : s->body) collectStmtIds(b, ids);
+  } else if (s->kind == StmtKind::While) {
+    collectIds(s->cond, ids);
+    for (auto &b : s->whileBody) collectStmtIds(b, ids);
+  } else if (s->kind == StmtKind::Return) {
+    if (s->returnValue) collectIds(s->returnValue, ids);
+  } else if (s->kind == StmtKind::ExprStmt) {
+    if (s->value) collectIds(s->value, ids);
+  } else if (s->kind == StmtKind::Def) {
+    // Don't collect params of nested defs
+    for (auto &b : s->body) collectStmtIds(b, ids);
+  }
+}
+
 int QLangCompiler::buildFunction(const std::string &name,
                                  const std::vector<std::string> &params,
                                  const std::vector<std::string> &captures,
                                  const std::vector<StmtPtr> &body) {
+  // Auto-detect free variables: variables referenced in the body that are
+  // not parameters and not yet declared in this function's scope.
+  std::unordered_set<std::string> allIds;
+  for (auto &s : body)
+    collectStmtIds(s, allIds);
+  std::unordered_set<std::string> paramSet(params.begin(), params.end());
+  std::vector<std::string> updatedCaptures = captures;
+  for (auto &id : allIds) {
+    if (paramSet.count(id)) continue;
+    if (m_regs.count(id)) continue; // already declared in this function
+    if (m_userFuncs.count(id)) continue; // user function name
+    if (builtinId(id) >= 0) continue; // builtin
+    // This is a free variable — capture it.
+    if (std::find(updatedCaptures.begin(), updatedCaptures.end(), id) == updatedCaptures.end())
+      updatedCaptures.push_back(id);
+  }
+
   // Save the enclosing function's compilation state.
   Bytecode savedCode = m_code;
   auto savedRegs = m_regs;
@@ -114,8 +189,8 @@ int QLangCompiler::buildFunction(const std::string &name,
   }
 
   // Register the explicit capture list (name -> refId).
-  for (size_t i = 0; i < captures.size(); i++)
-    m_captureRegs[captures[i]] = static_cast<int>(i);
+  for (size_t i = 0; i < updatedCaptures.size(); i++)
+    m_captureRegs[updatedCaptures[i]] = static_cast<int>(i);
 
   // Compile the body.
   for (auto &s : body)
@@ -189,7 +264,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
       if (op == "=") {
         int t = tmpRegister();
         compileExpr(s->assignValue, t);
-        emit(Opcode::REFSTORE, cit->second, t, 0);
+        emit(Opcode::REFSTORE, t, cit->second, 0);
       } else {
         int cur = tmpRegister();
         emit(Opcode::REFLOAD, cur, cit->second, 0);
@@ -197,7 +272,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
         compileExpr(s->assignValue, t);
         Opcode opCode = (op == "++") ? Opcode::INC : Opcode::DEC;
         emit(opCode, cur, cur, t);
-        emit(Opcode::REFSTORE, cit->second, cur, 0);
+        emit(Opcode::REFSTORE, cur, cit->second, 0);
       }
       break;
     }
@@ -349,7 +424,18 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
     for (auto &body : s->ifBody)
       compileStmt(body);
 
-    m_code.instructions()[jumpFalseIdx].b = static_cast<int>(m_code.size());
+    if (!s->elseBody.empty()) {
+      // Compile else body first, then emit a jump past it.
+      int elseBodyStart = static_cast<int>(m_code.size());
+      for (auto &body : s->elseBody)
+        compileStmt(body);
+      emit(Opcode::JMP, 0);
+      int jumpPastIdx = static_cast<int>(m_code.size()) - 1;
+      m_code.instructions()[jumpPastIdx].a = static_cast<int>(m_code.size());
+      m_code.instructions()[jumpFalseIdx].b = elseBodyStart;
+    } else {
+      m_code.instructions()[jumpFalseIdx].b = static_cast<int>(m_code.size());
+    }
     break;
   }
   case StmtKind::ExprStmt: {
@@ -535,8 +621,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
 }
 
 int QLangCompiler::builtinId(const std::string &name) const {
-  if (name == "toStr") return static_cast<int>(Builtin::ToStr);
-  if (name == "toInt") return static_cast<int>(Builtin::ToInt);
+  if (name == "toStr" || name == "str") return static_cast<int>(Builtin::ToStr);
+  if (name == "toInt" || name == "int") return static_cast<int>(Builtin::ToInt);
   if (name == "type") return static_cast<int>(Builtin::Type);
   if (name == "print") return static_cast<int>(Builtin::Print);
   if (name == "println") return static_cast<int>(Builtin::Println);
@@ -544,6 +630,7 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "len") return static_cast<int>(Builtin::Len);
   if (name == "blob") return static_cast<int>(Builtin::Blob);
   if (name == "substr") return static_cast<int>(Builtin::Substr);
+  if (name == "slice") return static_cast<int>(Builtin::Slice);
   throw QLangError(QLangErrorKind::Parse, 0, 0, "unknown function '" + name + "'");
 }
 
@@ -680,6 +767,7 @@ Opcode QLangCompiler::binOp(const std::string &text) const {
   if (text == ">>") return Opcode::SHR;
   if (text == "&&") return Opcode::LAND;
   if (text == "|||" || text == "||") return Opcode::LOR;
+  if (text == "**") return Opcode::POW;
   if (text == "%") return Opcode::MOD;
   if (text == "in") return Opcode::IN;
   throw QLangError(QLangErrorKind::Parse, 0, 0, "unsupported operator '" + text + "'");

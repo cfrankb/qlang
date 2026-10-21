@@ -19,7 +19,8 @@ enum class Builtin : int {
   Printf,
   Len,   // len(var) -> string/array/table length; other -> 1
   Blob,  // blob() -> empty binary blob
-  Substr // substr(str, start, len) -> substring
+  Substr, // substr(str, start, len) -> substring
+  Slice   // slice(array, start, len) -> new array
 };
 
 // Register-machine opcodes. This is a small register VM: each script variable
@@ -60,6 +61,7 @@ enum class Opcode {
   GT,
   LE,
   GE,
+  POW,       // r[a] = pow(r[b], r[c])  (exponential)
   IN,   // r[a] = (r[b] in r[c])  membership: array element / table key
 
   // Built-in function call. r[a] = call(funcId=b, args in r[a+1 .. a+c]).

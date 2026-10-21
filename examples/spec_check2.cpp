@@ -33,8 +33,8 @@ static void expectStr(const std::string &name, const std::string &src,
   try {
     ctx.run(src);
     std::string got = ctx.get(var).asString();
-    if (got == expect) { std::cout << "[PASS] str:  " << name << " (" << var << "=\"" << got << "\")\n"; passes++; }
-    else { std::cout << "[FAIL] str:  " << name << " (" << var << "=\"" << got << "\" exp \"" << expect << "\")\n"; fails++; }
+    if (got == expect) { std::cout << "[PASS] str:  " << name << " (" << var << "=\""<< got << "\")\n"; passes++; }
+    else { std::cout << "[FAIL] str:  " << name << " (" << var << "=\""<< got << "\" exp \""<< expect << "\")\n"; fails++; }
   } catch (const QLangError &e) { std::cout << "[FAIL] str:  " << name << " -> " << e.what() << "\n"; fails++; }
 }
 
@@ -61,9 +61,11 @@ int main() {
   expectRun("blob()", "local b = blob()");
 
   // -- helpers (214-221) --
-  expectVal("len", "local a = len([1,2,3]);", "a", 3);
+  expectVal("len array", "local a = len([1,2,3]);", "a", 3);
+  expectVal("len string", "local s = len(\"hello\");", "s", 5);
+  expectVal("len table", "local t = {a=1,b=2,c=3}\nlocal n = len(t);", "n", 3);
   expectRun("type()", "local t = type(5);");
-  expectThrow("substr unknown fn", "local s = substr(\"hello\", 1, 3);");
+  expectStr("substr", "local s = substr(\"hello\", 1, 3);", "s", "ell");
 
   // -- delete (222) --
   expectRun("delete var", "local a = 1\ndelete a");
@@ -72,16 +74,71 @@ int main() {
   expectVal("post-inc", "local a = 5\na++\na = a;", "a", 6);
   expectVal("while --a", "local a = 5\nwhile (a > 0)\n--a\nend", "a", 0);
 
-  // -- GAP: hex, in, continue/break, for-in, modulo, not, str, def --
+  // -- hex, in, continue/break, for-in, modulo, not, str type, def --
   expectVal("hex 0xc", "local n = 0xc\nlocal m = n;", "m", 12);
-  expectThrow("in operator", "local a = [1,2]\nlocal b = 2\nif (b in a) then\nb = 3\nend");
+  expectVal("in operator", "local a = [1,2]\nlocal b = 2\nif (b in a) then\nb = 3\nend\nlocal r = b;", "r", 3);
   expectRun("continue stmt", "local n = 0\nfor x = 1 to 3\ncontinue\nnext x");
   expectRun("break stmt", "local n = 0\nfor x = 1 to 3\nbreak\nnext x");
-  expectThrow("for in", "for i in [1,2,3]\nlocal s = toStr(i)\nnext i");
-  expectThrow("modulo", "local a = 5 % 2\nlocal m = a;");
-  expectThrow("not !", "local a = !false\nlocal m = a;");
-  expectThrow("str type", "local s:str = \"x\"");
-  expectThrow("def function", "def foo(a, b)\nreturn a\nend\nfoo(1,2)");
+  expectVal("for in", "local total = 0\nfor i in [1,2,3]\ntotal = total + i\nnext i\nlocal r = total;", "r", 6);
+  expectVal("modulo", "local a = 5 % 2\nlocal m = a;", "m", 1);
+  expectVal("not !", "local a = !false\nlocal m = a;", "m", 1);
+  expectStr("str type", "local s:str = \"x\"", "s", "x");
+  expectVal("def function", "def foo(a, b)\nreturn a + b\nend\nlocal r = foo(2,3);", "r", 5);
+  expectVal("def brace form", "def bar(a, b)\nreturn a * b\nend\nlocal r = bar(4,5);", "r", 20);
+
+  // -- NEW: str() / int() aliases (spec 236-237) --
+  expectStr("str alias", "local n = 42\nlocal s = str(n);", "s", "42");
+  expectVal("int alias", "local s = \"99\"\nlocal n = int(s);", "n", 99);
+  expectVal("int alias float", "local s = \"3.14\"\nlocal n = int(s);", "n", 3);
+  expectVal("int alias nil", "local z\nlocal n = int(z);", "n", 0);
+
+  // -- NEW: brace-form loops (spec 174-187) --
+  expectVal("for-brace", "local total = 0\nfor x = 1 to 3 {\n  total = total + x\n}\nlocal r = total;", "r", 6);
+  expectVal("while-brace", "local a = 3\nwhile (a > 0) {\n  a = a - 1\n}\nlocal r = a;", "r", 0);
+  expectVal("for-brace continue", "local total = 0\nfor x = 1 to 5 {\n  if x == 3 { continue }\n  total = total + x\n}\nlocal r = total;", "r", 12);
+  expectVal("for-brace break", "local total = 0\nfor x = 1 to 5 {\n  if x == 3 { break }\n  total = total + x\n}\nlocal r = total;", "r", 3);
+  expectVal("while-brace break", "local a = 5\nwhile (a > 0) {\n  if a == 3 { break }\n  a = a - 1\n}\nlocal r = a;", "r", 3);
+
+  // -- NEW: closure live-binding (spec 264-285) --
+  expectVal("closure live-bind read", "local x = 1\nlocal f = (y)[x] { return x + y }\nx = 10\nlocal r = f(20);\n", "r", 30);
+  expectVal("closure live-bind write", "local x = 1\nlocal f = (y)[x] { x = x + y; return x }\nx = 10\nlocal r = f(5);\n", "r", 15);
+  expectVal("closure live-bind outer change", "local x = 1\nlocal f = (y)[x] { return x + y }\nx = 100\nlocal r = f(1);\n", "r", 101);
+  expectVal("closure no capture", "local f = (a, b) { return a + b }\nlocal r = f(7, 8);\n", "r", 15);
+
+  // -- NEW: ** exponential (spec 223) --
+  expectVal("pow int", "local r = 2 ** 8;", "r", 256);
+  expectVal("pow float", "local r = 2 ** 3;", "r", 8);
+  expectVal("pow zero exp", "local r = 5 ** 0;", "r", 1);
+  expectVal("pow neg exp int", "local r = 2 ** -1;", "r", 0);
+  expectVal("pow nested", "local r = 2 ** 2 ** 3;", "r", 256);
+
+  // -- NEW: else / else if (spec 139-161) --
+  expectVal("else if true", "local x = 2\nif x == 1 then\nx = 1\nelse if x == 2 then\nx = 22\nelse\nx = 99\nend\nlocal r = x;", "r", 22);
+  expectVal("else else-if false", "local x = 3\nif x == 1 then\nx = 1\nelse if x == 2 then\nx = 22\nelse\nx = 99\nend\nlocal r = x;", "r", 99);
+  expectVal("else if with braces", "local x = 2\nif x == 1 {\n  x = 1\n} else if x == 2 {\n  x = 22\n} else {\n  x = 99\n}\nlocal r = x;", "r", 22);
+  expectVal("else with braces", "local x = 3\nif x == 1 {\n  x = 1\n} else {\n  x = 99\n}\nlocal r = x;", "r", 99);
+
+  // -- NEW: len on blob --
+  expectVal("len blob", "local b = blob()\nlocal n = len(b);", "n", 0);
+
+  // -- NEW: slice() builtin (spec §222) --
+  expectVal("slice basic", "local a = [10,20,30,40,50]\nlocal s = slice(a, 1, 3)\nlocal n = len(s);", "n", 3);
+  expectVal("slice from zero", "local a = [1,2,3,4,5]\nlocal s = slice(a, 0, 2)\nlocal v = s[0];", "v", 1);
+  expectVal("slice tail", "local a = [1,2,3,4,5]\nlocal s = slice(a, 3)\nlocal n = len(s);", "n", 2);
+  expectVal("slice empty", "local a = [1,2,3]\nlocal s = slice(a, 5, 2)\nlocal n = len(s);", "n", 0);
+
+  // -- NEW: complex expressions --
+  expectVal("complex expr", "local r = (2 + 3) * (4 - 1);", "r", 15);
+  expectVal("bitwise mix", "local r = (5 & 3) | 4;", "r", 5);
+  expectVal("shift mix", "local r = (1 << 3) + (8 >> 1);", "r", 12);
+  expectVal("compound add", "local a = 10\na += 5\nlocal r = a;", "r", 15);
+  expectVal("compound mul", "local a = 10\na *= 3\nlocal r = a;", "r", 30);
+
+  // -- NEW: nested functions --
+  expectVal("nested fn", "def outer(a)\n  def inner(b)\n    return a + b\n  end\n  return inner(10)\nend\nlocal r = outer(5);", "r", 15);
+
+  // -- NEW: array in table --
+  expectVal("array in table", "local t = {data=[1,2,3]}\nlocal r = t.data[1];", "r", 2);
 
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;

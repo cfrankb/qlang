@@ -19,6 +19,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "end") return TokenType::End;
   if (text == "def") return TokenType::Def;
   if (text == "return") return TokenType::Return;
+  if (text == "else") return TokenType::Else;
   if (text == "in") return TokenType::In;
   if (text == "continue") return TokenType::Continue;
   if (text == "break") return TokenType::Break;
@@ -241,6 +242,7 @@ Token QLangLexer::operatorToken() {
   if (c == '|' && n == '|' && t == '|')
     return make(TokenType::LogicalOr3, "|||", 3);
   if (c == '|' && n == '|') return make(TokenType::LogicalOr, "||", 2);
+  if (c == '*' && n == '*') return make(TokenType::Exponential, "**", 2);
   if (c == '+' && n == '+') return make(TokenType::Increment, "++", 2);
   if (c == '-' && n == '-') return make(TokenType::Decrement, "--", 2);
 

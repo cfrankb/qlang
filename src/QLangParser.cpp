@@ -55,6 +55,7 @@ static int precedence(TokenType t) {
   switch (t) {
   case TokenType::LogicalOr:
   case TokenType::LogicalOr3: return 1;
+  case TokenType::Exponential: return 11;
   case TokenType::LogicalAnd: return 2;
   case TokenType::Or: return 3;
   case TokenType::Xor: return 4;
@@ -324,19 +325,27 @@ StmtPtr QLangParser::parseFor() {
     stmt->kind = StmtKind::ForIn;
     stmt->forEnd = parseExpression(); // the collection
 
-    while (!check(TokenType::Next) && !check(TokenType::End) && !atEnd())
-      stmt->body.push_back(parseStatement());
-    if (check(TokenType::Next)) {
-      consume(TokenType::Next, "'next'");
-      Token var = consume(TokenType::Ident, "loop variable in 'next'");
-      if (var.value != stmt->loopVar)
-        throw QLangError(QLangErrorKind::Parse, var.line, var.col,
-                         std::string("'next '") + var.value +
-                             "' does not match loop variable '" +
-                             stmt->loopVar + "'");
-    } else if (atEnd()) {
-      throw QLangError(QLangErrorKind::Parse, line, col,
-                       "expected 'next' to close 'for' loop");
+    // Accept either 'next' or '{' as body delimiter
+    if (check(TokenType::LBrace)) {
+      m_pos++; // consume '{'
+      while (!check(TokenType::RBrace) && !atEnd())
+        stmt->body.push_back(parseStatement());
+      consume(TokenType::RBrace, "'}' to close 'for' loop");
+    } else {
+      while (!check(TokenType::Next) && !check(TokenType::End) && !atEnd())
+        stmt->body.push_back(parseStatement());
+      if (check(TokenType::Next)) {
+        consume(TokenType::Next, "'next'");
+        Token var = consume(TokenType::Ident, "loop variable in 'next'");
+        if (var.value != stmt->loopVar)
+          throw QLangError(QLangErrorKind::Parse, var.line, var.col,
+                           std::string("'next '") + var.value +
+                               "' does not match loop variable '" +
+                               stmt->loopVar + "'");
+      } else if (atEnd()) {
+        throw QLangError(QLangErrorKind::Parse, line, col,
+                         "expected 'next' to close 'for' loop");
+      }
     }
     return stmt;
   }
@@ -348,21 +357,29 @@ StmtPtr QLangParser::parseFor() {
   consume(TokenType::To, "'to'");
   stmt->forEnd = parseExpression();
 
-  while (!check(TokenType::Next) && !check(TokenType::End) && !atEnd()) {
-    stmt->body.push_back(parseStatement());
-  }
-  if (check(TokenType::Next)) {
-    consume(TokenType::Next, "'next'");
-    Token var = consume(TokenType::Ident, "loop variable in 'next'");
-    if (var.value != stmt->loopVar) {
-      throw QLangError(QLangErrorKind::Parse, var.line, var.col,
-                       std::string("'next '") + var.value +
-                           "' does not match loop variable '" +
-                           stmt->loopVar + "'");
+  // Accept either 'next' or '{' as body delimiter
+  if (check(TokenType::LBrace)) {
+    m_pos++; // consume '{'
+    while (!check(TokenType::RBrace) && !atEnd())
+      stmt->body.push_back(parseStatement());
+    consume(TokenType::RBrace, "'}' to close 'for' loop");
+  } else {
+    while (!check(TokenType::Next) && !check(TokenType::End) && !atEnd()) {
+      stmt->body.push_back(parseStatement());
     }
-  } else if (atEnd()) {
-    throw QLangError(QLangErrorKind::Parse, line, col,
-                     "expected 'next' to close 'for' loop");
+    if (check(TokenType::Next)) {
+      consume(TokenType::Next, "'next'");
+      Token var = consume(TokenType::Ident, "loop variable in 'next'");
+      if (var.value != stmt->loopVar) {
+        throw QLangError(QLangErrorKind::Parse, var.line, var.col,
+                         std::string("'next '") + var.value +
+                             "' does not match loop variable '" +
+                             stmt->loopVar + "'");
+      }
+    } else if (atEnd()) {
+      throw QLangError(QLangErrorKind::Parse, line, col,
+                       "expected 'next' to close 'for' loop");
+    }
   }
   return stmt;
 }
@@ -372,10 +389,19 @@ StmtPtr QLangParser::parseWhile() {
   auto stmt = std::make_shared<Stmt>();
   stmt->kind = StmtKind::While;
   stmt->cond = parseExpression();
-  while (!check(TokenType::End) && !atEnd()) {
-    stmt->whileBody.push_back(parseStatement());
+
+  // Accept either 'end' or '{' as body delimiter
+  if (check(TokenType::LBrace)) {
+    m_pos++; // consume '{'
+    while (!check(TokenType::RBrace) && !atEnd())
+      stmt->whileBody.push_back(parseStatement());
+    consume(TokenType::RBrace, "'}' to close 'while' loop");
+  } else {
+    while (!check(TokenType::End) && !atEnd()) {
+      stmt->whileBody.push_back(parseStatement());
+    }
+    consume(TokenType::End, "'end' to close 'while'");
   }
-  consume(TokenType::End, "'end' to close 'while'");
   return stmt;
 }
 
@@ -385,10 +411,44 @@ StmtPtr QLangParser::parseIf() {
   stmt->kind = StmtKind::If;
   stmt->ifCond = parseExpression();
   match(TokenType::Then);
-  while (!check(TokenType::End) && !atEnd()) {
-    stmt->ifBody.push_back(parseStatement());
+
+  // Accept either 'end' or '{' as body delimiter
+  if (check(TokenType::LBrace)) {
+    m_pos++; // consume '{'
+    while (!check(TokenType::RBrace) && !atEnd())
+      stmt->ifBody.push_back(parseStatement());
+    consume(TokenType::RBrace, "'}' to close 'if'");
+  } else {
+    while (!check(TokenType::End) && !check(TokenType::Else) && !atEnd()) {
+      stmt->ifBody.push_back(parseStatement());
+    }
+    if (check(TokenType::End))
+      consume(TokenType::End, "'end' to close 'if'");
   }
-  consume(TokenType::End, "'end' to close 'if'");
+
+  // Optional else / else if
+  if (check(TokenType::Else)) {
+    m_pos++; // consume 'else'
+    if (check(TokenType::If)) {
+      // else if: recursively parse the nested if as the else branch
+      stmt->elseBody.push_back(parseIf());
+    } else {
+      // else body
+      if (check(TokenType::LBrace)) {
+        m_pos++;
+        while (!check(TokenType::RBrace) && !atEnd())
+          stmt->elseBody.push_back(parseStatement());
+        consume(TokenType::RBrace, "'}' to close 'else'");
+      } else {
+        while (!check(TokenType::End) && !atEnd() && !check(TokenType::Else)) {
+          stmt->elseBody.push_back(parseStatement());
+        }
+        if (check(TokenType::End))
+          consume(TokenType::End, "'end' to close 'else'");
+      }
+    }
+  }
+
   return stmt;
 }
 
@@ -528,7 +588,10 @@ ExprPtr QLangParser::parseBinary(int minPrec) {
     if (prec < 0 || prec < minPrec) break;
     Token op = current();
     m_pos++;
-    ExprPtr right = parseBinary(prec + 1);
+    // Right-associative: ** (precedence 11) parses with same precedence
+    // so that a**b**c groups as a**(b**c), not (a**b)**c.
+    int nextPrec = (t == TokenType::Exponential) ? prec : prec + 1;
+    ExprPtr right = parseBinary(nextPrec);
     auto node = std::make_shared<Expr>();
     node->kind = ExprKind::Binary;
     node->op = op;
@@ -670,6 +733,46 @@ ExprPtr QLangParser::parsePrimary() {
     node->kind = ExprKind::Variable;
     node->name = tok.value;
     return node;
+  }
+  // str() / int() are reserved words (type tokens) but also valid as builtin
+  // function calls per spec §236-237. If followed by '(', treat as a call.
+  case TokenType::StrType: {
+    m_pos++;
+    if (check(TokenType::LParen)) {
+      m_pos++; // consume '('
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Call;
+      node->callee = "str";
+      if (!check(TokenType::RParen)) {
+        do {
+          node->args.push_back(parseExpression());
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RParen, "')'");
+      return node;
+    }
+    throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
+                     std::string("unexpected token '") + tok.text +
+                     "' in expression");
+  }
+  case TokenType::TypeInt: {
+    m_pos++;
+    if (check(TokenType::LParen)) {
+      m_pos++; // consume '('
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Call;
+      node->callee = "int";
+      if (!check(TokenType::RParen)) {
+        do {
+          node->args.push_back(parseExpression());
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RParen, "')'");
+      return node;
+    }
+    throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
+                     std::string("unexpected token '") + tok.text +
+                     "' in expression");
   }
   case TokenType::LParen: {
     m_pos++;
