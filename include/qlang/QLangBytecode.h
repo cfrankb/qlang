@@ -20,7 +20,8 @@ enum class Builtin : int {
   Len,   // len(var) -> string/array/table length; other -> 1
   Blob,  // blob() -> empty binary blob
   Substr, // substr(str, start, len) -> substring
-  Slice   // slice(array, start, len) -> new array
+  Slice,   // slice(array, start, len) -> new array
+  Range    // range(start, end) -> [start, start+1, ..., end]
 };
 
 // Register-machine opcodes. This is a small register VM: each script variable

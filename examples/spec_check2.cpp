@@ -127,6 +127,14 @@ int main() {
   expectVal("slice tail", "local a = [1,2,3,4,5]\nlocal s = slice(a, 3)\nlocal n = len(s);", "n", 2);
   expectVal("slice empty", "local a = [1,2,3]\nlocal s = slice(a, 5, 2)\nlocal n = len(s);", "n", 0);
 
+  // -- NEW: range() builtin (spec §201–204) --
+  expectVal("range 1-5 len", "local r = range(1,5)\nlocal n = len(r);", "n", 5);
+  expectVal("range 1-5 first", "local r = range(1,5)\nlocal v = r[0];", "v", 1);
+  expectVal("range 1-5 last", "local r = range(1,5)\nlocal v = r[4];", "v", 5);
+  expectVal("range empty", "local r = range(5,1)\nlocal n = len(r);", "n", 0);
+  expectVal("range in for", "local total = 0\nfor i in range(1,4)\ntotal = total + i\nnext i\nlocal r = total;", "r", 10);
+  expectVal("in range", "local a = 0\nif (3 in range(1,5))\na = 1\nend\nlocal r = a;", "r", 1);
+
   // -- NEW: complex expressions --
   expectVal("complex expr", "local r = (2 + 3) * (4 - 1);", "r", 15);
   expectVal("bitwise mix", "local r = (5 & 3) | 4;", "r", 5);

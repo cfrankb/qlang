@@ -267,6 +267,22 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args) {
       result.push_back(arr[static_cast<size_t>(start) + i]);
     return QLangValue::Array(result);
   }
+  case Builtin::Range: {
+    // range(start, end) — inclusive on both ends; returns [start, start+1, ...,
+    // end]. For start > end returns empty array.
+    if (args.size() != 2)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "range expects 2 args (start, end)");
+    int64_t start = toInt64(args[0]);
+    int64_t end = toInt64(args[1]);
+    std::vector<QLangValue> result;
+    if (start <= end) {
+      result.reserve(static_cast<size_t>(end - start + 1));
+      for (int64_t i = start; i <= end; ++i)
+        result.push_back(QLangValue::Int(static_cast<int32_t>(i)));
+    }
+    return QLangValue::Array(result);
+  }
   }
   throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown builtin");
 }

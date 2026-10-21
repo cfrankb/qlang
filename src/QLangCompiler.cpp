@@ -631,6 +631,7 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "blob") return static_cast<int>(Builtin::Blob);
   if (name == "substr") return static_cast<int>(Builtin::Substr);
   if (name == "slice") return static_cast<int>(Builtin::Slice);
+  if (name == "range") return static_cast<int>(Builtin::Range);
   throw QLangError(QLangErrorKind::Parse, 0, 0, "unknown function '" + name + "'");
 }
 
