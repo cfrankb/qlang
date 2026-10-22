@@ -489,7 +489,26 @@ Const-injected variables seed the VM register file at start (readable from
 QLang) but are excluded from the end-of-run scope sync, so QLang code cannot
 mutate them. The compiler guards against assignment with a parse-time error.
 
-TODO: inject C++ function (native qlang) into the context.
+Native (C++) functions are injected with `setFunc()`. The callback receives the
+context as its first argument (Lua convention) followed by the QLang arguments:
+
+```cpp
+ctx.setFunc("double", [](QLangContext& ctx, const std::vector<QLangValue>& args) -> QLangValue {
+    return qval_int(static_cast<int32_t>(args[0].asInt()) * 2);
+});
+
+ctx.setFunc("add", [](QLangContext& ctx, const std::vector<QLangValue>& args) -> QLangValue {
+    return qval_int(static_cast<int32_t>(args[0].asInt()) + static_cast<int32_t>(args[1].asInt()));
+});
+```
+
+Called from QLang like any builtin: `r = double(21)`. The return value is
+assigned to the destination register; returning `qval_nil()` means no result.
+Native funcs are resolved at compile time (negative opcode indices) and stored
+in `CompiledProgram::nativeFuncs` — no name lookup at runtime.
+
+
+TODO: add a method to the context to call a qlang function (either native or c++)
 
 global scope visibility
 ======================

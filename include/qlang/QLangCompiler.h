@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "QLangBytecode.h"
+#include "QLangContext.h"
 #include "QLangParser.h"
 
 namespace qlang {
@@ -25,6 +26,9 @@ struct CompiledProgram {
   std::vector<Function> functions; // functions[0] == the implicit "main"
   std::unordered_map<std::string, int> vars; // script name -> register index
   std::unordered_set<std::string> constVars; // names that are const (cannot be reassigned)
+  // Native (C++) functions registered via QLangContext::setFunc(), indexed
+  // by the negative opcode operand (index = -1 - opcode_b).
+  std::vector<QLangContext::NativeFunc> nativeFuncs;
   int registerCount = 0;
 };
 
@@ -38,6 +42,11 @@ public:
   // (not declared with `const` in QLang source). The compiler treats them
   // the same as source-level const vars for guardNotConst purposes.
   void addExternalConsts(const std::unordered_set<std::string> &names);
+
+  // Register names of C++ native functions. The compiler assigns them
+  // negative indices so the VM can dispatch them at runtime.
+  void addExternalFuncs(const std::unordered_set<std::string> &names);
+  const std::unordered_map<std::string, int> &nativeFuncIds() const { return m_nativeFuncIds; }
 
   CompiledProgram compile();
 
@@ -86,6 +95,12 @@ private:
   std::vector<StmtPtr> m_program;
   std::unordered_map<std::string, int> m_regs;
   std::unordered_set<std::string> m_constVars; // names declared with `const`
+  // External C++ native functions: name -> negative opcode index.
+  // Negative indices (-1, -2, ...) signal the VM to dispatch via the
+  // context's native function registry.
+  std::unordered_map<std::string, int> m_nativeFuncIds;
+  // Resolved native function indices: index -> function (filled at compile time).
+  std::vector<QLangContext::NativeFunc> m_nativeFuncsResolved;
   // Compiled user functions (index 0 is reserved for the implicit "main"
   // function and is filled in at the end of compile()). `def` bodies and
   // arrow-closure bodies are appended here as they are compiled.

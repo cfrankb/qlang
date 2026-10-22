@@ -9,6 +9,8 @@
 
 namespace qlang {
 
+class QLangContext; // forward declaration for CompiledProgram::nativeFuncs
+
 // Built-in function ids shared by the compiler (emits CALL with one of these)
 // and the VM (dispatches on them). Order is stable and used as the operand.
 enum class Builtin : int {

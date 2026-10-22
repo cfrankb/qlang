@@ -759,7 +759,15 @@ void QLangVM::run() {
       args.reserve(argCount);
       for (int k = 0; k < argCount; k++)
         args.push_back(frame.regs[dest + 1 + k]);
-      frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), args, m_scope, m_prog, m_deleted);
+      if (i.b < 0) {
+        // Native (C++) function: index into compiledProgram.nativeFuncs.
+        int idx = -1 - i.b;
+        if (idx < 0 || idx >= static_cast<int>(m_prog.nativeFuncs.size()))
+          throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown native function");
+        frame.regs[dest] = m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, args);
+      } else {
+        frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), args, m_scope, m_prog, m_deleted);
+      }
       break;
     }
     case Opcode::CALLFN: {

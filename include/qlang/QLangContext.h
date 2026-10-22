@@ -1,5 +1,6 @@
 #pragma once
 
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -36,9 +37,18 @@ namespace qlang
     void remove(const std::string &name);
     void clear();
 
+    // Inject a C++ function callable from QLang. Called like a builtin:
+    //   result = myFunc(arg1, arg2)
+    // The first argument is the context (like Lua's lua_State*), followed by
+    // the QLang arguments. Return a QLangValue (nil if no result).
+    using NativeFunc = std::function<QLangValue(QLangContext &, const std::vector<QLangValue> &)>;
+    void setFunc(const std::string &name, NativeFunc func);
+    const std::unordered_map<std::string, NativeFunc> &nativeFuncs() const { return m_nativeFuncs; }
+
   private:
     std::unordered_map<std::string, QLangValue> m_vars;
     std::unordered_set<std::string> m_injectedConsts;
+    std::unordered_map<std::string, NativeFunc> m_nativeFuncs;
   };
 
 } // namespace qlang

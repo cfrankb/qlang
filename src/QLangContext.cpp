@@ -26,7 +26,21 @@ namespace qlang
     std::vector<StmtPtr> program = parse(source);
     QLangCompiler compiler(std::move(program));
     compiler.addExternalConsts(m_injectedConsts);
+    std::unordered_set<std::string> nativeNames;
+    for (const auto &[name, _] : m_nativeFuncs)
+      nativeNames.insert(name);
+    compiler.addExternalFuncs(nativeNames);
     CompiledProgram compiled = compiler.compile();
+    // Populate the compiled program's native function table.
+    for (const auto &[name, func] : m_nativeFuncs) {
+      auto it = compiler.nativeFuncIds().find(name);
+      if (it != compiler.nativeFuncIds().end()) {
+        int idx = -1 - it->second;
+        while (compiled.nativeFuncs.size() <= static_cast<size_t>(idx))
+          compiled.nativeFuncs.push_back(nullptr);
+        compiled.nativeFuncs[static_cast<size_t>(idx)] = func;
+      }
+    }
     QLangVM vm(compiled, *this);
     vm.run();
   }
@@ -69,6 +83,12 @@ namespace qlang
   {
     m_vars.clear();
     m_injectedConsts.clear();
+    m_nativeFuncs.clear();
+  }
+
+  void QLangContext::setFunc(const std::string &name, NativeFunc func)
+  {
+    m_nativeFuncs[name] = std::move(func);
   }
 
 } // namespace qlang

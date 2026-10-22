@@ -20,6 +20,13 @@ void QLangCompiler::addExternalConsts(const std::unordered_set<std::string> &nam
   m_constVars.insert(names.begin(), names.end());
 }
 
+void QLangCompiler::addExternalFuncs(const std::unordered_set<std::string> &names) {
+  int idx = -1;
+  for (const auto &name : names) {
+    m_nativeFuncIds[name] = idx--;
+  }
+}
+
 int QLangCompiler::newRegister() { return m_nextReg++; }
 int QLangCompiler::tmpRegister() { return newRegister(); }
 
@@ -772,6 +779,14 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     }
     // Built-in function.
     int funcId = builtinId(e->callee);
+    // Native (C++) function — use negative index.
+    if (funcId < 0) {
+      auto nit = m_nativeFuncIds.find(e->callee);
+      if (nit != m_nativeFuncIds.end()) {
+        emit(Opcode::CALL, dest, nit->second, argCount);
+        break;
+      }
+    }
     emit(Opcode::CALL, dest, funcId, argCount);
     break;
   }

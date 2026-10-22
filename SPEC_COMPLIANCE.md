@@ -84,6 +84,8 @@ Line numbers below are against the CURRENT SPEC.md (7651 bytes, 456 lines).
 |------|------|--------|
 | §C++ interface | `set(name, value, isConst=false)` | ✓ implemented | Merged injectConst/injectGlobal into single `set()` with third `isConst` param. Seeds var into scope; when true, adds to `m_injectedConsts` so VM skips end-of-run sync and compiler's `guardNotConst()` rejects QLang assignment. |
 | §C++ interface | helpers to create `QValue` from common C++ types | ✓ implemented | `include/qlang/QValue.h` provides `using QValue = QLangValue;` and free helpers: `qval_nil`, `qval_bool`, `qval_byte`, `qval_char`, `qval_word`, `qval_short`, `qval_int`, `qval_unsigned`, `qval_dword`, `qval_float`, `qval_str` (3 overloads), `qval_blob`, `qval_array`, `qval_table`. |
+| §C++ interface | `setFunc(name, func)` — inject C++ function | ✓ implemented | `QLangContext::setFunc()` registers a native function. Callback signature: `std::function<QLangValue(QLangContext&, const std::vector<QLangValue>&)>` — context first (Lua convention). Compiler assigns negative opcode indices (-1, -2, …); VM dispatches `CALL` with `i.b < 0` via `m_prog.nativeFuncs[idx]`. |
+| §C++ interface | `CompiledProgram::nativeFuncs` | ✓ implemented | `std::vector<QLangContext::NativeFunc>` on `CompiledProgram`; populated from `m_nativeFuncs` at compile time in `QLangContext::run()`. VM reads it directly — no runtime lookup by name. |
 | §C++ interface | `CompiledProgram::constVars` | ✓ implemented | New field on `CompiledProgram`; populated from `m_constVars` at compile time (includes both `const`-declared and injected consts). VM uses it to skip scope sync for const vars. |
 
 ## Extensions Beyond Spec (present in implementation, absent from spec)
