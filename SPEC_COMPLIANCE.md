@@ -5,13 +5,27 @@ SPEC.md, what works, what does not, root causes, and recommended next steps.
 
 Verified by building the project (CMake, C++17, clean) and empirically running
 spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
-(81 cases). The shipped `examples/hello.cpp` smoke test passes.
+(147 cases). The shipped `examples/hello.cpp` smoke test passes.
 
 ## Current Status
 
-**138 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
+**147 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
 
-Line numbers below are against the CURRENT SPEC.md (11387 bytes, 574 lines, SHA256: 8f1ef041a3630ea156ad69f860d04ea2abdaa7d136c8d8d6251fab11622f5415).
+Line numbers below are against the CURRENT SPEC.md (13507 bytes, 635 lines, SHA256: c0a08dec5566d469f9eed3d3fd769c93aad35e0b2ed4085b4bdc9f8f91622b75).
+
+### SPEC.md Changes Since Last Audit
+
+SHA256 changed: `8f1ef041...` → `012d4528...` (+49 lines, +1645 bytes). Git history confirms 5 commits:
+
+| Commit | Change |
+|--------|--------|
+| `c121c3b` | Added `cast`, `min`, `max` to reserved words; added `cast` operator table; added `min`/`max` to builtins |
+| `ed323a8` | Added C++ `setFunc()` injection spec |
+| `065ca4e` | Added `ctx.call(fn)` spec |
+| `b89ecb5` | Added f-string spec section |
+| `df566d1` | Added `global` keyword spec section |
+
+Minor edits: fixed CMakeLists wording (`src/*.cpp`), added `s = "hello"` example, added `;` to `global a, b;` example, expanded TODO list for bytecodes versioning.
 
 ## Legend
 
@@ -92,8 +106,8 @@ All items below are implemented and verified. Table retained for traceability.
 | §C++ interface | `VM::callFunction(funcIndex, args)` | ✓ implemented | Creates a host caller frame, pushes callee via `pushCall()`, runs manual opcode loop until callee returns (`m_cur` drops below callee frame index), captures result from `regs[0]`, restores state, returns result. |
 | §C++ interface | `VM::runFrames(startFrame)` | ✓ implemented | Extracted VM loop from `run()` for reuse by `callFunction()`. Runs until `m_cur < startFrame`. |
 | §C++ interface | `CompiledProgram::constVars` | ✓ implemented | New field on `CompiledProgram`; populated from `m_constVars` at compile time (includes both `const`-declared and injected consts). VM uses it to skip scope sync for const vars. |
-| §global scope visibility | `global a, b` keyword | ✗ not implemented | Spec §532–564 describes `global` to import injected/global vars into function scope. No `Global` token in lexer; `global` is not in `keywordType()`. Inside functions, `global` is treated as a regular identifier and becomes a captured free variable — it coincidentally allows reading global vars but: (1) `global` alone throws "undeclared variable", (2) `global a, b` throws "unexpected token ','", (3) `global a` followed by assignment to `a` crashes at runtime. Additionally, script-level vars are visible in function scope **without** `global` (via closure capture of free variables), which contradicts the spec's intent that they be invisible by default. |
-| §strings (f-strings) | Python-style `f"Total: ${price:.2f}"` | ✓ implemented | Lexer: `FString` token; `fstringLiteral()` parses `${...}` interpolation blocks verbatim. Parser: `ExprKind::FString` with `strParts` (literal segments) and `exprParts` (inner expression ASTs). Compiler: emits `format(template, expr1, ...)` via `Builtin::Format` + `OP_Format` → `OP_CALL`. VM: `format` builtin does `%s`-based template substitution via `valueToString()`. Verified: `f"hello ${name}"`, `f"${a} + ${b} = ${a+b}"`, plain `f"just text"`, float `f"Total: $${price:.2f}"`. |
+| §global scope visibility | `global a, b` keyword | ✓ implemented | `TokenType::Global` in lexer; `keywordType()` maps `"global"`; parser handles `global a, b;` (semicolon optional) in function scope; compiler tracks `m_globalVars`/`m_globalRegMap`; VM routes through saved regs. Top-level `global` throws parse error. Undeclared global throws error. 9 new test cases pass. |
+| §strings (f-strings) | Python-style f"Total: ${price:.2f}" | ✓ implemented | Lexer: FString token; fstringLiteral() parses ${...} interpolation blocks verbatim. Parser: ExprKind::FString with strParts (literal segments), exprParts (inner expression ASTs), and formatSpecs (per-expression format specs like ".2f"). Compiler: emits format(template, expr1, ...) via Builtin::Format; format specs are translated to printf placeholders (:2f -> %.2f, :d -> %d, :x -> %x, :X -> %X, :o -> %o). Width and flag parsing supported: :06x -> %06x (zero-pad), :#06x -> %#06x (alternate hex with 0x prefix), :5d -> %5d (width), :-5s -> %-5s (left-align). VM: format builtin passes full printf substring to snprintf, preserving all flags/width/precision. Verified: f"Total: ${price:.2f}" -> "Total: 19.99", f"${0xff:x}" -> "ff", f"${255:X}" -> "FF", f"${255:#06x}" -> "0x00ff", f"${255:06x}" -> "0000ff", f"${10:05d}" -> "00010", f"${3.14:.2f}" -> "3.14". |
 
 ## Extensions Beyond Spec (present in implementation, absent from spec)
 
@@ -219,13 +233,11 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-Core spec fully implemented. **138 passed, 0 failed.**
+Core spec fully implemented. **147 passed, 0 failed.**
 
 ## Open Items
 
+- **`cast` operator (§374–386):** ✗ NOT implemented. Spec defines `cast<Type>(expr)` syntax (e.g. `cast<int>(1.12)`, `cast<string>([])`). No `TokenType::Cast` in lexer enum. No `keywordType()` entry for `cast`. No parser support for `cast<...>()` expression form. No `Builtin::Cast` or `OP_Convert` opcode. The existing `CONV` opcode handles typed declarations (`local b:byte = 32`) but not runtime cast expressions. **Action needed:** Add `TokenType::Cast`, parser `parseCast()` in `parsePrimary()`, compiler emit `OP_Convert`, VM handler for type coercion.
+- **`min`/`max` builtins (§409–428):** ✗ NOT implemented. Spec defines `min(number...|array)` and `max(number...|array)` — variadic number args or single array. No `Builtin::Min`/`Builtin::Max` in enum. No `builtinId()` entry. No VM handler. **Action needed:** Add `Builtin::Min`/`Builtin::Max`, register in `builtinId()`, implement in `callBuiltin()` with mixed-type guard (refuse int+float, refuse char+byte).
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
-- **`sprintf(fmt, ...)` (§374):** Implemented. `Builtin::Sprintf` added to enum, registered in `builtinId()`, implemented in `QLangVM.cpp` mirroring `Printf` but returning `QLangValue::String(out)`. Supports `%d`, `%f` (with `%.Nf` precision), `%s`, `%c`, and `%%` literal. 9 test cases pass.
-- **Nested call register allocation:** Fixed. Compiler now compiles call args into dedicated temp registers then emits `MOV` to the VM's expected `dest+1..dest+argCount` slots. This prevents nested calls from overwriting parent arg registers. Verified with `printf("%s %d", join(",", ar), len(ar))` after `for i in ar` loop.
-- **`join(separator, arr)` (§367):** Implemented. `Builtin::Join` added to enum, registered in `builtinId()`, implemented in `QLangVM.cpp` via `callBuiltin`. Non-string elements converted via `valueToString`. 8 test cases pass.
-|- **`isset(var)` (§381):** Implemented. `Builtin::IsSet` added to enum, registered in `builtinId()`, implemented in `QLangVM.cpp` via `callBuiltin`. Accepts a string (variable name); checks `prog.vars` map and `m_deleted` set to determine existence during execution (vars live in registers, not scope, until `run()` completes). 5 test cases pass.
-- **`f"hello ${name}"` f-strings (§567–575):** Implemented. Lexer emits `TokenType::FString` (prefix `f` before quote triggers `fstringLiteral()` which scans for `${...}` blocks verbatim). Parser builds `ExprKind::FString` with `strParts` (literal segments) and `exprParts` (parsed inner expressions via recursive inner lexer/parser). Compiler emits `format(template, arg1, ...)` call using `Builtin::Format`; template uses `%s` placeholders, exprs compiled into temp regs then MOV'd to `dest+1..dest+totalArgs`. VM `format` builtin iterates template, replaces each `%s` with `valueToString(args[ai++])`. Register pre-allocation ensures `dest+totalArgs` is within frame bounds. Verified: interpolation, multi-expr, no-interp, float format spec.
+- Generators (§608–623): ✗ NOT implemented. Spec has TODO section with Python-style `yield` prototype. No `yield` token, no generator state machine. Out of scope for v1.

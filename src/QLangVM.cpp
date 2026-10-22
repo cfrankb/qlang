@@ -60,7 +60,7 @@ std::string valueToString(const QLangValue &v) {
   switch (v.type()) {
   case QLangValue::Type::Nil: return "nil";
   case QLangValue::Type::String: return v.asString();
-  case QLangValue::Type::Bool: return std::to_string(static_cast<int32_t>(v.asInt()));
+  case QLangValue::Type::Bool: return v.asInt() ? "true" : "false";
   case QLangValue::Type::Char: return std::to_string(v.asChar());
   case QLangValue::Type::Byte: return std::to_string(v.asByte());
   case QLangValue::Type::Word: return std::to_string(v.asWord());
@@ -306,7 +306,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
   }
   case Builtin::Format: {
     // format(template, arg1, arg2, ...) — f-string interpolation.
-    // template uses %s placeholders; each arg is converted via valueToString.
+    // Supports full printf-style format specifiers: %s, %d, %f, %.*f, %5d, etc.
     if (args.empty())
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "format expects at least a template string");
@@ -316,15 +316,64 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     std::string fmt = args[0].asString();
     std::string out;
     size_t ai = 1;
-    for (size_t i = 0; i < fmt.size(); i++) {
-      if (fmt[i] == '%' && i + 1 < fmt.size() && fmt[i + 1] == 's') {
+    for (size_t i = 0; i < fmt.size(); ) {
+      if (fmt[i] == '%' && i + 1 < fmt.size()) {
+        // Parse the full format spec: %[flags][width][.precision]conversion
+        size_t j = i + 1;
+        // Skip flags: -, +, space, 0, #
+        while (j < fmt.size() && (fmt[j] == '-' || fmt[j] == '+' ||
+                                   fmt[j] == ' ' || fmt[j] == '0' || fmt[j] == '#'))
+          j++;
+        // Skip width digits
+        while (j < fmt.size() && std::isdigit(static_cast<unsigned char>(fmt[j])))
+          j++;
+        // Skip precision: .digits
+        if (j < fmt.size() && fmt[j] == '.') {
+          j++;
+          while (j < fmt.size() && std::isdigit(static_cast<unsigned char>(fmt[j])))
+            j++;
+        }
+        if (j >= fmt.size()) {
+          out += '%';
+          i++;
+          continue;
+        }
+        char spec = fmt[j];
+        if (spec == '%') {
+          out += '%';
+          i = j + 1;
+          continue;
+        }
         if (ai >= args.size())
           throw QLangError(QLangErrorKind::Runtime, 0, 0,
                            "format: not enough arguments for template placeholder");
-        out += valueToString(args[ai++]);
-        i++; // skip 's'
+        const QLangValue &av = args[ai++];
+        // Use the original format substring (including flags/width/precision)
+        // to let snprintf handle all formatting natively.
+        // j points at the conversion specifier, so include it: length = j - i + 1.
+        std::string sub(fmt, i, j - i + 1);
+        if (av.type() == QLangValue::Type::String) {
+          char buf[256];
+          std::snprintf(buf, sizeof(buf), sub.c_str(), av.asString().c_str());
+          out += buf;
+        } else if (av.type() == QLangValue::Type::Float) {
+          char buf[256];
+          std::snprintf(buf, sizeof(buf), sub.c_str(), toDouble(av));
+          out += buf;
+        } else if (av.type() == QLangValue::Type::Bool) {
+          char buf[256];
+          std::snprintf(buf, sizeof(buf), sub.c_str(), toInt64(av));
+          out += buf;
+        } else if (isNumeric(av)) {
+          char buf[256];
+          std::snprintf(buf, sizeof(buf), sub.c_str(), toInt64(av));
+          out += buf;
+        } else {
+          out += valueToString(av);
+        }
+        i = j + 1;
       } else {
-        out += fmt[i];
+        out += fmt[i++];
       }
     }
     return QLangValue::String(out);

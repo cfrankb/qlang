@@ -64,6 +64,7 @@ enum class TokenType {
   Global,      // global (import top-level vars into function scope)
   True,        // true
   False,       // false
+  Nil,         // nil (undefined/sentinel value)
 
   // Operators
   Dot,           // .  (table member access: t.name)

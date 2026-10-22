@@ -1,6 +1,7 @@
 #include "qlang/QLangCompiler.h"
 
 #include <algorithm>
+#include <iostream>
 #include <stdexcept>
 
 #include "qlang/QLangErrors.h"
@@ -964,17 +965,136 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     // f"literal ${expr} more" -> call format(template, expr1, expr2, ...)
     // CALL convention: args at dest+1..dest+argCount, result at dest.
     // So: reg[dest+1] = template, reg[dest+2..] = expressions.
+    // Format specs are encoded into the template placeholder:
+    //   no spec     -> %s
+    //   ".2f"       -> %.2f
+    //   "d"         -> %d
     std::string fmt;
     int exprCount = static_cast<int>(e->exprParts.size());
     for (int i = 0; i < exprCount; i++) {
       if (i < static_cast<int>(e->strParts.size()))
         fmt += e->strParts[i];
-      fmt += "%s";
+
+      // Build the printf placeholder from the format spec.
+      std::string placeholder;
+      if (i < static_cast<int>(e->formatSpecs.size())) {
+        if (!e->formatSpecs[i].empty()) {
+          // Python format spec -> printf spec.
+          // ":.2f" -> "%.2f", ":d" -> "%d", ":f" -> "%f", ":10s" -> "%10s"
+          const std::string &spec = e->formatSpecs[i];
+          // Find where the conversion specifier starts (first alphabetic char).
+          // e.g. ".2f" -> convStart=2, conversion="f", modifiers=".2"
+          size_t convStart = 0;
+          while (convStart < spec.size() && !std::isalpha(static_cast<unsigned char>(spec[convStart])))
+            convStart++;
+          if (convStart == spec.size()) {
+            // No conversion specifier — treat as string.
+            placeholder = "%s";
+          } else {
+            std::string conversion = spec.substr(convStart);
+            std::string modifiers = spec.substr(0, convStart);
+            // Handle width: ":10s" -> "%10s", ":>10" -> "%10s" (center-align not supported)
+            int width = 0;
+            bool leftAlign = false;
+            bool zeroPad = false;
+            bool altForm = false;
+            size_t mi = 0;
+            // Parse flags: #, 0, -, +, space
+            while (mi < modifiers.size()) {
+              char flag = modifiers[mi];
+              if (flag == '#') {
+                altForm = true;
+                mi++;
+              } else if (flag == '0' && width == 0) {
+                // '0' is a zero-pad flag only when it appears before width digits
+                zeroPad = true;
+                mi++;
+              } else if (flag == '-') {
+                leftAlign = true;
+                mi++;
+              } else if (flag == '+' || flag == ' ') {
+                // Sign flags — not used in placeholder generation but consume them
+                mi++;
+              } else {
+                break;
+              }
+            }
+            // Parse width digits
+            while (mi < modifiers.size() && std::isdigit(static_cast<unsigned char>(modifiers[mi]))) {
+              width = width * 10 + (modifiers[mi] - '0');
+              mi++;
+            }
+            // Check for dot+precision (only for float/double)
+            int precision = -1;
+            if (mi < modifiers.size() && modifiers[mi] == '.') {
+              mi++;
+              precision = 0;
+              while (mi < modifiers.size() && std::isdigit(static_cast<unsigned char>(modifiers[mi]))) {
+                precision = precision * 10 + (modifiers[mi] - '0');
+                mi++;
+              }
+            }
+            // Build printf placeholder
+            if (conversion == "f" || conversion == "e" || conversion == "g" ||
+                conversion == "a" || conversion == "F" || conversion == "E" ||
+                conversion == "G" || conversion == "A") {
+              // Float: %[flags][width][.precision]f
+              std::string flags;
+              if (zeroPad) flags += '0';
+              else if (!leftAlign && width > 0) flags += ' ';
+              if (width > 0) {
+                char wb[16];
+                std::snprintf(wb, sizeof(wb), "%d", width);
+                placeholder = "%" + flags + wb;
+              } else {
+                placeholder = "%" + flags;
+              }
+              if (precision >= 0) {
+                char pb[16];
+                std::snprintf(pb, sizeof(pb), ".%d", precision);
+                placeholder += pb;
+              }
+              placeholder += conversion;
+            } else if (conversion == "d" || conversion == "i" || conversion == "x" ||
+                       conversion == "X" || conversion == "o" || conversion == "u") {
+              // Integer: %[flags][width]d
+              std::string flags;
+              if (altForm) flags += '#';
+              if (zeroPad && width > 0) flags += '0';
+              else if (!leftAlign && width > 0) flags += ' ';
+              if (width > 0) {
+                char wb[16];
+                std::snprintf(wb, sizeof(wb), "%d", width);
+                placeholder = "%" + flags + wb + conversion;
+              } else {
+                placeholder = "%" + flags + conversion;
+              }
+            } else if (conversion == "s") {
+              // String: %[flags][width]s
+              std::string flags;
+              if (!leftAlign && width > 0) flags += ' ';
+              if (width > 0) {
+                char wb[16];
+                std::snprintf(wb, sizeof(wb), "%d", width);
+                placeholder = "%" + flags + wb + "s";
+              } else {
+                placeholder = "%" + flags + "s";
+              }
+            } else {
+              // Unknown conversion — fall back to %s
+              placeholder = "%s";
+            }
+          }
+        }
+      } else {
+        placeholder = "%s";
+      }
+      fmt += placeholder;
     }
     if (static_cast<int>(e->strParts.size()) > exprCount)
       fmt += e->strParts.back();
 
-    // Ensure enough registers: CALL reads dest+1..dest+totalArgs.
+    // Ensure enough registers: CALL reads dest+1..dest+argCount.
     int totalArgs = exprCount + 1;
     int maxReg = dest + totalArgs;
     while (m_nextReg <= maxReg)

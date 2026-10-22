@@ -80,6 +80,7 @@ struct Expr {
   // odd indices = expression nodes to interpolate.
   std::vector<std::string> strParts;
   std::vector<ExprPtr> exprParts;
+  std::vector<std::string> formatSpecs;  // per-expression format spec (e.g. ".2f")
 };
 
 // ---------------------------------------------------------------------------

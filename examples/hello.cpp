@@ -215,6 +215,17 @@ printf("%s --> len %d\n", join(",", ar), len(ar))
 
 println(sprintf("Today is %s %d", "monday", 2026))
 
+println(f"Hello ${human.name}. Formatted")
+
+local x = 1024 / 10
+println(f"1024 / 10 = ${x}")
+local x = 1024 % 10
+println(f"1024 %% 10 = ${x}")
+
+local x = 0x678 & 0x70
+println(f"0x678 & 0x70 = 0x${x:#04x}") #  expected: 0x678 & 0x70 = 0x0070
+println(f"{255:#06x}") # expected: "0x00ff"
+ 
 )";
 
   QLangContext ctx;

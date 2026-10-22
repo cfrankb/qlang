@@ -1,5 +1,6 @@
 #include "qlang/QLangParser.h"
 
+#include <iostream>
 #include <limits>
 #include <stdexcept>
 
@@ -828,6 +829,13 @@ ExprPtr QLangParser::parsePrimary() {
     node->literal = QLangValue::Int(0);
     return node;
   }
+  case TokenType::Nil: {
+    m_pos++;
+    auto node = std::make_shared<Expr>();
+    node->kind = ExprKind::Literal;
+    node->literal = QLangValue();
+    return node;
+  }
   case TokenType::Float: {
     m_pos++;
     auto node = std::make_shared<Expr>();
@@ -1062,13 +1070,35 @@ return node;
         throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
                          "unterminated interpolation in f-string");
       std::string exprText = raw.substr(exprStart, i - exprStart - 1);
+
+      // Split exprText into expression and format spec at the top-level ':'.
+      // The ':' may appear inside nested braces (e.g. {a:b}) — skip those.
+      size_t specPos = std::string::npos;
+      int braceDepth = 0;
+      for (size_t k = 0; k < exprText.size(); k++) {
+        if (exprText[k] == '{') braceDepth++;
+        else if (exprText[k] == '}') braceDepth--;
+        else if (exprText[k] == ':' && braceDepth == 0 && specPos == std::string::npos)
+          specPos = k;
+      }
+
+      std::string innerExprText;
+      std::string formatSpec;
+      if (specPos != std::string::npos) {
+        innerExprText = exprText.substr(0, specPos);
+        formatSpec = exprText.substr(specPos + 1);
+      } else {
+        innerExprText = exprText;
+      }
+
       // Recursively parse the inner expression.
-      QLangLexer innerLexer(exprText);
+      QLangLexer innerLexer(innerExprText);
       auto innerTokens = innerLexer.tokenize();
       QLangParser innerParser(std::move(innerTokens));
       auto innerExpr = innerParser.parseExpression();
       match(TokenType::Semicolon);
       node->exprParts.push_back(innerExpr);
+      node->formatSpecs.push_back(formatSpec);
     }
     return node;
   }

@@ -82,6 +82,7 @@ end
 cast
 min
 max
+assert
 ```
 
 constants
@@ -391,8 +392,8 @@ build-in functions
 
 |helpers|-|-|
 |--------|-|-|
-|toStr(var)     |  convert to string| (deprecated)
-|toInt(var)     |  convert to int| (deprecated)
+|toStr(var)     |  convert to string| deprecated
+|toInt(var)     |  convert to int| deprecated
 |type(var)      |   return a string representation of the type|
 |print(var)       | print a string|
 |println(var)     | print a string with carriage return
@@ -407,7 +408,9 @@ build-in functions
 |isset(var)| return true if variable, array index or table field exists. otherwise returns false
 |join(separator, arr)| join the array element using separator
 |min(number...\|array)| returns the smallest value in a group number (int, float, byte etc). 
-|max(number...\|array)| returns the largest value in a group number (int, float, byte etc). 
+|max(number...\|array)| returns the largest value in the group of numbers (int, float, byte etc). 
+|sum(number...\|array)| returns a sum of the group of numbers (int, float, byte etc). 
+|asset(bool, str)| if bool is false thrown an exception using text provided by str
 
 ```python
 a = [1,2,3]
@@ -426,6 +429,14 @@ c = min([3,5,6,1], [2,5,1,2]) # errror: only 1 array allowed
 # min and max refuse data if types are mixed (int and float)
 # min and max refuse data if types have mixed signed and unsigned types (char and byte)
 # max used the same rules as min
+
+d = sum(1,10,20) # d = 31
+d = sum([1,4,20]) # d = 25
+d = sum([1,4,20], [50,2]) # d = 77
+# sum accepts: numbers (int, char, float) or arrays ONLY
+# sum return float if a type float is present
+# sum return int   if data is mixed signed and unsigned types (char and byte) and no float are present
+
 
 ```
 
