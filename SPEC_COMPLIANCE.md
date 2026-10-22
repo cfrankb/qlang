@@ -9,9 +9,9 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 ## Current Status
 
-**128 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
+**138 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
 
-Line numbers below are against the CURRENT SPEC.md (7378 bytes, 444 lines).
+Line numbers below are against the CURRENT SPEC.md (7651 bytes, 456 lines).
 
 ## Legend
 
@@ -80,8 +80,11 @@ Line numbers below are against the CURRENT SPEC.md (7378 bytes, 444 lines).
 
 ## Missing vs Spec
 
-| Spec | Item | Status |
+|| Spec | Item | Status |
 |------|------|--------|
+| §C++ interface | `set(name, value, isConst=false)` | ✓ implemented | Merged injectConst/injectGlobal into single `set()` with third `isConst` param. Seeds var into scope; when true, adds to `m_injectedConsts` so VM skips end-of-run sync and compiler's `guardNotConst()` rejects QLang assignment. |
+| §C++ interface | helpers to create `QValue` from common C++ types | ✓ implemented | `include/qlang/QValue.h` provides `using QValue = QLangValue;` and free helpers: `qval_nil`, `qval_bool`, `qval_byte`, `qval_char`, `qval_word`, `qval_short`, `qval_int`, `qval_unsigned`, `qval_dword`, `qval_float`, `qval_str` (3 overloads), `qval_blob`, `qval_array`, `qval_table`. |
+| §C++ interface | `CompiledProgram::constVars` | ✓ implemented | New field on `CompiledProgram`; populated from `m_constVars` at compile time (includes both `const`-declared and injected consts). VM uses it to skip scope sync for const vars. |
 
 ## Extensions Beyond Spec (present in implementation, absent from spec)
 
@@ -156,6 +159,17 @@ Line numbers below are against the CURRENT SPEC.md (7378 bytes, 444 lines).
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
 Result: **138 passed, 0 failed.** All spec builtins implemented.
+
+## C++ Interface (new this round)
+
+| Feature | Status |
+|---------|--------|
+| `QValue` type alias + free helpers (`qval_*`) | ✓ added in `include/qlang/QValue.h` |
+| `QLangCompiler::addExternalConsts()` | ✓ added |
+| `CompiledProgram::constVars` | ✓ added to struct |
+| VM skips end-of-run sync for const vars | ✓ patched in `QLangVM.cpp` |
+| Compiler `guardNotConst()` covers injected consts | ✓ via `addExternalConsts()` |
+| Test: `examples/test_inject.cpp` | ✓ passes |
 
 ## Fixes Applied This Round (since prior audit)
 

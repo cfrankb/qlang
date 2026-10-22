@@ -834,6 +834,8 @@ void QLangVM::run() {
         for (const auto &[name, reg] : m_prog.vars) {
           if (m_deleted.count(reg))
             m_scope.remove(name);
+          else if (m_prog.constVars.count(name))
+            ; // skip: const-injected vars are read-only, do not sync back
           else
             m_scope.set(name, frame.regs[reg]);
         }

@@ -24,6 +24,7 @@ struct CompiledProgram {
   Bytecode code;                 // scratch for main; functions() holds all fns
   std::vector<Function> functions; // functions[0] == the implicit "main"
   std::unordered_map<std::string, int> vars; // script name -> register index
+  std::unordered_set<std::string> constVars; // names that are const (cannot be reassigned)
   int registerCount = 0;
 };
 
@@ -32,6 +33,11 @@ struct CompiledProgram {
 class QLangCompiler {
 public:
   explicit QLangCompiler(std::vector<StmtPtr> program);
+
+  // Register names that are const because they were injected from the host
+  // (not declared with `const` in QLang source). The compiler treats them
+  // the same as source-level const vars for guardNotConst purposes.
+  void addExternalConsts(const std::unordered_set<std::string> &names);
 
   CompiledProgram compile();
 

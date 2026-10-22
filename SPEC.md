@@ -10,6 +10,8 @@ default variable scope is local
 
 this first version will parse text within a context.
 
+SPEC_COMPLIANCE.md should track the hash of SPEC.md
+
 variable types
 ===============
 ```
@@ -442,3 +444,54 @@ closure list is mandatory []. closure only available in function scope.
 reference still maintained even after reassignment 
 return value is optiona. defaults to nil
 local always apply to the current scope.
+
+
+C++ interface
+========
+
+Injected host variables are available to QLang code via the
+`QLangContext` API. Two injection modes exist:
+
+```
+ctx.set("name", value, false)   // writable from QLang 
+ctx.set("name", value, true)    // read-only from QLang; assignment is a compile error
+```
+
+Host code constructs values via the `QValue` type (alias for `QLangValue`) and
+free helpers:
+
+```cpp
+#include "qlang/QValue.h"
+using namespace qlang;
+
+ctx.set("greeting", qval_str("hello"));
+ctx.set("pi",       qval_float(3.14159), true);
+ctx.set("MAX",      qval_int(99), true);
+
+// QValue helpers cover all scalar types plus aggregate types:
+qval_nil()
+qval_bool(bool)
+qval_byte(uint8_t)
+qval_char(int8_t)
+qval_word(uint16_t)
+qval_short(int16_t)
+qval_int(int32_t)
+qval_unsigned(uint32_t)
+qval_dword(uint64_t)
+qval_float(double)
+qval_str(const char*) / qval_str(const std::string&)
+qval_blob(const std::vector<uint8_t>&)
+qval_array(ArrayValue)
+qval_table(TableValue)
+```
+
+Const-injected variables seed the VM register file at start (readable from
+QLang) but are excluded from the end-of-run scope sync, so QLang code cannot
+mutate them. The compiler guards against assignment with a parse-time error.
+
+TODO: inject C++ function (native qlang) into the context.
+
+global scope visibility
+======================
+
+global const and functions are visible everywhere

@@ -16,6 +16,10 @@ static bool isArrayExpr(const ExprPtr &e) {
 QLangCompiler::QLangCompiler(std::vector<StmtPtr> program)
     : m_program(std::move(program)) {}
 
+void QLangCompiler::addExternalConsts(const std::unordered_set<std::string> &names) {
+  m_constVars.insert(names.begin(), names.end());
+}
+
 int QLangCompiler::newRegister() { return m_nextReg++; }
 int QLangCompiler::tmpRegister() { return newRegister(); }
 
@@ -85,6 +89,7 @@ CompiledProgram QLangCompiler::compile() {
                         fn.instructions, fn.constants);
   out.code = std::move(outCode);
   out.vars = std::move(m_regs);
+  out.constVars = std::move(m_constVars);
   out.registerCount = m_nextReg;
   return out;
 }
