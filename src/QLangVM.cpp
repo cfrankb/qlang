@@ -20,20 +20,29 @@ namespace {
 
 bool isNumeric(const QLangValue &v) {
   auto t = v.type();
-  return t == QLangValue::Type::Bool || t == QLangValue::Type::Byte ||
-         t == QLangValue::Type::Word || t == QLangValue::Type::Short ||
-         t == QLangValue::Type::Int || t == QLangValue::Type::Unsigned ||
+  return t == QLangValue::Type::Bool || t == QLangValue::Type::Char ||
+         t == QLangValue::Type::Byte || t == QLangValue::Type::Word ||
+         t == QLangValue::Type::Short || t == QLangValue::Type::Int ||
+         t == QLangValue::Type::Unsigned || t == QLangValue::Type::Dword ||
          t == QLangValue::Type::Float;
 }
 
 int64_t toInt64(const QLangValue &v) {
   switch (v.type()) {
   case QLangValue::Type::Bool: return static_cast<int64_t>(v.asInt());
+  case QLangValue::Type::Char: return static_cast<int64_t>(v.asChar());
   case QLangValue::Type::Byte: return static_cast<int64_t>(v.asByte());
   case QLangValue::Type::Word: return static_cast<int64_t>(v.asWord());
   case QLangValue::Type::Short: return static_cast<int64_t>(v.asShort());
   case QLangValue::Type::Int: return static_cast<int64_t>(v.asInt());
   case QLangValue::Type::Unsigned: return static_cast<int64_t>(v.asUnsigned());
+  case QLangValue::Type::Dword: {
+    uint64_t u = v.asDword();
+    if (u > static_cast<uint64_t>(INT64_MAX))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "dword value exceeds int64_t range");
+    return static_cast<int64_t>(u);
+  }
   case QLangValue::Type::Float: return static_cast<int64_t>(v.asFloat());
   default: return 0;
   }
@@ -52,11 +61,13 @@ std::string valueToString(const QLangValue &v) {
   case QLangValue::Type::Nil: return "nil";
   case QLangValue::Type::String: return v.asString();
   case QLangValue::Type::Bool: return std::to_string(static_cast<int32_t>(v.asInt()));
+  case QLangValue::Type::Char: return std::to_string(v.asChar());
   case QLangValue::Type::Byte: return std::to_string(v.asByte());
   case QLangValue::Type::Word: return std::to_string(v.asWord());
   case QLangValue::Type::Short: return std::to_string(v.asShort());
   case QLangValue::Type::Int: return std::to_string(v.asInt());
   case QLangValue::Type::Unsigned: return std::to_string(v.asUnsigned());
+  case QLangValue::Type::Dword: return std::to_string(v.asDword());
   case QLangValue::Type::Float: {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%.15g", v.asFloat());
@@ -317,6 +328,8 @@ QLangValue convert(const QLangValue &v, QLangValue::Type type) {
   switch (type) {
   case QLangValue::Type::Bool:
     return QLangValue::Bool(toInt64(v) ? 1 : 0);
+  case QLangValue::Type::Char:
+    return QLangValue::Char(static_cast<int8_t>(toInt64(v)));
   case QLangValue::Type::Byte:
     return QLangValue::Byte(static_cast<uint8_t>(toInt64(v)));
   case QLangValue::Type::Word:
@@ -327,6 +340,8 @@ QLangValue convert(const QLangValue &v, QLangValue::Type type) {
     return QLangValue::Int(static_cast<int32_t>(toInt64(v)));
   case QLangValue::Type::Unsigned:
     return QLangValue::Unsigned(static_cast<uint32_t>(toInt64(v)));
+  case QLangValue::Type::Dword:
+    return QLangValue::Dword(static_cast<uint64_t>(toInt64(v)));
   default: return v;
   }
 }

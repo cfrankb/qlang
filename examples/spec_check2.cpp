@@ -181,6 +181,24 @@ int main() {
   expectThrow("range as ident", "local range = 1");
   expectThrow("slice as ident", "local slice = 1");
 
+  // -- NEW: char type (spec §18) --
+  expectVal("char typed -50", "local c:char = -50\nlocal r = c;", "r", -50);
+  expectStr("char type returns char", "local c:char = -1\nlocal s = type(c);", "s", "char");
+  expectVal("char max", "local c:char = 127\nlocal r = c;", "r", 127);
+  expectVal("char min", "local c:char = -128\nlocal r = c;", "r", -128);
+  expectVal("char arithmetic", "local a:char = 10\nlocal b:char = 20\nlocal r = a + b;", "r", 30);
+  expectRun("char const", "const ch:char = 42");
+  // char and byte have different type strings
+  expectVal("char != byte type", "local b:byte = 42\nlocal c:char = 42\nlocal r = (type(b) == \"byte\");", "r", 1);
+  expectVal("char != byte type2", "local b:byte = 42\nlocal c:char = 42\nlocal r = (type(c) == \"char\");", "r", 1);
+
+  // -- NEW: dword type (spec §24) --
+  expectStr("dword typed", "local d:dword = 4294967296\nlocal s = toStr(d);", "s", "4294967296");
+  expectStr("dword type returns dword", "local d:dword = 1\nlocal s = type(d);", "s", "dword");
+  expectStr("dword max u32", "local d:dword = 4294967295\nlocal s = toStr(d);", "s", "4294967295");
+  expectRun("dword const", "const big:dword = 10000000000");
+  expectVal("dword arithmetic", "local a:dword = 100\nlocal b:dword = 200\nlocal r = a + b;", "r", 300);
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

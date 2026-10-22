@@ -34,6 +34,7 @@ enum class TokenType {
   // Type keywords (used in typed declarations: local b:byte = 32). The range
   // TypeByte..TypeTable maps 1:1 onto QLangValue::Type Byte..Table.
   TypeBool,    // bool
+  TypeChar,    // char (int8_t)
   TypeByte,
   TypeWord,
   TypeShort,
@@ -44,6 +45,7 @@ enum class TokenType {
   TypeArray,
   TypeFloat,   // float
   TypeTable,   // table
+  TypeDword,   // dword (uint64_t)
   StrType,     // str (alias for string; kept outside the range above)
 
   // Keywords / operators

@@ -8,11 +8,13 @@ const char *QLangValue::typeName() const {
   switch (m_type) {
   case Type::Nil: return "nil";
   case Type::Bool: return "bool";
+  case Type::Char: return "char";
   case Type::Byte: return "byte";
   case Type::Word: return "word";
   case Type::Short: return "short";
   case Type::Int: return "int";
   case Type::Unsigned: return "unsigned";
+  case Type::Dword: return "dword";
   case Type::String: return "string";
   case Type::Blob: return "blob";
   case Type::Array: return "array";
@@ -33,17 +35,31 @@ const char *QLangValue::typeName() const {
   }
 
 QL_ACCESSOR_GETTER(uint8_t, Byte, uint8_t)
+// asChar reads from the int32_t storage (Char stores int8_t there).
+const int32_t &QLangValue::asChar() const {
+  if (m_type != Type::Char)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected Char but value is ") + typeName());
+  return std::get<int32_t>(m_storage);
+}
 QL_ACCESSOR_GETTER(uint16_t, Word, uint16_t)
 QL_ACCESSOR_GETTER(int16_t, Short, int16_t)
-// asInt accepts both Int and Bool (they share int32_t storage).
+// asInt accepts Int, Bool, and Char (all store in int32_t storage).
 const int32_t &QLangValue::asInt() const {
-  if (m_type != Type::Int && m_type != Type::Bool)
+  if (m_type != Type::Int && m_type != Type::Bool && m_type != Type::Char)
     throw QLangError(QLangErrorKind::Type, 0, 0,
-                     std::string("expected Int or Bool but value is ") +
+                     std::string("expected Int, Bool or Char but value is ") +
                          typeName());
   return std::get<int32_t>(m_storage);
 }
 QL_ACCESSOR_GETTER(uint32_t, Unsigned, uint32_t)
+// asDword reads from the uint64_t storage.
+const uint64_t &QLangValue::asDword() const {
+  if (m_type != Type::Dword)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected Dword but value is ") + typeName());
+  return std::get<uint64_t>(m_storage);
+}
 QL_ACCESSOR_GETTER(std::string, String, std::string)
 QL_ACCESSOR_GETTER(std::vector<uint8_t>, Blob, std::vector<uint8_t>)
 QL_ACCESSOR_GETTER(ArrayValue, Array, ArrayValue)
@@ -62,17 +78,31 @@ QL_ACCESSOR_GETTER(TableValue, Table, TableValue)
   }
 
 QL_ACCESSOR_MUT(uint8_t, Byte, uint8_t)
+// asChar mut reads from the int32_t storage (Char stores int8_t there).
+int32_t &QLangValue::asChar() {
+  if (m_type != Type::Char)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected Char but value is ") + typeName());
+  return std::get<int32_t>(m_storage);
+}
 QL_ACCESSOR_MUT(uint16_t, Word, uint16_t)
 QL_ACCESSOR_MUT(int16_t, Short, int16_t)
-// asInt mut accepts both Int and Bool (they share int32_t storage).
+// asInt mut accepts Int, Bool, and Char (all store in int32_t storage).
 int32_t &QLangValue::asInt() {
-  if (m_type != Type::Int && m_type != Type::Bool)
+  if (m_type != Type::Int && m_type != Type::Bool && m_type != Type::Char)
     throw QLangError(QLangErrorKind::Type, 0, 0,
-                     std::string("expected Int or Bool but value is ") +
+                     std::string("expected Int, Bool or Char but value is ") +
                          typeName());
   return std::get<int32_t>(m_storage);
 }
 QL_ACCESSOR_MUT(uint32_t, Unsigned, uint32_t)
+// asDword mut reads from the uint64_t storage.
+uint64_t &QLangValue::asDword() {
+  if (m_type != Type::Dword)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected Dword but value is ") + typeName());
+  return std::get<uint64_t>(m_storage);
+}
 QL_ACCESSOR_MUT(std::string, String, std::string)
 QL_ACCESSOR_MUT(std::vector<uint8_t>, Blob, std::vector<uint8_t>)
 QL_ACCESSOR_MUT(ArrayValue, Array, ArrayValue)

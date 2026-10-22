@@ -43,11 +43,13 @@ public:
   enum class Type {
     Nil,      // unset / absent
     Bool,     // bool (true/false; stored as Int 1/0 at runtime)
+    Char,     // int8_t (signed; distinct from Byte which is uint8_t)
     Byte,     // uint8_t
     Word,     // uint16_t
     Short,    // int16_t
     Int,      // int32_t
     Unsigned, // uint32_t
+    Dword,    // uint64_t
     String,   // null-terminated text
     Blob,     // arbitrary binary data
     Array,    // list of mixed values
@@ -63,6 +65,11 @@ public:
   static QLangValue Byte(uint8_t v) {
     QLangValue q(Type::Byte);
     q.m_storage = v;
+    return q;
+  }
+  static QLangValue Char(int8_t v) {
+    QLangValue q(Type::Char);
+    q.m_storage = static_cast<int32_t>(v);
     return q;
   }
   static QLangValue Word(uint16_t v) {
@@ -87,6 +94,11 @@ public:
   }
   static QLangValue Unsigned(uint32_t v) {
     QLangValue q(Type::Unsigned);
+    q.m_storage = v;
+    return q;
+  }
+  static QLangValue Dword(uint64_t v) {
+    QLangValue q(Type::Dword);
     q.m_storage = v;
     return q;
   }
@@ -129,6 +141,8 @@ public:
   // match the requested type, so callers get a clear, located failure.
   const uint8_t &asByte() const;
   uint8_t &asByte();
+  const int32_t &asChar() const;
+  int32_t &asChar();
   const uint16_t &asWord() const;
   uint16_t &asWord();
   const int16_t &asShort() const;
@@ -137,6 +151,8 @@ public:
   int32_t &asInt();
   const uint32_t &asUnsigned() const;
   uint32_t &asUnsigned();
+  const uint64_t &asDword() const;
+  uint64_t &asDword();
   const std::string &asString() const;
   std::string &asString();
   const std::vector<uint8_t> &asBlob() const;
@@ -153,7 +169,7 @@ public:
 private:
   Type m_type;
   std::variant<std::monostate, uint8_t, uint16_t, int16_t, int32_t, uint32_t,
-               double, std::string, std::vector<uint8_t>, ArrayValue,
+               uint64_t, double, std::string, std::vector<uint8_t>, ArrayValue,
                TableValue, ClosurePtr>
       m_storage;
 };

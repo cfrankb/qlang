@@ -9,7 +9,7 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 ## Current Status
 
-**81 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
+**103 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
 
 Line numbers below are against the CURRENT SPEC.md (5993 bytes, 373 lines).
 
@@ -130,8 +130,8 @@ Line numbers below are against the CURRENT SPEC.md (5993 bytes, 373 lines).
 | `range` | `Range` | ✓ | Reserved word in spec; lexer recognizes it. Used as builtin `range()` function. Cannot be used as identifier. |
 | `slice` | `Slice` | ✓ | Reserved word in spec; lexer recognizes it. Used as builtin `slice()` function. Cannot be used as identifier. |
 | `goto` | `Goto` | ✓ | |
-| `char` | — | ✗ | Listed as type; `TokenType::Char` exists for literals but `char` keyword not in `keywordType()` |
-| `dword` | — | ✗ | Listed as type but no `TypeDword` or `DwordType` token |
+|| `char` | `TypeChar` | ✓ | Listed as type; `char` is a reserved keyword; `local c:char` parses; `type(c)` → `"char"`; signed -128..127; distinct from `byte` (uint8_t); `asInt()` accepts Char (stores in int32_t slot) |
+| `dword` | `TypeDword` | ✓ | Listed as type; `dword` is a reserved keyword; `local d:dword` parses; `type(d)` → `"dword"`; `uint64_t`; arithmetic supported; overflow on int64_t conversion throws |
 | `switch` | — | ✗ | Listed as reserved word; no token, parser, compiler, or VM support |
 | `case` | — | ✗ | Listed as reserved word; no token |
 | `default` | — | ✗ | Listed as reserved word; no token |
@@ -142,13 +142,13 @@ Line numbers below are against the CURRENT SPEC.md (5993 bytes, 373 lines).
 |---|---|---|---|
 | `string/str` | `String` | `TypeString`/`StrType` | ✓ |
 | `blob` | `Blob` | `TypeBlob` | ✓ |
-| `char (int8_t)` | — | — | **Missing.** Maps to same `Byte` at runtime but no distinct `TypeChar` |
+|| `char (int8_t)` | `Char` | `TypeChar` | ✓ | `local c:char = -50` parses; `type(c)` → `"char"`; signed range -128..127; participates in arithmetic; distinct from `byte` (uint8_t) at type level |
 | `byte (uint8_t)` | `Byte` | `TypeByte` | ✓ |
 | `word (uint16_t)` | `Word` | `TypeWord` | ✓ |
 | `short (int16_t)` | `Short` | `TypeShort` | ✓ |
 | `int (int32_t)` | `Int` | `TypeInt` | ✓ |
 | `unsigned (uint32_t)` | `Unsigned` | `TypeUnsigned` | ✓ |
-| `dword (uint64_t)` | — | — | **Missing.** No 64-bit type |
+| `dword (uint64_t)` | `Dword` | `TypeDword` | ✓ | `local d:dword = 4294967296` parses; `type(d)` → `"dword"`; `uint64_t` storage; participates in arithmetic; `toStr()` works |
 | `array` | `Array` | `TypeArray` | ✓ |
 | `float` | `Float` | `TypeFloat` | ✓ |
 | `table` | `Table` | `TypeTable` | ✓ |
@@ -158,10 +158,10 @@ Line numbers below are against the CURRENT SPEC.md (5993 bytes, 373 lines).
 
 - `examples/spec_check.cpp` — original cases (const, nil, float, concat, for, if,
   while, operators, toStr/toInt).
-- `examples/spec_check2.cpp` — 81 cases covering all spec features tested.
+- `examples/spec_check2.cpp` — 81 cases covering all spec features tested, plus 15 new tests for `bool`, `char`, `dword`, and `range`/`slice` reserved-word status.
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
-Result: **90 passed, 0 failed**.
+Result: **103 passed, 0 failed**.
 
 ## Fixes Applied This Round (since prior audit)
 
@@ -207,12 +207,8 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
   stored as `Int(1/0)` at runtime. Three options were considered and the
   implementation chose (1) — adding `TypeBool` + `TokenType::BoolType` and
   mapping to `Int(0/1)` at runtime. |
-- **`char` vs `byte` (§18):** Spec distinguishes `char (int8_t)` from
-  `byte (uint8_t)`; implementation treats both as `Byte` (uint8_t) at runtime.
-  No `TypeChar` in value system; `char` is not a keyword in the lexer.
-  If the distinction matters, add `TypeChar` and a signed-byte representation.
-- **`dword` type (§24):** Spec lists `dword (uint64_t)` but no such type exists
-  in the value system or lexer. No 64-bit integer type is supported.
+- **`char` vs `byte` (§18):** ✅ RESOLVED. Added `TypeChar` + `TokenType::TypeChar`. `char` (int8_t) is now distinct from `byte` (uint8_t) at the value and type level. `local c:char = -50` parses; `type(c)` returns `"char"`; `char` participates in arithmetic; signed range -128..127. `char` is also a reserved word (cannot be used as identifier).
+- **`dword` type (§24):** ✅ RESOLVED. Added `TypeDword` + `TokenType::TypeDword`. `local d:dword = 4294967296` parses; `type(d)` → `"dword"`; stores in `uint64_t` variant slot; participates in arithmetic; `toStr()` works; overflow on conversion to int64_t throws Runtime error.
 - **`switch`/`case`/`default` (§206–219):** Spec shows full switch syntax with
   string cases, `in`-cases, `range`-cases, and `default`. No lexer tokens,
   parser nodes, compiler logic, or VM opcodes exist. This is a substantial

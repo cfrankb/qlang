@@ -1,5 +1,6 @@
 #include "qlang/QLangParser.h"
 
+#include <limits>
 #include <stdexcept>
 
 #include "qlang/QLangErrors.h"
@@ -267,14 +268,20 @@ StmtPtr QLangParser::parseDeclaration() {
     TokenType tt = current().type;
     bool isType =
         (tt >= TokenType::TypeBool && tt <= TokenType::TypeTable) ||
-        tt == TokenType::StrType;
+        tt == TokenType::StrType ||
+        tt == TokenType::TypeChar ||
+        tt == TokenType::TypeDword;
     if (isType) {
       QLangValue::Type vt =
           (tt == TokenType::StrType)
               ? QLangValue::Type::String
-              : static_cast<QLangValue::Type>(
-                    static_cast<int>(tt) - static_cast<int>(TokenType::TypeBool) +
-                    static_cast<int>(QLangValue::Type::Bool));
+              : (tt == TokenType::TypeChar)
+                  ? QLangValue::Type::Char
+                  : (tt == TokenType::TypeDword)
+                      ? QLangValue::Type::Dword
+                      : static_cast<QLangValue::Type>(
+                            static_cast<int>(tt) - static_cast<int>(TokenType::TypeBool) +
+                            static_cast<int>(QLangValue::Type::Bool));
       stmt->declaredType = vt;
       m_pos++;
     } else {
@@ -307,14 +314,20 @@ StmtPtr QLangParser::parseConst() {
     TokenType tt = current().type;
     bool isType =
         (tt >= TokenType::TypeBool && tt <= TokenType::TypeTable) ||
-        tt == TokenType::StrType;
+        tt == TokenType::StrType ||
+        tt == TokenType::TypeChar ||
+        tt == TokenType::TypeDword;
     if (isType) {
       QLangValue::Type vt =
           (tt == TokenType::StrType)
               ? QLangValue::Type::String
-              : static_cast<QLangValue::Type>(
-                    static_cast<int>(tt) - static_cast<int>(TokenType::TypeBool) +
-                    static_cast<int>(QLangValue::Type::Bool));
+              : (tt == TokenType::TypeChar)
+                  ? QLangValue::Type::Char
+                  : (tt == TokenType::TypeDword)
+                      ? QLangValue::Type::Dword
+                      : static_cast<QLangValue::Type>(
+                            static_cast<int>(tt) - static_cast<int>(TokenType::TypeBool) +
+                            static_cast<int>(QLangValue::Type::Bool));
       stmt->declaredType = vt;
       m_pos++;
     } else {
@@ -739,7 +752,12 @@ ExprPtr QLangParser::parsePrimary() {
       v = std::stoll(tok.value, nullptr, 16); // 0x... hexadecimal
     auto node = std::make_shared<Expr>();
     node->kind = ExprKind::Literal;
-    node->literal = QLangValue::Int(static_cast<int32_t>(v));
+    // Use Dword for values outside int32_t range so the full value is preserved.
+    if (v > static_cast<long long>(std::numeric_limits<int32_t>::max()) ||
+        v < static_cast<long long>(std::numeric_limits<int32_t>::min()))
+      node->literal = QLangValue::Dword(static_cast<uint64_t>(v));
+    else
+      node->literal = QLangValue::Int(static_cast<int32_t>(v));
     return node;
   }
   case TokenType::True: {

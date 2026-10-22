@@ -30,6 +30,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "true") return TokenType::True;
   if (text == "false") return TokenType::False;
   if (text == "bool") return TokenType::TypeBool;
+  if (text == "char") return TokenType::TypeChar;
   if (text == "byte") return TokenType::TypeByte;
   if (text == "word") return TokenType::TypeWord;
   if (text == "short") return TokenType::TypeShort;
@@ -41,6 +42,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "array") return TokenType::TypeArray;
   if (text == "float") return TokenType::TypeFloat;
   if (text == "table") return TokenType::TypeTable;
+  if (text == "dword") return TokenType::TypeDword;
   return TokenType::Ident;
 }
 
