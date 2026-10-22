@@ -60,6 +60,7 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::GE: return "ge";
   case Opcode::CALL: return "call";
   case Opcode::DELETE: return "delete";
+  case Opcode::CAST: return "cast";
   case Opcode::ARRGET: return "arrget";
   case Opcode::ARRPUT: return "arrput";
   case Opcode::ARRAPP: return "arrapp";

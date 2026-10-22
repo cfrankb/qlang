@@ -961,6 +961,12 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     emit(Opcode::TABGET, dest, baseR, keyR);
     break;
   }
+  case ExprKind::Cast: {
+    int src = tmpRegister();
+    compileExpr(e->castOperand, src);
+    emit(Opcode::CAST, dest, src, static_cast<int>(e->targetType));
+    break;
+  }
   case ExprKind::FString: {
     // f"literal ${expr} more" -> call format(template, expr1, expr2, ...)
     // CALL convention: args at dest+1..dest+argCount, result at dest.
@@ -1085,6 +1091,9 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
               placeholder = "%s";
             }
           }
+        } else {
+          // Empty format spec — default to %s.
+          placeholder = "%s";
         }
       } else {
         placeholder = "%s";

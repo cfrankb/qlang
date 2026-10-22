@@ -78,6 +78,9 @@ enum class Opcode {
   // Variable removal. r[a] is dropped from the scope at end-of-run.
   DELETE, // remove script variable mapped to register a
 
+  // Runtime cast: strict type conversion (throws on invalid cast).
+  CAST, // r[a] = strict_convert(r[b], type c)
+
   // Array operations (register holds an ArrayValue).
   ARRGET, // r[a] = arrays[b][c]               (subscript read)
   ARRPUT, // arrays[a][b] = c                   (subscript write)

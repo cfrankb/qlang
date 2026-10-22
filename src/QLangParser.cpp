@@ -275,16 +275,26 @@ StmtPtr QLangParser::parseDeclaration() {
         tt == TokenType::TypeChar ||
         tt == TokenType::TypeDword;
     if (isType) {
-      QLangValue::Type vt =
-          (tt == TokenType::StrType)
-              ? QLangValue::Type::String
-              : (tt == TokenType::TypeChar)
-                  ? QLangValue::Type::Char
-                  : (tt == TokenType::TypeDword)
-                      ? QLangValue::Type::Dword
-                      : static_cast<QLangValue::Type>(
-                            static_cast<int>(tt) - static_cast<int>(TokenType::TypeBool) +
-                            static_cast<int>(QLangValue::Type::Bool));
+      // Explicit lookup table (formula is wrong — enums have different layouts).
+      static const std::pair<int,int> tmap[] = {
+        {static_cast<int>(TokenType::TypeBool),  static_cast<int>(QLangValue::Type::Bool)},
+        {static_cast<int>(TokenType::TypeChar),  static_cast<int>(QLangValue::Type::Char)},
+        {static_cast<int>(TokenType::TypeByte),  static_cast<int>(QLangValue::Type::Byte)},
+        {static_cast<int>(TokenType::TypeWord),  static_cast<int>(QLangValue::Type::Word)},
+        {static_cast<int>(TokenType::TypeShort), static_cast<int>(QLangValue::Type::Short)},
+        {static_cast<int>(TokenType::TypeInt),   static_cast<int>(QLangValue::Type::Int)},
+        {static_cast<int>(TokenType::TypeUnsigned),static_cast<int>(QLangValue::Type::Unsigned)},
+        {static_cast<int>(TokenType::TypeString), static_cast<int>(QLangValue::Type::String)},
+        {static_cast<int>(TokenType::TypeBlob),  static_cast<int>(QLangValue::Type::Blob)},
+        {static_cast<int>(TokenType::TypeArray), static_cast<int>(QLangValue::Type::Array)},
+        {static_cast<int>(TokenType::TypeFloat), static_cast<int>(QLangValue::Type::Float)},
+        {static_cast<int>(TokenType::TypeTable), static_cast<int>(QLangValue::Type::Table)},
+        {static_cast<int>(TokenType::TypeDword), static_cast<int>(QLangValue::Type::Dword)},
+      };
+      int ttv = static_cast<int>(tt);
+      QLangValue::Type vt = QLangValue::Type::Nil;
+      for (auto [t,v] : tmap) { if (t == ttv) { vt = static_cast<QLangValue::Type>(v); break; } }
+      if (vt == QLangValue::Type::Nil && tt == TokenType::StrType) vt = QLangValue::Type::String;
       stmt->declaredType = vt;
       m_pos++;
     } else {
@@ -321,16 +331,26 @@ StmtPtr QLangParser::parseConst() {
         tt == TokenType::TypeChar ||
         tt == TokenType::TypeDword;
     if (isType) {
-      QLangValue::Type vt =
-          (tt == TokenType::StrType)
-              ? QLangValue::Type::String
-              : (tt == TokenType::TypeChar)
-                  ? QLangValue::Type::Char
-                  : (tt == TokenType::TypeDword)
-                      ? QLangValue::Type::Dword
-                      : static_cast<QLangValue::Type>(
-                            static_cast<int>(tt) - static_cast<int>(TokenType::TypeBool) +
-                            static_cast<int>(QLangValue::Type::Bool));
+      // Explicit lookup table (formula is wrong — enums have different layouts).
+      static const std::pair<int,int> tmap[] = {
+        {static_cast<int>(TokenType::TypeBool),  static_cast<int>(QLangValue::Type::Bool)},
+        {static_cast<int>(TokenType::TypeChar),  static_cast<int>(QLangValue::Type::Char)},
+        {static_cast<int>(TokenType::TypeByte),  static_cast<int>(QLangValue::Type::Byte)},
+        {static_cast<int>(TokenType::TypeWord),  static_cast<int>(QLangValue::Type::Word)},
+        {static_cast<int>(TokenType::TypeShort), static_cast<int>(QLangValue::Type::Short)},
+        {static_cast<int>(TokenType::TypeInt),   static_cast<int>(QLangValue::Type::Int)},
+        {static_cast<int>(TokenType::TypeUnsigned),static_cast<int>(QLangValue::Type::Unsigned)},
+        {static_cast<int>(TokenType::TypeString), static_cast<int>(QLangValue::Type::String)},
+        {static_cast<int>(TokenType::TypeBlob),  static_cast<int>(QLangValue::Type::Blob)},
+        {static_cast<int>(TokenType::TypeArray), static_cast<int>(QLangValue::Type::Array)},
+        {static_cast<int>(TokenType::TypeFloat), static_cast<int>(QLangValue::Type::Float)},
+        {static_cast<int>(TokenType::TypeTable), static_cast<int>(QLangValue::Type::Table)},
+        {static_cast<int>(TokenType::TypeDword), static_cast<int>(QLangValue::Type::Dword)},
+      };
+      int ttv = static_cast<int>(tt);
+      QLangValue::Type vt = QLangValue::Type::Nil;
+      for (auto [t,v] : tmap) { if (t == ttv) { vt = static_cast<QLangValue::Type>(v); break; } }
+      if (vt == QLangValue::Type::Nil && tt == TokenType::StrType) vt = QLangValue::Type::String;
       stmt->declaredType = vt;
       m_pos++;
     } else {
@@ -861,6 +881,52 @@ return node;
   }
   case TokenType::Ident: {
     m_pos++;
+    // cast<Type>(expr): special cast expression.
+    if (tok.value == "cast" && check(TokenType::Less)) {
+      m_pos++; // consume '<'
+      // Parse type keyword (must be a valid type).
+      if (!check(TokenType::TypeBool) && !check(TokenType::TypeChar) &&
+          !check(TokenType::TypeByte) && !check(TokenType::TypeWord) &&
+          !check(TokenType::TypeShort) && !check(TokenType::TypeInt) &&
+          !check(TokenType::TypeUnsigned) && !check(TokenType::TypeString) &&
+          !check(TokenType::TypeBlob) && !check(TokenType::TypeArray) &&
+          !check(TokenType::TypeFloat) && !check(TokenType::TypeTable) &&
+          !check(TokenType::TypeDword) && !check(TokenType::StrType)) {
+        throw QLangError(QLangErrorKind::Parse, current().line, current().col,
+                         std::string("invalid cast target type '") + current().text + "'");
+      }
+      QLangValue::Type targetType;
+      // Explicit lookup table (formula is wrong — enums have different layouts).
+      static const std::pair<int,int> tmap[] = {
+        {static_cast<int>(TokenType::TypeBool),  static_cast<int>(QLangValue::Type::Bool)},
+        {static_cast<int>(TokenType::TypeChar),  static_cast<int>(QLangValue::Type::Char)},
+        {static_cast<int>(TokenType::TypeByte),  static_cast<int>(QLangValue::Type::Byte)},
+        {static_cast<int>(TokenType::TypeWord),  static_cast<int>(QLangValue::Type::Word)},
+        {static_cast<int>(TokenType::TypeShort), static_cast<int>(QLangValue::Type::Short)},
+        {static_cast<int>(TokenType::TypeInt),   static_cast<int>(QLangValue::Type::Int)},
+        {static_cast<int>(TokenType::TypeUnsigned),static_cast<int>(QLangValue::Type::Unsigned)},
+        {static_cast<int>(TokenType::TypeString), static_cast<int>(QLangValue::Type::String)},
+        {static_cast<int>(TokenType::TypeBlob),  static_cast<int>(QLangValue::Type::Blob)},
+        {static_cast<int>(TokenType::TypeArray), static_cast<int>(QLangValue::Type::Array)},
+        {static_cast<int>(TokenType::TypeFloat), static_cast<int>(QLangValue::Type::Float)},
+        {static_cast<int>(TokenType::TypeTable), static_cast<int>(QLangValue::Type::Table)},
+        {static_cast<int>(TokenType::TypeDword), static_cast<int>(QLangValue::Type::Dword)},
+      };
+      int ttv = static_cast<int>(current().type);
+      targetType = QLangValue::Type::Nil;
+      for (auto [t,v] : tmap) { if (t == ttv) { targetType = static_cast<QLangValue::Type>(v); break; } }
+      if (targetType == QLangValue::Type::Nil && current().type == TokenType::StrType)
+        targetType = QLangValue::Type::String;
+      m_pos++; // consume the type keyword
+      consume(TokenType::Greater, "'>' after cast type");
+      consume(TokenType::LParen, "'(' after cast<Type>");
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Cast;
+      node->targetType = targetType;
+      node->castOperand = parseExpression();
+      consume(TokenType::RParen, "')' to close cast expression");
+      return node;
+    }
     // Call expression: name(args)
     if (check(TokenType::LParen)) {
       m_pos++; // consume '('
@@ -1041,23 +1107,24 @@ return node;
   case TokenType::LBrace:
     return parseTableLiteral();
   case TokenType::FString: {
-    // Parse f-string: split token.value into literal parts and ${expr} sections.
+    // Parse f-string: split token.value into literal parts and {expr} sections.
+    // Supports both Python-style {expr} and ${expr} syntax.
     m_pos++;
     auto node = std::make_shared<Expr>();
     node->kind = ExprKind::FString;
     const std::string &raw = tok.value;
     size_t i = 0;
     while (i < raw.size()) {
-      // Find next ${...}
-      size_t dollar = raw.find("${", i);
+      // Find next {expr} (supports both {expr} and ${expr} syntax)
+      size_t dollar = raw.find("{", i);
       if (dollar == std::string::npos) {
         // Remainder is literal text.
         node->strParts.push_back(raw.substr(i));
         break;
       }
-      // Literal text before ${
+      // Literal text before the opening brace.
       node->strParts.push_back(raw.substr(i, dollar - i));
-      i = dollar + 2; // skip '${'
+      i = dollar + 1; // skip '{'
       // Find matching }
       int depth = 1;
       size_t exprStart = i;

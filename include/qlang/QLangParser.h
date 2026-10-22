@@ -24,7 +24,8 @@ enum class ExprKind {
   Index,   // base[index]  (array subscript read)
   Member,   // base.name    (table member read)
   Closure,   // (params)[captures] { ... }  (anonymous closure expression)
-  FString    // f"hello ${name}"  (interpolated string literal)
+  FString,   // f"hello ${name}"  (interpolated string literal)
+  Cast       // cast<Type>(expr)  (runtime type coercion)
 };
 
 struct Expr; // forward declaration so ExprPtr can be used inside Expr
@@ -81,6 +82,10 @@ struct Expr {
   std::vector<std::string> strParts;
   std::vector<ExprPtr> exprParts;
   std::vector<std::string> formatSpecs;  // per-expression format spec (e.g. ".2f")
+
+  // Cast: cast<Type>(expr)  (runtime type coercion).
+  QLangValue::Type targetType;
+  ExprPtr castOperand;
 };
 
 // ---------------------------------------------------------------------------

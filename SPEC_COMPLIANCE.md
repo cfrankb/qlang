@@ -179,9 +179,12 @@ All items below are implemented and verified. Table retained for traceability.
 - `examples/spec_check.cpp` — original cases (const, nil, float, concat, for, if,
   while, operators, toStr/toInt).
 - `examples/spec_check2.cpp` — 81 test cases covering all spec features including `bool`, `char`, `dword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, and method calls.
+- `examples/spec_cast_test.cpp` — 20 cast tests: numeric casts (int/float/byte/word/short/unsigned/dword/char/bool), string casts, invalid collection casts, nested casts, expression-context casts, nil cast.
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
-Result: **138 passed, 0 failed.** All spec builtins implemented.
+Result: **147 passed, 0 failed.** All spec builtins implemented.
+`g++ -std=c++17 -Iinclude examples/spec_cast_test.cpp build/libqlang.a -o /tmp/cast_test && /tmp/cast_test 2>/dev/null`
+Result: **20 passed, 0 failed.**
 
 ## C++ Interface (new this round)
 
@@ -200,6 +203,12 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 | Issue | Root cause | Fix |
 |-------|-----------|-----|
+| `cast<Type>(expr)` parse error | No parser support for cast expression form | Added `ExprKind::Cast` to parser, `cast` keyword handling in `parsePrimary()` consuming `<type>` syntax |
+| `OP_CAST` opcode missing | No opcode for runtime cast | Added `CAST` opcode to `QLangBytecode.h`, `Bytecode::name()` |
+| Compiler didn't emit cast opcode | `ExprKind::Cast` not handled | Added `case ExprKind::Cast` in `compileExpr()` emitting `OP_CAST dest src targetType` |
+| VM had no cast handler | No VM dispatch for runtime coercion | Added `strict_convert()` function and `case Opcode::CAST` in all 3 VM loops |
+| Type mapping formula wrong | `tt - TypeBool + Bool` formula off-by-N for types after `TypeUnsigned` (enums have different layouts) | Replaced with explicit `std::pair<int,int>` lookup table in 3 parser sites (declaration, const, cast) |
+| `convert()` included Float causing table corruption | `convert()` treated Float as numeric target; parser's buggy mapping made `table` → Float(12), so typed table declarations tried to convert tables to float | Restored original `convert()` (only integer types, default pass-through) |
 | `join` after `for` loop fails | Compiler emitted `CALL` but compiled nested-call args into temp registers that didn't match the VM's `dest+1..dest+argCount` convention; nested call dest registers overwrote parent arg slots | Compile args into dedicated temp registers, then emit `MOV` from each temp to `dest+1+i` before `CALL`. This ensures args are in the VM's expected slots regardless of nested-call register allocation. |
 | `blob()` parse error | `parsePrimary` TypeBlob case didn't consume `blob` before checking `(` | `m_pos++` to consume `blob` token |
 | `substr()` unknown function | No builtin registered | Added `Builtin::Substr` + `substr` in `callBuiltin` |
@@ -233,11 +242,10 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-Core spec fully implemented. **147 passed, 0 failed.**
+Core spec fully implemented. **147 passed, 0 failed** (spec_check2) + **20 passed, 0 failed** (spec_cast_test).
 
 ## Open Items
 
-- **`cast` operator (§374–386):** ✗ NOT implemented. Spec defines `cast<Type>(expr)` syntax (e.g. `cast<int>(1.12)`, `cast<string>([])`). No `TokenType::Cast` in lexer enum. No `keywordType()` entry for `cast`. No parser support for `cast<...>()` expression form. No `Builtin::Cast` or `OP_Convert` opcode. The existing `CONV` opcode handles typed declarations (`local b:byte = 32`) but not runtime cast expressions. **Action needed:** Add `TokenType::Cast`, parser `parseCast()` in `parsePrimary()`, compiler emit `OP_Convert`, VM handler for type coercion.
 - **`min`/`max` builtins (§409–428):** ✗ NOT implemented. Spec defines `min(number...|array)` and `max(number...|array)` — variadic number args or single array. No `Builtin::Min`/`Builtin::Max` in enum. No `builtinId()` entry. No VM handler. **Action needed:** Add `Builtin::Min`/`Builtin::Max`, register in `builtinId()`, implement in `callBuiltin()` with mixed-type guard (refuse int+float, refuse char+byte).
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
 - Generators (§608–623): ✗ NOT implemented. Spec has TODO section with Python-style `yield` prototype. No `yield` token, no generator state machine. Out of scope for v1.

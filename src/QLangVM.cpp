@@ -365,8 +365,17 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
           std::snprintf(buf, sizeof(buf), sub.c_str(), toInt64(av));
           out += buf;
         } else if (isNumeric(av)) {
+          // If the placeholder is %s but the arg is numeric, use %d instead.
+          std::string actualFmt = sub;
+          if (sub == "%s" || sub == "%+s" || sub == "% s" || sub == "%0s" ||
+              sub == "%#s") {
+            // Build a numeric placeholder with the same width/flags.
+            // Strip the 's' and replace with 'd'.
+            std::string prefix = sub.substr(0, sub.size() - 1);
+            actualFmt = prefix + "d";
+          }
           char buf[256];
-          std::snprintf(buf, sizeof(buf), sub.c_str(), toInt64(av));
+          std::snprintf(buf, sizeof(buf), actualFmt.c_str(), toInt64(av));
           out += buf;
         } else {
           out += valueToString(av);
@@ -504,8 +513,10 @@ bool QLangVM::isTrue(const QLangValue &v) {
   }
 }
 
-// Convert a value to the target declared type. Integer types truncate/wrap
+// Convert a value to the target declared type. Numeric types truncate/wrap
 // (C-style cast semantics); other types pass through unchanged.
+// For typed declarations — lenient: pass through non-numeric mismatches.
+// For runtime cast — use OP_CAST instead, which is strict.
 QLangValue convert(const QLangValue &v, QLangValue::Type type) {
   switch (type) {
   case QLangValue::Type::Bool:
@@ -526,6 +537,62 @@ QLangValue convert(const QLangValue &v, QLangValue::Type type) {
     return QLangValue::Dword(static_cast<uint64_t>(toInt64(v)));
   default: return v;
   }
+}
+
+// Strict runtime cast: throws on invalid source→target combinations.
+// Used by OP_CAST for `cast<Type>(expr)` — distinct from OP_CONV which is
+// lenient for typed declarations.
+QLangValue strict_convert(const QLangValue &v, QLangValue::Type type) {
+  // Numeric targets: must be numeric source.
+  if (type == QLangValue::Type::Bool || type == QLangValue::Type::Char ||
+      type == QLangValue::Type::Byte || type == QLangValue::Type::Word ||
+      type == QLangValue::Type::Short || type == QLangValue::Type::Int ||
+      type == QLangValue::Type::Unsigned || type == QLangValue::Type::Dword ||
+      type == QLangValue::Type::Float) {
+    if (v.type() == QLangValue::Type::Array || v.type() == QLangValue::Type::Table ||
+        v.type() == QLangValue::Type::Blob) {
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       std::string("cannot cast ") + v.typeName() + " to " +
+                       QLangValue(type).typeName());
+    }
+    int64_t n = toInt64(v);
+    switch (type) {
+    case QLangValue::Type::Bool:
+      return QLangValue::Bool(n ? 1 : 0);
+    case QLangValue::Type::Char:
+      return QLangValue::Char(static_cast<int8_t>(n));
+    case QLangValue::Type::Byte:
+      return QLangValue::Byte(static_cast<uint8_t>(n));
+    case QLangValue::Type::Word:
+      return QLangValue::Word(static_cast<uint16_t>(n));
+    case QLangValue::Type::Short:
+      return QLangValue::Short(static_cast<int16_t>(n));
+    case QLangValue::Type::Int:
+      return QLangValue::Int(static_cast<int32_t>(n));
+    case QLangValue::Type::Unsigned:
+      return QLangValue::Unsigned(static_cast<uint32_t>(n));
+    case QLangValue::Type::Dword:
+      return QLangValue::Dword(static_cast<uint64_t>(n));
+    case QLangValue::Type::Float:
+      return QLangValue::Float(static_cast<double>(n));
+    default:
+      return v;
+    }
+  }
+  // String target: convert anything to string.
+  if (type == QLangValue::Type::String) {
+    return QLangValue::String(valueToString(v));
+  }
+  // Collection targets: allow same-type, reject others.
+  if (type == QLangValue::Type::Array || type == QLangValue::Type::Table) {
+    if (v.type() != QLangValue::Type::Array && v.type() != QLangValue::Type::Table) {
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       std::string("cannot cast ") + v.typeName() + " to " +
+                       QLangValue(type).typeName());
+    }
+    return v;
+  }
+  return v;
 }
 
 QLangValue QLangVM::doUnary(Opcode op, const QLangValue &a) {
@@ -737,6 +804,10 @@ void QLangVM::run() {
     case Opcode::CONV:
       frame.regs[i.a] = convert(frame.regs[i.b],
                                 static_cast<QLangValue::Type>(i.c));
+      break;
+    case Opcode::CAST:
+      frame.regs[i.a] = strict_convert(frame.regs[i.b],
+                                       static_cast<QLangValue::Type>(i.c));
       break;
     case Opcode::DELETE:
       m_deleted.insert(i.a);
@@ -1013,6 +1084,10 @@ void QLangVM::runFrames(int startFrame)
       frame.regs[i.a] = convert(frame.regs[i.b],
                                 static_cast<QLangValue::Type>(i.c));
       break;
+    case Opcode::CAST:
+      frame.regs[i.a] = strict_convert(frame.regs[i.b],
+                                       static_cast<QLangValue::Type>(i.c));
+      break;
     case Opcode::DELETE:
       m_deleted.insert(i.a);
       break;
@@ -1281,6 +1356,10 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     case Opcode::CONV:
       frame.regs[i.a] = convert(frame.regs[i.b],
                                 static_cast<QLangValue::Type>(i.c));
+      break;
+    case Opcode::CAST:
+      frame.regs[i.a] = strict_convert(frame.regs[i.b],
+                                       static_cast<QLangValue::Type>(i.c));
       break;
     case Opcode::DELETE:
       m_deleted.insert(i.a);
