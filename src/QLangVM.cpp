@@ -153,7 +153,13 @@ QLangValue seqGet(const QLangValue &col, int64_t idx) {
 
 // Dispatch a built-in function call. `args` are the evaluated operands; the
 // return value is stored by the caller into the call's destination register.
-QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args) {
+// `scope` is the host scope (seeded at run start, synced at run end).
+// `prog.vars` maps variable names to frame registers; `deleted` tracks
+// registers removed by `delete`. Used by isset() to check existence during
+// execution (vars live in registers, not scope, until run completes).
+QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
+                       QLangContext &scope, const CompiledProgram &prog,
+                       const std::unordered_set<int> &deleted) {
   auto need = [&](size_t n, const char *fn) {
     if (args.size() != static_cast<size_t>(n))
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
@@ -303,6 +309,41 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args) {
         result.push_back(QLangValue::Int(static_cast<int32_t>(i)));
     }
     return QLangValue::Array(result);
+  }
+  case Builtin::Join: {
+    // join(separator, array) — concatenates array elements with separator.
+    // Non-string elements are converted via valueToString.
+    if (args.size() != 2)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "join expects 2 args (separator, array)");
+    if (args[1].type() != QLangValue::Type::Array)
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "join: second argument must be an array");
+    const std::string &sep = args[0].asString();
+    const auto &elems = args[1].asArray();
+    std::string result;
+    for (size_t i = 0; i < elems.size(); ++i) {
+      if (i > 0) result += sep;
+      result += valueToString(elems[i]);
+    }
+    return QLangValue::String(result);
+  }
+  case Builtin::IsSet: {
+    // isset(var_name) — returns true (1) if the named variable exists in
+    // scope (or current frame registers during execution), false (0) otherwise.
+    need(1, "isset");
+    if (args[0].type() != QLangValue::Type::String)
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "isset: argument must be a string (variable name)");
+    const std::string &name = args[0].asString();
+    // Check scope first (for pre-seeded vars set before run()).
+    if (scope.has(name)) return QLangValue::Int(1);
+    // During execution, vars live in frame registers. Check the program's
+    // name->reg map and the deleted set.
+    auto it = prog.vars.find(name);
+    if (it != prog.vars.end() && !deleted.count(it->second))
+      return QLangValue::Int(1);
+    return QLangValue::Int(0);
   }
   }
   throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown builtin");
@@ -651,7 +692,7 @@ void QLangVM::run() {
       args.reserve(argCount);
       for (int k = 0; k < argCount; k++)
         args.push_back(frame.regs[dest + 1 + k]);
-      frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), args);
+      frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), args, m_scope, m_prog, m_deleted);
       break;
     }
     case Opcode::CALLFN: {

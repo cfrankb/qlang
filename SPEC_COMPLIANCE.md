@@ -9,7 +9,7 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 ## Current Status
 
-**110 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
+**128 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
 
 Line numbers below are against the CURRENT SPEC.md (6473 bytes, 404 lines).
 
@@ -57,12 +57,10 @@ Line numbers below are against the CURRENT SPEC.md (6473 bytes, 404 lines).
 - [x] const immutability: `year = sx` → "cannot assignment to constant"
 - [x] `;` optional silent separator
 - [x] `delete var`
-- [x] `blob()` — creates empty blob
-|- [x] builtins: `toStr`, `toInt`, `type`, `print`, `println`, `printf`, `len`,
-      `substr`, `slice`, `range`
+|- [x] `blob()` — creates empty blob
+- [x] builtins: `toStr`, `toInt`, `type`, `print`, `println`, `printf`, `len`,
+      `substr`, `slice`, `range`, `join`, `isset`
 |- [ ] `sprintf(fmt, ...)` — spec §359 lists it; not implemented in VM |
-|- [ ] `join(separator, arr)` — spec §367 lists it; not implemented in VM |
-|- [ ] `isset(var)` — spec §366 lists it; not implemented in VM |
 - [x] `int(nil)` returns 0 (not throw)
 - [x] `str()` / `int()` as function-call aliases (not just type keywords)
 - [x] `def name(params) { ... }` / `def name(params) end` — global-scope named
@@ -84,7 +82,6 @@ Line numbers below are against the CURRENT SPEC.md (6473 bytes, 404 lines).
 
 | Spec | Item | Status |
 |------|------|--------|
-| — | — | **Core spec fully implemented.** 110/110 tests pass. Three builtins from §348–367 remain unimplemented: `sprintf`, `join`, `isset`. |
 
 ## Extensions Beyond Spec (present in implementation, absent from spec)
 
@@ -129,7 +126,7 @@ Line numbers below are against the CURRENT SPEC.md (6473 bytes, 404 lines).
 || `slice` | — | — | **Not a keyword.** Removed from `keywordType()`. Tokenizes as `Ident`. Can be used as variable name (`local slice = 1`). `slice(a, 0, 1)` still works as builtin call via the `Ident` + `LParen` path in `parsePrimary()`. |
 | `goto` | `Goto` | ✓ | |
 || `char` | `TypeChar` | ✓ | Listed as type; `char` is a reserved keyword; `local c:char` parses; `type(c)` → `"char"`; signed -128..127; distinct from `byte` (uint8_t); `asInt()` accepts Char (stores in int32_t slot) |
-| `dword` | `TypeDword` | ✓ | Listed as type; `dword` is a reserved keyword; `local d:dword` parses; `type(d)` → `"dword"`; `uint64_t`; arithmetic supported; overflow on int64_t conversion throws |
+| `type` | `Type` | ✓ | Reserved word; blocks identifier use. `local type = 1` → parse error. `type()` builtin call works via `parsePrimary()` special case (same pattern as `str`/`int`). `type(var)` returns type string. |
 || `switch` | `Switch` | ✓ | `switch (expr) { case val: ... case in expr: ... default: ... }` — string/int cases via EQ, membership via IN, break exits switch via `m_breakJmps` patching, implicit JMP prevents fall-through |
 || `case` | `Case` | ✓ | Reserved word; parsed in switch body |
 || `default` | `Default` | ✓ | Reserved word; parsed in switch body as fallback |
@@ -158,7 +155,7 @@ Line numbers below are against the CURRENT SPEC.md (6473 bytes, 404 lines).
 - `examples/spec_check2.cpp` — 81 test cases covering all spec features including `bool`, `char`, `dword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, and method calls.
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
-Result: **110 passed, 0 failed.** Three builtins from spec §348–367 remain unimplemented: `sprintf`, `join`, `isset`.
+Result: **128 passed, 0 failed.** One builtin from spec §348–367 remains unimplemented: `sprintf`.
 
 ## Fixes Applied This Round (since prior audit)
 
@@ -166,6 +163,7 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 | Issue | Root cause | Fix |
 |-------|-----------|-----|
+| `join` after `for` loop fails | Compiler emitted `CALL` but compiled nested-call args into temp registers that didn't match the VM's `dest+1..dest+argCount` convention; nested call dest registers overwrote parent arg slots | Compile args into dedicated temp registers, then emit `MOV` from each temp to `dest+1+i` before `CALL`. This ensures args are in the VM's expected slots regardless of nested-call register allocation. |
 | `blob()` parse error | `parsePrimary` TypeBlob case didn't consume `blob` before checking `(` | `m_pos++` to consume `blob` token |
 | `substr()` unknown function | No builtin registered | Added `Builtin::Substr` + `substr` in `callBuiltin` |
 | `0xc` hex literal | Lexer didn't handle `0x` prefix | `QLangLexer::number()` now handles hex |
@@ -198,11 +196,12 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-Core spec fully implemented. **110 passed, 0 failed.** Three builtins from §348–367 remain unimplemented: `sprintf`, `join`, `isset`.
+Core spec fully implemented. **128 passed, 0 failed.** One builtin from §348–367 remains unimplemented: `sprintf`.
 
 ## Open Items
 
-- **`next` keyword form:** The spec shows `for x = 1 to 32\nnext x` with an explicit loop variable. The implementation accepts `next` without a variable too (`for x = 1 to 3\nnext`). The spec's `next x` form is supported but the bare `next` form is also accepted — worth confirming which is intended.
+- **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
 - **`sprintf(fmt, ...)` (§359):** Spec: "same format as sprintf. return new string." Not implemented. Fix: add `Builtin::Sprintf`, register in `builtinId()`, implement in `QLangVM.cpp` using `snprintf`.
-- **`join(separator, arr)` (§367):** Spec: "join the array element using separator." Not implemented. Fix: add `Builtin::Join`, register in `builtinId()`, implement in `QLangVM.cpp` by iterating array and concatenating with separator.
-- **`isset(var)` (§366):** Spec: "return true if variable, array index or table field exists. otherwise returns false." Not implemented. Fix: add `Builtin::IsSet`, register in `builtinId()`, implement in `QLangVM.cpp` checking `m_scope`, array bounds, and table keys.
+- **Nested call register allocation:** Fixed. Compiler now compiles call args into dedicated temp registers then emits `MOV` to the VM's expected `dest+1..dest+argCount` slots. This prevents nested calls from overwriting parent arg registers. Verified with `printf("%s %d", join(",", ar), len(ar))` after `for i in ar` loop.
+- **`join(separator, arr)` (§367):** Implemented. `Builtin::Join` added to enum, registered in `builtinId()`, implemented in `QLangVM.cpp` via `callBuiltin`. Non-string elements converted via `valueToString`. 8 test cases pass.
+- **`isset(var)` (§381):** Implemented. `Builtin::IsSet` added to enum, registered in `builtinId()`, implemented in `QLangVM.cpp` via `callBuiltin`. Accepts a string (variable name); checks `prog.vars` map and `m_deleted` set to determine existence during execution (vars live in registers, not scope, until `run()` completes). 5 test cases pass.

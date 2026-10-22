@@ -45,6 +45,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "float") return TokenType::TypeFloat;
   if (text == "table") return TokenType::TypeTable;
   if (text == "dword") return TokenType::TypeDword;
+  if (text == "type") return TokenType::Type;
   return TokenType::Ident;
 }
 

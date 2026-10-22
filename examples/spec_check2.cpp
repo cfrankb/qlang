@@ -208,6 +208,30 @@ int main() {
   expectVal("switch range case", "local x = 15\nswitch (x) {\n  case in range(1,10): x = 1\n  case in range(11,20): x = 2\n  default: x = 99\n}\nlocal r = x;", "r", 2);
   expectRun("switch empty", "local x = 1\nswitch (x) {\n  default:\n}");
 
+  // -- NEW: join() builtin (spec §367) --
+  expectStr("join basic", "local a = [1,2,3]\nlocal r = join(\", \", a);", "r", "1, 2, 3");
+  expectStr("join empty", "local a = []\nlocal r = join(\", \", a);", "r", "");
+  expectStr("join single", "local a = [42]\nlocal r = join(\", \", a);", "r", "42");
+  expectStr("join strings", "local a = [\"a\",\"b\",\"c\"]\nlocal r = join(\"-\", a);", "r", "a-b-c");
+  expectStr("join mixed types", "local a = [1, \"two\", 3.0]\nlocal r = join(\"\", a);", "r", "1two3");
+  expectStr("join no sep", "local a = [1,2,3]\nlocal r = join(\"\", a);", "r", "123");
+  expectThrow("join wrong count", "local a = [1]\nlocal r = join(a);");
+  expectThrow("join non-array", "local r = join(\", \", \"not an array\");");
+
+  // -- NEW: type reserved word (spec §67) --
+  expectThrow("type as ident", "local type = 1");
+  expectThrow("type as type decl", "local x:type = 1");
+  expectStr("type builtin call", "local s = type(42);", "s", "int");
+  expectStr("type builtin string", "local s = type(\"hello\");", "s", "string");
+  expectStr("type builtin array", "local a = [1,2]\nlocal s = type(a);", "s", "array");
+
+  // -- NEW: isset() builtin (spec §381) --
+  expectVal("isset undefined", "local r = isset(\"undefined_var\");", "r", 0);
+  expectVal("isset defined", "local x = 1\nlocal r = isset(\"x\");", "r", 1);
+  expectVal("isset after delete", "local x = 1\ndelete x\nlocal r = isset(\"x\");", "r", 0);
+  expectThrow("isset wrong count", "local r = isset();");
+  expectThrow("isset non-string", "local r = isset(123);");
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

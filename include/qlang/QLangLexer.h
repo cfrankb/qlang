@@ -47,6 +47,7 @@ enum class TokenType {
   TypeTable,   // table
   TypeDword,   // dword (uint64_t)
   StrType,     // str (alias for string; kept outside the range above)
+  Type,        // type (reserved; used as builtin function)
 
   // Keywords / operators
   In,          // in (membership / for-in)

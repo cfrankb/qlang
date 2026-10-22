@@ -728,11 +728,18 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
   }
   case ExprKind::Call: {
     int argCount = static_cast<int>(e->args.size());
+    // Allocate the result slot first, then compile each arg into a temp
+    // register. After all args are in place, move them to the VM's expected
+    // arg slots (dest+1 .. dest+argCount) and emit CALL.
+    int argBase = dest + 1;
     std::vector<int> argRegs(argCount);
     for (int i = 0; i < argCount; i++)
       argRegs[i] = tmpRegister();
     for (int i = 0; i < argCount; i++)
       compileExpr(e->args[i], argRegs[i]);
+    // Move each arg into the slot the VM reads from.
+    for (int i = 0; i < argCount; i++)
+      emit(Opcode::MOV, argBase + i, argRegs[i], 0);
 
     // Method call: obj.method(args) -> load the member (closure) first.
     if (e->calleeMember) {
@@ -854,6 +861,8 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "substr") return static_cast<int>(Builtin::Substr);
   if (name == "slice") return static_cast<int>(Builtin::Slice);
   if (name == "range") return static_cast<int>(Builtin::Range);
+  if (name == "join") return static_cast<int>(Builtin::Join);
+  if (name == "isset") return static_cast<int>(Builtin::IsSet);
   return -1;
 }
 

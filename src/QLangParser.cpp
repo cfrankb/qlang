@@ -379,12 +379,12 @@ StmtPtr QLangParser::parseFor() {
         stmt->body.push_back(parseStatement());
       if (check(TokenType::Next)) {
         consume(TokenType::Next, "'next'");
-        Token var = consume(TokenType::Ident, "loop variable in 'next'");
-        if (var.value != stmt->loopVar)
-          throw QLangError(QLangErrorKind::Parse, var.line, var.col,
-                           std::string("'next '") + var.value +
-                               "' does not match loop variable '" +
-                               stmt->loopVar + "'");
+        if (check(TokenType::Ident)) {
+          Token var = peek();
+          if (var.type == TokenType::Ident && var.value == stmt->loopVar) {
+            consume(TokenType::Ident, "loop variable in 'next'");
+          }
+        }
       } else if (atEnd()) {
         throw QLangError(QLangErrorKind::Parse, line, col,
                          "expected 'next' to close 'for' loop");
@@ -412,12 +412,11 @@ StmtPtr QLangParser::parseFor() {
     }
     if (check(TokenType::Next)) {
       consume(TokenType::Next, "'next'");
-      Token var = consume(TokenType::Ident, "loop variable in 'next'");
-      if (var.value != stmt->loopVar) {
-        throw QLangError(QLangErrorKind::Parse, var.line, var.col,
-                         std::string("'next '") + var.value +
-                             "' does not match loop variable '" +
-                             stmt->loopVar + "'");
+      if (check(TokenType::Ident)) {
+        Token var = peek();
+        if (var.type == TokenType::Ident && var.value == stmt->loopVar) {
+          consume(TokenType::Ident, "loop variable in 'next'");
+        }
       }
     } else if (atEnd()) {
       throw QLangError(QLangErrorKind::Parse, line, col,
@@ -886,6 +885,27 @@ ExprPtr QLangParser::parsePrimary() {
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Call;
       node->callee = "int";
+      if (!check(TokenType::RParen)) {
+        do {
+          node->args.push_back(parseExpression());
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RParen, "')'");
+      return node;
+    }
+    throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
+                     std::string("unexpected token '") + tok.text +
+                     "' in expression");
+  }
+  // type() is a reserved word (spec §67) but also a valid builtin call.
+  // If followed by '(', treat as a call; otherwise reject.
+  case TokenType::Type: {
+    m_pos++;
+    if (check(TokenType::LParen)) {
+      m_pos++; // consume '('
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Call;
+      node->callee = "type";
       if (!check(TokenType::RParen)) {
         do {
           node->args.push_back(parseExpression());

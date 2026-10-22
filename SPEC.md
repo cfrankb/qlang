@@ -56,8 +56,8 @@ false
 def
 let (alias local)
 else
-range
-slice
+range => keyword
+slice => build in
 goto
 char
 dword
@@ -225,8 +225,36 @@ loops
 
 ```
 
-for x = 1 to 32 
+for x = 1 to 32
 next x
+
+for x in range (0,4)
+next x
+
+for x in [1,25,6,7]
+next x
+
+# next can increment counter implicitely
+# replicating the same behavior as basic
+
+for x = 1 to 32
+next # assume x
+
+for y = 1 to 32
+   for x = 1 to 32
+   next # assume x
+next # assume y
+
+a = [1,4,6]
+for x in a
+next # assume x
+
+
+for y in range (0,10) {
+   for x in range (0,10) {
+   }
+}
+
 
 for x = 1 to 32 {
    if x == 4 {
@@ -306,6 +334,31 @@ operators
 |! |not (inverse)
 |;  |silent separator (optional)
 
+operator +=
+
+|left-hand|operator|right-hand|result
+|-|-|-|-|
+|"string"| +=| "_string"|"string_string"
+|"string"| +=| 123|"string123"
+|"string"| +=| true|"stringtrue"
+|"string"| +=| 1.23|"string1.23"
+|"string"| +=| any other types|string<\type>
+|123| +=| 123|246
+|123| +=| 1.23|124
+|123| +=| any other types|error
+|1.23| +=| 123|124.23
+|1.23| +=| 1.23|2.46
+|1.23| +=| any other types|error
+|[1,2,3]|+=|[5,6]|[1,2,3,5,6]
+|[1,2,3]|+=|4|[1,2,3,4]
+|[1,2,3]|+=|"s"|[1,2,3,"s"]
+|[1,2,3]|+=|1.23|[1,2,3,1.23]
+|[1,2,3]|+=|{name="toto"}|error
+|[1,2,3]|+=|any other types|error
+|{name="toto"}|+=|{age=23}|{name="toto", age=23}
+|{name="toto"}|+=|any other types|error
+
+
 
 build-in functions
 ===================
@@ -319,7 +372,7 @@ build-in functions
 |println(var)     | print a string with carriage return
 |printf(fmt, ...) | mirror C printf
 |sprintf(fmt, ...) |same format as sprintf. return new string
-|len(var)         | return string, table, blob or array |length; other type return 1; error on undefined/nil.
+|len(var)         | return size of string, table, blob or array |length; other type return 1; error on undefined/nil.
 |substr(str, start, lenght) | return a substring fron index start. lenght is optional
 |delete var      | delete variable
 |str(var)        | return string representation of variable
@@ -341,7 +394,7 @@ b = slice(a, 0, 2)
 ```
 
 
-functions (native)
+functions (qlang native)
 ==================
 
 ```

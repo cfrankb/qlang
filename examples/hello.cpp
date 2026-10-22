@@ -211,6 +211,8 @@ for i in ar {
 }
 println("")
 
+printf("%s --> len %d", join(",", ar), len(ar))
+
 )";
 
   QLangContext ctx;
