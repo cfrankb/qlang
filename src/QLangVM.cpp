@@ -304,6 +304,31 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     }
     return QLangValue::String(out);
   }
+  case Builtin::Format: {
+    // format(template, arg1, arg2, ...) — f-string interpolation.
+    // template uses %s placeholders; each arg is converted via valueToString.
+    if (args.empty())
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "format expects at least a template string");
+    if (args[0].type() != QLangValue::Type::String)
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "format: template must be a string");
+    std::string fmt = args[0].asString();
+    std::string out;
+    size_t ai = 1;
+    for (size_t i = 0; i < fmt.size(); i++) {
+      if (fmt[i] == '%' && i + 1 < fmt.size() && fmt[i + 1] == 's') {
+        if (ai >= args.size())
+          throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                           "format: not enough arguments for template placeholder");
+        out += valueToString(args[ai++]);
+        i++; // skip 's'
+      } else {
+        out += fmt[i];
+      }
+    }
+    return QLangValue::String(out);
+  }
   case Builtin::Len: {
     need(1, "len");
     return QLangValue::Int(static_cast<int32_t>(lenOf(args[0])));

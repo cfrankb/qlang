@@ -27,7 +27,8 @@ enum class Builtin : int {
   Range,   // range(start, end) -> [start, start+1, ..., end]
   Join,      // join(separator, array) -> string
   IsSet,     // isset(var_name) -> bool (checks scope existence)
-  Sprintf    // sprintf(fmt, ...) -> string (same format as printf, returns result)
+  Sprintf,   // sprintf(fmt, ...) -> string (same format as printf, returns result)
+  Format     // format(template, ...) -> string (f-string interpolation)
 };
 
 // Register-machine opcodes. This is a small register VM: each script variable

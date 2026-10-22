@@ -189,6 +189,97 @@ Token QLangLexer::stringLiteral(bool triple, char delim, bool singleQuote) {
   return tok;
 }
 
+// f-string: f"..." or f'...' — parses content with ${...} interpolation.
+// The raw template (with ${...} intact) is stored in token.value.
+// Escapes are processed; ${...} sections are left as-is for the parser.
+Token QLangLexer::fstringLiteral(bool triple, char delim, bool singleQuote) {
+  int line = m_line, col = m_col;
+  advance(); // opening delimiter (the quote char)
+  std::string text;
+
+  if (triple) {
+    bool closed = false;
+    while (!atEnd()) {
+      if (peek() == delim && peek(1) == delim && peek(2) == delim) {
+        advance(); advance(); advance();
+        closed = true;
+        break;
+      }
+      // Check for ${...} interpolation — preserve it verbatim.
+      if (peek() == '$' && peek(1) == '{') {
+        // Read the ${...} block verbatim.
+        text.push_back('$');
+        text.push_back('{');
+        advance(); advance(); // skip ${
+        int braceDepth = 1;
+        while (!atEnd() && braceDepth > 0) {
+          char c = advance();
+          text.push_back(c);
+          if (c == '{') braceDepth++;
+          else if (c == '}') braceDepth--;
+        }
+        if (braceDepth > 0)
+          throw QLangError(QLangErrorKind::Lex, line, col,
+                           "unterminated interpolation in f-string");
+      } else {
+        text.push_back(advance());
+      }
+    }
+    if (!closed)
+      throw QLangError(QLangErrorKind::Lex, line, col,
+                       "unterminated multiline f-string");
+  } else {
+    bool closed = false;
+    while (!atEnd()) {
+      char c = advance();
+      if (c == '\\') {
+        if (atEnd()) break;
+        char e = advance();
+        switch (e) {
+        case 'n': text.push_back('\n'); break;
+        case 't': text.push_back('\t'); break;
+        case 'r': text.push_back('\r'); break;
+        case '\\': text.push_back('\\'); break;
+        case '"': text.push_back('"'); break;
+        case '\'': text.push_back('\''); break;
+        default: text.push_back(e); break;
+        }
+      } else if (c == '$' && peek() == '{') {
+        // Preserve ${...} verbatim.
+        text.push_back('$');
+        text.push_back('{');
+        advance(); // skip '{'
+        int braceDepth = 1;
+        while (!atEnd() && braceDepth > 0) {
+          char ec = advance();
+          text.push_back(ec);
+          if (ec == '{') braceDepth++;
+          else if (ec == '}') braceDepth--;
+        }
+        if (braceDepth > 0)
+          throw QLangError(QLangErrorKind::Lex, line, col,
+                           "unterminated interpolation in f-string");
+      } else if (c == delim) {
+        closed = true;
+        break;
+      } else {
+        text.push_back(c);
+      }
+    }
+    if (!closed)
+      throw QLangError(QLangErrorKind::Lex, line, col,
+                       "unterminated f-string literal");
+  }
+
+  Token tok;
+  tok.text = "f" + std::string(1, delim) + text + std::string(1, delim);
+  tok.value = text;
+  tok.line = line;
+  tok.col = col;
+  tok.type = TokenType::FString;
+  return tok;
+}
+
 Token QLangLexer::identifier() {
   int line = m_line, col = m_col;
   std::string text;
@@ -304,6 +395,19 @@ std::vector<Token> QLangLexer::tokenize() {
         tokens.push_back(stringLiteral(true, c, false));
       } else {
         tokens.push_back(stringLiteral(false, c, c == '\''));
+      }
+      continue;
+    }
+
+    // f-string: f"..." or f'...'  (must be before identifier check)
+    if (c == 'f' && !atEnd() && (peek(1) == '"' || peek(1) == '\'')) {
+      advance(); // consume 'f'
+      char delim = peek();  // peek() now returns the quote char
+      bool triple = (peek(1) == delim && peek(2) == delim);
+      if (triple) {
+        tokens.push_back(fstringLiteral(true, delim, false));
+      } else {
+        tokens.push_back(fstringLiteral(false, delim, delim == '\''));
       }
       continue;
     }

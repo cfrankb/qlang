@@ -1017,6 +1017,46 @@ return node;
     return parseArrayLiteral();
   case TokenType::LBrace:
     return parseTableLiteral();
+  case TokenType::FString: {
+    // Parse f-string: split token.value into literal parts and ${expr} sections.
+    m_pos++;
+    auto node = std::make_shared<Expr>();
+    node->kind = ExprKind::FString;
+    const std::string &raw = tok.value;
+    size_t i = 0;
+    while (i < raw.size()) {
+      // Find next ${...}
+      size_t dollar = raw.find("${", i);
+      if (dollar == std::string::npos) {
+        // Remainder is literal text.
+        node->strParts.push_back(raw.substr(i));
+        break;
+      }
+      // Literal text before ${
+      node->strParts.push_back(raw.substr(i, dollar - i));
+      i = dollar + 2; // skip '${'
+      // Find matching }
+      int depth = 1;
+      size_t exprStart = i;
+      while (i < raw.size() && depth > 0) {
+        if (raw[i] == '{') depth++;
+        else if (raw[i] == '}') depth--;
+        i++;
+      }
+      if (depth != 0)
+        throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
+                         "unterminated interpolation in f-string");
+      std::string exprText = raw.substr(exprStart, i - exprStart - 1);
+      // Recursively parse the inner expression.
+      QLangLexer innerLexer(exprText);
+      auto innerTokens = innerLexer.tokenize();
+      QLangParser innerParser(std::move(innerTokens));
+      auto innerExpr = innerParser.parseExpression();
+      match(TokenType::Semicolon);
+      node->exprParts.push_back(innerExpr);
+    }
+    return node;
+  }
   default:
     break;
   }

@@ -23,7 +23,8 @@ enum class ExprKind {
   Table,
   Index,   // base[index]  (array subscript read)
   Member,   // base.name    (table member read)
-  Closure   // (params)[captures] { ... }  (anonymous closure expression)
+  Closure,   // (params)[captures] { ... }  (anonymous closure expression)
+  FString    // f"hello ${name}"  (interpolated string literal)
 };
 
 struct Expr; // forward declaration so ExprPtr can be used inside Expr
@@ -73,6 +74,12 @@ struct Expr {
   std::vector<std::string> params;
   std::vector<std::string> captures;
   std::vector<std::shared_ptr<Stmt>> body;
+
+  // FString: f"literal ${expr} more"  (interpolated string).
+  // `parts` alternates: even indices = literal string segments,
+  // odd indices = expression nodes to interpolate.
+  std::vector<std::string> strParts;
+  std::vector<ExprPtr> exprParts;
 };
 
 // ---------------------------------------------------------------------------

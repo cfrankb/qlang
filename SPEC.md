@@ -15,6 +15,11 @@ this first version will parse text within a context.
 `SPEC_COMPLIANCE.md` should track the hash of SPEC.md
 always update `SPEC_COMPLIANCE.md`.
 
+maintain a separate targets in the CMakeLists.
+- linkage library 
+- demo application (e,g, examples/hello.cpp)
+- test sets for all the features listed below. 
+
 variable types
 ===============
 ```
@@ -234,7 +239,6 @@ loops
 =======================================
 
 ```python
-
 for x = 1 to 32
 next x
 
@@ -259,12 +263,10 @@ a = [1,4,6]
 for x in a
 next # assume x
 
-
 for y in range (0,10) {
    for x in range (0,10) {
    }
 }
-
 
 for x = 1 to 32 {
    if x == 4 {
@@ -280,7 +282,6 @@ for x = 1 to 32 {
 while (a > 0) {
  --a
 }
-
 
 a = [1,4,6]
 
@@ -304,16 +305,13 @@ for i in range(1,10) {
 
 label/goto
 ================
-
 ```python
-
 a = 10
 
 :label1
 --a
 
 if a > 1 goto label1
-
 ```
 
 label and goto must reside in the same scope.
@@ -373,17 +371,17 @@ operator +=
 build-in functions
 ===================
 
-|helpers||
-|--------|-|
-|toStr(var)     |  convert to string|
-|toInt(var)     |  convert to int|
+|helpers|-|-|
+|--------|-|-|
+|toStr(var)     |  convert to string| (deprecated)
+|toInt(var)     |  convert to int| (deprecated)
 |type(var)      |   return a string representation of the type|
 |print(var)       | print a string|
 |println(var)     | print a string with carriage return
 |printf(fmt, ...) | mirror C printf
 |sprintf(fmt, ...) |same format as sprintf. return new string
-|len(var)         | return size of string, table, blob or array |length; other type return 1; error on undefined/nil.
-|substr(str, start, lenght) | return a substring fron index start. lenght is optional
+|len(var)         | return size of string, table, blob or array; other type return 1; error on undefined/nil.
+|substr(str, start, lenght)| return a substring fron index start. lenght is optional
 |delete var      | delete variable
 |str(var)        | return string representation of variable
 |int(var)        | return variable cast to int; string are parsed as decimal. other types return 0

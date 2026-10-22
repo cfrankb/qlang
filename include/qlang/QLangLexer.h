@@ -13,6 +13,7 @@ enum class TokenType {
   Float,
   String,
   Char,   // single-quoted literal, e.g. ' ' -> byte
+  FString, // f"..." / f'...' interpolated string
   Ident,
 
   // Keywords
@@ -129,6 +130,7 @@ private:
   void skipWhitespaceAndComments();
   Token number();
   Token stringLiteral(bool triple, char delim, bool singleQuote);
+  Token fstringLiteral(bool triple, char delim, bool singleQuote);
   Token identifier();
   Token operatorToken();
 

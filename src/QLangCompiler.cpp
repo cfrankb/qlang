@@ -867,6 +867,45 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     emit(Opcode::TABGET, dest, baseR, keyR);
     break;
   }
+  case ExprKind::FString: {
+    // f"literal ${expr} more" -> call format(template, expr1, expr2, ...)
+    // CALL convention: args at dest+1..dest+argCount, result at dest.
+    // So: reg[dest+1] = template, reg[dest+2..] = expressions.
+    std::string fmt;
+    int exprCount = static_cast<int>(e->exprParts.size());
+    for (int i = 0; i < exprCount; i++) {
+      if (i < static_cast<int>(e->strParts.size()))
+        fmt += e->strParts[i];
+      fmt += "%s";
+    }
+    if (static_cast<int>(e->strParts.size()) > exprCount)
+      fmt += e->strParts.back();
+
+    // Ensure enough registers: CALL reads dest+1..dest+totalArgs.
+    int totalArgs = exprCount + 1;
+    int maxReg = dest + totalArgs;
+    while (m_nextReg <= maxReg)
+      tmpRegister();
+
+    // Compile each expression into temp registers.
+    std::vector<int> argRegs(exprCount);
+    for (int i = 0; i < exprCount; i++)
+      argRegs[i] = tmpRegister();
+    for (int i = 0; i < exprCount; i++)
+      compileExpr(e->exprParts[i], argRegs[i]);
+
+    // Layout: dest+1=template, dest+2..dest+totalArgs=expr args.
+    int templateReg = dest + 1;
+    int exprStartReg = dest + 2;
+
+    emit(Opcode::CONST, templateReg, emitConst(QLangValue::String(fmt)));
+
+    for (int i = 0; i < exprCount; i++)
+      emit(Opcode::MOV, exprStartReg + i, argRegs[i], 0);
+
+    emit(Opcode::CALL, dest, static_cast<int>(Builtin::Format), totalArgs);
+    break;
+  }
   }
 }
 
@@ -885,6 +924,7 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "join") return static_cast<int>(Builtin::Join);
   if (name == "isset") return static_cast<int>(Builtin::IsSet);
   if (name == "sprintf") return static_cast<int>(Builtin::Sprintf);
+  if (name == "format") return static_cast<int>(Builtin::Format);
   return -1;
 }
 
