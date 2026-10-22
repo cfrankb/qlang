@@ -103,7 +103,8 @@ enum class StmtKind {
   Label,     // :labelname (no-op marker, records PC for goto)
   Goto,      // goto labelname
   GotoIf,    // if cond goto label (conditional jump)
-  Switch     // switch (expr) { case ... : ... default: ... }
+  Switch,    // switch (expr) { case ... : ... default: ... }
+  Global     // global a, b (import top-level vars into function scope)
 };
 
 // Base statement node. Forward-declared so StmtPtr can be used inside Stmt.
@@ -179,6 +180,9 @@ struct Stmt {
   };
   std::vector<SwitchCase> cases;
   std::vector<StmtPtr> defaultBody;
+
+  // Global: global name1, name2, ...  (import top-level vars into function scope).
+  std::vector<std::string> globalNames;
 };
 
 using StmtPtr = std::shared_ptr<Stmt>;
@@ -206,6 +210,7 @@ private:
   StmtPtr parseBreak();
   StmtPtr parseGoto();
   StmtPtr parseSwitch();
+  StmtPtr parseGlobal();
   StmtPtr parseFunction();
   StmtPtr parseArrowClosure(const std::string &varName);
   bool looksLikeArrow() const;

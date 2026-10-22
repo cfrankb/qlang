@@ -244,6 +244,49 @@ int main() {
   expectThrow("sprintf bad type", "local s = sprintf(123);");
   expectThrow("sprintf missing arg", "local s = sprintf(\"%s\");");
 
+  // -- NEW: global keyword (spec §530-564) --
+  // Global const visible everywhere
+  expectStr("global const visible",
+    "const HELLO = \"Hello World\"\ndef test() { return HELLO }\nlocal r = test();",
+    "r", "Hello World");
+
+  // Global function visible everywhere
+  expectVal("global func visible",
+    "def add(a,b) { return a+b }\ndef wrapper() { return add(3,4) }\nlocal r = wrapper();",
+    "r", 7);
+
+  // Global var invisible without keyword
+  expectThrow("global var invisible without keyword",
+    "a = 42\ndef test() { return a }\ntest()");
+
+  // Basic global keyword: import and read
+  expectVal("global basic read",
+    "a = 42\ndef test() { global a; return a }\nlocal r = test();",
+    "r", 42);
+
+  // Global keyword modifies persist after function return
+  expectVal("global modify persists",
+    "a = [1,2,3]\ndef test() { global a; a = a + [4,5,6] }\ntest()\nlocal r = len(a);",
+    "r", 6);
+
+  // Global with multiple variables
+  expectVal("global multiple vars",
+    "a = 10\nb = 20\ndef test() { global a, b; return a + b }\nlocal r = test();",
+    "r", 30);
+
+  // Global with local shadow — global wins after declaration
+  expectVal("global with local shadow",
+    "a = 10\ndef test() { local a = 99; global a; return a }\nlocal r = test();",
+    "r", 10);
+
+  // Global at top level is error
+  expectThrow("global at top level error",
+    "a = 1\nglobal a");
+
+  // Global undeclared variable error
+  expectThrow("global undeclared var",
+    "def test() { global z }\ntest()");
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

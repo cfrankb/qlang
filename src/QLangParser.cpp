@@ -102,6 +102,7 @@ StmtPtr QLangParser::parseStatement() {
   if (check(TokenType::Break)) return parseBreak();
   if (check(TokenType::Goto)) return parseGoto();
   if (check(TokenType::Switch)) return parseSwitch();
+  if (check(TokenType::Global)) return parseGlobal();
 
   if (check(TokenType::Def)) return parseFunction();
   if (check(TokenType::Return)) return parseReturn();
@@ -589,6 +590,20 @@ StmtPtr QLangParser::parseSwitch() {
     }
   }
   consume(TokenType::RBrace, "'}' to close switch");
+  return stmt;
+}
+
+StmtPtr QLangParser::parseGlobal() {
+  int line = current().line, col = current().col;
+  (void)line;
+  (void)col;
+  consume(TokenType::Global, "'global'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Global;
+  do {
+    stmt->globalNames.push_back(consume(TokenType::Ident, "variable name after 'global'").value);
+  } while (match(TokenType::Comma));
+  match(TokenType::Semicolon);
   return stmt;
 }
 

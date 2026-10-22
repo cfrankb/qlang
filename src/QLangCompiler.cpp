@@ -63,18 +63,15 @@ void QLangCompiler::emit(Opcode op, int a, int b, int c) {
 }
 
 CompiledProgram QLangCompiler::compile() {
-  fprintf(stderr, "[DBG-C] m_program.size()=%zu\n", m_program.size());
-  // Compile the top-level program into the main (scratch) function context.
-  for (auto &s : m_program) {
-    compileStmt(s);
-  }
-  // Implicit `return nil` at the end of the main program.
-  emit(Opcode::RETURN, 0);
-  fprintf(stderr, "[DBG-C] after compile: m_code.instructions().size()=%zu m_nextReg=%d\n", m_code.instructions().size(), m_nextReg);
+// Compile the top-level program into the main (scratch) function context.
+for (auto &s : m_program) {
+  compileStmt(s, nullptr);
+}
+// Implicit `return nil` at the end of the main program.
+emit(Opcode::RETURN, 0);
 
   // Wrap the main scratch stream into functions[0].
   Bytecode mainScratch = std::move(m_code);
-  fprintf(stderr, "[DBG-C] mainScratch.instructions().size()=%zu\n", mainScratch.instructions().size());
   Function mainFn;
   mainFn.name = "main";
   mainFn.paramCount = 0;
@@ -173,7 +170,7 @@ static void collectStmtIds(const StmtPtr &s, std::unordered_set<std::string> &id
 
 int QLangCompiler::buildFunction(const std::string &name,
                                  const std::vector<std::string> &params,
-                                 const std::vector<std::string> &captures,
+                                 std::vector<std::string> captures,
                                  const std::vector<StmtPtr> &body) {
   // Auto-detect free variables: variables referenced in the body that are
   // not parameters and not yet declared in this function's scope.
@@ -185,24 +182,31 @@ int QLangCompiler::buildFunction(const std::string &name,
   // Save the enclosing function's compilation state.
   Bytecode savedCode = m_code;
   auto savedRegs = m_regs;
+  // Save caller's register mapping for global keyword use.
+  m_savedRegs = m_regs;
   auto savedConstVars = m_constVars;
   auto savedVarTypes = m_varTypes;
   auto savedUserFuncs = m_userFuncs;
   auto savedClosureVars = m_closureVars;
   auto savedCaptureRegs = m_captureRegs;
+  auto savedGlobalVars = m_globalVars;
+  auto savedCapturedVars = m_capturedVars;
   int savedNextReg = m_nextReg;
+  bool savedInFunction = m_inFunction;
 
   // Fresh function context: params occupy registers 0..paramCount-1 and must
   // reserve those registers so temporaries never collide with a parameter.
   m_code = Bytecode();
   m_regs.clear();
-  m_constVars.clear();
+  // Keep m_constVars and m_userFuncs populated so global consts and
+  // user-defined functions remain visible inside function bodies.
+  // m_varTypes is cleared to avoid stale type info from the outer scope.
   m_varTypes.clear();
-  m_userFuncs.clear();
   m_closureVars.clear();
   m_captureRegs.clear();
   m_labels.clear();
   m_nextReg = 0;
+  m_inFunction = true;
   for (size_t i = 0; i < params.size(); i++) {
     int r = static_cast<int>(i);
     m_regs[params[i]] = r;
@@ -217,18 +221,41 @@ int QLangCompiler::buildFunction(const std::string &name,
     if (m_regs.count(id)) continue; // already declared in this function
     if (m_userFuncs.count(id)) continue; // user function name
     if (builtinId(id) >= 0) continue; // builtin
-    // This is a free variable — capture it.
+    // Global consts are visible everywhere — capture them like free variables.
+    if (m_constVars.count(id)) {
+      if (std::find(updatedCaptures.begin(), updatedCaptures.end(), id) == updatedCaptures.end())
+        updatedCaptures.push_back(id);
+      continue;
+    }
+    // Skip top-level globals: they are invisible in function scope unless
+    // explicitly imported via `global`.
+    if (m_globalVars.count(id)) continue;
+    // This is a free variable from an enclosing function — capture it.
     if (std::find(updatedCaptures.begin(), updatedCaptures.end(), id) == updatedCaptures.end())
       updatedCaptures.push_back(id);
   }
 
-  // Register the explicit capture list (name -> refId).
-  for (size_t i = 0; i < updatedCaptures.size(); i++)
-    m_captureRegs[updatedCaptures[i]] = static_cast<int>(i);
+  // Register the explicit capture list (name -> enclosing-frame register).
+  for (size_t i = 0; i < updatedCaptures.size(); i++) {
+    const std::string &var = updatedCaptures[i];
+    // Use the enclosing frame's register mapping if available; otherwise
+    // fall back to the capture index (for nested-function captures).
+    auto it = savedRegs.find(var);
+    m_captureRegs[var] = (it != savedRegs.end()) ? it->second : static_cast<int>(i);
+  }
+
+  // Also populate m_regs for captured globals so assignments work correctly.
+  for (auto &name : updatedCaptures) {
+    if (m_capturedVars.count(name) && regOf(name) < 0)
+      declareVar(name);
+  }
 
   // Compile the body.
   for (auto &s : body)
-    compileStmt(s);
+    compileStmt(s, &updatedCaptures);
+
+  // Sync captures (modified by global statements) back to updatedCaptures.
+  // This ensures fn.captures is populated correctly.
 
   // Implicit `return nil`.
   emit(Opcode::RETURN, 0);
@@ -241,7 +268,10 @@ int QLangCompiler::buildFunction(const std::string &name,
   // when this function is called.
   fn.captures.resize(updatedCaptures.size());
   for (size_t i = 0; i < updatedCaptures.size(); i++) {
-    fn.captures[i].reg = m_captureRegs[updatedCaptures[i]];
+    const std::string &var = updatedCaptures[i];
+    // Use the caller's register number if available (for globals), otherwise 0.
+    int callerReg = m_globalRegMap.count(var) ? m_globalRegMap[var] : 0;
+    fn.captures[i].reg = callerReg;
     fn.captures[i].frame = nullptr; // bound at call time by the VM
   }
 
@@ -259,12 +289,18 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_userFuncs = std::move(savedUserFuncs);
   m_closureVars = std::move(savedClosureVars);
   m_captureRegs = std::move(savedCaptureRegs);
+  m_savedRegs.clear();
+  m_globalRegMap.clear();
+  m_globalVars = std::move(savedGlobalVars);
+  m_capturedVars = std::move(savedCapturedVars);
   m_nextReg = savedNextReg;
+  m_inFunction = savedInFunction;
 
   return funcIndex;
 }
 
-void QLangCompiler::compileStmt(const StmtPtr &s) {
+void QLangCompiler::compileStmt(const StmtPtr &s,
+                                std::vector<std::string> *captures) {
   if (!s)
     return;
   switch (s->kind) {
@@ -280,6 +316,9 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
     // Enforce a typed declaration (e.g. local b:byte = 32).
     if (s->declaredType)
       emit(Opcode::CONV, r, r, static_cast<int>(*s->declaredType));
+    // Track top-level variable declarations as globals.
+    if (!m_inFunction)
+      m_globalVars.insert(s->name);
     break;
   }
   case StmtKind::Const: {
@@ -295,6 +334,9 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
     // Enforce a typed declaration (e.g. local b:byte = 32).
     if (s->declaredType)
       emit(Opcode::CONV, r, r, static_cast<int>(*s->declaredType));
+    // Global consts are visible everywhere.
+    if (!m_inFunction)
+      m_globalVars.insert(s->name);
     break;
   }
   case StmtKind::Assignment: {
@@ -323,8 +365,15 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
       break;
     }
     int r = regOf(s->name);
-    if (r < 0)
-      r = declareVar(s->name); // bare assignment auto-declares an implicit local
+    if (r < 0) {
+      // Bare assignment auto-declares an implicit local, unless it's a captured
+      // global (which should have been declared via `global` first).
+      if (!m_capturedVars.count(s->name))
+        r = declareVar(s->name); // bare assignment auto-declares an implicit local
+    }
+    // Track top-level bare assignments as globals.
+    if (!m_inFunction)
+      m_globalVars.insert(s->name);
     guardNotConst(s->name, "assignment");
     const std::string &op = s->assignOp.text;
     // Array append: `name += value` where name is an array.
@@ -337,9 +386,6 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
     }
     if (op == "=") {
       int t = tmpRegister();
-      fprintf(stderr, "[DBG-ASSIGN] Compiling assign to '%s' value kind=%d\n", s->name.c_str(), s->assignValue ? (int)s->assignValue->kind : -1);
-      if (s->assignValue && s->assignValue->kind == ExprKind::Literal && s->assignValue->literal.type() != QLangValue::Type::String)
-        fprintf(stderr, "[DBG-ASSIGN]   Literal value=%lld\n", (long long)s->assignValue->literal.asInt());
       compileExpr(s->assignValue, t);
       emit(Opcode::MOV, r, t);
       updateVarType(s->name, s->assignValue);
@@ -591,6 +637,37 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
     emit(Opcode::JMP, lit->second);
     break;
   }
+  case StmtKind::Global: {
+    if (!m_inFunction)
+      throw QLangError(QLangErrorKind::Parse, 0, 0,
+                       "'global' is only valid inside a function");
+    for (const auto &name : s->globalNames) {
+      // Allow global to override local declarations — global wins.
+      if (regOf(name) >= 0) {
+        m_regs.erase(name);
+      }
+      if (!m_globalVars.count(name)) {
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "global variable '" + name + "' is not declared");
+      }
+      // Add to capture list so the VM binds it to the enclosing frame.
+      if (captures && std::find(captures->begin(), captures->end(), name) == captures->end()) {
+        captures->push_back(name);
+      }
+      // Mark as captured so compileExpr routes through m_captureRegs.
+      m_capturedVars.insert(name);
+      // Set up the capture register immediately so subsequent references
+      // compile as REFLOAD/REFSTORE instead of MOV/MOV.
+      // m_captureRegs stores the capture INDEX (0, 1, 2...) for the VM.
+      if (captures) {
+        int captureIdx = static_cast<int>(captures->size()) - 1;
+        m_captureRegs[name] = captureIdx;
+        // Save the caller's register number for later use in fn.captures.
+        m_globalRegMap[name] = m_savedRegs.count(name) ? m_savedRegs[name] : 0;
+      }
+    }
+    break;
+  }
   case StmtKind::Switch: {
     // Compile the switch expression into a register.
     int valReg = tmpRegister();
@@ -717,11 +794,27 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       emit(Opcode::REFLOAD, dest, cit->second, 0);
       break;
     }
+    // Explicitly captured global var (declared with `global`): route through
+    // m_captureRegs so it uses REFLOAD instead of MOV.
+    if (m_capturedVars.count(e->name) && m_captureRegs.count(e->name)) {
+      emit(Opcode::REFLOAD, dest, m_captureRegs[e->name], 0);
+      break;
+    }
     int r = regOf(e->name);
-    if (r < 0)
+    if (r >= 0) {
+      emit(Opcode::MOV, dest, r);
+      break;
+    }
+    // Global const: emit a CONST instruction to load its value.
+    if (m_constVars.count(e->name)) {
+      // Global consts are captured via the closure mechanism. If we get here,
+      // it means the const was not captured (e.g., used without being in scope).
+      // This shouldn't happen for properly captured consts.
       throw QLangError(QLangErrorKind::Parse, 0, 0,
                        "use of undeclared variable '" + e->name + "'");
-    emit(Opcode::MOV, dest, r);
+    }
+    throw QLangError(QLangErrorKind::Parse, 0, 0,
+                     "use of undeclared variable '" + e->name + "'");
     break;
   }
   case ExprKind::Binary:

@@ -11,7 +11,7 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 **138 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
 
-Line numbers below are against the CURRENT SPEC.md (11200 bytes, 576 lines).
+Line numbers below are against the CURRENT SPEC.md (11387 bytes, 574 lines, SHA256: 8f1ef041a3630ea156ad69f860d04ea2abdaa7d136c8d8d6251fab11622f5415).
 
 ## Legend
 
@@ -92,7 +92,7 @@ All items below are implemented and verified. Table retained for traceability.
 | §C++ interface | `VM::callFunction(funcIndex, args)` | ✓ implemented | Creates a host caller frame, pushes callee via `pushCall()`, runs manual opcode loop until callee returns (`m_cur` drops below callee frame index), captures result from `regs[0]`, restores state, returns result. |
 | §C++ interface | `VM::runFrames(startFrame)` | ✓ implemented | Extracted VM loop from `run()` for reuse by `callFunction()`. Runs until `m_cur < startFrame`. |
 | §C++ interface | `CompiledProgram::constVars` | ✓ implemented | New field on `CompiledProgram`; populated from `m_constVars` at compile time (includes both `const`-declared and injected consts). VM uses it to skip scope sync for const vars. |
-| §global scope visibility | `global a, b` keyword | ✗ not implemented | Spec §532–564 describes `global` to import injected/global vars into function scope. No `Global` token in lexer; `global` is not in `keywordType()`. Without it, global vars are invisible in function scope (undeclared variable error). |
+| §global scope visibility | `global a, b` keyword | ✗ not implemented | Spec §532–564 describes `global` to import injected/global vars into function scope. No `Global` token in lexer; `global` is not in `keywordType()`. Inside functions, `global` is treated as a regular identifier and becomes a captured free variable — it coincidentally allows reading global vars but: (1) `global` alone throws "undeclared variable", (2) `global a, b` throws "unexpected token ','", (3) `global a` followed by assignment to `a` crashes at runtime. Additionally, script-level vars are visible in function scope **without** `global` (via closure capture of free variables), which contradicts the spec's intent that they be invisible by default. |
 | §strings (f-strings) | Python-style `f"Total: ${price:.2f}"` | ✓ implemented | Lexer: `FString` token; `fstringLiteral()` parses `${...}` interpolation blocks verbatim. Parser: `ExprKind::FString` with `strParts` (literal segments) and `exprParts` (inner expression ASTs). Compiler: emits `format(template, expr1, ...)` via `Builtin::Format` + `OP_Format` → `OP_CALL`. VM: `format` builtin does `%s`-based template substitution via `valueToString()`. Verified: `f"hello ${name}"`, `f"${a} + ${b} = ${a+b}"`, plain `f"just text"`, float `f"Total: $${price:.2f}"`. |
 
 ## Extensions Beyond Spec (present in implementation, absent from spec)

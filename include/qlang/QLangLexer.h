@@ -61,6 +61,7 @@ enum class TokenType {
   Switch,      // switch statement keyword
   Case,        // case clause keyword
   Default,     // default clause keyword
+  Global,      // global (import top-level vars into function scope)
   True,        // true
   False,       // false
 

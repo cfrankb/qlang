@@ -46,6 +46,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "table") return TokenType::TypeTable;
   if (text == "dword") return TokenType::TypeDword;
   if (text == "type") return TokenType::Type;
+  if (text == "global") return TokenType::Global;
   return TokenType::Ident;
 }
 

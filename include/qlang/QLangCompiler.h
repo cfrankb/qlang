@@ -58,7 +58,8 @@ private:
   int emitConst(const QLangValue &value);
 
   void emit(Opcode op, int a, int b = 0, int c = 0);
-  void compileStmt(const StmtPtr &s);
+  void compileStmt(const StmtPtr &s,
+                   std::vector<std::string> *captures = nullptr);
   void compileExpr(const ExprPtr &e, int dest);
   Opcode binOp(const std::string &text) const;
   Opcode unOp(const std::string &text) const;
@@ -68,7 +69,7 @@ private:
   // return its function index. `captures` is the explicit capture list.
   int buildFunction(const std::string &name,
                     const std::vector<std::string> &params,
-                    const std::vector<std::string> &captures,
+                    std::vector<std::string> captures,
                     const std::vector<StmtPtr> &body);
 
   // Compile a statement inside a function body (used by buildFunction for the
@@ -112,6 +113,16 @@ private:
   // Active closure capture table: captured variable name -> refId (index into
   // the current function's explicit capture list).
   std::unordered_map<std::string, int> m_captureRegs;
+  // Variable names declared at the top level (visible everywhere as globals).
+  // Functions only see them when explicitly imported via `global`.
+  std::unordered_set<std::string> m_globalVars;
+  // Variables explicitly imported into function scope via `global`. These are
+  // NOT in m_regs (so they compile as REFLOAD/REFSTORE) but ARE assignable.
+  std::unordered_set<std::string> m_capturedVars;
+  // Caller's register mapping saved at function-entry for global keyword support.
+  std::unordered_map<std::string, int> m_savedRegs;
+  // Mapping from global var name to caller's register number (for capture spec).
+  std::unordered_map<std::string, int> m_globalRegMap;
   // Runtime type tracking: lets the compiler choose the right opcode for
   // `+=` (array append vs. string/number add) and array/table access.
   std::unordered_map<std::string, QLangValue::Type> m_varTypes;
@@ -120,6 +131,8 @@ private:
   std::vector<int> m_breakJmps; // instruction indices of unpatched break JMPs
   std::unordered_map<std::string, int> m_labels; // label name -> instruction index (per-scope)
   int m_nextReg = 0;
+  // True when compiling inside a function body (global keyword is only valid there).
+  bool m_inFunction = false;
 };
 
 } // namespace qlang

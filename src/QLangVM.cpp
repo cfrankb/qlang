@@ -861,6 +861,7 @@ void QLangVM::run() {
       // (the deque keeps frame pointers stable, so the caller frame is valid).
       QLangValue retVal = frame.regs.empty() ? QLangValue() : frame.regs[0];
       int dest = frame.callDest;
+      fprintf(stderr, "[DBG-RET] func=%d dest=%d retVal=%lld\n", frame.funcIndex, dest, toInt64(retVal));
       if (m_cur == 0) {
         // Returning from main: sync the frame back into the scope before
         // unwinding so script variables persist.
@@ -898,9 +899,12 @@ void QLangVM::run() {
     case Opcode::GE:
     case Opcode::MOD:
     case Opcode::POW:
-    case Opcode::IN:
-      frame.regs[i.a] = doBinary(op, frame.regs[i.b], frame.regs[i.c]);
+    case Opcode::IN: {
+      QLangValue result = doBinary(op, frame.regs[i.b], frame.regs[i.c]);
+      frame.regs[i.a] = result;
+      fprintf(stderr, "[DBG-RES] op=%d a=%d b=%d c=%d -> regs[%d]=%lld (b=%lld, c=%lld)\n", (int)op, i.a, i.b, i.c, i.a, toInt64(result), toInt64(frame.regs[i.b]), toInt64(frame.regs[i.c]));
       break;
+    }
     case Opcode::JMP:
       frame.pc = static_cast<size_t>(i.a);
       continue;

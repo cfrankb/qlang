@@ -15,8 +15,8 @@ this first version will parse text within a context.
 `SPEC_COMPLIANCE.md` should track the hash of SPEC.md
 always update `SPEC_COMPLIANCE.md`.
 
-maintain a separate targets in the CMakeLists.
-- linkage library 
+maintain separate targets in the CMakeLists.
+- linkage library src/*.cpp
 - demo application (e,g, examples/hello.cpp)
 - test sets for all the features listed below. 
 
@@ -79,6 +79,9 @@ join
 global
 const
 end
+cast
+min
+max
 ```
 
 constants
@@ -158,6 +161,7 @@ local f = 1.13 # float
 
 c = a  # copy a to c
 a += 12 # add to variable
+s = "hello"
 s += "abc" # append to a string
 
 sv = 123
@@ -341,6 +345,7 @@ operators
 |** |exponential
 |! |not (inverse)
 |;  |silent separator (optional)
+|cast|change datatype at runtime
 
 operator +=
 
@@ -366,6 +371,19 @@ operator +=
 |{name="toto"}|+=|{age=23}|{name="toto", age=23}
 |{name="toto"}|+=|any other types|error
 
+operator cast
+|examples|results|notes|
+|-----|-----|-|
+|cast\<int>(1.12)| 1| casting to 1. trunkate decimals
+|cast\<float>(1)|1.0f| make the iht into a floating point
+|cast\<string>(13)|"13"| turns int into string
+|cast\<string>(1.3)|"1.3"| turns float into string
+|cast\<word>(-1)|65535| converting int to word removes signage
+|cast\<string>([])|"\<string>"| collections fallback on their string representations
+|cast\<int>([])|n/a| error: collections cannot be cast to int
+|cast\<array>(123)|n/a| error: numbers cannot be cast to collections
+|cast\<any>()|n/a| error: empty source. nothing to cast
+|cast\<>(123)|n/a| error: empty cast. nothing to do
 
 
 build-in functions
@@ -388,6 +406,8 @@ build-in functions
 |slice(array, start, length) | return an array slice
 |isset(var)| return true if variable, array index or table field exists. otherwise returns false
 |join(separator, arr)| join the array element using separator
+|min(number...\|array)| returns the smallest value in a group number (int, float, byte etc). 
+|max(number...\|array)| returns the largest value in a group number (int, float, byte etc). 
 
 ```python
 a = [1,2,3]
@@ -397,6 +417,16 @@ println(join(", ", a))
 a = [1,2,3,4,5]
 b = slice(a, 0, 2)
 # b = [1,2]
+
+c = min(4, 1)  # c = 1
+c = min(2, 0, 4, 3)  # c = 0
+c = min([2.5,4,1]) # c = 1
+c = min([3,5,6,1], [2,5,1,2]) # errror: only 1 array allowed
+# min and max accept: numbers (int, char, float) or an array
+# min and max refuse data if types are mixed (int and float)
+# min and max refuse data if types have mixed signed and unsigned types (char and byte)
+# max used the same rules as min
+
 ```
 
 
@@ -525,7 +555,10 @@ ctx.setFunc("dbl", [](QLangContext&, const std::vector<QLangValue>& a) {
 QLangValue r2 = ctx.call("dbl", {qval_int(21)});  // 42
 ```
 
-TODO: add bytecodes() const method to the context returning the bytecode buffer.
+TODO: 
+- add methods to rerived the bytecodes() from the context 
+- upload new bytecodes into the context
+- version bytecodes to avoid loading incompatible bytecodes
 
 global scope visibility
 ======================
@@ -545,7 +578,7 @@ def test() {
    # error, a is a global var/invisible by default
    printf("[test] len: %d\n", len(a)) 
 
-   global a, b
+   global a, b;
    printf("[test] len: %d\n", len(a)) 
    # output >> [test] len: 3
 
@@ -572,3 +605,20 @@ price = 19.99
 print(f"Total: ${price:.2f}")  # Output: Total: $19.99
 ```
 
+generators
+=================
+
+TODO: propose a solution. below is a prototype adapted from python
+
+```
+def gen_fct(mi, mx) {
+   for i in range(mi, mx)
+      yield i
+}
+
+local gen = gen_fct(1,3)
+println(next gen)
+println(next gen)
+println(next gen)
+# test for end condition???
+```
