@@ -211,7 +211,9 @@ for i in ar {
 }
 println("")
 
-printf("%s --> len %d", join(",", ar), len(ar))
+printf("%s --> len %d\n", join(",", ar), len(ar))
+
+println(sprintf("Today is %s %d", "monday", 2026))
 
 )";
 

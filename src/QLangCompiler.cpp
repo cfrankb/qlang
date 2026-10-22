@@ -863,6 +863,7 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "range") return static_cast<int>(Builtin::Range);
   if (name == "join") return static_cast<int>(Builtin::Join);
   if (name == "isset") return static_cast<int>(Builtin::IsSet);
+  if (name == "sprintf") return static_cast<int>(Builtin::Sprintf);
   return -1;
 }
 

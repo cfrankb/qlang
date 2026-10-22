@@ -237,6 +237,73 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     std::cout << out;
     return QLangValue();
   }
+  case Builtin::Sprintf: {
+    // sprintf(fmt, ...) — same format as printf but returns the formatted string.
+    if (args.empty())
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "sprintf expects at least a format string");
+    if (args[0].type() != QLangValue::Type::String)
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "sprintf: format string must be a string");
+    std::string fmt = args[0].asString();
+    std::string out;
+    size_t ai = 1; // next format argument
+    for (size_t i = 0; i < fmt.size();) {
+      if (fmt[i] == '%' && i + 1 < fmt.size()) {
+        // Skip optional width/precision: digits and dots after %
+        size_t j = i + 1;
+        while (j < fmt.size() && (fmt[j] == '.' || (fmt[j] >= '0' && fmt[j] <= '9')))
+          j++;
+        if (j >= fmt.size()) {
+          // Trailing %, treat as literal
+          out += '%';
+          i++;
+          continue;
+        }
+        char spec = fmt[j];
+        if (spec == '%') {
+          out += '%';
+          i = j + 1;
+          continue;
+        }
+        if (ai >= args.size())
+          throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                           "sprintf: not enough arguments for format spec");
+        const QLangValue &av = args[ai++];
+        switch (spec) {
+        case 'd': out += std::to_string(toInt64(av)); break;
+        case 'f': {
+          // Extract precision from format (e.g. %.2f).
+          int precision = 6;
+          {
+            size_t k = i + 1;
+            if (k < fmt.size() && fmt[k] == '.') {
+              k++;
+              int prec = 0;
+              while (k < fmt.size() && fmt[k] >= '0' && fmt[k] <= '9') {
+                prec = prec * 10 + (fmt[k] - '0');
+                k++;
+              }
+              if (k > i + 2)
+                precision = prec;
+            }
+          }
+          char buf[64];
+          std::snprintf(buf, sizeof(buf), "%.*f", precision, toDouble(av));
+          out += buf;
+          break;
+        }
+        case 's': out += valueToString(av); break;
+        case 'c': out += static_cast<char>(toInt64(av)); break;
+        default: out += spec; break;
+        }
+        i = j + 1;
+      } else {
+        out += fmt[i++];
+      }
+    }
+    return QLangValue::String(out);
+  }
   case Builtin::Len: {
     need(1, "len");
     return QLangValue::Int(static_cast<int32_t>(lenOf(args[0])));

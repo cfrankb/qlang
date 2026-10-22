@@ -11,7 +11,7 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 **128 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
 
-Line numbers below are against the CURRENT SPEC.md (6473 bytes, 404 lines).
+Line numbers below are against the CURRENT SPEC.md (7378 bytes, 444 lines).
 
 ## Legend
 
@@ -60,7 +60,7 @@ Line numbers below are against the CURRENT SPEC.md (6473 bytes, 404 lines).
 |- [x] `blob()` — creates empty blob
 - [x] builtins: `toStr`, `toInt`, `type`, `print`, `println`, `printf`, `len`,
       `substr`, `slice`, `range`, `join`, `isset`
-|- [ ] `sprintf(fmt, ...)` — spec §359 lists it; not implemented in VM |
+||- [x] `sprintf(fmt, ...)` — returns formatted string via `snprintf`-backed parser; supports `%d/%f/%s/%c/%%` and `%.Nf` precision
 - [x] `int(nil)` returns 0 (not throw)
 - [x] `str()` / `int()` as function-call aliases (not just type keywords)
 - [x] `def name(params) { ... }` / `def name(params) end` — global-scope named
@@ -155,7 +155,7 @@ Line numbers below are against the CURRENT SPEC.md (6473 bytes, 404 lines).
 - `examples/spec_check2.cpp` — 81 test cases covering all spec features including `bool`, `char`, `dword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, and method calls.
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
-Result: **128 passed, 0 failed.** One builtin from spec §348–367 remains unimplemented: `sprintf`.
+Result: **138 passed, 0 failed.** All spec builtins implemented.
 
 ## Fixes Applied This Round (since prior audit)
 
@@ -196,12 +196,12 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-Core spec fully implemented. **128 passed, 0 failed.** One builtin from §348–367 remains unimplemented: `sprintf`.
+Core spec fully implemented. **138 passed, 0 failed.**
 
 ## Open Items
 
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
-- **`sprintf(fmt, ...)` (§359):** Spec: "same format as sprintf. return new string." Not implemented. Fix: add `Builtin::Sprintf`, register in `builtinId()`, implement in `QLangVM.cpp` using `snprintf`.
+- **`sprintf(fmt, ...)` (§374):** Implemented. `Builtin::Sprintf` added to enum, registered in `builtinId()`, implemented in `QLangVM.cpp` mirroring `Printf` but returning `QLangValue::String(out)`. Supports `%d`, `%f` (with `%.Nf` precision), `%s`, `%c`, and `%%` literal. 9 test cases pass.
 - **Nested call register allocation:** Fixed. Compiler now compiles call args into dedicated temp registers then emits `MOV` to the VM's expected `dest+1..dest+argCount` slots. This prevents nested calls from overwriting parent arg registers. Verified with `printf("%s %d", join(",", ar), len(ar))` after `for i in ar` loop.
 - **`join(separator, arr)` (§367):** Implemented. `Builtin::Join` added to enum, registered in `builtinId()`, implemented in `QLangVM.cpp` via `callBuiltin`. Non-string elements converted via `valueToString`. 8 test cases pass.
 - **`isset(var)` (§381):** Implemented. `Builtin::IsSet` added to enum, registered in `builtinId()`, implemented in `QLangVM.cpp` via `callBuiltin`. Accepts a string (variable name); checks `prog.vars` map and `m_deleted` set to determine existence during execution (vars live in registers, not scope, until `run()` completes). 5 test cases pass.

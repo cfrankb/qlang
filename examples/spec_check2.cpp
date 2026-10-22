@@ -232,6 +232,18 @@ int main() {
   expectThrow("isset wrong count", "local r = isset();");
   expectThrow("isset non-string", "local r = isset(123);");
 
+  // -- NEW: sprintf() builtin (spec §374) --
+  expectStr("sprintf basic", "local s = sprintf(\"hello %s\", \"world\");", "s", "hello world");
+  expectStr("sprintf int", "local s = sprintf(\"num=%d\", 42);", "s", "num=42");
+  expectStr("sprintf float", "local s = sprintf(\"pi=%.2f\", 3.14);", "s", "pi=3.14");
+  expectStr("sprintf multi", "local s = sprintf(\"%s is %d\", \"age\", 99);", "s", "age is 99");
+  expectStr("sprintf char", "local s = sprintf(\"c=%c\", 65);", "s", "c=A");
+  expectStr("sprintf percent", "local s = sprintf(\"%d%%\", 100);", "s", "100%");
+  expectStr("sprintf no args", "local s = sprintf(\"plain\");", "s", "plain");
+  expectThrow("sprintf no format", "local s = sprintf();");
+  expectThrow("sprintf bad type", "local s = sprintf(123);");
+  expectThrow("sprintf missing arg", "local s = sprintf(\"%s\");");
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

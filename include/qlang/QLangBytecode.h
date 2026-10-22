@@ -23,7 +23,8 @@ enum class Builtin : int {
   Slice,   // slice(array, start, len) -> new array
   Range,   // range(start, end) -> [start, start+1, ..., end]
   Join,      // join(separator, array) -> string
-  IsSet      // isset(var_name) -> bool (checks scope existence)
+  IsSet,     // isset(var_name) -> bool (checks scope existence)
+  Sprintf    // sprintf(fmt, ...) -> string (same format as printf, returns result)
 };
 
 // Register-machine opcodes. This is a small register VM: each script variable
