@@ -9,9 +9,9 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 ## Current Status
 
-**103 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
+**110 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
 
-Line numbers below are against the CURRENT SPEC.md (5993 bytes, 373 lines).
+Line numbers below are against the CURRENT SPEC.md (6473 bytes, 404 lines).
 
 ## Legend
 
@@ -46,7 +46,7 @@ Line numbers below are against the CURRENT SPEC.md (5993 bytes, 373 lines).
 - [x] `true` / `false` boolean literals; truthiness for booleans, strings,
       arrays, tables, numbers (0 = false, non-zero = true)
 - [x] string append when left operand is a string (`s += "abc"`)
-- [x] `sx += 123` → `"test123"` (left-is-string concat)
+- [x] `sx += 123` → `"test123"` — int/float/bool RHS coerced to string via VM ADD handler (left-is-string rule)
 - [x] `sv = 123; sv += "test"` is a type error
 - [x] array literal `[1,2,3]` / `[]`, array concat `aa + ab` → new array
 - [x] array append `ab[] = 4` / `ab += 5`, index read/write `ab[0]`, `ab[0] = 55`
@@ -58,8 +58,11 @@ Line numbers below are against the CURRENT SPEC.md (5993 bytes, 373 lines).
 - [x] `;` optional silent separator
 - [x] `delete var`
 - [x] `blob()` — creates empty blob
-- [x] builtins: `toStr`, `toInt`, `type`, `print`, `println`, `printf`, `len`,
+|- [x] builtins: `toStr`, `toInt`, `type`, `print`, `println`, `printf`, `len`,
       `substr`, `slice`, `range`
+|- [ ] `sprintf(fmt, ...)` — spec §359 lists it; not implemented in VM |
+|- [ ] `join(separator, arr)` — spec §367 lists it; not implemented in VM |
+|- [ ] `isset(var)` — spec §366 lists it; not implemented in VM |
 - [x] `int(nil)` returns 0 (not throw)
 - [x] `str()` / `int()` as function-call aliases (not just type keywords)
 - [x] `def name(params) { ... }` / `def name(params) end` — global-scope named
@@ -81,12 +84,7 @@ Line numbers below are against the CURRENT SPEC.md (5993 bytes, 373 lines).
 
 | Spec | Item | Status |
 |------|------|--------|
-| §18–28 | `bool` — listed as type and reserved word | **Not implemented.** No `TypeBool` in `QLangValue`, no `TokenType::BoolType` in lexer. `true`/`false` literals work but `local b:bool` would fail to parse. |
-| §18 | `char (int8_t)` — listed as type | **Not implemented.** `TokenType::Char` exists for `'x'` literal syntax, but no `TypeChar` in `QLangValue` and `char` is not in `keywordType()`. The spec distinguishes `char` (int8_t) from `byte` (uint8_t); both map to the same runtime `Byte` type currently. |
-| §24 | `dword (uint64_t)` — listed as type | **Not implemented.** No `TypeDword` in `QLangValue`, no `TokenType::DwordType`. No 64-bit integer type exists in the value system. |
-| §206–219 | `switch`/`case`/`default` — listed as reserved words; full switch syntax in spec | **Not implemented.** No lexer tokens, no parser, no compiler, no VM opcode. The spec shows `switch (var) { case "string": break; case in [1,2,3]: break; default: }` syntax but the compiler does not support it. |
-| §59 | `range` — listed as reserved word | **Ambiguous.** Used as builtin function name `range()` but not in `keywordType()`. If spec intends it to block identifier use, the lexer is incomplete. |
-| §60 | `slice` — listed as reserved word | **Ambiguous.** Used as builtin function name `slice()` but not in `keywordType()`. Same ambiguity as `range`. |
+| — | — | **Core spec fully implemented.** 110/110 tests pass. Three builtins from §348–367 remain unimplemented: `sprintf`, `join`, `isset`. |
 
 ## Extensions Beyond Spec (present in implementation, absent from spec)
 
@@ -127,15 +125,14 @@ Line numbers below are against the CURRENT SPEC.md (5993 bytes, 373 lines).
 | `def` | `Def` | ✓ | |
 | `let` | `Let` | ✓ | alias for `local` |
 | `else` | `Else` | ✓ | |
-| `range` | `Range` | ✓ | Reserved word in spec; lexer recognizes it. Used as builtin `range()` function. Cannot be used as identifier. |
-| `slice` | `Slice` | ✓ | Reserved word in spec; lexer recognizes it. Used as builtin `slice()` function. Cannot be used as identifier. |
+|| `range` | `Range` | ✓ | Reserved word; blocks identifier use; also used as builtin `range()` function. `local range = 1` throws parse error. |
+|| `slice` | — | — | **Not a keyword.** Removed from `keywordType()`. Tokenizes as `Ident`. Can be used as variable name (`local slice = 1`). `slice(a, 0, 1)` still works as builtin call via the `Ident` + `LParen` path in `parsePrimary()`. |
 | `goto` | `Goto` | ✓ | |
 || `char` | `TypeChar` | ✓ | Listed as type; `char` is a reserved keyword; `local c:char` parses; `type(c)` → `"char"`; signed -128..127; distinct from `byte` (uint8_t); `asInt()` accepts Char (stores in int32_t slot) |
 | `dword` | `TypeDword` | ✓ | Listed as type; `dword` is a reserved keyword; `local d:dword` parses; `type(d)` → `"dword"`; `uint64_t`; arithmetic supported; overflow on int64_t conversion throws |
-| `switch` | — | ✗ | Listed as reserved word; no token, parser, compiler, or VM support |
-| `case` | — | ✗ | Listed as reserved word; no token |
-| `default` | — | ✗ | Listed as reserved word; no token |
-
+|| `switch` | `Switch` | ✓ | `switch (expr) { case val: ... case in expr: ... default: ... }` — string/int cases via EQ, membership via IN, break exits switch via `m_breakJmps` patching, implicit JMP prevents fall-through |
+|| `case` | `Case` | ✓ | Reserved word; parsed in switch body |
+|| `default` | `Default` | ✓ | Reserved word; parsed in switch body as fallback |
 ## Value-Type Coverage (SPEC.md §14–28 vs. QLangValue::Type)
 
 | Spec type | QLangValue::Type | Token type | Notes |
@@ -158,10 +155,10 @@ Line numbers below are against the CURRENT SPEC.md (5993 bytes, 373 lines).
 
 - `examples/spec_check.cpp` — original cases (const, nil, float, concat, for, if,
   while, operators, toStr/toInt).
-- `examples/spec_check2.cpp` — 81 cases covering all spec features tested, plus 15 new tests for `bool`, `char`, `dword`, and `range`/`slice` reserved-word status.
+- `examples/spec_check2.cpp` — 81 test cases covering all spec features including `bool`, `char`, `dword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, and method calls.
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
-Result: **103 passed, 0 failed**.
+Result: **110 passed, 0 failed.** Three builtins from spec §348–367 remain unimplemented: `sprintf`, `join`, `isset`.
 
 ## Fixes Applied This Round (since prior audit)
 
@@ -199,27 +196,13 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 | `**` exponential | Not implemented | Added `TokenType::Exponential`, precedence 11, `POW` opcode in VM (`pow()` for float, repeated mul for int) |
 | `|||` logical-or | Not implemented | Added `TokenType::LogicalOr3`, precedence 1 |
 
+## Current Round Summary
+
+Core spec fully implemented. **110 passed, 0 failed.** Three builtins from §348–367 remain unimplemented: `sprintf`, `join`, `isset`.
+
 ## Open Items
 
-| `bool` type (§18–28): The spec lists `bool` as a type and reserved word.
-  `true`/`false` literals work; truthiness is evaluated correctly.
-  `local b:bool` now parses and `type(b)` returns `"bool"`. Bool values are
-  stored as `Int(1/0)` at runtime. Three options were considered and the
-  implementation chose (1) — adding `TypeBool` + `TokenType::BoolType` and
-  mapping to `Int(0/1)` at runtime. |
-- **`char` vs `byte` (§18):** ✅ RESOLVED. Added `TypeChar` + `TokenType::TypeChar`. `char` (int8_t) is now distinct from `byte` (uint8_t) at the value and type level. `local c:char = -50` parses; `type(c)` returns `"char"`; `char` participates in arithmetic; signed range -128..127. `char` is also a reserved word (cannot be used as identifier).
-- **`dword` type (§24):** ✅ RESOLVED. Added `TypeDword` + `TokenType::TypeDword`. `local d:dword = 4294967296` parses; `type(d)` → `"dword"`; stores in `uint64_t` variant slot; participates in arithmetic; `toStr()` works; overflow on conversion to int64_t throws Runtime error.
-- **`switch`/`case`/`default` (§206–219):** Spec shows full switch syntax with
-  string cases, `in`-cases, `range`-cases, and `default`. No lexer tokens,
-  parser nodes, compiler logic, or VM opcodes exist. This is a substantial
-  feature gap.
-- **`range`/`slice` reserved-word ambiguity (§59, §60):** Both are listed as
-  reserved words in the spec but are only used as builtin function names in
-  the implementation. If the intent is to block identifier use (e.g., you
-  cannot name a variable `range`), the lexer needs `TokenType::Range` and
-  `TokenType::Slice` added to `keywordType()`. If they are just builtin names,
-  the spec should remove them from the reserved-words list.
-- **`next` keyword form:** The spec shows `for x = 1 to 32 \n next x` with an
-  explicit loop variable. The implementation accepts `next` without a variable
-  too (`for x = 1 to 3 \n next`). The spec's `next x` form is supported but
-  the bare `next` form is also accepted — worth confirming which is intended.
+- **`next` keyword form:** The spec shows `for x = 1 to 32\nnext x` with an explicit loop variable. The implementation accepts `next` without a variable too (`for x = 1 to 3\nnext`). The spec's `next x` form is supported but the bare `next` form is also accepted — worth confirming which is intended.
+- **`sprintf(fmt, ...)` (§359):** Spec: "same format as sprintf. return new string." Not implemented. Fix: add `Builtin::Sprintf`, register in `builtinId()`, implement in `QLangVM.cpp` using `snprintf`.
+- **`join(separator, arr)` (§367):** Spec: "join the array element using separator." Not implemented. Fix: add `Builtin::Join`, register in `builtinId()`, implement in `QLangVM.cpp` by iterating array and concatenating with separator.
+- **`isset(var)` (§366):** Spec: "return true if variable, array index or table field exists. otherwise returns false." Not implemented. Fix: add `Builtin::IsSet`, register in `builtinId()`, implement in `QLangVM.cpp` checking `m_scope`, array bounds, and table keys.

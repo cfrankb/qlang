@@ -95,7 +95,8 @@ enum class StmtKind {
   Break,     // break
   Label,     // :labelname (no-op marker, records PC for goto)
   Goto,      // goto labelname
-  GotoIf     // if cond goto label (conditional jump)
+  GotoIf,    // if cond goto label (conditional jump)
+  Switch     // switch (expr) { case ... : ... default: ... }
 };
 
 // Base statement node. Forward-declared so StmtPtr can be used inside Stmt.
@@ -161,6 +162,16 @@ struct Stmt {
   // GotoIf: if cond goto label (conditional jump).
   ExprPtr gotoIfCond;
   std::string gotoIfLabel;
+
+  // Switch: switch (expr) { case val : ... case in expr : ... default : ... }
+  ExprPtr switchExpr;
+  struct SwitchCase {
+    ExprPtr value;       // the case expression to match
+    bool isIn = false;   // true if `case in expr:` (membership test)
+    std::vector<StmtPtr> body;
+  };
+  std::vector<SwitchCase> cases;
+  std::vector<StmtPtr> defaultBody;
 };
 
 using StmtPtr = std::shared_ptr<Stmt>;
@@ -187,6 +198,7 @@ private:
   StmtPtr parseContinue();
   StmtPtr parseBreak();
   StmtPtr parseGoto();
+  StmtPtr parseSwitch();
   StmtPtr parseFunction();
   StmtPtr parseArrowClosure(const std::string &varName);
   bool looksLikeArrow() const;

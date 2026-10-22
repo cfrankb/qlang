@@ -34,7 +34,17 @@ int QLangCompiler::regOf(const std::string &name) const {
 }
 
 int QLangCompiler::emitConst(const QLangValue &value) {
-  return m_code.addConstant(value);
+  int idx = m_code.addConstant(value);
+  std::string valStr;
+  if (value.type() == QLangValue::Type::Int)
+    valStr = std::to_string(value.asInt());
+  else if (value.type() == QLangValue::Type::String)
+    valStr = value.asString();
+  else
+    valStr = std::string("(type=") + std::to_string((int)value.type()) + ")";
+  fprintf(stderr, "[DBG-CONST] Adding constant type=%d value=%s -> index=%d (pool size=%zu)\n",
+          (int)value.type(), valStr.c_str(), idx, m_code.constants().size());
+  return idx;
 }
 
 void QLangCompiler::emit(Opcode op, int a, int b, int c) {
@@ -314,6 +324,9 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
     }
     if (op == "=") {
       int t = tmpRegister();
+      fprintf(stderr, "[DBG-ASSIGN] Compiling assign to '%s' value kind=%d\n", s->name.c_str(), s->assignValue ? (int)s->assignValue->kind : -1);
+      if (s->assignValue && s->assignValue->kind == ExprKind::Literal && s->assignValue->literal.type() != QLangValue::Type::String)
+        fprintf(stderr, "[DBG-ASSIGN]   Literal value=%lld\n", (long long)s->assignValue->literal.asInt());
       compileExpr(s->assignValue, t);
       emit(Opcode::MOV, r, t);
       updateVarType(s->name, s->assignValue);
@@ -538,10 +551,18 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
     break;
   }
   case StmtKind::Break: {
-    if (m_loops.empty())
-      throw QLangError(QLangErrorKind::Parse, 0, 0,
-                       "'break' outside of a loop");
-    emit(Opcode::BREAK, m_loops.back().breakAddr);
+    if (!m_loops.empty()) {
+      emit(Opcode::BREAK, m_loops.back().breakAddr);
+      break;
+    }
+    if (!m_switches.empty()) {
+      // Record this break JMP for later patching once we know the switch end.
+      m_breakJmps.push_back(static_cast<int>(m_code.size()));
+      emit(Opcode::JMP, 0); // placeholder, patched in switch compilation
+      break;
+    }
+    throw QLangError(QLangErrorKind::Parse, 0, 0,
+                     "'break' outside of a loop or switch");
     break;
   }
   case StmtKind::Label: {
@@ -555,6 +576,114 @@ void QLangCompiler::compileStmt(const StmtPtr &s) {
       throw QLangError(QLangErrorKind::Parse, 0, 0,
                        "undefined label '" + s->gotoLabel + "'");
     emit(Opcode::JMP, lit->second);
+    break;
+  }
+  case StmtKind::Switch: {
+    // Compile the switch expression into a register.
+    int valReg = tmpRegister();
+    compileExpr(s->switchExpr, valReg);
+
+    // Push switch context so `break` inside case bodies jumps here.
+    // We'll patch the exit target after we know where switchEnd is.
+    m_switches.push_back(0); // placeholder, patched later
+
+    // Emit a comparison + conditional-jump chain for each case.
+    // For each case we emit:
+    //   [match check: EQ/IN] -> JMPIFTRUE -> [JMP to skip] -> [case body]
+    // After all cases, compile default, then emit JMP to switch end.
+    // The JMP after each case jumps to the next case's check (or switchEnd for last).
+    std::vector<int> caseMatchStarts; // instruction index of each case's match start (const emit)
+    std::vector<int> caseJmpiIfTrueIdx; // instruction index of each JMPIFTRUE
+    std::vector<int> caseSkipJmpIdx;    // JMP after JMPIFTRUE (skip to next case)
+    std::vector<int> caseExitJmpIdx;    // implicit JMP after case body (exit to switchEnd)
+    std::vector<int> caseBodyStarts;    // instruction index of each case body
+    for (size_t i = 0; i < s->cases.size(); i++) {
+      const auto &sc = s->cases[i];
+      int matchCheckIdx = static_cast<int>(m_code.size());
+      caseMatchStarts.push_back(matchCheckIdx);
+      // Emit the match check for this case.
+      int cmpReg = tmpRegister();
+      if (sc.isIn) {
+        int exprReg = tmpRegister();
+        compileExpr(sc.value, exprReg);
+        emit(Opcode::IN, cmpReg, valReg, exprReg);
+      } else {
+        int exprReg = tmpRegister();
+        compileExpr(sc.value, exprReg);
+        emit(Opcode::EQ, cmpReg, valReg, exprReg);
+      }
+      emit(Opcode::JMPIFTRUE, cmpReg, 0); // target to patch: jump to case body
+      caseJmpiIfTrueIdx.push_back(static_cast<int>(m_code.size()) - 1);
+      // Emit JMP to skip this case body (patched to next case or switchEnd).
+      int skipJmpIdx = static_cast<int>(m_code.size());
+      emit(Opcode::JMP, 0);
+      caseSkipJmpIdx.push_back(skipJmpIdx);
+      // Compile the case body, then emit an implicit JMP to skip remaining cases.
+      caseBodyStarts.push_back(static_cast<int>(m_code.size()));
+      for (auto &body : sc.body) {
+        fprintf(stderr, "[DBG-CASE] Case %zu body stmt kind=%d\n", i, (int)body->kind);
+        if (body->kind == StmtKind::Assignment) {
+          fprintf(stderr, "[DBG-CASE]   Assign op=%s value=", body->assignOp.text.c_str());
+          if (body->assignValue && body->assignValue->kind == ExprKind::Literal)
+            fprintf(stderr, "Literal:%d (type=%d)\n", (int)body->assignValue->literal.asInt(), (int)body->assignValue->literal.type());
+          else
+            fprintf(stderr, "non-literal\n");
+        }
+        compileStmt(body);
+      }
+      emit(Opcode::JMP, 0); // implicit exit: patched after default compiles
+      caseExitJmpIdx.push_back(static_cast<int>(m_code.size()) - 1);
+    }
+
+    // Compile the default body (if any).
+    int defaultBodyStart = static_cast<int>(m_code.size());
+    for (auto &db : s->defaultBody)
+      compileStmt(db);
+    int defaultBodyEnd = static_cast<int>(m_code.size());
+
+    // Now we know where switchEnd is (after all cases and default).
+    int switchEnd = static_cast<int>(m_code.size());
+    // Update the switch context with the real exit target.
+    m_switches.back() = switchEnd;
+    // Patch any break JMPs that were emitted with placeholder target 0.
+    for (int idx : m_breakJmps) {
+      m_code.at(idx).a = switchEnd;
+    }
+    m_breakJmps.clear();
+
+    // Patch all JMPIFTRUE targets to point at their case body start,
+    // skip-JMP targets to next case (or default body for last),
+    // and exit-JMP targets to switchEnd.
+    for (size_t i = 0; i < s->cases.size(); i++) {
+      m_code.at(caseJmpiIfTrueIdx[i]).b = caseBodyStarts[i];
+      if (i + 1 < s->cases.size())
+        m_code.at(caseSkipJmpIdx[i]).a = caseMatchStarts[i + 1];
+      else
+        m_code.at(caseSkipJmpIdx[i]).a = defaultBodyStart;
+      m_code.at(caseExitJmpIdx[i]).a = switchEnd;
+    }
+
+    // Pop switch context after patching is complete.
+    m_switches.pop_back();
+
+    // Debug: dump switch bytecode
+    fprintf(stderr, "[DBG-SW] switchEnd=%d instructions.size()=%zu\n", switchEnd, m_code.instructions().size());
+    for (size_t i = 0; i < m_code.instructions().size(); i++) {
+      auto &inst = m_code.instructions()[i];
+      fprintf(stderr, "[DBG-SW]   [%zu] op=%d a=%d b=%d c=%d\n", i, (int)inst.op, inst.a, inst.b, inst.c);
+    }
+    fprintf(stderr, "[DBG-SW] constants.size()=%zu\n", m_code.constants().size());
+    for (size_t i = 0; i < m_code.constants().size(); i++) {
+      const auto &c = m_code.constants()[i];
+      std::string cv;
+      if (c.type() == QLangValue::Type::Int)
+        cv = std::to_string(c.asInt());
+      else if (c.type() == QLangValue::Type::String)
+        cv = c.asString();
+      else
+        cv = std::string("(type=") + std::to_string((int)c.type()) + ")";
+      fprintf(stderr, "[DBG-SW]   const[%zu] type=%d str=%s\n", i, (int)c.type(), cv.c_str());
+    }
     break;
   }
   }

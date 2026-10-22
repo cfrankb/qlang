@@ -163,7 +163,7 @@ int main() {
   expectVal("array in table", "local t = {data=[1,2,3]}\nlocal r = t.data[1];", "r", 2);
 
   // -- NEW: closure in table literal + method call (spec §292–297) --
-  expectRun("closure in table", "local events:table = { onLoad = (name)[] { printf(\"onLOAD -->%s\\n\", name) } }\nevents.onLoad(\"test\")");
+  expectRun("closure in table", "local events:table = { onLoad = (name)[] { printf(\"onLOAD -->%s\n\", name) } }\nevents.onLoad(\"test\")");
   expectStr("closure in table return", "local events:table = { greet = (who)[] { return \"hi \" + who } }\nlocal r = events.greet(\"world\");", "r", "hi world");
   expectVal("method call via var", "local f = (x)[] { return x * 2 }\nlocal r = f(21);", "r", 42);
   expectVal("member call no args", "local t:table = { val = 99 }\nlocal r = t.val;", "r", 99);
@@ -177,9 +177,9 @@ int main() {
   expectVal("bool in if", "local b:bool = false\nlocal r = 0\nif !b then r = 1 end\nlocal result = r;", "result", 1);
   expectRun("bool const", "const flag:bool = true");
 
-  // -- NEW: range/slice reserved-word status --
-  expectThrow("range as ident", "local range = 1");
-  expectThrow("slice as ident", "local slice = 1");
+  // -- NEW: slice as builtin (not keyword) — can be used as identifier --
+  expectVal("slice as ident", "local slice = 42\nlocal r = slice;", "r", 42);
+  expectRun("slice as builtin call", "local a = [1,2,3]\nlocal b = slice(a, 0, 1)\nlocal n = len(b);");
 
   // -- NEW: char type (spec §18) --
   expectVal("char typed -50", "local c:char = -50\nlocal r = c;", "r", -50);
@@ -198,6 +198,15 @@ int main() {
   expectStr("dword max u32", "local d:dword = 4294967295\nlocal s = toStr(d);", "s", "4294967295");
   expectRun("dword const", "const big:dword = 10000000000");
   expectVal("dword arithmetic", "local a:dword = 100\nlocal b:dword = 200\nlocal r = a + b;", "r", 300);
+
+  // -- NEW: switch/case/default (spec §208-221) --
+  expectVal("switch basic int", "local x = 2\nswitch (x) {\n  case 1: x = 10\n  case 2: x = 20\n  case 3: x = 30\n  default: x = 99\n}\nlocal r = x;", "r", 20);
+  expectVal("switch basic string", "local x = \"hello\"\nswitch (x) {\n  case \"world\": x = 1\n  case \"hello\": x = 2\n  default: x = 3\n}\nlocal r = x;", "r", 2);
+  expectVal("switch default", "local x = 99\nswitch (x) {\n  case 1: x = 1\n  case 2: x = 2\n  default: x = 999\n}\nlocal r = x;", "r", 999);
+  expectVal("switch break", "local x = 2\nlocal result = 0\nswitch (x) {\n  case 1: result = 1; break\n  case 2: result = 2; break\n  default: result = 99\n}\nlocal r = result;", "r", 2);
+  expectVal("switch in case", "local x = 3\nswitch (x) {\n  case in [1,2]: x = 10\n  case in [3,4,5]: x = 30\n  default: x = 99\n}\nlocal r = x;", "r", 30);
+  expectVal("switch range case", "local x = 15\nswitch (x) {\n  case in range(1,10): x = 1\n  case in range(11,20): x = 2\n  default: x = 99\n}\nlocal r = x;", "r", 2);
+  expectRun("switch empty", "local x = 1\nswitch (x) {\n  default:\n}");
 
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;

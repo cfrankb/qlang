@@ -95,6 +95,8 @@ private:
   // `+=` (array append vs. string/number add) and array/table access.
   std::unordered_map<std::string, QLangValue::Type> m_varTypes;
   std::vector<LoopCtx> m_loops; // enclosing-loop targets for continue/break
+  std::vector<int> m_switches;  // enclosing-switch end targets for break
+  std::vector<int> m_breakJmps; // instruction indices of unpatched break JMPs
   std::unordered_map<std::string, int> m_labels; // label name -> instruction index (per-scope)
   int m_nextReg = 0;
 };

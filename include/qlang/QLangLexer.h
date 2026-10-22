@@ -56,6 +56,9 @@ enum class TokenType {
   Label,       // :label (label declaration)
   Range,       // range (reserved; used as builtin function)
   Slice,       // slice (reserved; used as builtin function)
+  Switch,      // switch statement keyword
+  Case,        // case clause keyword
+  Default,     // default clause keyword
   True,        // true
   False,       // false
 

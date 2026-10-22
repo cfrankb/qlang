@@ -101,6 +101,7 @@ StmtPtr QLangParser::parseStatement() {
   if (check(TokenType::Continue)) return parseContinue();
   if (check(TokenType::Break)) return parseBreak();
   if (check(TokenType::Goto)) return parseGoto();
+  if (check(TokenType::Switch)) return parseSwitch();
 
   if (check(TokenType::Def)) return parseFunction();
   if (check(TokenType::Return)) return parseReturn();
@@ -545,11 +546,50 @@ StmtPtr QLangParser::parseGoto() {
   int line = current().line, col = current().col;
   (void)line;
   (void)col;
-  consume(TokenType::Goto, "'goto'");
+  consume(TokenType::Goto, "\"goto\"");
   auto stmt = std::make_shared<Stmt>();
   stmt->kind = StmtKind::Goto;
   stmt->gotoLabel = consume(TokenType::Ident, "label name after 'goto'").value;
   match(TokenType::Semicolon);
+  return stmt;
+}
+
+StmtPtr QLangParser::parseSwitch() {
+  int line = current().line, col = current().col;
+  (void)line;
+  (void)col;
+  consume(TokenType::Switch, "'switch'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Switch;
+  consume(TokenType::LParen, "'(' after 'switch'");
+  stmt->switchExpr = parseExpression();
+  consume(TokenType::RParen, "')' after switch expression");
+  consume(TokenType::LBrace, "'{' to open switch body");
+
+  while (!check(TokenType::RBrace) && !atEnd()) {
+    if (check(TokenType::Case)) {
+      consume(TokenType::Case, "'case'");
+      auto swCase = Stmt::SwitchCase{};
+      bool isIn = match(TokenType::In);
+      swCase.isIn = isIn;
+      swCase.value = parseExpression();
+      consume(TokenType::Colon, "':' after case expression");
+      while (!check(TokenType::Case) && !check(TokenType::Default) &&
+             !check(TokenType::RBrace) && !atEnd())
+        swCase.body.push_back(parseStatement());
+      stmt->cases.push_back(std::move(swCase));
+    } else if (check(TokenType::Default)) {
+      consume(TokenType::Default, "'default'");
+      consume(TokenType::Colon, "':' after 'default'");
+      while (!check(TokenType::Case) && !check(TokenType::Default) &&
+             !check(TokenType::RBrace) && !atEnd())
+        stmt->defaultBody.push_back(parseStatement());
+    } else {
+      throw QLangError(QLangErrorKind::Parse, current().line, current().col,
+                       "expected 'case' or 'default' inside switch body");
+    }
+  }
+  consume(TokenType::RBrace, "'}' to close switch");
   return stmt;
 }
 

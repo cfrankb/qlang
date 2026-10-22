@@ -26,7 +26,9 @@ TokenType keywordType(const std::string &text) {
   if (text == "break") return TokenType::Break;
   if (text == "goto") return TokenType::Goto;
   if (text == "range") return TokenType::Range;
-  if (text == "slice") return TokenType::Slice;
+  if (text == "switch") return TokenType::Switch;
+  if (text == "case") return TokenType::Case;
+  if (text == "default") return TokenType::Default;
   if (text == "true") return TokenType::True;
   if (text == "false") return TokenType::False;
   if (text == "bool") return TokenType::TypeBool;
