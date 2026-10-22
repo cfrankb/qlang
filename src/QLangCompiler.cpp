@@ -87,6 +87,7 @@ CompiledProgram QLangCompiler::compile() {
   for (auto &fn : m_functions)
     out.functions.push_back(std::move(fn));
 
+
   Bytecode outCode;
   outCode.setInstructions(out.functions[0].instructions);
   outCode.setConstants(out.functions[0].constants);

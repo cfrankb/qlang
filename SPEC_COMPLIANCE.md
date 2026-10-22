@@ -11,7 +11,7 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 **138 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
 
-Line numbers below are against the CURRENT SPEC.md (7651 bytes, 456 lines).
+Line numbers below are against the CURRENT SPEC.md (11200 bytes, 576 lines).
 
 ## Legend
 
@@ -80,13 +80,20 @@ Line numbers below are against the CURRENT SPEC.md (7651 bytes, 456 lines).
 
 ## Missing vs Spec
 
-|| Spec | Item | Status |
-|------|------|--------|
-| §C++ interface | `set(name, value, isConst=false)` | ✓ implemented | Merged injectConst/injectGlobal into single `set()` with third `isConst` param. Seeds var into scope; when true, adds to `m_injectedConsts` so VM skips end-of-run sync and compiler's `guardNotConst()` rejects QLang assignment. |
+All items below are implemented and verified. Table retained for traceability.
+
+| Spec | Item | Status | Notes |
+|------|------|--------|-------|
+| §C++ interface | `set(name, value, isConst=false)` | ✓ implemented | Merged `injectConst`/`injectGlobal` into single `set()` with third `isConst` param. Seeds var into scope; when true, adds to `m_injectedConsts` so VM skips end-of-run sync and compiler's `guardNotConst()` rejects QLang assignment. |
 | §C++ interface | helpers to create `QValue` from common C++ types | ✓ implemented | `include/qlang/QValue.h` provides `using QValue = QLangValue;` and free helpers: `qval_nil`, `qval_bool`, `qval_byte`, `qval_char`, `qval_word`, `qval_short`, `qval_int`, `qval_unsigned`, `qval_dword`, `qval_float`, `qval_str` (3 overloads), `qval_blob`, `qval_array`, `qval_table`. |
 | §C++ interface | `setFunc(name, func)` — inject C++ function | ✓ implemented | `QLangContext::setFunc()` registers a native function. Callback signature: `std::function<QLangValue(QLangContext&, const std::vector<QLangValue>&)>` — context first (Lua convention). Compiler assigns negative opcode indices (-1, -2, …); VM dispatches `CALL` with `i.b < 0` via `m_prog.nativeFuncs[idx]`. |
 | §C++ interface | `CompiledProgram::nativeFuncs` | ✓ implemented | `std::vector<QLangContext::NativeFunc>` on `CompiledProgram`; populated from `m_nativeFuncs` at compile time in `QLangContext::run()`. VM reads it directly — no runtime lookup by name. |
+| §C++ interface | `Context::call(name, args)` | ✓ implemented | Looks up native funcs first, then scans `compiled.functions[1..]` by name. Creates a fresh `QLangVM` and calls `callFunction()`. Cached compiled program stored in `Pimpl::compiled`. |
+| §C++ interface | `VM::callFunction(funcIndex, args)` | ✓ implemented | Creates a host caller frame, pushes callee via `pushCall()`, runs manual opcode loop until callee returns (`m_cur` drops below callee frame index), captures result from `regs[0]`, restores state, returns result. |
+| §C++ interface | `VM::runFrames(startFrame)` | ✓ implemented | Extracted VM loop from `run()` for reuse by `callFunction()`. Runs until `m_cur < startFrame`. |
 | §C++ interface | `CompiledProgram::constVars` | ✓ implemented | New field on `CompiledProgram`; populated from `m_constVars` at compile time (includes both `const`-declared and injected consts). VM uses it to skip scope sync for const vars. |
+| §global scope visibility | `global a, b` keyword | ✗ not implemented | Spec §532–564 describes `global` to import injected/global vars into function scope. No `Global` token in lexer; `global` is not in `keywordType()`. Without it, global vars are invisible in function scope (undeclared variable error). |
+| §strings (f-strings) | Python-style `f"Total: ${price:.2f}"` | ✗ not implemented | Spec §567–575 describes f-string syntax. No lexer/parser support yet. |
 
 ## Extensions Beyond Spec (present in implementation, absent from spec)
 

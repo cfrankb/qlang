@@ -834,7 +834,7 @@ void QLangVM::run() {
     case Opcode::RETURN: {
       // Capture the callee's return value and its caller-dest before unwinding
       // (the deque keeps frame pointers stable, so the caller frame is valid).
-      QLangValue retVal = frame.regs[0];
+      QLangValue retVal = frame.regs.empty() ? QLangValue() : frame.regs[0];
       int dest = frame.callDest;
       if (m_cur == 0) {
         // Returning from main: sync the frame back into the scope before
@@ -900,6 +900,526 @@ void QLangVM::run() {
     }
     frame.pc += 1;
   }
+}
+
+void QLangVM::runFrames(int startFrame)
+{
+  while (m_cur >= startFrame) {
+    Frame &frame = m_frames[m_cur];
+    const Function &fn = m_prog.functions[frame.funcIndex];
+    const auto &instrs = fn.instructions;
+    const auto &consts = fn.constants;
+
+    if (frame.pc >= instrs.size()) {
+      // Fell off the end: unwind with nil.
+      m_frames.pop_back();
+      m_cur--;
+      continue;
+    }
+
+    if (++m_steps > kMaxSteps)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "max instruction steps exceeded (possible infinite loop)");
+
+    const Instruction &i = instrs[frame.pc];
+    Opcode op = i.op;
+
+    switch (op) {
+    case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
+    case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
+    case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::CONV:
+      frame.regs[i.a] = convert(frame.regs[i.b],
+                                static_cast<QLangValue::Type>(i.c));
+      break;
+    case Opcode::DELETE:
+      m_deleted.insert(i.a);
+      break;
+    case Opcode::ARRGET: {
+      QLangValue &base = frame.regs[i.b];
+      if (base.type() != QLangValue::Type::Array)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot subscript non-array value");
+      int64_t idx = toInt64(frame.regs[i.c]);
+      const auto &elems = base.asArray();
+      if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "array index out of range");
+      frame.regs[i.a] = elems[static_cast<size_t>(idx)];
+      break;
+    }
+    case Opcode::ARRPUT: {
+      QLangValue &base = frame.regs[i.a];
+      if (base.type() != QLangValue::Type::Array)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot subscript non-array value");
+      int64_t idx = toInt64(frame.regs[i.b]);
+      auto &elems = base.asArray();
+      if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "array index out of range");
+      elems[static_cast<size_t>(idx)] = frame.regs[i.c];
+      break;
+    }
+    case Opcode::ARRAPP: {
+      QLangValue &base = frame.regs[i.a];
+      if (base.type() != QLangValue::Type::Array)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot append to non-array value");
+      base.asArray().push_back(frame.regs[i.b]);
+      break;
+    }
+    case Opcode::ARRAPPV: {
+      QLangValue &base = frame.regs[i.a];
+      if (base.type() != QLangValue::Type::Array)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot append non-array to array");
+      if (frame.regs[i.b].type() != QLangValue::Type::Array)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot append non-array to array");
+      auto &elems = base.asArray();
+      const auto &extra = frame.regs[i.b].asArray();
+      elems.insert(elems.end(), extra.begin(), extra.end());
+      break;
+    }
+    case Opcode::ARRLEN:
+      frame.regs[i.a] =
+          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+      break;
+    case Opcode::LEN:
+      frame.regs[i.a] =
+          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+      break;
+    case Opcode::SEQGET:
+      frame.regs[i.a] = seqGet(frame.regs[i.b], toInt64(frame.regs[i.c]));
+      break;
+    case Opcode::TABGET: {
+      QLangValue &base = frame.regs[i.b];
+      if (base.type() != QLangValue::Type::Table)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot access member of non-table value");
+      const std::string &key = valueToString(frame.regs[i.c]);
+      const auto &kv = base.asTable();
+      auto it = kv.find(key);
+      if (it == kv.end())
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "table has no member '" + key + "'");
+      frame.regs[i.a] = it->second;
+      break;
+    }
+    case Opcode::TABCREATE: {
+      frame.regs[i.a] = QLangValue::Table(TableValue{});
+      break;
+    }
+    case Opcode::TABPUT: {
+      QLangValue &base = frame.regs[i.a];
+      if (base.type() != QLangValue::Type::Table)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot assign member of non-table value");
+      const std::string &key = valueToString(frame.regs[i.b]);
+      base.asTable()[key] = frame.regs[i.c];
+      break;
+    }
+    case Opcode::CALL: {
+      int dest = i.a;
+      int argCount = i.c;
+      std::vector<QLangValue> callArgs;
+      callArgs.reserve(argCount);
+      for (int k = 0; k < argCount; k++)
+        callArgs.push_back(frame.regs[dest + 1 + k]);
+      if (i.b < 0) {
+        int idx = -1 - i.b;
+        if (idx < 0 || idx >= static_cast<int>(m_prog.nativeFuncs.size()))
+          throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown native function");
+        frame.regs[dest] = m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, callArgs);
+      } else {
+        frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), callArgs, m_scope, m_prog, m_deleted);
+      }
+      break;
+    }
+    case Opcode::CALLFN: {
+      frame.pc += 1;
+      pushCall(i.b, frame.regs, i.a, i.c);
+      const Function &calleeFn = m_prog.functions[i.b];
+      m_frames[m_cur].captures = calleeFn.captures;
+      for (auto &cr : m_frames[m_cur].captures)
+        cr.frame = &m_frames[m_cur - 1];
+      continue;
+    }
+    case Opcode::CALLCLOS: {
+      const QLangValue &cv = frame.regs[i.a];
+      if (cv.type() != QLangValue::Type::Function)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "attempt to call a non-function value");
+      frame.pc += 1;
+      pushCall(cv.asFunction().funcIndex, frame.regs, i.a, i.c);
+      m_frames[m_cur].captures = cv.asFunction().captures;
+      continue;
+    }
+    case Opcode::MAKEFUNC: {
+      const QLangValue &cv = consts[i.b];
+      if (cv.type() != QLangValue::Type::Function)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "invalid function constant");
+      const Closure &spec = cv.asFunction();
+      auto closure = std::make_shared<Closure>();
+      closure->funcIndex = spec.funcIndex;
+      for (const CaptureRef &cr : spec.captures) {
+        CaptureRef bound;
+        bound.frame = &m_frames[m_cur];
+        bound.reg = cr.reg;
+        closure->captures.push_back(bound);
+      }
+      frame.regs[i.a] = QLangValue::Function(std::move(closure));
+      break;
+    }
+    case Opcode::REFLOAD: {
+      const CaptureRef &cr = frame.captures[i.b];
+      auto *framePtr = static_cast<Frame *>(cr.frame);
+      frame.regs[i.a] = framePtr->regs[cr.reg];
+      break;
+    }
+    case Opcode::REFSTORE: {
+      CaptureRef &cr = frame.captures[i.b];
+      auto *framePtr = static_cast<Frame *>(cr.frame);
+      framePtr->regs[cr.reg] = frame.regs[i.a];
+      break;
+    }
+    case Opcode::RETURN: {
+      QLangValue retVal = frame.regs.empty() ? QLangValue() : frame.regs[0];
+      m_frames.pop_back();
+      m_cur--;
+      if (m_cur >= 0)
+        m_frames[m_cur].regs[frame.callDest] = retVal;
+      continue;
+    }
+    case Opcode::ADD:
+    case Opcode::SUB:
+    case Opcode::MUL:
+    case Opcode::DIV:
+    case Opcode::AND:
+    case Opcode::OR:
+    case Opcode::XOR:
+    case Opcode::SHL:
+    case Opcode::SHR:
+    case Opcode::LAND:
+    case Opcode::LOR:
+    case Opcode::EQ:
+    case Opcode::NE:
+    case Opcode::LT:
+    case Opcode::GT:
+    case Opcode::LE:
+    case Opcode::GE:
+    case Opcode::MOD:
+    case Opcode::POW:
+    case Opcode::IN:
+      frame.regs[i.a] = doBinary(op, frame.regs[i.b], frame.regs[i.c]);
+      break;
+    case Opcode::JMP:
+      frame.pc = static_cast<size_t>(i.a);
+      continue;
+    case Opcode::JMPIFTRUE:
+      if (isTrue(frame.regs[i.a]))
+        frame.pc = static_cast<size_t>(i.b);
+      else
+        frame.pc = frame.pc + 1;
+      continue;
+    case Opcode::CONTINUE:
+      frame.pc = static_cast<size_t>(i.a);
+      continue;
+    case Opcode::BREAK:
+      frame.pc = static_cast<size_t>(i.a);
+      continue;
+    case Opcode::JMPIFFALSE:
+      if (!isTrue(frame.regs[i.a]))
+        frame.pc = static_cast<size_t>(i.b);
+      else
+        frame.pc = frame.pc + 1;
+      continue;
+    }
+    frame.pc += 1;
+  }
+}
+
+QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &args)
+{
+  if (funcIndex < 0 || funcIndex >= static_cast<int>(m_prog.functions.size()))
+    throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown function");
+
+  // Save current state so we can restore after the call.
+  int savedCur = m_cur;
+  size_t savedFramesSize = m_frames.size();
+
+  // Create a temporary caller regs vector for pushCall.
+  std::vector<QLangValue> callerRegs(static_cast<size_t>(args.size() + 1), QLangValue());
+  for (size_t k = 0; k < args.size(); ++k)
+    callerRegs[1 + k] = args[k];
+
+  // pushCall pushes the callee frame. We pass dest=0 so args are copied from
+  // callerRegs[1..argc] into the callee's regs[0..argc-1]. The result will
+  // be stored in the callee's reg 0 on RETURN.
+  pushCall(funcIndex, callerRegs, 0, static_cast<int>(args.size()));
+
+  // Bind captures for the new callee frame.
+  const Function &calleeFn = m_prog.functions[funcIndex];
+  m_frames[m_cur].captures = calleeFn.captures;
+  for (auto &cr : m_frames[m_cur].captures)
+    cr.frame = &m_frames[m_cur - 1];
+
+  // The callee frame index.
+  int calleeFrameIdx = m_cur;
+
+  // Run the VM manually until the callee returns (m_cur drops below calleeFrameIdx).
+  while (m_cur >= calleeFrameIdx) {
+    Frame &frame = m_frames[m_cur];
+    const Function &fn = m_prog.functions[frame.funcIndex];
+    const auto &instrs = fn.instructions;
+    const auto &consts = fn.constants;
+
+    if (frame.pc >= instrs.size()) {
+      // Fell off the end: unwind with nil.
+      m_frames.pop_back();
+      m_cur--;
+      continue;
+    }
+
+    if (++m_steps > kMaxSteps)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "max instruction steps exceeded (possible infinite loop)");
+
+    const Instruction &i = instrs[frame.pc];
+    Opcode op = i.op;
+
+    switch (op) {
+    case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
+    case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
+    case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::CONV:
+      frame.regs[i.a] = convert(frame.regs[i.b],
+                                static_cast<QLangValue::Type>(i.c));
+      break;
+    case Opcode::DELETE:
+      m_deleted.insert(i.a);
+      break;
+    case Opcode::ARRGET: {
+      QLangValue &base = frame.regs[i.b];
+      if (base.type() != QLangValue::Type::Array)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot subscript non-array value");
+      int64_t idx = toInt64(frame.regs[i.c]);
+      const auto &elems = base.asArray();
+      if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "array index out of range");
+      frame.regs[i.a] = elems[static_cast<size_t>(idx)];
+      break;
+    }
+    case Opcode::ARRPUT: {
+      QLangValue &base = frame.regs[i.a];
+      if (base.type() != QLangValue::Type::Array)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot subscript non-array value");
+      int64_t idx = toInt64(frame.regs[i.b]);
+      auto &elems = base.asArray();
+      if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "array index out of range");
+      elems[static_cast<size_t>(idx)] = frame.regs[i.c];
+      break;
+    }
+    case Opcode::ARRAPP: {
+      QLangValue &base = frame.regs[i.a];
+      if (base.type() != QLangValue::Type::Array)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot append to non-array value");
+      base.asArray().push_back(frame.regs[i.b]);
+      break;
+    }
+    case Opcode::ARRAPPV: {
+      QLangValue &base = frame.regs[i.a];
+      if (base.type() != QLangValue::Type::Array)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot append non-array to array");
+      if (frame.regs[i.b].type() != QLangValue::Type::Array)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot append non-array to array");
+      auto &elems = base.asArray();
+      const auto &extra = frame.regs[i.b].asArray();
+      elems.insert(elems.end(), extra.begin(), extra.end());
+      break;
+    }
+    case Opcode::ARRLEN:
+      frame.regs[i.a] =
+          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+      break;
+    case Opcode::LEN:
+      frame.regs[i.a] =
+          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+      break;
+    case Opcode::SEQGET:
+      frame.regs[i.a] = seqGet(frame.regs[i.b], toInt64(frame.regs[i.c]));
+      break;
+    case Opcode::TABGET: {
+      QLangValue &base = frame.regs[i.b];
+      if (base.type() != QLangValue::Type::Table)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot access member of non-table value");
+      const std::string &key = valueToString(frame.regs[i.c]);
+      const auto &kv = base.asTable();
+      auto it = kv.find(key);
+      if (it == kv.end())
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "table has no member '" + key + "'");
+      frame.regs[i.a] = it->second;
+      break;
+    }
+    case Opcode::TABCREATE: {
+      frame.regs[i.a] = QLangValue::Table(TableValue{});
+      break;
+    }
+    case Opcode::TABPUT: {
+      QLangValue &base = frame.regs[i.a];
+      if (base.type() != QLangValue::Type::Table)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot assign member of non-table value");
+      const std::string &key = valueToString(frame.regs[i.b]);
+      base.asTable()[key] = frame.regs[i.c];
+      break;
+    }
+    case Opcode::CALL: {
+      int dest = i.a;
+      int argCount = i.c;
+      std::vector<QLangValue> callArgs;
+      callArgs.reserve(argCount);
+      for (int k = 0; k < argCount; k++)
+        callArgs.push_back(frame.regs[dest + 1 + k]);
+      if (i.b < 0) {
+        int idx = -1 - i.b;
+        if (idx < 0 || idx >= static_cast<int>(m_prog.nativeFuncs.size()))
+          throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown native function");
+        frame.regs[dest] = m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, callArgs);
+      } else {
+        frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), callArgs, m_scope, m_prog, m_deleted);
+      }
+      break;
+    }
+    case Opcode::CALLFN: {
+      frame.pc += 1;
+      pushCall(i.b, frame.regs, i.a, i.c);
+      const Function &calleeFn2 = m_prog.functions[i.b];
+      m_frames[m_cur].captures = calleeFn2.captures;
+      for (auto &cr : m_frames[m_cur].captures)
+        cr.frame = &m_frames[m_cur - 1];
+      continue;
+    }
+    case Opcode::CALLCLOS: {
+      const QLangValue &cv = frame.regs[i.a];
+      if (cv.type() != QLangValue::Type::Function)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "attempt to call a non-function value");
+      frame.pc += 1;
+      pushCall(cv.asFunction().funcIndex, frame.regs, i.a, i.c);
+      m_frames[m_cur].captures = cv.asFunction().captures;
+      continue;
+    }
+    case Opcode::MAKEFUNC: {
+      const QLangValue &cv = consts[i.b];
+      if (cv.type() != QLangValue::Type::Function)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "invalid function constant");
+      const Closure &spec = cv.asFunction();
+      auto closure = std::make_shared<Closure>();
+      closure->funcIndex = spec.funcIndex;
+      for (const CaptureRef &cr : spec.captures) {
+        CaptureRef bound;
+        bound.frame = &m_frames[m_cur];
+        bound.reg = cr.reg;
+        closure->captures.push_back(bound);
+      }
+      frame.regs[i.a] = QLangValue::Function(std::move(closure));
+      break;
+    }
+    case Opcode::REFLOAD: {
+      const CaptureRef &cr = frame.captures[i.b];
+      auto *framePtr = static_cast<Frame *>(cr.frame);
+      frame.regs[i.a] = framePtr->regs[cr.reg];
+      break;
+    }
+    case Opcode::REFSTORE: {
+      CaptureRef &cr = frame.captures[i.b];
+      auto *framePtr = static_cast<Frame *>(cr.frame);
+      framePtr->regs[cr.reg] = frame.regs[i.a];
+      break;
+    }
+    case Opcode::RETURN: {
+      // Capture the result BEFORE unwinding.
+      QLangValue retVal = frame.regs.empty() ? QLangValue() : frame.regs[0];
+      m_frames.pop_back();
+      m_cur--;
+      // Restore state and return.
+      while (m_frames.size() > savedFramesSize)
+        m_frames.pop_back();
+      m_cur = savedCur;
+      return retVal;
+    }
+    case Opcode::ADD:
+    case Opcode::SUB:
+    case Opcode::MUL:
+    case Opcode::DIV:
+    case Opcode::AND:
+    case Opcode::OR:
+    case Opcode::XOR:
+    case Opcode::SHL:
+    case Opcode::SHR:
+    case Opcode::LAND:
+    case Opcode::LOR:
+    case Opcode::EQ:
+    case Opcode::NE:
+    case Opcode::LT:
+    case Opcode::GT:
+    case Opcode::LE:
+    case Opcode::GE:
+    case Opcode::MOD:
+    case Opcode::POW:
+    case Opcode::IN:
+      frame.regs[i.a] = doBinary(op, frame.regs[i.b], frame.regs[i.c]);
+      break;
+    case Opcode::JMP:
+      frame.pc = static_cast<size_t>(i.a);
+      continue;
+    case Opcode::JMPIFTRUE:
+      if (isTrue(frame.regs[i.a]))
+        frame.pc = static_cast<size_t>(i.b);
+      else
+        frame.pc = frame.pc + 1;
+      continue;
+    case Opcode::CONTINUE:
+      frame.pc = static_cast<size_t>(i.a);
+      continue;
+    case Opcode::BREAK:
+      frame.pc = static_cast<size_t>(i.a);
+      continue;
+    case Opcode::JMPIFFALSE:
+      if (!isTrue(frame.regs[i.a]))
+        frame.pc = static_cast<size_t>(i.b);
+      else
+        frame.pc = frame.pc + 1;
+      continue;
+    }
+    frame.pc += 1;
+  }
+
+  // Fell off the end without a RETURN.
+  while (m_frames.size() > savedFramesSize)
+    m_frames.pop_back();
+  m_cur = savedCur;
+  return QLangValue();
 }
 
 } // namespace qlang

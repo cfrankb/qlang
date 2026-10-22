@@ -22,6 +22,15 @@ public:
 
   void run();
 
+  // Call a QLang or native function by index from within the VM. Creates a
+  // host caller frame, pushes the callee, runs until it returns, then pops
+  // the host frame and returns the result.
+  QLangValue callFunction(int funcIndex, const std::vector<QLangValue> &args);
+
+  // Run the VM loop starting from the given frame index until the frame
+  // pointer drops below startFrame. Used by both run() and callFunction().
+  void runFrames(int startFrame);
+
   // Number of registers allocated (for debugging / assertions).
   int registerCount() const { return static_cast<int>(m_registers.size()); }
 

@@ -1,6 +1,8 @@
 #pragma once
 
 #include <functional>
+#include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -19,6 +21,7 @@ namespace qlang
   {
   public:
     QLangContext();
+    ~QLangContext();
 
     // Parse source text into a list of statements. Throws QLangError on
     // lex/parse failure.
@@ -37,6 +40,13 @@ namespace qlang
     void remove(const std::string &name);
     void clear();
 
+    // Call a QLang or native function by name from C++.
+    // Looks up the function in native funcs first, then in compiled user
+    // functions. Returns the function's return value (nil if none).
+    // Compiles the program on first use; subsequent calls reuse the cached
+    // compilation.
+    QLangValue call(const std::string &name, const std::vector<QLangValue> &args = {});
+
     // Inject a C++ function callable from QLang. Called like a builtin:
     //   result = myFunc(arg1, arg2)
     // The first argument is the context (like Lua's lua_State*), followed by
@@ -46,6 +56,9 @@ namespace qlang
     const std::unordered_map<std::string, NativeFunc> &nativeFuncs() const { return m_nativeFuncs; }
 
   private:
+    // Pimpl: holds the compiled program without creating a circular include.
+    struct Pimpl;
+    std::unique_ptr<Pimpl> m_pimpl;
     std::unordered_map<std::string, QLangValue> m_vars;
     std::unordered_set<std::string> m_injectedConsts;
     std::unordered_map<std::string, NativeFunc> m_nativeFuncs;

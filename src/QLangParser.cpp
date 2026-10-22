@@ -825,7 +825,7 @@ ExprPtr QLangParser::parsePrimary() {
     auto node = std::make_shared<Expr>();
     node->kind = ExprKind::Literal;
     node->literal = QLangValue::String(tok.value);
-    return node;
+return node;
   }
   case TokenType::Char: {
     m_pos++;

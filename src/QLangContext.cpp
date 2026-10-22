@@ -10,7 +10,16 @@
 namespace qlang
 {
 
-  QLangContext::QLangContext() = default;
+  // Pimpl definition — breaks the circular include with QLangCompiler.h.
+  struct QLangContext::Pimpl
+  {
+    std::optional<CompiledProgram> compiled;
+  };
+
+  QLangContext::QLangContext()
+  {
+    m_pimpl = std::make_unique<Pimpl>();
+  }
 
   std::vector<StmtPtr> QLangContext::parse(const std::string &source)
   {
@@ -41,7 +50,9 @@ namespace qlang
         compiled.nativeFuncs[static_cast<size_t>(idx)] = func;
       }
     }
-    QLangVM vm(compiled, *this);
+    // Cache the compiled program for subsequent call() invocations.
+    m_pimpl->compiled = std::move(compiled);
+    QLangVM vm(m_pimpl->compiled.value(), *this);
     vm.run();
   }
 
@@ -89,6 +100,37 @@ namespace qlang
   void QLangContext::setFunc(const std::string &name, NativeFunc func)
   {
     m_nativeFuncs[name] = std::move(func);
+  }
+
+  QLangContext::~QLangContext() = default;
+
+  QLangValue QLangContext::call(const std::string &name, const std::vector<QLangValue> &args)
+  {
+    // Check native funcs first.
+    auto it = m_nativeFuncs.find(name);
+    if (it != m_nativeFuncs.end())
+      return it->second(*this, args);
+
+    // Ensure we have a compiled program.
+    if (!m_pimpl->compiled.has_value())
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "no program compiled; call run() first");
+
+    // Look up the function by name in the compiled program.
+    const auto &functions = m_pimpl->compiled.value().functions;
+    int funcIndex = -1;
+    for (int i = static_cast<int>(functions.size()) - 1; i >= 1; --i) {
+      if (functions[static_cast<size_t>(i)].name == name) {
+        funcIndex = i;
+        break;
+      }
+    }
+    if (funcIndex < 0)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "undefined function '" + name + "'");
+
+    QLangVM vm(m_pimpl->compiled.value(), *this);
+    return vm.callFunction(funcIndex, args);
   }
 
 } // namespace qlang

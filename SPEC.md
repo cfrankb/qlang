@@ -1,8 +1,10 @@
-overview
+instructions
 ==========
 
 scripting language that interfaces with C++
 this language will compile to bytecode.
+
+QLang uses a python-like syntax.
 
 new class QLangContext will host the interpreter context. 
 
@@ -10,7 +12,8 @@ default variable scope is local
 
 this first version will parse text within a context.
 
-SPEC_COMPLIANCE.md should track the hash of SPEC.md
+`SPEC_COMPLIANCE.md` should track the hash of SPEC.md
+always update `SPEC_COMPLIANCE.md`.
 
 variable types
 ===============
@@ -68,12 +71,15 @@ case
 default
 type
 join
+global
+const
+end
 ```
 
 constants
 =========
 
-```
+```python
 const # declare a constant
 
 const year = 2026;
@@ -83,7 +89,7 @@ const month:byte = 10;
 comments 
 =======================
 
-```
+```python
 # comment
 ```
 
@@ -96,14 +102,16 @@ boolean evaluation
 |string| empty => false; non-empty => true
 |array| empty => false; non-empty => true
 |table| empty => false; non-empty => true
+|blob| empty => false; non-empty => true
 |number| 0 => false; non-zero => true
+|nil| false
 
 
 
 declarations
 =======================
 
-```
+```python
 local a1  # default variable type int. default value 0
 local result = true # boolean
 result = false # boolean
@@ -170,7 +178,7 @@ local events:table = {
 conditional
 =======================
 
-```
+```python
 
 if (a == 32) || (b==32) {
 
@@ -209,7 +217,7 @@ if a == 1 return false;
 
 switch
 =======
-```
+```python
 switch (var) {
    case "string2":
    case "string1":
@@ -225,7 +233,7 @@ switch (var) {
 loops
 =======================================
 
-```
+```python
 
 for x = 1 to 32
 next x
@@ -297,7 +305,7 @@ for i in range(1,10) {
 label/goto
 ================
 
-```
+```python
 
 a = 10
 
@@ -383,7 +391,7 @@ build-in functions
 |isset(var)| return true if variable, array index or table field exists. otherwise returns false
 |join(separator, arr)| join the array element using separator
 
-```
+```python
 a = [1,2,3]
 println(join(", ", a))
 # output: 1, 2, 3
@@ -391,16 +399,13 @@ println(join(", ", a))
 a = [1,2,3,4,5]
 b = slice(a, 0, 2)
 # b = [1,2]
-
-
 ```
 
 
 functions (qlang native)
 ==================
 
-```
-
+```python
 def function_name(param1, param2)
 end
 
@@ -452,7 +457,7 @@ C++ interface
 Injected host variables are available to QLang code via the
 `QLangContext` API. Two injection modes exist:
 
-```
+```cpp
 ctx.set("name", value, false)   // writable from QLang 
 ctx.set("name", value, true)    // read-only from QLang; assignment is a compile error
 ```
@@ -507,10 +512,65 @@ assigned to the destination register; returning `qval_nil()` means no result.
 Native funcs are resolved at compile time (negative opcode indices) and stored
 in `CompiledProgram::nativeFuncs` — no name lookup at runtime.
 
+`QLangContext::call(name, args)` invokes a QLang or native function by name
+from C++. It checks native funcs first, then scans compiled user functions by
+name. The compiled program is cached after the first `run()` call so subsequent
+`call()` invocations reuse it.
 
-TODO: add a method to the context to call a qlang function (either native or c++)
+```cpp
+ctx.run("def square(x) { return x * x }\n");
+QLangValue r = ctx.call("square", {qval_int(7)});  // r.asInt() == 49
+
+ctx.setFunc("dbl", [](QLangContext&, const std::vector<QLangValue>& a) {
+  return qval_int(a[0].asInt() * 2);
+});
+QLangValue r2 = ctx.call("dbl", {qval_int(21)});  // 42
+```
+
+TODO: add bytecodes() const method to the context returning the bytecode buffer.
 
 global scope visibility
 ======================
 
-global const and functions are visible everywhere
+global const and functions are visible everywhere (global, local, function). 
+global variables (native and injected) are not visble in function scope unless declared via global keyword. (see example)
+
+```python
+const HELLO = "Hello World"
+
+a = [1,2,3] # global a
+b = "John"  # global b
+
+def test() {
+   println(HELLO) # HELLO is visible here
+
+   # error, a is a global var/invisible by default
+   printf("[test] len: %d\n", len(a)) 
+
+   global a, b
+   printf("[test] len: %d\n", len(a)) 
+   # output >> [test] len: 3
+
+   a += [4,5,6] # modify global a
+}
+
+printf("[global] len: %d\n", len(a)) 
+# output >> [global] len 3
+
+test()
+
+printf("[global] len: %d\n", len(a)) 
+# output >> [global] len 6
+```
+
+
+strings
+================
+
+`QLang` to implement `Python f-strings` style
+
+```python
+price = 19.99
+print(f"Total: ${price:.2f}")  # Output: Total: $19.99
+```
+
