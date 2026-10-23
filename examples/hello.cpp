@@ -233,8 +233,8 @@ println("this is the END")
 
 import math
 
-local mx = max(3, 7)
-local mn = min(3, 7)
+local mx = max(3, 7, -1)
+local mn = min(3, 7, -9)
 local sm = sum(1, 2, 3)
 println(sprintf("max= %d, min=%d, sum=%d", mx, mn, sm))
 

@@ -11,7 +11,7 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 **151 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
 
-Line numbers below are against the CURRENT SPEC.md (14082 bytes, 778 lines, SHA256: da23f67ab34f204e2bacfb5daa7e4ca744c1d6c4b5ee902278b5a1c8c22c3c4c).
+Line numbers below are against the CURRENT SPEC.md (18310 bytes, 781 lines, SHA256: 884d37cfad27903f6eeefcd2dace22eafd083f44bcfa2a332dea49093d9d3e98).
 
 ### SPEC.md Changes Since Last Audit
 
@@ -254,7 +254,7 @@ Core spec fully implemented. **151 passed, 0 failed** (spec_check2) + **20 passe
 
 ## Open Items
 
-- **`min`/`max` builtins:** REMOVED from spec builtins table; moved to `math` module. Implemented as C++-registered module functions accessible via `import math` / `import math.min`. Compliance item closed.
+|- **`min`/`max`/`sum` via `import math`:** ✓ implemented. C++-registered module. `min`/`max` return `Int` for values within int32_t range; return `Dword` when result exceeds int32_t range (prevents silent truncation). `sum` flattens array args (`sum([1,2,3])` and `sum([1,2], [3,4])` both work); returns `Int` for in-range results, `Dword` on overflow. |-
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
 - **Module system (§604–661):** v1 implemented. `import math` (flat import all) and `import math.min` (single func) both work. Modules are C++-registered via `ctx.registerModule()`, resolved at compile time. No new opcodes. Qualified access (`math.min(...)`) is a future extension.
 - Generators (§608–623): ✗ NOT implemented. Spec has TODO section with Python-style `yield` prototype. No `yield` token, no generator state machine. Out of scope for v1.

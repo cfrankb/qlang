@@ -68,7 +68,6 @@ def
 let (alias local)
 else
 range => keyword
-slice => build in
 goto
 char
 dword
@@ -780,3 +779,25 @@ d = sum([1,4,20], [50,2]) # d = 77
 
 |functions|-|-|
 |--------|-|-|
+
+# user defined classes
+
+TODO: propose a class definition based on the prototype herein
+
+
+```
+class Money {
+   let total = 0
+
+   def __init__ (amount) {
+      self.total = amount
+   }
+
+   def __destroy__() {
+   }
+
+   def add(self, sum) {
+      self.total += sum
+   }
+}
+```
