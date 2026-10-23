@@ -6,6 +6,7 @@
 #include "qlang/QLangErrors.h"
 #include "qlang/QLangLexer.h"
 #include "qlang/QLangVM.h"
+#include "qlang/QLangModules.h"
 
 namespace qlang
 {
@@ -19,6 +20,7 @@ namespace qlang
   QLangContext::QLangContext()
   {
     m_pimpl = std::make_unique<Pimpl>();
+    registerBuiltinModules(*this);
   }
 
   std::vector<StmtPtr> QLangContext::parse(const std::string &source)

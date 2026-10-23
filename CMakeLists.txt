@@ -18,6 +18,7 @@ add_library(qlang
   src/QLangCompiler.cpp
   src/QLangVM.cpp
   src/QLangContext.cpp
+  src/QLangModules.cpp
 )
 target_include_directories(qlang PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
