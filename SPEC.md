@@ -535,6 +535,16 @@ QLangContext ctx;
 registerBuiltinModules(ctx);  // math module (min, max, sum) is now available
 ```
 
+Convenience method `ctx.importModule(name, alias)` is the C++ equivalent of
+the QLang `import <name>` statement. It finds an already-registered module and
+re-registers it under `alias` (or the same name if alias is empty), making it
+available for QLang `import` statements:
+
+```cpp
+ctx.importModule("math");           // equivalent to QLang `import math`
+ctx.importModule("math", "m");      // equivalent to QLang `import m`
+```
+
 Custom modules are registered with `ctx.registerModule(name, module)`. A module
 is a named collection of native functions. Modules are resolved at compile time
 by `import` statements — no VM changes needed:

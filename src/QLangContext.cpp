@@ -128,6 +128,22 @@ namespace qlang
       m_modules.back().name = name;
   }
 
+  void QLangContext::importModule(const std::string &name, const std::string &alias)
+  {
+    // Find the module by its registered name.
+    const Module *found = nullptr;
+    for (auto &mod : m_modules) {
+      if (mod.name == name) { found = &mod; break; }
+    }
+    if (!found)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "unknown module '" + name + "'");
+    // Register under the requested name (alias if given, otherwise original).
+    Module copy = *found;
+    copy.name = alias.empty() ? name : alias;
+    registerModule(copy.name, copy);
+  }
+
   QLangContext::~QLangContext() = default;
 
   QLangValue QLangContext::call(const std::string &name, const std::vector<QLangValue> &args)

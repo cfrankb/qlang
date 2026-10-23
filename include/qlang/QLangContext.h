@@ -64,6 +64,12 @@ namespace qlang
     void registerModule(const std::string &name, const Module &module);
     const std::vector<Module> &modules() const { return m_modules; }
 
+    // Convenience: find an already-registered module by name and register it
+    // under `alias` (or `name` if alias is empty). Equivalent to QLang
+    // `import <name>` / `import <alias>`. Throws if the source module is not
+    // found.
+    void importModule(const std::string &name, const std::string &alias = "");
+
   private:
     // Pimpl: holds the compiled program without creating a circular include.
     struct Pimpl;
