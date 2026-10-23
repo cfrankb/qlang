@@ -11,7 +11,7 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 **151 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
 
-Line numbers below are against the CURRENT SPEC.md (14082 bytes, 665 lines, SHA256: 42ed612b024061ac14a920f89295bb89ce4b8b146e65fc3e1679fcd8b6c1c4f4).
+Line numbers below are against the CURRENT SPEC.md (14082 bytes, 778 lines, SHA256: da23f67ab34f204e2bacfb5daa7e4ca744c1d6c4b5ee902278b5a1c8c22c3c4c).
 
 ### SPEC.md Changes Since Last Audit
 
