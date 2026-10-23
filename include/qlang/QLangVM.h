@@ -52,6 +52,11 @@ private:
   static QLangValue doBinary(Opcode op, const QLangValue &a, const QLangValue &b);
   static QLangValue doUnary(Opcode op, const QLangValue &a);
 
+  // Call a closure value (Function type) with the given arguments.
+  // Extracts the funcIndex from the closure and invokes callFunction.
+public:
+  QLangValue callClosure(const QLangValue &closure, const std::vector<QLangValue> &args);
+
   // Push a callee frame, copying args into its parameter registers, and advance
   // the frame pointer onto it. `dest` is the caller register holding the
   // closure (for CALLCLOS) / the call destination (for CALLFN).

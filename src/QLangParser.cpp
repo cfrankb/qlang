@@ -105,6 +105,7 @@ StmtPtr QLangParser::parseStatement() {
   if (check(TokenType::Switch)) return parseSwitch();
   if (check(TokenType::Global)) return parseGlobal();
   if (check(TokenType::Import) || check(TokenType::From)) return parseImport();
+  if (check(TokenType::Class)) return parseClass();
 
   if (check(TokenType::Def)) return parseFunction();
   if (check(TokenType::Return)) return parseReturn();
@@ -155,6 +156,42 @@ StmtPtr QLangParser::parseStatement() {
     const Token &idt = current();
     m_pos++; // consume the identifier
     TokenType nxt = current().type;
+
+    // Method definition inside class: name(params)[] { body }
+    // Detect by peering past the parenthesized param list to see if '[' follows.
+    if (nxt == TokenType::LParen && looksLikeArrow()) {
+      auto stmt = std::make_shared<Stmt>();
+      stmt->kind = StmtKind::Arrow;
+      stmt->name = idt.value;
+      consume(TokenType::LParen, "'(' after method name");
+      if (!check(TokenType::RParen)) {
+        do {
+          stmt->params.push_back(consume(TokenType::Ident, "parameter name").value);
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RParen, "')' after method params");
+      // Mandatory explicit capture list: [x, y, ...]
+      consume(TokenType::LBracket, "'[' to open capture list");
+      if (!check(TokenType::RBracket)) {
+        do {
+          stmt->captures.push_back(
+            consume(TokenType::Ident, "captured variable").value);
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RBracket, "']' to close capture list");
+      // Body in braces.
+      if (match(TokenType::LBrace)) {
+        while (!check(TokenType::RBrace) && !atEnd())
+          stmt->body.push_back(parseStatement());
+        consume(TokenType::RBrace, "'}' to close method body");
+      } else {
+        while (!check(TokenType::End) && !atEnd())
+          stmt->body.push_back(parseStatement());
+        consume(TokenType::End, "'end' to close method body");
+      }
+      match(TokenType::Semicolon);
+      return stmt;
+    }
 
     // Postfix inc/dec as a statement: a++ / a--
     if (nxt == TokenType::Increment || nxt == TokenType::Decrement) {
@@ -578,7 +615,7 @@ StmtPtr QLangParser::parseGoto() {
   int line = current().line, col = current().col;
   (void)line;
   (void)col;
-  consume(TokenType::Goto, "\"goto\"");
+  consume(TokenType::Goto, "goto");
   auto stmt = std::make_shared<Stmt>();
   stmt->kind = StmtKind::Goto;
   stmt->gotoLabel = consume(TokenType::Ident, "label name after 'goto'").value;
@@ -672,6 +709,23 @@ StmtPtr QLangParser::parseImport() {
       stmt->importAlias = consume(TokenType::Ident, "alias name after 'as'").value;
     }
   }
+  match(TokenType::Semicolon);
+  return stmt;
+}
+
+StmtPtr QLangParser::parseClass() {
+  int line = current().line, col = current().col;
+  (void)line;
+  (void)col;
+  consume(TokenType::Class, "'class'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Class;
+  stmt->className = consume(TokenType::Ident, "class name").value;
+  consume(TokenType::LBrace, "'{' to open class body");
+  while (!check(TokenType::RBrace) && !atEnd()) {
+    stmt->classBody.push_back(parseStatement());
+  }
+  consume(TokenType::RBrace, "'}' to close class body");
   match(TokenType::Semicolon);
   return stmt;
 }

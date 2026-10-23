@@ -106,6 +106,12 @@ public:
     q.m_storage = std::move(v);
     return q;
   }
+  static QLangValue Table() {
+    auto m = std::make_shared<std::map<std::string, QLangValue>>();
+    QLangValue q(Type::Table);
+    q.m_storage = std::move(m);
+    return q;
+  }
   static QLangValue Function(ClosurePtr v) {
     QLangValue q(Type::Function);
     q.m_storage = std::move(v);

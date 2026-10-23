@@ -51,6 +51,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "import") return TokenType::Import;
   if (text == "from") return TokenType::From;
   if (text == "as") return TokenType::As;
+  if (text == "class") return TokenType::Class;
   if (text == "nil") return TokenType::Nil;
   return TokenType::Ident;
 }

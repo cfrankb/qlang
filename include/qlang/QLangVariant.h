@@ -34,7 +34,8 @@ using ClosurePtr = std::shared_ptr<Closure>;
 using ArrayValue = std::vector<QLangValue>;
 
 // A script table is a keyed map of string -> script value (spec: table).
-using TableValue = std::map<std::string, QLangValue>;
+// Shared across copies so mutations in callees are visible to callers (self semantics).
+using TableValue = std::shared_ptr<std::map<std::string, QLangValue>>;
 
 // The storage variant for every script variable value. Mirrors the spec's
 // variable types: string, blob, byte, word, short, int, unsigned, array,

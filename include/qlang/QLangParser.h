@@ -113,7 +113,8 @@ enum class StmtKind {
   GotoIf,    // if cond goto label (conditional jump)
   Switch,    // switch (expr) { case ... : ... default: ... }
   Global,    // global a, b (import top-level vars into function scope)
-  Import     // import math / import math.min
+  Import,    // import math / import math.min
+  Class      // class Name { fields + methods end }
 };
 
 // Base statement node. Forward-declared so StmtPtr can be used inside Stmt.
@@ -199,6 +200,10 @@ struct Stmt {
   std::vector<std::string> importFuncs;  // function names for `from math import min, max`
   std::string importAlias;   // alias for `import math as m`
   bool importAll = false;    // true for `from math import *`
+
+  // Class: class Name { fields + methods end }
+  std::string className;
+  std::vector<StmtPtr> classBody;
 };
 
 using StmtPtr = std::shared_ptr<Stmt>;
@@ -228,6 +233,7 @@ private:
   StmtPtr parseSwitch();
   StmtPtr parseGlobal();
   StmtPtr parseImport();
+  StmtPtr parseClass();
   StmtPtr parseFunction();
   StmtPtr parseArrowClosure(const std::string &varName);
   bool looksLikeArrow() const;

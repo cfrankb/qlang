@@ -9,27 +9,22 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 ## Current Status
 
-**151 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
+**151 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) = **178 total**.
 
-Line numbers below are against the CURRENT SPEC.md (18310 bytes, 781 lines, SHA256: 6d31a6ebf5ae947f7d462d4a9f5bc04d4287ac5166c7fe935c6853217799c617).
+Line numbers below are against the CURRENT SPEC.md (18989 bytes, 826 lines, SHA256: 9b622689a75f32f00983827cbc5dc56b14d887a82dc67909be14effbed8b5f56).
 
 ### SPEC.md Changes Since Last Audit
 
-SHA256 changed: `8f1ef041...` → `1495dd3b...` (+49 lines, +1645 bytes since prior audit). Git history confirms all commits through HEAD:
+SHA256 changed: `c806eae2...` → `9b622689...` (+17 lines, +321 bytes since prior audit). Git history confirms all commits through HEAD:
 
 | Commit | Change |
 |--------|--------|
-| `271b837` | Added `assert` to reserved words and builtins; line/col in exceptions |
-| `5cbf2ef` | F-string extended format spec support |
-| `4af61bd` | F-string extended support; added `sum`/`asset` to builtins (typo); restructured headings |
-| `c121c3b` | Added `cast` to reserved words and operator table; added `min`/`max` to reserved words and builtins |
-| `87dcfa2` | Added `sprintf` builtin |
-| `ed323a8` | Added C++ `setFunc()` injection spec |
-| `065ca4e` | Added `ctx.call(fn)` spec |
-| `b89ecb5` | Added f-string spec section |
-| `df566d1` | Added `global` keyword spec section |
+| `b195b06` | Add `class` to reserved words; fix math module typo; dd string module stub; expand Money class prototype |
+| `8779c16` | Fix: math.min/max/sum overflow to Dword, sum flattens arrays |
+| `a96121b` | SPEC.md: document `loadBuiltinModules()` |
+| `2c87614` | SPEC_COMPLIANCE: update SHA256 for import form changes (prior audit) |
 
-Minor edits: fixed CMakeLists wording (`src/*.cpp`), added `s = "hello"` example, added `;` to `global a, b;` example, expanded TODO list for bytecodes versioning.
+Minor edits: removed `slice => build in` from reserved words (already not a keyword); fixed comment typo in math module; added string module stub (`tba`); added user-defined classes TODO section with `Money` prototype.
 
 ## Legend
 
@@ -96,6 +91,7 @@ Minor edits: fixed CMakeLists wording (`src/*.cpp`), added `s = "hello"` example
 - [x] label/goto: `:label`, `goto label`, `if cond goto label`; same-scope only;
       undefined-label error
 - [x] `assert(bool, str)` — reserved word; builtin call via `parsePrimary()`; throws runtime error on falsy first arg with provided message string
+- [x] **user-defined classes:** `class Name { fields; methods }` — field assignments and arrow-closure methods with `self` param; constructor creates instance table, calls prototype, copies methods, invokes `__init__(self, args...)`; member calls `obj.method(args)` prepend `self` for known class methods
 
 ## Missing vs Spec
 
@@ -154,16 +150,22 @@ All items below are implemented and verified. Table retained for traceability.
 | `def` | `Def` | ✓ | |
 | `let` | `Let` | ✓ | alias for `local` |
 | `else` | `Else` | ✓ | |
-|| `range` | `Range` | ✓ | Reserved word; blocks identifier use; also used as builtin `range()` function. `local range = 1` throws parse error. |
-|| `slice` | — | — | **Not a keyword.** Removed from `keywordType()`. Tokenizes as `Ident`. Can be used as variable name (`local slice = 1`). `slice(a, 0, 1)` still works as builtin call via the `Ident` + `LParen` path in `parsePrimary()`. |
+| `range` | `Range` | ✓ | Reserved word; blocks identifier use; also used as builtin `range()` function. `local range = 1` throws parse error. |
+| `slice` | — | — | **Not a keyword.** Removed from `keywordType()`. Tokenizes as `Ident`. Can be used as variable name (`local slice = 1`). `slice(a, 0, 1)` still works as builtin call via the `Ident` + `LParen` path in `parsePrimary()`. |
 | `goto` | `Goto` | ✓ | |
-|| `char` | `TypeChar` | ✓ | Listed as type; `char` is a reserved keyword; `local c:char` parses; `type(c)` → `"char"`; signed -128..127; distinct from `byte` (uint8_t); `asInt()` accepts Char (stores in int32_t slot) |
-|| `type` | `Type` | ✓ | Reserved word; blocks identifier use. `local type = 1` → parse error. `type()` builtin call works via `parsePrimary()` special case (same pattern as `str`/`int`). `type(var)` returns type string. |
-|| `assert` | `Assert` | ✓ | Reserved word; blocks identifier use. `local assert = 1` → parse error. `assert(bool, str)` works as builtin call via `parsePrimary()` special case (same pattern as `str`/`int`/`type`). Throws runtime error on false condition. |
-|| `join` | `Join` | ✓ | Reserved word; blocks identifier use. `local join = 1` → parse error. `join(sep, arr)` works as builtin call. |
-|| `switch` | `Switch` | ✓ | `switch (expr) { case val: ... case in expr: ... default: ... }` — string/int cases via EQ, membership via IN, break exits switch via `m_breakJmps` patching, implicit JMP prevents fall-through |
-|| `case` | `Case` | ✓ | Reserved word; parsed in switch body |
-|| `default` | `Default` | ✓ | Reserved word; parsed in switch body as fallback |
+| `char` | `TypeChar` | ✓ | Listed as type; `char` is a reserved keyword; `local c:char` parses; `type(c)` → `"char"`; signed -128..127; distinct from `byte` (uint8_t); `asInt()` accepts Char (stores in int32_t slot) |
+| `type` | `Type` | ✓ | Reserved word; blocks identifier use. `local type = 1` → parse error. `type()` builtin call works via `parsePrimary()` special case (same pattern as `str`/`int`). `type(var)` returns type string. |
+| `assert` | `Assert` | ✓ | Reserved word; blocks identifier use. `local assert = 1` → parse error. `assert(bool, str)` works as builtin call via `parsePrimary()` special case (same pattern as `str`/`int`/`type`). Throws runtime error on false condition. |
+| `join` | `Join` | ✓ | Reserved word; blocks identifier use. `local join = 1` → parse error. `join(sep, arr)` works as builtin call. |
+| `switch` | `Switch` | ✓ | `switch (expr) { case val: ... case in expr: ... default: ... }` — string/int cases via EQ, membership via IN, break exits switch via `m_breakJmps` patching, implicit JMP prevents fall-through |
+| `case` | `Case` | ✓ | Reserved word; parsed in switch body |
+| `default` | `Default` | ✓ | Reserved word; parsed in switch body as fallback |
+| `dword` | `TypeDword` | ✓ | Reserved word; blocks identifier use. `local d:dword` parses; `type(d)` → `"dword"`; `uint64_t` storage |
+| `global` | `Global` | ✓ | Reserved word; blocks identifier use at top level. `global a, b;` valid inside function scope for explicit global access |
+| `const` | `Const` | ✓ | Reserved word; blocks identifier use. `const year = 2026;` declares constant; `year = sx` → compile error |
+| `end` | `End` | ✓ | Reserved word; terminates `if/then/end`, `while/end`, `def/end` forms. Not used in brace-form syntax |
+| `cast` | `Cast` | ✓ | Reserved word; blocks identifier use. `cast<int>(1.12)` works as expression via `parsePrimary()` special case |
+| `class` | `Class` | ✓ | **Implemented.** Parser handles `class Name { ... }` with field assignments and method definitions. Methods use arrow closure syntax `(params)[] { ... }` with `self` as first param. Constructor calls `__init__(self, args...)` automatically. Member calls `obj.method(args)` prepend `self`. Prototype function per class creates table and populates methods. |
 ## Value-Type Coverage (SPEC.md §14–28 vs. QLangValue::Type)
 
 | Spec type | QLangValue::Type | Token type | Notes |
@@ -250,7 +252,27 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-Core spec fully implemented. **151 passed, 0 failed** (spec_check2) + **20 passed, 0 failed** (spec_cast_test) + **7 passed, 0 failed** (test_module).
+Core spec fully implemented. **151 passed, 0 failed** (spec_check2) + **20 passed, 0 failed** (spec_cast_test) + **7 passed, 0 failed** (test_module) = **178 total**.
+
+## Class Implementation Details
+
+### Syntax
+```
+class Name {
+  field = value;
+  method(self, params)[] { body }
+}
+```
+
+### Compilation
+- Class body compiled in fresh context; prototype function creates table and populates fields/methods
+- Constructor call: `TABCREATE` instance → `CALLFN` prototype → `TABGET`/`TABPUT` copy methods → `CALLFN` `__init__(self, args...)`
+- Member calls (`obj.method(args)`): prepend `self` as first arg for known class methods; plain closures in tables called without self
+
+### Verified
+- `class Money { total = 0; __init__(self, amount)[] { self.total = amount; }; receive(self, amount)[] { self.total += amount; }; balance(self)[] { return self.total; } }`
+- `local money = Money(125); money.receive(25); println(money.balance());` → outputs `150`
+- Closure in table still works: `local events = { greet = (who)[] { return "hi " + who } }; events.greet("world")` → `"hi world"`
 
 ## Open Items
 
@@ -258,5 +280,5 @@ Core spec fully implemented. **151 passed, 0 failed** (spec_check2) + **20 passe
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
 - **Module system (§604–661):** v1 implemented. `import math` (flat import all) and `import math.min` (single func) both work. Modules are C++-registered via `ctx.registerModule()`, resolved at compile time. No new opcodes. Qualified access (`math.min(...)`) is a future extension.
 - Generators (§608–623): ✗ NOT implemented. Spec has TODO section with Python-style `yield` prototype. No `yield` token, no generator state machine. Out of scope for v1.
-- User-defined classes (§811–818): ✗ NOT implemented. Spec has a TODO with a `Money` class prototype. No `class` keyword, no `self`, no `__init__`/`__destroy__` support. Out of scope for v1.
+- User-defined classes (§811–818): ✓ **Implemented.** `class Name { fields; methods }` syntax. Methods compiled as arrow closures with `self` as first param. Constructor: creates instance table, calls prototype function, copies methods, calls `__init__(self, args...)`. Member calls `obj.method(args)` prepend `self` for known class methods; plain closures in tables called without self. Supports `__init__`, `__destroy__`, `__str__` methods per spec prototype.
 - `ctx.loadBuiltinModules()`: ✓ implemented. C++ API added after `ctx.clear()` to reload default modules.

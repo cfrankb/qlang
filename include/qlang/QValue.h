@@ -47,6 +47,6 @@ inline QValue qval_blob(std::vector<uint8_t> &&v) { return QValue::Blob(std::mov
 
 inline QValue qval_array(ArrayValue v) { return QValue::Array(std::move(v)); }
 
-inline QValue qval_table(TableValue v) { return QValue::Table(std::move(v)); }
+inline QValue qval_table(TableValue v) { return QValue::Table(v); }
 
 } // namespace qlang

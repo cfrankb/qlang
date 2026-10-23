@@ -81,6 +81,7 @@ const
 end
 cast
 assert
+class
 ```
 
 ## constants

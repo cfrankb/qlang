@@ -118,6 +118,13 @@ private:
   std::vector<Function> m_functions;
   // User-defined functions: name -> function index (for `def` calls).
   std::unordered_map<std::string, int> m_userFuncs;
+  // User-defined classes: name -> prototype-creation function index + method info.
+  struct ClassRecord {
+    int prototypeFunc = -1; // function index that creates and returns the prototype table
+    std::vector<std::string> methodNames;
+    std::unordered_map<std::string, int> methodFuncIndices;
+  };
+  std::unordered_map<std::string, ClassRecord> m_classes;
   // Variable names that currently hold an arrow-closure value.
   std::unordered_set<std::string> m_closureVars;
   // Active closure capture table: captured variable name -> refId (index into

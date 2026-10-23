@@ -1,5 +1,7 @@
 #include "qlang/QLangCompiler.h"
 
+#include <execinfo.h>
+
 #include <algorithm>
 #include <iostream>
 #include <stdexcept>
@@ -76,9 +78,18 @@ void QLangCompiler::emit(Opcode op, int a, int b, int c) {
 }
 
 CompiledProgram QLangCompiler::compile() {
-// Compile the top-level program into the main (scratch) function context.
-for (auto &s : m_program) {
-  compileStmt(s, nullptr);
+  fprintf(stderr, "[DBG-COMPILER] QLangCompiler::compile() called, this=%p\n", (void*)this);
+  // Compile the top-level program into the main (scratch) function context.
+for (size_t i = 0; i < m_program.size(); i++) {
+    auto &s = m_program[i];
+    fprintf(stderr, "[DBG-COMP] Compiling stmt %zu kind=%d\n", i, (int)s->kind);
+    compileStmt(s, nullptr);
+    fprintf(stderr, "[DBG-COMP] After stmt %zu: m_code=%zu instrs this=%p\n", i, m_code.instructions().size(), (void*)this);
+    // Dump instructions for debugging
+    for (size_t j = 0; j < m_code.instructions().size(); j++) {
+      auto &inst = m_code.instructions()[j];
+      fprintf(stderr, "[DBG-COMP]   [%zu] op=%d a=%d b=%d c=%d\n", j, (int)inst.op, inst.a, inst.b, inst.c);
+    }
 }
 // Implicit `return nil` at the end of the main program.
 emit(Opcode::RETURN, 0);
@@ -209,6 +220,7 @@ int QLangCompiler::buildFunction(const std::string &name,
 
   // Fresh function context: params occupy registers 0..paramCount-1 and must
   // reserve those registers so temporaries never collide with a parameter.
+  fprintf(stderr, "[DBG-BF] Resetting m_code (buildFunction for '%s') this=%p\n", name.c_str(), (void*)this);
   m_code = Bytecode();
   m_regs.clear();
   // Keep m_constVars and m_userFuncs populated so global consts and
@@ -717,6 +729,90 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     }
     break;
   }
+  case StmtKind::Class: {
+    // class Name { fields + methods end }
+    // Compile body into a function that creates the prototype table and returns it.
+    // Store the function index; at construction time we CALLFN it to get the prototype.
+    Bytecode savedCode = m_code;
+    auto savedRegs = m_regs;
+    auto savedConstVars = m_constVars;
+    auto savedVarTypes = m_varTypes;
+    auto savedUserFuncs = m_userFuncs;
+    auto savedClosureVars = m_closureVars;
+    auto savedCaptureRegs = m_captureRegs;
+    auto savedGlobalVars = m_globalVars;
+    auto savedCapturedVars = m_capturedVars;
+    int savedNextReg = m_nextReg;
+    bool savedInFunction = m_inFunction;
+
+    m_code = Bytecode();
+    m_regs.clear();
+    m_constVars.clear();
+    m_varTypes.clear();
+    m_userFuncs.clear();
+    m_closureVars.clear();
+    m_captureRegs.clear();
+    m_globalVars.clear();
+    m_capturedVars.clear();
+    m_labels.clear();
+    m_nextReg = 0;
+    m_inFunction = false;
+
+    // Emit: TABCREATE proto, then compile body, then RETURN proto.
+    emit(Opcode::TABCREATE, 0);
+    m_nextReg = 1; // temporaries must not collide with prototype at reg 0
+
+    std::vector<std::string> methodNames;
+    std::unordered_map<std::string, int> methodFuncIndices;
+    for (auto &st : s->classBody) {
+      if (st->kind == StmtKind::Assignment) {
+        int keyR = tmpRegister();
+        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(st->name)));
+        int valR = tmpRegister();
+        compileExpr(st->assignValue, valR);
+        emit(Opcode::TABPUT, 0, keyR, valR);
+      } else if (st->kind == StmtKind::Arrow) {
+        int funcIndex = buildFunction(st->name, st->params, st->captures, st->body);
+        auto closure = std::make_shared<Closure>();
+        closure->funcIndex = funcIndex;
+        int constIdx = emitConst(QLangValue::Function(closure));
+        int keyR = tmpRegister();
+        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(st->name)));
+        int funcR = tmpRegister();
+        emit(Opcode::MAKEFUNC, funcR, constIdx);
+        emit(Opcode::TABPUT, 0, keyR, funcR);
+        methodNames.push_back(st->name);
+        methodFuncIndices[st->name] = funcIndex;
+      } else {
+        compileStmt(st);
+      }
+    }
+
+    emit(Opcode::RETURN, 0);
+
+    int prototypeFuncIdx = static_cast<int>(m_functions.size()) + 1; // +1 for mainFn prepend
+    m_functions.emplace_back(Function{
+        s->className + "_prototype", 0, m_nextReg,
+        std::move(m_code.instructions()), std::move(m_code.constants()), {}});
+    m_code = std::move(savedCode);
+    m_regs = std::move(savedRegs);
+    m_constVars = std::move(savedConstVars);
+    m_varTypes = std::move(savedVarTypes);
+    m_userFuncs = std::move(savedUserFuncs);
+    m_closureVars = std::move(savedClosureVars);
+    m_captureRegs = std::move(savedCaptureRegs);
+    m_globalVars = std::move(savedGlobalVars);
+    m_capturedVars = std::move(savedCapturedVars);
+    m_nextReg = savedNextReg;
+    m_inFunction = savedInFunction;
+
+    ClassRecord rec;
+    rec.prototypeFunc = prototypeFuncIdx;
+    rec.methodNames = std::move(methodNames);
+    rec.methodFuncIndices = std::move(methodFuncIndices);
+    m_classes[s->className] = std::move(rec);
+    break;
+  }
   case StmtKind::Global: {
     if (!m_inFunction)
       throw QLangError(QLangErrorKind::Parse, 0, 0,
@@ -914,6 +1010,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
   }
   case ExprKind::Call: {
     int argCount = static_cast<int>(e->args.size());
+    fprintf(stderr, "[DBG-CALL] Entering call expr for '%s' with %d args\n", e->callee.c_str(), argCount);
+    fprintf(stderr, "[DBG-CALL] &m_code=%p m_code.size=%zu\n", (void*)&m_code, m_code.instructions().size());
     // Allocate the result slot first, then compile each arg into a temp
     // register. After all args are in place, move them to the VM's expected
     // arg slots (dest+1 .. dest+argCount) and emit CALL.
@@ -921,21 +1019,92 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     std::vector<int> argRegs(argCount);
     for (int i = 0; i < argCount; i++)
       argRegs[i] = tmpRegister();
-    for (int i = 0; i < argCount; i++)
+    for (int i = 0; i < argCount; i++) {
+      fprintf(stderr, "[DBG-CALL] Compiling arg %d\n", i);
       compileExpr(e->args[i], argRegs[i]);
+      fprintf(stderr, "[DBG-CALL] After arg %d: m_code=%zu\n", i, m_code.instructions().size());
+    }
     // Move each arg into the slot the VM reads from.
     for (int i = 0; i < argCount; i++)
       emit(Opcode::MOV, argBase + i, argRegs[i], 0);
 
     // Method call: obj.method(args) -> load the member (closure) first.
     if (e->calleeMember) {
-      int funcReg = tmpRegister();
-      compileExpr(e->calleeMember, funcReg);
-      emit(Opcode::MOV, dest, funcReg);
-      emit(Opcode::CALLCLOS, dest, argCount, argCount);
+      // Prepend self only for known class methods (whose signature includes self).
+      // Table-stored closures are called as-is.
+      bool prependSelf = false;
+      for (const auto &kv : m_classes) {
+        if (kv.second.methodFuncIndices.count(e->callee)) {
+          prependSelf = true;
+          break;
+        }
+      }
+      if (prependSelf) {
+        // Shift existing args down by one FIRST, before allocating new temps
+        // that might collide with the shifted slots.
+        for (int i = argCount - 1; i >= 0; i--)
+          emit(Opcode::MOV, argBase + i + 1, argRegs[i], 0);
+        // Advance past shifted slots so selfReg won't collide.
+        int minReg = argBase + argCount + 1;
+        if (m_nextReg < minReg) m_nextReg = minReg;
+        // Now argBase is free. Compile base into a fresh temp.
+        int selfReg = tmpRegister();
+        compileExpr(e->calleeMember->memberBase, selfReg);
+        emit(Opcode::MOV, argBase, selfReg, 0);
+        int funcReg = tmpRegister();
+        compileExpr(e->calleeMember, funcReg);
+        emit(Opcode::MOV, dest, funcReg);
+        emit(Opcode::CALLCLOS, dest, argCount + 1, argCount + 1);
+      } else {
+        int funcReg = tmpRegister();
+        compileExpr(e->calleeMember, funcReg);
+        emit(Opcode::MOV, dest, funcReg);
+        emit(Opcode::CALLCLOS, dest, argCount, argCount);
+      }
       break;
     }
 
+    // Class constructor call: ClassName(args) -> create instance, copy methods,
+    // call __init__(self, args...).
+    auto cit = m_classes.find(e->callee);
+    if (cit != m_classes.end()) {
+      const ClassRecord &rec = cit->second;
+      // Create instance table.
+      int instanceReg = tmpRegister();
+      emit(Opcode::TABCREATE, instanceReg);
+      // Call prototype function to get the prototype table.
+      int protoReg = tmpRegister();
+      emit(Opcode::CALLFN, protoReg, rec.prototypeFunc, 0);
+      // Copy methods from prototype to instance.
+      for (const auto &mname : rec.methodNames) {
+        int keyR = tmpRegister();
+        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(mname)));
+        int valR = tmpRegister();
+        emit(Opcode::TABGET, valR, protoReg, keyR);
+        emit(Opcode::TABPUT, instanceReg, keyR, valR);
+      }
+      // Save instance to dest before overwriting instanceReg with args.
+      emit(Opcode::MOV, dest, instanceReg);
+      // Prepend instance as first arg (self): move args into place,
+      // then move saved instance as arg[0].
+      int newArgCount = argCount + 1;
+      int newArgBase = dest + 1;
+      for (int i = argCount - 1; i >= 0; i--) {
+        emit(Opcode::MOV, newArgBase + i + 1, argRegs[i], 0);
+      }
+      emit(Opcode::MOV, newArgBase, dest, 0);
+      // Call __init__.
+      auto initIt = rec.methodFuncIndices.find("__init__");
+      if (initIt == rec.methodFuncIndices.end()) {
+        break;
+      }
+      int funcIdx = initIt->second;
+      emit(Opcode::CALLFN, dest, funcIdx, newArgCount);
+      // __init__ may return nil; instance was passed as self at newArgBase
+      // and survives there (callee frame is separate).
+      emit(Opcode::MOV, dest, newArgBase);
+      break;
+    }
     // User `def` function: funcIndex known at compile time.
     auto uit = m_userFuncs.find(e->callee);
     if (uit != m_userFuncs.end()) {
@@ -987,10 +1156,10 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       }
     }
     if (allConst) {
-      TableValue kv;
+      TableValue kv = std::make_shared<std::map<std::string, QLangValue>>();
       for (auto &item : e->items)
-        kv[item.first] = evalConstExpr(item.second);
-      emit(Opcode::CONST, dest, emitConst(QLangValue::Table(std::move(kv))));
+        kv->operator[](item.first) = evalConstExpr(item.second);
+      emit(Opcode::CONST, dest, emitConst(QLangValue::Table(kv)));
       break;
     }
     // Runtime table construction.
@@ -1246,10 +1415,10 @@ QLangValue QLangCompiler::evalConstExpr(const ExprPtr &e) {
     return QLangValue::Array(std::move(elems));
   }
   case ExprKind::Table: {
-    TableValue kv;
+    TableValue kv = std::make_shared<std::map<std::string, QLangValue>>();
     for (auto &item : e->items)
-      kv[item.first] = evalConstExpr(item.second);
-    return QLangValue::Table(std::move(kv));
+      kv->operator[](item.first) = evalConstExpr(item.second);
+    return QLangValue::Table(kv);
   }
   default:
     throw QLangError(QLangErrorKind::Parse, 0, 0,

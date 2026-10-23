@@ -66,6 +66,7 @@ enum class TokenType {
   Import,      // import (module import)
   From,        // from (module import from)
   As,          // as (module alias)
+  Class,       // class (user-defined class)
   True,        // true
   False,       // false
   Nil,         // nil (undefined/sentinel value)
