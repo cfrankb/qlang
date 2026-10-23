@@ -11,6 +11,7 @@
 #include "qlang/QLangCompiler.h"
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
+#include "qlang/QLangModules.h"
 #include "qlang/QLangParser.h"
 
 using namespace qlang;
@@ -229,11 +230,13 @@ println(f"{255:#06x}") # expected: "0x00ff"
 #assert(1==0, "this is TRUE")
 
 println("this is the END")
- 
+
 import math
 
-import user
-
+local mx = max(3, 7)
+local mn = min(3, 7)
+local sm = sum(1, 2, 3)
+println(sprintf("max= %d, min=%d, sum=%d", mx, mn, sm))
 
 )";
 
@@ -245,7 +248,9 @@ import user
     for (auto &st : program)
       printStmt(st, 0);
 
-    CompiledProgram cp = QLangCompiler(program).compile();
+    QLangCompiler compiler(program);
+    compiler.addModules(ctx.modules());
+    CompiledProgram cp = compiler.compile();
     dumpBytecode(cp);
   }
   catch (const QLangError &e)
