@@ -528,12 +528,16 @@ in `CompiledProgram::nativeFuncs` — no name lookup at runtime.
 
 System modules are auto-registered on `QLangContext` construction. Call
 `registerBuiltinModules(ctx)` to register additional or override modules before
-the first `run()`:
+the first `run()`. Call `ctx.loadBuiltinModules()` to reload the default modules
+after `ctx.clear()`:
 
 ```cpp
 #include "qlang/QLangModules.h"
 QLangContext ctx;
 registerBuiltinModules(ctx);  // math module (min, max, sum) is now available
+
+ctx.clear();
+ctx.loadBuiltinModules();     // math module is available again
 ```
 
 Two methods control module availability:
