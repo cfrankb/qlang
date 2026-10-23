@@ -523,6 +523,69 @@ assigned to the destination register; returning `qval_nil()` means no result.
 Native funcs are resolved at compile time (negative opcode indices) and stored
 in `CompiledProgram::nativeFuncs` — no name lookup at runtime.
 
+## Module registration
+
+System modules are auto-registered on `QLangContext` construction. Call
+`registerBuiltinModules(ctx)` to register additional or override modules before
+the first `run()`:
+
+```cpp
+#include "qlang/QLangModules.h"
+QLangContext ctx;
+registerBuiltinModules(ctx);  // math module (min, max, sum) is now available
+```
+
+Custom modules are registered with `ctx.registerModule(name, module)`. A module
+is a named collection of native functions. Modules are resolved at compile time
+by `import` statements — no VM changes needed:
+
+```cpp
+QLangContext::Module myMod;
+myMod.name = "math";
+myMod.funcs["min"] = [](QLangContext&, const std::vector<QLangValue>& args) -> QLangValue {
+    if (args.empty()) return QLangValue::Int(0);
+    int64_t v = toInt64(args[0]);
+    for (size_t i = 1; i < args.size(); i++) {
+        int64_t a = toInt64(args[i]);
+        if (a < v) v = a;
+    }
+    return QLangValue::Int(static_cast<int32_t>(v));
+};
+myMod.funcs["max"] = [](QLangContext&, const std::vector<QLangValue>& args) -> QLangValue { ... };
+ctx.registerModule("math", myMod);
+```
+
+Import forms in QLang (flat, v1 only — no qualified access):
+
+```python
+import math          # import all public names from the math module
+import math.min      # import only min from the math module
+```
+
+Module names must be unique per context. Re-registering a module with the same
+name appends a new entry; the last registration wins at compile time.
+
+## ctx.clear()
+
+`ctx.clear()` resets the context state for reuse:
+
+```cpp
+ctx.clear();
+// equivalent to:
+//   m_vars.clear();
+//   m_injectedConsts.clear();
+//   m_nativeFuncs.clear();
+//   m_modules.clear();
+//   m_pimpl->compiled.reset();
+```
+
+After `clear()`, all injected vars, consts, native funcs, and modules are
+removed. The compiled program cache is invalidated. Call
+`registerBuiltinModules(ctx)` again if you need the built-in modules.
+
+`ctx.remove(name)` deletes a single variable.
+`ctx.has(name)` / `ctx.isset(name)` check whether a variable exists.
+
 `QLangContext::call(name, args)` invokes a QLang or native function by name
 from C++. It checks native funcs first, then scans compiled user functions by
 name. The compiled program is cached after the first `run()` call so subsequent
