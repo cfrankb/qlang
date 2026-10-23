@@ -47,6 +47,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "dword") return TokenType::TypeDword;
   if (text == "type") return TokenType::Type;
   if (text == "global") return TokenType::Global;
+  if (text == "assert") return TokenType::Assert;
   if (text == "nil") return TokenType::Nil;
   return TokenType::Ident;
 }

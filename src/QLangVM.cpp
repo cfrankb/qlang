@@ -159,7 +159,8 @@ QLangValue seqGet(const QLangValue &col, int64_t idx) {
 // execution (vars live in registers, not scope, until run completes).
 QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
                        QLangContext &scope, const CompiledProgram &prog,
-                       const std::unordered_set<int> &deleted) {
+                       const std::unordered_set<int> &deleted,
+                       int line = 0, int col = 0) {
   auto need = [&](size_t n, const char *fn) {
     if (args.size() != static_cast<size_t>(n))
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
@@ -494,6 +495,28 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     if (it != prog.vars.end() && !deleted.count(it->second))
       return QLangValue::Int(1);
     return QLangValue::Int(0);
+  }
+  case Builtin::Assert: {
+    // assert(bool, str) — throws a runtime error with the given message if
+    // the boolean argument is false (0).
+    need(2, "assert");
+    // Validate args regardless of condition.
+    if (args[1].type() != QLangValue::Type::String)
+      throw QLangError(QLangErrorKind::Type, line, col,
+                       "assert: second argument must be a string (error message)");
+    // Truthiness check (same logic as QLangVM::isTrue).
+    bool truthy = false;
+    const auto &arg0 = args[0];
+    if (arg0.type() == QLangValue::Type::Nil) truthy = false;
+    else if (arg0.type() == QLangValue::Type::String)
+      truthy = !arg0.asString().empty();
+    else if (isNumeric(arg0))
+      truthy = toInt64(arg0) != 0;
+    else
+      truthy = true;
+    if (!truthy)
+      throw QLangError(QLangErrorKind::Runtime, line, col, args[1].asString());
+    return QLangValue();
   }
   }
   throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown builtin");
@@ -911,7 +934,7 @@ void QLangVM::run() {
           throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown native function");
         frame.regs[dest] = m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, args);
       } else {
-        frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), args, m_scope, m_prog, m_deleted);
+        frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), args, m_scope, m_prog, m_deleted, i.line, i.col);
       }
       break;
     }
@@ -1189,7 +1212,7 @@ void QLangVM::runFrames(int startFrame)
           throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown native function");
         frame.regs[dest] = m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, callArgs);
       } else {
-        frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), callArgs, m_scope, m_prog, m_deleted);
+        frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), callArgs, m_scope, m_prog, m_deleted, i.line, i.col);
       }
       break;
     }
@@ -1462,7 +1485,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
           throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown native function");
         frame.regs[dest] = m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, callArgs);
       } else {
-        frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), callArgs, m_scope, m_prog, m_deleted);
+        frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), callArgs, m_scope, m_prog, m_deleted, i.line, i.col);
       }
       break;
     }

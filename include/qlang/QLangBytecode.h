@@ -28,7 +28,8 @@ enum class Builtin : int {
   Join,      // join(separator, array) -> string
   IsSet,     // isset(var_name) -> bool (checks scope existence)
   Sprintf,   // sprintf(fmt, ...) -> string (same format as printf, returns result)
-  Format     // format(template, ...) -> string (f-string interpolation)
+  Format,    // format(template, ...) -> string (f-string interpolation)
+  Assert     // assert(bool, str) -> void (throws if bool is false)
 };
 
 // Register-machine opcodes. This is a small register VM: each script variable
@@ -138,6 +139,8 @@ struct Instruction {
   int a = 0;
   int b = 0;
   int c = 0;
+  int line = 0;
+  int col = 0;
 };
 
 // A compiled user-defined function: its instruction stream, constant pool, and

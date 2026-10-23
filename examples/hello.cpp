@@ -215,17 +215,21 @@ printf("%s --> len %d\n", join(",", ar), len(ar))
 
 println(sprintf("Today is %s %d", "monday", 2026))
 
-println(f"Hello ${human.name}. Formatted")
+println(f"Hello {human.name}. Formatted")
 
 local x = 1024 / 10
-println(f"1024 / 10 = ${x}")  # 102
+println(f"1024 / 10 = {x}")  # 102
 local x = 1024 % 10
-println(f"1024 %% 10 = ${x}") # 4
+println(f"1024 %% 10 = {x}") # 4
 
 local x = 0x678 & 0x70
-println(f"0x678 & 0x70 = 0x${x:#04x}") #  expected: 0x678 & 0x70 = 0x0070
+println(f"0x678 & 0x70 = {x:#04x}") #  expected: 0x678 & 0x70 = 0x0070
 println(f"{255:#06x}") # expected: "0x00ff"
 
+assert(1==0, "this is TRUE")
+
+println("this is the END")
+ 
 )";
 
   QLangContext ctx;

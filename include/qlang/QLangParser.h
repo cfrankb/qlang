@@ -56,6 +56,8 @@ struct Expr {
   std::string callee;
   ExprPtr calleeMember; // for method calls: obj.method(args)
   std::vector<ExprPtr> args;
+  int callLine = 0;
+  int callCol = 0;
 
   // Array literal: [e0, e1, ...].
   std::vector<ExprPtr> elements;

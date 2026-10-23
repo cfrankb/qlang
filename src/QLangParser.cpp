@@ -108,6 +108,16 @@ StmtPtr QLangParser::parseStatement() {
   if (check(TokenType::Def)) return parseFunction();
   if (check(TokenType::Return)) return parseReturn();
 
+  // assert(...) — expression statement
+  if (check(TokenType::Assert)) {
+    auto expr = parseExpression();
+    match(TokenType::Semicolon);
+    auto stmt = std::make_shared<Stmt>();
+    stmt->kind = StmtKind::ExprStmt;
+    stmt->value = expr;
+    return stmt;
+  }
+
   // Label statement: :labelname
   if (check(TokenType::Colon)) {
     consume(TokenType::Colon, "':' before label name");
@@ -1101,6 +1111,27 @@ return node;
     }
     throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
                      std::string("expected '(' after 'slice'"));
+  }
+  case TokenType::Assert: {
+    // assert(bool, str) builtin call.
+    m_pos++;
+    if (check(TokenType::LParen)) {
+      m_pos++;
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Call;
+      node->callee = "assert";
+      node->callLine = tok.line;
+      node->callCol = tok.col;
+      if (!check(TokenType::RParen)) {
+        do {
+          node->args.push_back(parseExpression());
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RParen, "')'");
+      return node;
+    }
+    throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
+                     std::string("expected '(' after 'assert'"));
   }
   case TokenType::LBracket:
     return parseArrayLiteral();

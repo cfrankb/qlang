@@ -883,6 +883,9 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       }
     }
     emit(Opcode::CALL, dest, funcId, argCount);
+    // Propagate source position for runtime error reporting.
+    m_code.at(m_code.size() - 1).line = e->callLine;
+    m_code.at(m_code.size() - 1).col = e->callCol;
     break;
   }
   case ExprKind::Array: {
@@ -1147,6 +1150,7 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "isset") return static_cast<int>(Builtin::IsSet);
   if (name == "sprintf") return static_cast<int>(Builtin::Sprintf);
   if (name == "format") return static_cast<int>(Builtin::Format);
+  if (name == "assert") return static_cast<int>(Builtin::Assert);
   return -1;
 }
 
