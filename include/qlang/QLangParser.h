@@ -193,9 +193,12 @@ struct Stmt {
   // Global: global name1, name2, ...  (import top-level vars into function scope).
   std::vector<std::string> globalNames;
 
-  // Import: import math / import math.min  (bring module names into scope).
+  // Import: import math / import math as m / from math import * / from math import min, max
   std::string importModule;
-  std::string importFunc;  // empty = import all; non-empty = import single func
+  std::string importFunc;  // empty = import all; non-empty = import single func (legacy dot syntax)
+  std::vector<std::string> importFuncs;  // function names for `from math import min, max`
+  std::string importAlias;   // alias for `import math as m`
+  bool importAll = false;    // true for `from math import *`
 };
 
 using StmtPtr = std::shared_ptr<Stmt>;

@@ -1,6 +1,5 @@
 # instructions
 
-
 scripting language that interfaces with C++
 this language will compile to bytecode.
 
@@ -19,6 +18,8 @@ maintain separate targets in the CMakeLists.
 - linkage library src/*.cpp
 - demo application (e,g, examples/hello.cpp)
 - test sets for all the features listed below. 
+
+suggest commit name but don't commit automatically.
 
 # language
 
@@ -580,15 +581,29 @@ the default name.
 
 ### QLang import syntax
 
-Modules are resolved at compile time — no VM changes needed:
+Modules are resolved at compile time — no VM changes needed for flat import.
 
 ```python
-import math          # import all public names from the math module
-import math.min      # import only min from the math module
+import math                   # import module into the namespace
+                              # use math.min and math.max
+
+import math as m              # m.min, m.max
+
+from math import *            # import all public names from the math module
+from math import min, max     # import `min` and `max` only
 ```
 
-v1 uses flat import only — qualified access (`math.min(...)`) is a future
-extension.
+| Form | Behaviour |
+|---|---|
+| `import math` | Register the module under `math`; call as `math.min(...)`, `math.max(...)` (qualified access) |
+| `import math as m` | Register the module under alias `m`; call as `m.min(...)` |
+| `from math import *` | Flat import: copy all public names into the current scope |
+| `from math import min, max` | Flat import: copy only the listed names into the current scope |
+
+Qualified access (`math.min(...)`) is a future extension — v1 supports flat
+import only (`from math import *` / `from math import min, max`). The module
+is still resolved at compile time and each imported function is registered as
+an external (native) function in the current scope.
 
 ## ctx.clear()
 
@@ -695,9 +710,19 @@ println(next gen)
 ## import statement
 
 ```python
-import math              # import all public names from the math module
-import math.min          # import only min from the math module
+import math                   # import module into the namespace
+                              # use math.min and matn.max
+
+import math as m              # m.min, m.max
+
+from math import *            # import all public names from the math 
+from math import min, max     # import `min` and `max` 
+
 ```
+
+
+
+
 
 Modules are registered from C++ via `ctx.registerModule(name, module)`. The
 `import` statement is resolved at compile time: each function in the module
@@ -721,11 +746,11 @@ ctx.registerModule("math", {
 });
 ```
 
-||functions|-|-|
-||--------|-|-|
-||min(number...|array)| returns the smallest value in a group number (int, float, byte etc). |
-||max(number...|array)| returns the largest value in the group of numbers (int, float, byte etc). |
-||sum(number...|array)| returns a sum of the group of numbers (int, float, byte etc). |
+|functions|-|-|
+|--------|-|-|
+|min(number...|array)| returns the smallest value in a group number (int, float, byte etc). |
+|max(number...|array)| returns the largest value in the group of numbers (int, float, byte etc). |
+|sum(number...|array)| returns a sum of the group of numbers (int, float, byte etc). |
 
 
 ```
@@ -749,5 +774,5 @@ d = sum([1,4,20], [50,2]) # d = 77
 
 ## string module
 
-||functions|-|-|
-||--------|-|-|
+|functions|-|-|
+|--------|-|-|

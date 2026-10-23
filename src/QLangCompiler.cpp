@@ -651,40 +651,69 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     break;
   }
   case StmtKind::Import: {
-    // `import math` or `import math.min` — resolve module functions at compile
-    // time and register them as external funcs in the current scope.
+    // Resolve module functions at compile time and register them as external
+    // funcs in the current scope. Supports:
+    //   import math                          — flat import all
+    //   import math.min                      — flat import single func (legacy)
+    //   import math as m                     — register under alias, flat import all
+    //   from math import *                   — flat import all
+    //   from math import min, max            — flat import specific funcs
     if (!m_inFunction) {
-      bool found = false;
-      for (const auto &mod : m_moduleFuncs) {
-        if (mod.name == s->importModule) {
-          found = true;
-          if (s->importFunc.empty()) {
-            // Import all: register each func name.
-            for (const auto &[fname, func] : mod.funcs) {
-              int idx = -1 - m_nativeFuncIds[fname];
-              while (m_nativeFuncsResolved.size() <= static_cast<size_t>(idx))
-                m_nativeFuncsResolved.push_back(nullptr);
-              m_nativeFuncsResolved[static_cast<size_t>(idx)] = func;
-            }
-          } else {
-            // Import single: register only that function.
-            auto fit = mod.funcs.find(s->importFunc);
-            if (fit == mod.funcs.end())
-              throw QLangError(QLangErrorKind::Parse, 0, 0,
-                               "undefined function '" + s->importFunc + "' in module '" + s->importModule + "'");
-            const std::string &fname = s->importFunc;
-            const auto &func = fit->second;
-            int idx = -1 - m_nativeFuncIds[fname];
-            while (m_nativeFuncsResolved.size() <= static_cast<size_t>(idx))
-              m_nativeFuncsResolved.push_back(nullptr);
-            m_nativeFuncsResolved[static_cast<size_t>(idx)] = func;
-          }
-          break;
-        }
+      // Find the module.
+      const QLangContext::Module *mod = nullptr;
+      for (const auto &m : m_moduleFuncs) {
+        if (m.name == s->importModule) { mod = &m; break; }
       }
-      if (!found)
+      if (!mod)
         throw QLangError(QLangErrorKind::Parse, 0, 0,
                          "undefined module '" + s->importModule + "'");
+
+      // If alias specified, register the module under the alias name.
+      if (!s->importAlias.empty()) {
+        QLangContext::Module aliased;
+        aliased.name = s->importAlias;
+        aliased.funcs = mod->funcs;
+        m_moduleFuncs.push_back(aliased);
+        // Now import from the alias.
+        mod = &m_moduleFuncs.back();
+      }
+
+      // Collect function names to import.
+      std::vector<std::string> names;
+      if (!s->importFunc.empty()) {
+        // Legacy single-function import.
+        auto fit = mod->funcs.find(s->importFunc);
+        if (fit == mod->funcs.end())
+          throw QLangError(QLangErrorKind::Parse, 0, 0,
+                           "undefined function '" + s->importFunc + "' in module '" + s->importModule + "'");
+        names.push_back(s->importFunc);
+      } else if (s->importAll) {
+        // `from math import *` — import all.
+        for (const auto &[fname, func] : mod->funcs)
+          names.push_back(fname);
+      } else if (!s->importFuncs.empty()) {
+        // `from math import min, max` — import specific functions.
+        for (const auto &fname : s->importFuncs) {
+          if (mod->funcs.find(fname) == mod->funcs.end())
+            throw QLangError(QLangErrorKind::Parse, 0, 0,
+                             "undefined function '" + fname + "' in module '" + s->importModule + "'");
+          names.push_back(fname);
+        }
+      } else {
+        // `import math` — flat import all (v1).
+        for (const auto &[fname, func] : mod->funcs)
+          names.push_back(fname);
+      }
+
+      // Register each function as an external func in the current scope.
+      for (const auto &fname : names) {
+        int idx = -1 - m_nativeFuncIds[fname];
+        while (m_nativeFuncsResolved.size() <= static_cast<size_t>(idx))
+          m_nativeFuncsResolved.push_back(nullptr);
+        auto it = mod->funcs.find(fname);
+        if (it != mod->funcs.end())
+          m_nativeFuncsResolved[static_cast<size_t>(idx)] = it->second;
+      }
     }
     break;
   }

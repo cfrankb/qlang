@@ -49,6 +49,8 @@ TokenType keywordType(const std::string &text) {
   if (text == "global") return TokenType::Global;
   if (text == "assert") return TokenType::Assert;
   if (text == "import") return TokenType::Import;
+  if (text == "from") return TokenType::From;
+  if (text == "as") return TokenType::As;
   if (text == "nil") return TokenType::Nil;
   return TokenType::Ident;
 }

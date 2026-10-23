@@ -104,7 +104,7 @@ StmtPtr QLangParser::parseStatement() {
   if (check(TokenType::Goto)) return parseGoto();
   if (check(TokenType::Switch)) return parseSwitch();
   if (check(TokenType::Global)) return parseGlobal();
-  if (check(TokenType::Import)) return parseImport();
+  if (check(TokenType::Import) || check(TokenType::From)) return parseImport();
 
   if (check(TokenType::Def)) return parseFunction();
   if (check(TokenType::Return)) return parseReturn();
@@ -640,14 +640,37 @@ StmtPtr QLangParser::parseGlobal() {
 }
 
 StmtPtr QLangParser::parseImport() {
-  consume(TokenType::Import, "'import'");
   auto stmt = std::make_shared<Stmt>();
   stmt->kind = StmtKind::Import;
-  stmt->importModule = consume(TokenType::Ident, "module name after 'import'").value;
-  // Optional: import math.min  (single function import)
-  if (check(TokenType::Dot)) {
-    m_pos++; // consume '.'
-    stmt->importFunc = consume(TokenType::Ident, "function name after '.'").value;
+
+  if (match(TokenType::From)) {
+    // `from <module> import ...`
+    stmt->importModule = consume(TokenType::Ident, "module name after 'from'").value;
+    consume(TokenType::Import, "'import' after module name");
+    if (check(TokenType::Star)) {
+      // `from math import *`
+      stmt->importAll = true;
+      m_pos++;
+    } else {
+      // `from math import min, max`
+      do {
+        stmt->importFuncs.push_back(consume(TokenType::Ident, "function name").value);
+      } while (match(TokenType::Comma));
+    }
+  } else {
+    // `import <module>` or `import <module>.<func>` or `import <module> as <alias>`
+    consume(TokenType::Import, "'import'");
+    stmt->importModule = consume(TokenType::Ident, "module name after 'import'").value;
+    // Optional: import math.min  (legacy single function import)
+    if (check(TokenType::Dot)) {
+      m_pos++; // consume '.'
+      stmt->importFunc = consume(TokenType::Ident, "function name after '.'").value;
+    }
+    // Optional: import math as m
+    if (check(TokenType::As)) {
+      m_pos++; // consume 'as'
+      stmt->importAlias = consume(TokenType::Ident, "alias name after 'as'").value;
+    }
   }
   match(TokenType::Semicolon);
   return stmt;
