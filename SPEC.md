@@ -762,7 +762,7 @@ c = min(4, 1)  # c = 1
 c = min(2, 0, 4, 3)  # c = 0
 c = min([2.5,4,1]) # c = 1
 c = min([3,5,6,1], [2,5,1,2]) # errror: only 1 array allowed
-#import min and max accept: numbers (int, char, float) or an array
+#import min and max accept: numbers (int, char, float) or an array ONLY
 #min and max refuse data if types are mixed (int and float)
 #min and max refuse data if types have mixed signed and unsigned types (char and byte)
 #max used the same rules as min
@@ -779,25 +779,47 @@ d = sum([1,4,20], [50,2]) # d = 77
 
 |functions|-|-|
 |--------|-|-|
+|tba||||
 
 # user defined classes
 
 TODO: propose a class definition based on the prototype herein
 
 
-```
+```python
 class Money {
-   let total = 0
+   total = 0
 
-   def __init__ (amount) {
+   # constructor
+   __init__ (self, amount)[] {
       self.total = amount
    }
 
-   def __destroy__() {
+   # destructor
+   __destroy__(self)[] {
    }
 
-   def add(self, sum) {
-      self.total += sum
+   # string representation
+   __str__(self)[] {
+      return f"balance: {self.total}"
+   }
+
+   receive(self, amount)[] {
+      self.total += amount
+   }
+
+   spend(self, amount)[] {
+      self.total += amount
+   }
+
+   balance(self)[] {
+      return self.total
    }
 }
+
+let money = Money(125)
+money.receive(25)
+println(f"balance: {money.balance()}")
+money.spend(15)
+println(f"balance: {money.balance()}")
 ```

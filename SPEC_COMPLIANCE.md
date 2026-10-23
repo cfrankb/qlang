@@ -11,7 +11,7 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 **151 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
 
-Line numbers below are against the CURRENT SPEC.md (18310 bytes, 781 lines, SHA256: 884d37cfad27903f6eeefcd2dace22eafd083f44bcfa2a332dea49093d9d3e98).
+Line numbers below are against the CURRENT SPEC.md (18310 bytes, 781 lines, SHA256: 6d31a6ebf5ae947f7d462d4a9f5bc04d4287ac5166c7fe935c6853217799c617).
 
 ### SPEC.md Changes Since Last Audit
 
@@ -250,11 +250,13 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-Core spec fully implemented. **151 passed, 0 failed** (spec_check2) + **20 passed, 0 failed** (spec_cast_test) + **4 passed, 0 failed** (test_module).
+Core spec fully implemented. **151 passed, 0 failed** (spec_check2) + **20 passed, 0 failed** (spec_cast_test) + **7 passed, 0 failed** (test_module).
 
 ## Open Items
 
-|- **`min`/`max`/`sum` via `import math`:** ✓ implemented. C++-registered module. `min`/`max` return `Int` for values within int32_t range; return `Dword` when result exceeds int32_t range (prevents silent truncation). `sum` flattens array args (`sum([1,2,3])` and `sum([1,2], [3,4])` both work); returns `Int` for in-range results, `Dword` on overflow. |-
+||- **`min`/`max`/`sum` via `import math`:** ✓ implemented. C++-registered module (`src/QLangModules.cpp`). `min`/`max`: return `Int` for values within int32_t range; return `Dword` when result exceeds ±2147483647 (prevents silent truncation). Reject mixed float+int with type error (§767/§770). Accept single array arg (`min([1,5,9])` → `1`). Forbid mixed char+byte. `sum`: flattens all array args (`sum([1,2,3])` and `sum([1,2], [3,4])` both work); returns `Int` for in-range, `Dword` on overflow; returns `Float` when any arg is float (§777); allows float+int mix (sums in double then returns float). |
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
 - **Module system (§604–661):** v1 implemented. `import math` (flat import all) and `import math.min` (single func) both work. Modules are C++-registered via `ctx.registerModule()`, resolved at compile time. No new opcodes. Qualified access (`math.min(...)`) is a future extension.
 - Generators (§608–623): ✗ NOT implemented. Spec has TODO section with Python-style `yield` prototype. No `yield` token, no generator state machine. Out of scope for v1.
+- User-defined classes (§811–818): ✗ NOT implemented. Spec has a TODO with a `Money` class prototype. No `class` keyword, no `self`, no `__init__`/`__destroy__` support. Out of scope for v1.
+- `ctx.loadBuiltinModules()`: ✓ implemented. C++ API added after `ctx.clear()` to reload default modules.
