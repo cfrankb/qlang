@@ -535,19 +535,13 @@ QLangContext ctx;
 registerBuiltinModules(ctx);  // math module (min, max, sum) is now available
 ```
 
-Convenience method `ctx.importModule(name, alias)` is the C++ equivalent of
-the QLang `import <name>` statement. It finds an already-registered module and
-re-registers it under `alias` (or the same name if alias is empty), making it
-available for QLang `import` statements:
+Two methods control module availability:
 
-```cpp
-ctx.importModule("math");           // equivalent to QLang `import math`
-ctx.importModule("math", "m");      // equivalent to QLang `import m`
-```
+### `ctx.registerModule(name, module)`
 
-Custom modules are registered with `ctx.registerModule(name, module)`. A module
-is a named collection of native functions. Modules are resolved at compile time
-by `import` statements — no VM changes needed:
+Defines and stores a new module in the context's registry. This is a **setup**
+operation — it does not import anything into QLang scope. QLang code can use
+`import <name>` to pull the functions in on the next `run()`.
 
 ```cpp
 QLangContext::Module myMod;
@@ -565,15 +559,36 @@ myMod.funcs["max"] = [](QLangContext&, const std::vector<QLangValue>& args) -> Q
 ctx.registerModule("math", myMod);
 ```
 
-Import forms in QLang (flat, v1 only — no qualified access):
+Registering a module with a name that already exists appends a new entry; the
+last registration wins at compile time.
+
+### `ctx.importModule(name, alias)`
+
+Finds an already-registered module by `name` and re-registers it under
+`alias` (or the same `name` if alias is empty). This is the C++ equivalent of
+the QLang `import <name>` statement — it makes the module's functions
+available for compile-time import resolution.
+
+```cpp
+ctx.importModule("math");           // equivalent to QLang `import math`
+ctx.importModule("math", "m");      // equivalent to QLang `import m`
+```
+
+Throws `runtime error: unknown module '...'` if the source module is not found.
+Useful when you want to expose the same module under multiple names or override
+the default name.
+
+### QLang import syntax
+
+Modules are resolved at compile time — no VM changes needed:
 
 ```python
 import math          # import all public names from the math module
 import math.min      # import only min from the math module
 ```
 
-Module names must be unique per context. Re-registering a module with the same
-name appends a new entry; the last registration wins at compile time.
+v1 uses flat import only — qualified access (`math.min(...)`) is a future
+extension.
 
 ## ctx.clear()
 
