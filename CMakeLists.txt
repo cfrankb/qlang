@@ -31,3 +31,11 @@ target_link_libraries(qlang_example PRIVATE qlang)
 
 enable_testing()
 add_test(NAME smoke COMMAND qlang_example)
+
+# Spec compliance test harness.
+add_executable(spec_check2 examples/spec_check2.cpp)
+target_link_libraries(spec_check2 PRIVATE qlang)
+
+# Module system smoke test.
+add_executable(test_module examples/test_module.cpp)
+target_link_libraries(test_module PRIVATE qlang)

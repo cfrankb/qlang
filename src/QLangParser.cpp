@@ -104,6 +104,7 @@ StmtPtr QLangParser::parseStatement() {
   if (check(TokenType::Goto)) return parseGoto();
   if (check(TokenType::Switch)) return parseSwitch();
   if (check(TokenType::Global)) return parseGlobal();
+  if (check(TokenType::Import)) return parseImport();
 
   if (check(TokenType::Def)) return parseFunction();
   if (check(TokenType::Return)) return parseReturn();
@@ -634,6 +635,20 @@ StmtPtr QLangParser::parseGlobal() {
   do {
     stmt->globalNames.push_back(consume(TokenType::Ident, "variable name after 'global'").value);
   } while (match(TokenType::Comma));
+  match(TokenType::Semicolon);
+  return stmt;
+}
+
+StmtPtr QLangParser::parseImport() {
+  consume(TokenType::Import, "'import'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Import;
+  stmt->importModule = consume(TokenType::Ident, "module name after 'import'").value;
+  // Optional: import math.min  (single function import)
+  if (check(TokenType::Dot)) {
+    m_pos++; // consume '.'
+    stmt->importFunc = consume(TokenType::Ident, "function name after '.'").value;
+  }
   match(TokenType::Semicolon);
   return stmt;
 }

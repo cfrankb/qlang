@@ -39,6 +39,7 @@ namespace qlang
     for (const auto &[name, _] : m_nativeFuncs)
       nativeNames.insert(name);
     compiler.addExternalFuncs(nativeNames);
+    compiler.addModules(m_modules);
     CompiledProgram compiled = compiler.compile();
     // Populate the compiled program's native function table.
     for (const auto &[name, func] : m_nativeFuncs) {
@@ -49,6 +50,14 @@ namespace qlang
           compiled.nativeFuncs.push_back(nullptr);
         compiled.nativeFuncs[static_cast<size_t>(idx)] = func;
       }
+    }
+    // Also copy module-resolved native functions into compiled.nativeFuncs.
+    const auto &resolved = compiler.nativeFuncsResolved();
+    for (size_t i = 0; i < resolved.size(); i++) {
+      while (compiled.nativeFuncs.size() <= i)
+        compiled.nativeFuncs.push_back(nullptr);
+      if (resolved[i])
+        compiled.nativeFuncs[i] = resolved[i];
     }
     // Cache the compiled program for subsequent call() invocations.
     m_pimpl->compiled = std::move(compiled);
@@ -95,11 +104,26 @@ namespace qlang
     m_vars.clear();
     m_injectedConsts.clear();
     m_nativeFuncs.clear();
+    m_modules.clear();
+    m_pimpl->compiled.reset();
   }
 
   void QLangContext::setFunc(const std::string &name, NativeFunc func)
   {
     m_nativeFuncs[name] = std::move(func);
+  }
+
+  void QLangContext::registerModule(const std::string &name, const Module &module)
+  {
+    for (const auto &[fname, _] : module.funcs) {
+      // Check for name collision with existing native funcs.
+      if (m_nativeFuncs.count(fname) && m_nativeFuncs.count(fname) /* already registered */) {
+        // Silently allow override — last registration wins.
+      }
+    }
+    m_modules.push_back(module);
+    if (m_modules.back().name != name)
+      m_modules.back().name = name;
   }
 
   QLangContext::~QLangContext() = default;

@@ -112,7 +112,8 @@ enum class StmtKind {
   Goto,      // goto labelname
   GotoIf,    // if cond goto label (conditional jump)
   Switch,    // switch (expr) { case ... : ... default: ... }
-  Global     // global a, b (import top-level vars into function scope)
+  Global,    // global a, b (import top-level vars into function scope)
+  Import     // import math / import math.min
 };
 
 // Base statement node. Forward-declared so StmtPtr can be used inside Stmt.
@@ -191,6 +192,10 @@ struct Stmt {
 
   // Global: global name1, name2, ...  (import top-level vars into function scope).
   std::vector<std::string> globalNames;
+
+  // Import: import math / import math.min  (bring module names into scope).
+  std::string importModule;
+  std::string importFunc;  // empty = import all; non-empty = import single func
 };
 
 using StmtPtr = std::shared_ptr<Stmt>;
@@ -219,6 +224,7 @@ private:
   StmtPtr parseGoto();
   StmtPtr parseSwitch();
   StmtPtr parseGlobal();
+  StmtPtr parseImport();
   StmtPtr parseFunction();
   StmtPtr parseArrowClosure(const std::string &varName);
   bool looksLikeArrow() const;

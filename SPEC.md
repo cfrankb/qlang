@@ -1,5 +1,5 @@
-instructions
-==========
+# instructions
+
 
 scripting language that interfaces with C++
 this language will compile to bytecode.
@@ -20,8 +20,9 @@ maintain separate targets in the CMakeLists.
 - demo application (e,g, examples/hello.cpp)
 - test sets for all the features listed below. 
 
-variable types
-===============
+# language
+
+## variable types
 ```
 string/str (zero terminated)
 blob  (binary data)
@@ -38,8 +39,7 @@ table
 bool (true, false)
 ```
 
-reserved words
-===============
+## reserved words
 ```
 for
 to
@@ -80,13 +80,10 @@ global
 const
 end
 cast
-min
-max
 assert
 ```
 
-constants
-=========
+## constants
 
 ```python
 const # declare a constant
@@ -95,15 +92,13 @@ const year = 2026;
 const month:byte = 10;
 ```
 
-comments 
-=======================
+## comments 
 
 ```python
 # comment
 ```
 
-boolean evaluation
-=======================
+## boolean evaluation
 
 |type||
 |----|-|
@@ -117,8 +112,7 @@ boolean evaluation
 
 
 
-declarations
-=======================
+## declarations
 
 ```python
 local a1  # default variable type int. default value 0
@@ -184,9 +178,9 @@ local events:table = {
 }
 
 ```
+# Control flow
 
-conditional
-=======================
+## conditions
 
 ```python
 
@@ -225,8 +219,7 @@ if a == 1 return false;
 
 ```
 
-switch
-=======
+## switch
 ```python
 switch (var) {
    case "string2":
@@ -240,9 +233,7 @@ switch (var) {
 }
 ```
 
-loops
-=======================================
-
+## loops
 ```python
 for x = 1 to 32
 next x
@@ -308,8 +299,7 @@ for i in range(1,10) {
 }
 ```
 
-label/goto
-================
+## label / goto
 ```python
 a = 10
 
@@ -322,8 +312,9 @@ if a > 1 goto label1
 label and goto must reside in the same scope.
 if they cross a boundary, trigger an error.
 
-operators
-==========
+# syntax
+
+## operators
 
 |operator|role|
 |---------|--|
@@ -387,8 +378,7 @@ operator cast
 |cast\<>(123)|n/a| error: empty cast. nothing to do
 
 
-build-in functions
-===================
+## build-in functions
 
 |helpers|-|-|
 |--------|-|-|
@@ -407,10 +397,8 @@ build-in functions
 |slice(array, start, length) | return an array slice
 |isset(var)| return true if variable, array index or table field exists. otherwise returns false
 |join(separator, arr)| join the array element using separator
-|min(number...\|array)| returns the smallest value in a group number (int, float, byte etc). 
-|max(number...\|array)| returns the largest value in the group of numbers (int, float, byte etc). 
-|sum(number...\|array)| returns a sum of the group of numbers (int, float, byte etc). 
-|asset(bool, str)| if bool is false thrown an exception using text provided by str
+|assert(bool, str)| if bool is false thrown an exception using text provided by str
+
 
 ```python
 a = [1,2,3]
@@ -421,21 +409,6 @@ a = [1,2,3,4,5]
 b = slice(a, 0, 2)
 # b = [1,2]
 
-c = min(4, 1)  # c = 1
-c = min(2, 0, 4, 3)  # c = 0
-c = min([2.5,4,1]) # c = 1
-c = min([3,5,6,1], [2,5,1,2]) # errror: only 1 array allowed
-# min and max accept: numbers (int, char, float) or an array
-# min and max refuse data if types are mixed (int and float)
-# min and max refuse data if types have mixed signed and unsigned types (char and byte)
-# max used the same rules as min
-
-d = sum(1,10,20) # d = 31
-d = sum([1,4,20]) # d = 25
-d = sum([1,4,20], [50,2]) # d = 77
-# sum accepts: numbers (int, char, float) or arrays ONLY
-# sum return float if a type float is present
-# sum return int   if data is mixed signed and unsigned types (char and byte) and no float are present
 
 
 ```
@@ -490,8 +463,7 @@ return value is optiona. defaults to nil
 local always apply to the current scope.
 
 
-C++ interface
-========
+# C++ api
 
 Injected host variables are available to QLang code via the
 `QLangContext` API. Two injection modes exist:
@@ -571,8 +543,7 @@ TODO:
 - upload new bytecodes into the context
 - version bytecodes to avoid loading incompatible bytecodes
 
-global scope visibility
-======================
+# global scope 
 
 global const and functions are visible everywhere (global, local, function). 
 global variables (native and injected) are not visble in function scope unless declared via global keyword. (see example)
@@ -606,8 +577,7 @@ printf("[global] len: %d\n", len(a))
 ```
 
 
-strings
-================
+# strings
 
 `QLang` to implement `Python f-strings` style
 
@@ -616,9 +586,7 @@ price = 19.99
 print(f"Total: ${price:.2f}")  # Output: Total: $19.99
 ```
 
-generators
-=================
-
+# generators
 TODO: propose a solution. below is a prototype adapted from python
 
 ```
@@ -633,3 +601,65 @@ println(next gen)
 println(next gen)
 # test for end condition???
 ```
+
+# modules (internal)
+
+## import statement
+
+```python
+import math              # import all public names from the math module
+import math.min          # import only min from the math module
+```
+
+Modules are registered from C++ via `ctx.registerModule(name, module)`. The
+`import` statement is resolved at compile time: each function in the module
+is registered as an external (native) function in the current scope. Qualified
+access (`math.min(...)`) is a future extension; v1 uses flat import only.
+
+Module can be written in C++ or Qlang. System modules (C++) are part of the
+qlang library.
+
+qlang context (ctx) parses the source. it creates the `main` module.
+when a module is registered, it will provide it's own name.
+all errors messages will reference the module name.
+
+## math module
+
+```cpp
+ctx.registerModule("math", {
+  {"min", [](QLangContext&, const std::vector<QLangValue>& args) -> QLangValue { ... }},
+  {"max", ...},
+  {"sum", ...}
+});
+```
+
+||functions|-|-|
+||--------|-|-|
+||min(number...|array)| returns the smallest value in a group number (int, float, byte etc). |
+||max(number...|array)| returns the largest value in the group of numbers (int, float, byte etc). |
+||sum(number...|array)| returns a sum of the group of numbers (int, float, byte etc). |
+
+
+```
+import math
+c = min(4, 1)  # c = 1
+c = min(2, 0, 4, 3)  # c = 0
+c = min([2.5,4,1]) # c = 1
+c = min([3,5,6,1], [2,5,1,2]) # errror: only 1 array allowed
+#import min and max accept: numbers (int, char, float) or an array
+#min and max refuse data if types are mixed (int and float)
+#min and max refuse data if types have mixed signed and unsigned types (char and byte)
+#max used the same rules as min
+
+d = sum(1,10,20) # d = 31
+d = sum([1,4,20]) # d = 25
+d = sum([1,4,20], [50,2]) # d = 77
+# sum accepts: numbers (int, char, float) or arrays ONLY
+# sum return float if a type float is present
+# sum return int   if data is mixed signed and unsigned types (char and byte) and no float are present
+```
+
+## string module
+
+||functions|-|-|
+||--------|-|-|

@@ -9,17 +9,21 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 ## Current Status
 
-**147 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
+**151 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`).
 
-Line numbers below are against the CURRENT SPEC.md (13507 bytes, 635 lines, SHA256: c0a08dec5566d469f9eed3d3fd769c93aad35e0b2ed4085b4bdc9f8f91622b75).
+Line numbers below are against the CURRENT SPEC.md (14082 bytes, 665 lines, SHA256: 42ed612b024061ac14a920f89295bb89ce4b8b146e65fc3e1679fcd8b6c1c4f4).
 
 ### SPEC.md Changes Since Last Audit
 
-SHA256 changed: `8f1ef041...` → `012d4528...` (+49 lines, +1645 bytes). Git history confirms 5 commits:
+SHA256 changed: `8f1ef041...` → `1495dd3b...` (+49 lines, +1645 bytes since prior audit). Git history confirms all commits through HEAD:
 
 | Commit | Change |
 |--------|--------|
-| `c121c3b` | Added `cast`, `min`, `max` to reserved words; added `cast` operator table; added `min`/`max` to builtins |
+| `271b837` | Added `assert` to reserved words and builtins; line/col in exceptions |
+| `5cbf2ef` | F-string extended format spec support |
+| `4af61bd` | F-string extended support; added `sum`/`asset` to builtins (typo); restructured headings |
+| `c121c3b` | Added `cast` to reserved words and operator table; added `min`/`max` to reserved words and builtins |
+| `87dcfa2` | Added `sprintf` builtin |
 | `ed323a8` | Added C++ `setFunc()` injection spec |
 | `065ca4e` | Added `ctx.call(fn)` spec |
 | `b89ecb5` | Added f-string spec section |
@@ -91,6 +95,7 @@ Minor edits: fixed CMakeLists wording (`src/*.cpp`), added `s = "hello"` example
       (`local x = 1; local f = (y)[x] { return x + y }; x = 10; f(20)` → 30)
 - [x] label/goto: `:label`, `goto label`, `if cond goto label`; same-scope only;
       undefined-label error
+- [x] `assert(bool, str)` — reserved word; builtin call via `parsePrimary()`; throws runtime error on falsy first arg with provided message string
 
 ## Missing vs Spec
 
@@ -98,7 +103,7 @@ All items below are implemented and verified. Table retained for traceability.
 
 | Spec | Item | Status | Notes |
 |------|------|--------|-------|
-| §C++ interface | `assert(bool, str)` builtin | ✓ implemented | Added `TokenType::Assert`, `Builtin::Assert`. Parser handles `assert(...)` as expression call (both statement and expression context). VM throws `QLangError(Runtime)` with the message string when first arg is falsy. Uses truthiness check matching `isTrue`: nil→false, empty string→false, 0→false, everything else→true. Requires exactly 2 args; second arg must be string. |
+|| §builtins | `assert(bool, str)` | ✓ implemented | Added `TokenType::Assert`, `Builtin::Assert`. Parser handles `assert(...)` as expression call (both statement and expression context). VM throws `QLangError(Runtime)` with the message string when first arg is falsy. Uses truthiness check matching `isTrue`: nil→false, empty string→false, 0→false, everything else→true. Requires exactly 2 args; second arg must be string. |
 | §C++ interface | `set(name, value, isConst=false)` | ✓ implemented | Merged `injectConst`/`injectGlobal` into single `set()` with third `isConst` param. Seeds var into scope; when true, adds to `m_injectedConsts` so VM skips end-of-run sync and compiler's `guardNotConst()` rejects QLang assignment. |
 | §C++ interface | helpers to create `QValue` from common C++ types | ✓ implemented | `include/qlang/QValue.h` provides `using QValue = QLangValue;` and free helpers: `qval_nil`, `qval_bool`, `qval_byte`, `qval_char`, `qval_word`, `qval_short`, `qval_int`, `qval_unsigned`, `qval_dword`, `qval_float`, `qval_str` (3 overloads), `qval_blob`, `qval_array`, `qval_table`. |
 | §C++ interface | `setFunc(name, func)` — inject C++ function | ✓ implemented | `QLangContext::setFunc()` registers a native function. Callback signature: `std::function<QLangValue(QLangContext&, const std::vector<QLangValue>&)>` — context first (Lua convention). Compiler assigns negative opcode indices (-1, -2, …); VM dispatches `CALL` with `i.b < 0` via `m_prog.nativeFuncs[idx]`. |
@@ -155,6 +160,7 @@ All items below are implemented and verified. Table retained for traceability.
 || `char` | `TypeChar` | ✓ | Listed as type; `char` is a reserved keyword; `local c:char` parses; `type(c)` → `"char"`; signed -128..127; distinct from `byte` (uint8_t); `asInt()` accepts Char (stores in int32_t slot) |
 || `type` | `Type` | ✓ | Reserved word; blocks identifier use. `local type = 1` → parse error. `type()` builtin call works via `parsePrimary()` special case (same pattern as `str`/`int`). `type(var)` returns type string. |
 || `assert` | `Assert` | ✓ | Reserved word; blocks identifier use. `local assert = 1` → parse error. `assert(bool, str)` works as builtin call via `parsePrimary()` special case (same pattern as `str`/`int`/`type`). Throws runtime error on false condition. |
+|| `join` | `Join` | ✓ | Reserved word; blocks identifier use. `local join = 1` → parse error. `join(sep, arr)` works as builtin call. |
 || `switch` | `Switch` | ✓ | `switch (expr) { case val: ... case in expr: ... default: ... }` — string/int cases via EQ, membership via IN, break exits switch via `m_breakJmps` patching, implicit JMP prevents fall-through |
 || `case` | `Case` | ✓ | Reserved word; parsed in switch body |
 || `default` | `Default` | ✓ | Reserved word; parsed in switch body as fallback |
@@ -244,10 +250,11 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-Core spec fully implemented. **147 passed, 0 failed** (spec_check2) + **20 passed, 0 failed** (spec_cast_test) + **13 passed, 0 failed** (assert tests).
+Core spec fully implemented. **151 passed, 0 failed** (spec_check2) + **20 passed, 0 failed** (spec_cast_test) + **4 passed, 0 failed** (test_module).
 
 ## Open Items
 
-- **`min`/`max` builtins (§409–428):** ✗ NOT implemented. Spec defines `min(number...|array)` and `max(number...|array)` — variadic number args or single array. No `Builtin::Min`/`Builtin::Max` in enum. No `builtinId()` entry. No VM handler. **Action needed:** Add `Builtin::Min`/`Builtin::Max`, register in `builtinId()`, implement in `callBuiltin()` with mixed-type guard (refuse int+float, refuse char+byte).
+- **`min`/`max` builtins:** REMOVED from spec builtins table; moved to `math` module. Implemented as C++-registered module functions accessible via `import math` / `import math.min`. Compliance item closed.
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
+- **Module system (§604–661):** v1 implemented. `import math` (flat import all) and `import math.min` (single func) both work. Modules are C++-registered via `ctx.registerModule()`, resolved at compile time. No new opcodes. Qualified access (`math.min(...)`) is a future extension.
 - Generators (§608–623): ✗ NOT implemented. Spec has TODO section with Python-style `yield` prototype. No `yield` token, no generator state machine. Out of scope for v1.

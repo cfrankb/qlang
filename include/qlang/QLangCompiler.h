@@ -46,7 +46,13 @@ public:
   // Register names of C++ native functions. The compiler assigns them
   // negative indices so the VM can dispatch them at runtime.
   void addExternalFuncs(const std::unordered_set<std::string> &names);
+
+  // Register module functions. Each function in each module is registered as
+  // an external func with the same name (module qualification is compile-time
+  // only for flat import; qualified access math.min() is a future extension).
+  void addModules(const std::vector<QLangContext::Module> &modules);
   const std::unordered_map<std::string, int> &nativeFuncIds() const { return m_nativeFuncIds; }
+  const std::vector<QLangContext::NativeFunc> &nativeFuncsResolved() const { return m_nativeFuncsResolved; }
 
   CompiledProgram compile();
 
@@ -102,6 +108,10 @@ private:
   std::unordered_map<std::string, int> m_nativeFuncIds;
   // Resolved native function indices: index -> function (filled at compile time).
   std::vector<QLangContext::NativeFunc> m_nativeFuncsResolved;
+  // Set of names that are module functions (imported from registered modules).
+  std::unordered_set<std::string> m_moduleFuncNames;
+  // Registered modules (populated by addModules, used by import compilation).
+  std::vector<QLangContext::Module> m_moduleFuncs;
   // Compiled user functions (index 0 is reserved for the implicit "main"
   // function and is filled in at the end of compile()). `def` bodies and
   // arrow-closure bodies are appended here as they are compiled.

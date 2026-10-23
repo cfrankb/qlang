@@ -28,6 +28,18 @@ void QLangCompiler::addExternalFuncs(const std::unordered_set<std::string> &name
   }
 }
 
+void QLangCompiler::addModules(const std::vector<QLangContext::Module> &modules) {
+  std::unordered_set<std::string> allNames;
+  for (const auto &mod : modules) {
+    for (const auto &[name, _] : mod.funcs) {
+      allNames.insert(name);
+      m_moduleFuncNames.insert(name);
+    }
+  }
+  addExternalFuncs(allNames);
+  m_moduleFuncs = modules;
+}
+
 int QLangCompiler::newRegister() { return m_nextReg++; }
 int QLangCompiler::tmpRegister() { return newRegister(); }
 
@@ -636,6 +648,44 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       throw QLangError(QLangErrorKind::Parse, 0, 0,
                        "undefined label '" + s->gotoLabel + "'");
     emit(Opcode::JMP, lit->second);
+    break;
+  }
+  case StmtKind::Import: {
+    // `import math` or `import math.min` — resolve module functions at compile
+    // time and register them as external funcs in the current scope.
+    if (!m_inFunction) {
+      bool found = false;
+      for (const auto &mod : m_moduleFuncs) {
+        if (mod.name == s->importModule) {
+          found = true;
+          if (s->importFunc.empty()) {
+            // Import all: register each func name.
+            for (const auto &[fname, func] : mod.funcs) {
+              int idx = -1 - m_nativeFuncIds[fname];
+              while (m_nativeFuncsResolved.size() <= static_cast<size_t>(idx))
+                m_nativeFuncsResolved.push_back(nullptr);
+              m_nativeFuncsResolved[static_cast<size_t>(idx)] = func;
+            }
+          } else {
+            // Import single: register only that function.
+            auto fit = mod.funcs.find(s->importFunc);
+            if (fit == mod.funcs.end())
+              throw QLangError(QLangErrorKind::Parse, 0, 0,
+                               "undefined function '" + s->importFunc + "' in module '" + s->importModule + "'");
+            const std::string &fname = s->importFunc;
+            const auto &func = fit->second;
+            int idx = -1 - m_nativeFuncIds[fname];
+            while (m_nativeFuncsResolved.size() <= static_cast<size_t>(idx))
+              m_nativeFuncsResolved.push_back(nullptr);
+            m_nativeFuncsResolved[static_cast<size_t>(idx)] = func;
+          }
+          break;
+        }
+      }
+      if (!found)
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "undefined module '" + s->importModule + "'");
+    }
     break;
   }
   case StmtKind::Global: {

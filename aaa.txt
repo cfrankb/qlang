@@ -1,0 +1,1003 @@
+[DBG-CONST] Adding constant type=6 value=32 -> index=0 (pool size=1)
+[DBG-CONST] Adding constant type=6 value=32 -> index=1 (pool size=2)
+[DBG-CONST] Adding constant type=9 value=hello -> index=2 (pool size=3)
+[DBG-CONST] Adding constant type=6 value=0 -> index=3 (pool size=4)
+[DBG-CONST] Adding constant type=6 value=12 -> index=4 (pool size=5)
+[DBG-CONST] Adding constant type=9 value= world -> index=5 (pool size=6)
+[DBG-CONST] Adding constant type=6 value=1 -> index=6 (pool size=7)
+[DBG-CONST] Adding constant type=6 value=5 -> index=7 (pool size=8)
+[DBG-CONST] Adding constant type=6 value=44 -> index=8 (pool size=9)
+[DBG-CONST] Adding constant type=9 value= ok -> index=9 (pool size=10)
+[DBG-CONST] Adding constant type=6 value=3 -> index=10 (pool size=11)
+[DBG-CONST] Adding constant type=6 value=0 -> index=11 (pool size=12)
+[DBG-CONST] Adding constant type=6 value=1 -> index=12 (pool size=13)
+[DBG-CONST] Adding constant type=9 value=Louis is TOTO
+ -> index=13 (pool size=14)
+[DBG-CONST] Adding constant type=9 value=hello %s
+ -> index=0 (pool size=1)
+[DBG-CONST] Adding constant type=6 value=1 -> index=1 (pool size=2)
+[DBG-CONST] Adding constant type=14 value=(type=14) -> index=14 (pool size=15)
+[DBG-CONST] Adding constant type=9 value=Sonia -> index=15 (pool size=16)
+[DBG-CONST] Adding constant type=6 value=0 -> index=16 (pool size=17)
+[DBG-CONST] Adding constant type=11 value=(type=11) -> index=17 (pool size=18)
+[DBG-CONST] Adding constant type=9 value=coundown: %d
+ -> index=18 (pool size=19)
+[DBG-CONST] Adding constant type=6 value=0 -> index=19 (pool size=20)
+[DBG-CONST] Adding constant type=9 value=string -> index=20 (pool size=21)
+[DBG-CONST] Adding constant type=9 value=char: %c
+ -> index=21 (pool size=22)
+[DBG-CONST] Adding constant type=6 value=5 -> index=22 (pool size=23)
+[DBG-CONST] Adding constant type=6 value=4 -> index=23 (pool size=24)
+[DBG-CONST] Adding constant type=6 value=5 -> index=24 (pool size=25)
+[DBG-CONST] Adding constant type=9 value=ELSE -> index=25 (pool size=26)
+[DBG-CONST] Adding constant type=9 value=onLoad -> index=26 (pool size=27)
+[DBG-CONST] Adding constant type=9 value=onLOaD -->%s
+ -> index=0 (pool size=1)
+[DBG-CONST] Adding constant type=14 value=(type=14) -> index=27 (pool size=28)
+[DBG-CONST] Adding constant type=9 value=onDeath -> index=28 (pool size=29)
+[DBG-CONST] Adding constant type=14 value=(type=14) -> index=29 (pool size=30)
+[DBG-CONST] Adding constant type=9 value=Tam Tam -> index=30 (pool size=31)
+[DBG-CONST] Adding constant type=9 value=onLoad -> index=31 (pool size=32)
+[DBG-CONST] Adding constant type=13 value=(type=13) -> index=32 (pool size=33)
+[DBG-CONST] Adding constant type=9 value=human: %s age=%d
+ -> index=33 (pool size=34)
+[DBG-CONST] Adding constant type=9 value=name -> index=34 (pool size=35)
+[DBG-CONST] Adding constant type=9 value=age -> index=35 (pool size=36)
+[DBG-CONST] Adding constant type=9 value=space %d
+ -> index=36 (pool size=37)
+[DBG-CONST] Adding constant type=6 value=32 -> index=37 (pool size=38)
+[DBG-CONST] Adding constant type=11 value=(type=11) -> index=38 (pool size=39)
+[DBG-CONST] Adding constant type=11 value=(type=11) -> index=39 (pool size=40)
+[DBG-CONST] Adding constant type=11 value=(type=11) -> index=40 (pool size=41)
+[DBG-CONST] Adding constant type=6 value=0 -> index=41 (pool size=42)
+[DBG-CONST] Adding constant type=9 value=%d -> index=42 (pool size=43)
+[DBG-CONST] Adding constant type=9 value= -> index=43 (pool size=44)
+[DBG-CONST] Adding constant type=9 value=%s --> len %d
+ -> index=44 (pool size=45)
+[DBG-CONST] Adding constant type=9 value=, -> index=45 (pool size=46)
+[DBG-CONST] Adding constant type=9 value=Today is %s %d -> index=46 (pool size=47)
+[DBG-CONST] Adding constant type=9 value=monday -> index=47 (pool size=48)
+[DBG-CONST] Adding constant type=6 value=2026 -> index=48 (pool size=49)
+[DBG-CONST] Adding constant type=9 value=name -> index=49 (pool size=50)
+[DBG-CONST] Adding constant type=9 value=Hello %s. Formatted -> index=50 (pool size=51)
+[DBG-CONST] Adding constant type=6 value=1024 -> index=51 (pool size=52)
+[DBG-CONST] Adding constant type=6 value=10 -> index=52 (pool size=53)
+[DBG-CONST] Adding constant type=9 value=1024 / 10 = %s -> index=53 (pool size=54)
+[DBG-CONST] Adding constant type=6 value=1024 -> index=54 (pool size=55)
+[DBG-CONST] Adding constant type=6 value=10 -> index=55 (pool size=56)
+[DBG-CONST] Adding constant type=9 value=1024 %% 10 = %s -> index=56 (pool size=57)
+[DBG-CONST] Adding constant type=6 value=1656 -> index=57 (pool size=58)
+[DBG-CONST] Adding constant type=6 value=112 -> index=58 (pool size=59)
+[DBG-CONST] Adding constant type=9 value=0x678 & 0x70 = %#04x -> index=59 (pool size=60)
+[DBG-CONST] Adding constant type=6 value=255 -> index=60 (pool size=61)
+[DBG-CONST] Adding constant type=9 value=%#06x -> index=61 (pool size=62)
+[DBG-CONST] Adding constant type=6 value=1 -> index=62 (pool size=63)
+[DBG-CONST] Adding constant type=6 value=0 -> index=63 (pool size=64)
+[DBG-CONST] Adding constant type=9 value=this is TRUE -> index=64 (pool size=65)
+[DBG-CONST] Adding constant type=9 value=this is the END -> index=65 (pool size=66)
+Parsed 39 statements.
+local a =   literal: int
+local b:byte =   literal: int
+local s =   literal: string
+local sum =   literal: int
+a += =   literal: int
+s += =   literal: string
+for i =   literal: int
+  to
+  literal: int
+  sum = =     binop +
+      var: sum
+      var: i
+if
+  binop ==
+    var: a
+    literal: int
+  s += =     literal: string
+local n =   literal: int
+while
+  binop >
+    var: n
+    literal: int
+  n = =     binop -
+      var: n
+      literal: int
+expr
+expr
+aa = =   literal: int
+if
+  binop ==
+    var: aa
+    literal: int
+local events:table = expr
+local human = expr
+expr
+expr
+ar = = ar += = expr
+expr
+expr
+expr
+local x =   binop /
+    literal: int
+    literal: int
+expr
+local x =   binop %
+    literal: int
+    literal: int
+expr
+local x =   binop &
+    literal: int
+    literal: int
+expr
+expr
+expr
+expr
+
+Bytecode (225 instructions, 155 registers, 66 constants):
+  0: const r[1] = const[0] (int)
+  1: mov r[0] r[1] r[0]
+  2: const r[3] = const[1] (int)
+  3: mov r[2] r[3] r[0]
+  4: conv r[2] r[2] r[3]
+  5: const r[5] = const[2] (string)
+  6: mov r[4] r[5] r[0]
+  7: const r[7] = const[3] (int)
+  8: mov r[6] r[7] r[0]
+  9: const r[8] = const[4] (int)
+  10: add r[0] r[0] r[8]
+  11: const r[9] = const[5] (string)
+  12: add r[4] r[4] r[9]
+  13: const r[11] = const[6] (int)
+  14: mov r[10] r[11] r[0]
+  15: const r[12] = const[7] (int)
+  16: le r[13] r[10] r[12]
+  17: jmpfalse r[13] -> 24
+  18: mov r[15] r[6] r[0]
+  19: mov r[16] r[10] r[0]
+  20: add r[14] r[15] r[16]
+  21: mov r[6] r[14] r[0]
+  22: inc r[10] r[10] r[0]
+  23: jmp -> 16
+  24: mov r[18] r[0] r[0]
+  25: const r[19] = const[8] (int)
+  26: eq r[17] r[18] r[19]
+  27: jmpfalse r[17] -> 30
+  28: const r[20] = const[9] (string)
+  29: add r[4] r[4] r[20]
+  30: const r[22] = const[10] (int)
+  31: mov r[21] r[22] r[0]
+  32: mov r[24] r[21] r[0]
+  33: const r[25] = const[11] (int)
+  34: gt r[23] r[24] r[25]
+  35: jmpfalse r[23] -> 41
+  36: mov r[27] r[21] r[0]
+  37: const r[28] = const[12] (int)
+  38: sub r[26] r[27] r[28]
+  39: mov r[21] r[26] r[0]
+  40: jmp -> 32
+  41: const r[30] = const[13] (string)
+  42: mov r[30] r[30] r[0]
+  43: call r[29] r[5] r[1]
+  44: makefunc r[32] r[14] r[0]
+  45: mov r[31] r[32] r[0]
+  46: const r[34] = const[15] (string)
+  47: mov r[34] r[34] r[0]
+  48: mov r[33] r[31] r[0]
+  49: callclo r[33] r[1] r[1]
+  50: const r[35] = const[16] (int)
+  51: const r[36] = const[17] (array)
+  52: ? r[37] r[36] r[0]
+  53: lt r[38] r[35] r[37]
+  54: jmpfalse r[38] -> 63
+  55: ? r[10] r[36] r[35]
+  56: const r[40] = const[18] (string)
+  57: mov r[41] r[10] r[0]
+  58: mov r[40] r[40] r[0]
+  59: mov r[41] r[41] r[0]
+  60: call r[39] r[5] r[2]
+  61: inc r[35] r[35] r[0]
+  62: jmp -> 53
+  63: const r[43] = const[19] (int)
+  64: const r[44] = const[20] (string)
+  65: ? r[45] r[44] r[0]
+  66: lt r[46] r[43] r[45]
+  67: jmpfalse r[46] -> 76
+  68: ? r[42] r[44] r[43]
+  69: const r[48] = const[21] (string)
+  70: mov r[49] r[42] r[0]
+  71: mov r[48] r[48] r[0]
+  72: mov r[49] r[49] r[0]
+  73: call r[47] r[5] r[2]
+  74: inc r[43] r[43] r[0]
+  75: jmp -> 66
+  76: const r[51] = const[22] (int)
+  77: mov r[50] r[51] r[0]
+  78: mov r[53] r[50] r[0]
+  79: const r[54] = const[23] (int)
+  80: eq r[52] r[53] r[54]
+  81: jmpfalse r[52] -> 83
+  82: jmp -> 90
+  83: mov r[56] r[50] r[0]
+  84: const r[57] = const[24] (int)
+  85: eq r[55] r[56] r[57]
+  86: jmpfalse r[55] -> 90
+  87: const r[59] = const[25] (string)
+  88: mov r[59] r[59] r[0]
+  89: call r[58] r[4] r[1]
+  90: tabcreate r[62] r[0] r[0]
+  91: const r[63] = const[26] (string)
+  92: makefunc r[64] r[27] r[0]
+  93: tabput r[62] r[63] r[64]
+  94: const r[65] = const[28] (string)
+  95: makefunc r[66] r[29] r[0]
+  96: tabput r[62] r[65] r[66]
+  97: mov r[61] r[62] r[0]
+  98: mov r[60] r[61] r[0]
+  99: conv r[60] r[60] r[13]
+  100: const r[68] = const[30] (string)
+  101: mov r[68] r[68] r[0]
+  102: mov r[70] r[60] r[0]
+  103: const r[71] = const[31] (string)
+  104: tabget r[69] r[70] r[71]
+  105: mov r[67] r[69] r[0]
+  106: callclo r[67] r[1] r[1]
+  107: const r[73] = const[32] (table)
+  108: mov r[72] r[73] r[0]
+  109: const r[75] = const[33] (string)
+  110: mov r[78] r[72] r[0]
+  111: const r[79] = const[34] (string)
+  112: tabget r[76] r[78] r[79]
+  113: mov r[80] r[72] r[0]
+  114: const r[81] = const[35] (string)
+  115: tabget r[77] r[80] r[81]
+  116: mov r[75] r[75] r[0]
+  117: mov r[76] r[76] r[0]
+  118: mov r[77] r[77] r[0]
+  119: call r[74] r[5] r[3]
+  120: const r[83] = const[36] (string)
+  121: const r[84] = const[37] (int)
+  122: mov r[83] r[83] r[0]
+  123: mov r[84] r[84] r[0]
+  124: call r[82] r[5] r[2]
+  125: const r[86] = const[38] (array)
+  126: mov r[86] r[86] r[0]
+  127: call r[85] r[4] r[1]
+  128: const r[88] = const[39] (array)
+  129: mov r[87] r[88] r[0]
+  130: const r[89] = const[40] (array)
+  131: arrappv r[87] r[89] r[0]
+  132: const r[90] = const[41] (int)
+  133: mov r[91] r[87] r[0]
+  134: ? r[92] r[91] r[0]
+  135: lt r[93] r[90] r[92]
+  136: jmpfalse r[93] -> 145
+  137: ? r[10] r[91] r[90]
+  138: const r[95] = const[42] (string)
+  139: mov r[96] r[10] r[0]
+  140: mov r[95] r[95] r[0]
+  141: mov r[96] r[96] r[0]
+  142: call r[94] r[5] r[2]
+  143: inc r[90] r[90] r[0]
+  144: jmp -> 135
+  145: const r[98] = const[43] (string)
+  146: mov r[98] r[98] r[0]
+  147: call r[97] r[4] r[1]
+  148: const r[100] = const[44] (string)
+  149: const r[103] = const[45] (string)
+  150: mov r[104] r[87] r[0]
+  151: mov r[102] r[103] r[0]
+  152: mov r[103] r[104] r[0]
+  153: call r[101] r[11] r[2]
+  154: mov r[105] r[87] r[0]
+  155: mov r[103] r[105] r[0]
+  156: call r[102] r[6] r[1]
+  157: mov r[100] r[100] r[0]
+  158: mov r[101] r[101] r[0]
+  159: mov r[102] r[102] r[0]
+  160: call r[99] r[5] r[3]
+  161: const r[108] = const[46] (string)
+  162: const r[109] = const[47] (string)
+  163: const r[110] = const[48] (int)
+  164: mov r[108] r[108] r[0]
+  165: mov r[109] r[109] r[0]
+  166: mov r[110] r[110] r[0]
+  167: call r[107] r[13] r[3]
+  168: mov r[107] r[107] r[0]
+  169: call r[106] r[4] r[1]
+  170: mov r[116] r[72] r[0]
+  171: const r[117] = const[49] (string)
+  172: tabget r[115] r[116] r[117]
+  173: const r[113] = const[50] (string)
+  174: mov r[114] r[115] r[0]
+  175: call r[112] r[14] r[2]
+  176: mov r[112] r[112] r[0]
+  177: call r[111] r[4] r[1]
+  178: const r[120] = const[51] (int)
+  179: const r[121] = const[52] (int)
+  180: div r[119] r[120] r[121]
+  181: mov r[118] r[119] r[0]
+  182: mov r[126] r[118] r[0]
+  183: const r[124] = const[53] (string)
+  184: mov r[125] r[126] r[0]
+  185: call r[123] r[14] r[2]
+  186: mov r[123] r[123] r[0]
+  187: call r[122] r[4] r[1]
+  188: const r[128] = const[54] (int)
+  189: const r[129] = const[55] (int)
+  190: ? r[127] r[128] r[129]
+  191: mov r[118] r[127] r[0]
+  192: mov r[134] r[118] r[0]
+  193: const r[132] = const[56] (string)
+  194: mov r[133] r[134] r[0]
+  195: call r[131] r[14] r[2]
+  196: mov r[131] r[131] r[0]
+  197: call r[130] r[4] r[1]
+  198: const r[136] = const[57] (int)
+  199: const r[137] = const[58] (int)
+  200: and r[135] r[136] r[137]
+  201: mov r[118] r[135] r[0]
+  202: mov r[142] r[118] r[0]
+  203: const r[140] = const[59] (string)
+  204: mov r[141] r[142] r[0]
+  205: call r[139] r[14] r[2]
+  206: mov r[139] r[139] r[0]
+  207: call r[138] r[4] r[1]
+  208: const r[147] = const[60] (int)
+  209: const r[145] = const[61] (string)
+  210: mov r[146] r[147] r[0]
+  211: call r[144] r[14] r[2]
+  212: mov r[144] r[144] r[0]
+  213: call r[143] r[4] r[1]
+  214: const r[151] = const[62] (int)
+  215: const r[152] = const[63] (int)
+  216: eq r[149] r[151] r[152]
+  217: const r[150] = const[64] (string)
+  218: mov r[149] r[149] r[0]
+  219: mov r[150] r[150] r[0]
+  220: call r[148] r[15] r[2]
+  221: const r[154] = const[65] (string)
+  222: mov r[154] r[154] r[0]
+  223: call r[153] r[4] r[1]
+  224: return r[0] r[0] r[0]
+
+Constants:
+  [0] int
+  [1] int
+  [2] string
+  [3] int
+  [4] int
+  [5] string
+  [6] int
+  [7] int
+  [8] int
+  [9] string
+  [10] int
+  [11] int
+  [12] int
+  [13] string
+  [14] function
+  [15] string
+  [16] int
+  [17] array
+  [18] string
+  [19] int
+  [20] string
+  [21] string
+  [22] int
+  [23] int
+  [24] int
+  [25] string
+  [26] string
+  [27] function
+  [28] string
+  [29] fun[DBG-CONST] Adding constant type=6 value=32 -> index=0 (pool size=1)
+[DBG-CONST] Adding constant type=6 value=32 -> index=1 (pool size=2)
+[DBG-CONST] Adding constant type=9 value=hello -> index=2 (pool size=3)
+[DBG-CONST] Adding constant type=6 value=0 -> index=3 (pool size=4)
+[DBG-CONST] Adding constant type=6 value=12 -> index=4 (pool size=5)
+[DBG-CONST] Adding constant type=9 value= world -> index=5 (pool size=6)
+[DBG-CONST] Adding constant type=6 value=1 -> index=6 (pool size=7)
+[DBG-CONST] Adding constant type=6 value=5 -> index=7 (pool size=8)
+[DBG-CONST] Adding constant type=6 value=44 -> index=8 (pool size=9)
+[DBG-CONST] Adding constant type=9 value= ok -> index=9 (pool size=10)
+[DBG-CONST] Adding constant type=6 value=3 -> index=10 (pool size=11)
+[DBG-CONST] Adding constant type=6 value=0 -> index=11 (pool size=12)
+[DBG-CONST] Adding constant type=6 value=1 -> index=12 (pool size=13)
+[DBG-CONST] Adding constant type=9 value=Louis is TOTO
+ -> index=13 (pool size=14)
+[DBG-CONST] Adding constant type=9 value=hello %s
+ -> index=0 (pool size=1)
+[DBG-CONST] Adding constant type=6 value=1 -> index=1 (pool size=2)
+[DBG-CONST] Adding constant type=14 value=(type=14) -> index=14 (pool size=15)
+[DBG-CONST] Adding constant type=9 value=Sonia -> index=15 (pool size=16)
+[DBG-CONST] Adding constant type=6 value=0 -> index=16 (pool size=17)
+[DBG-CONST] Adding constant type=11 value=(type=11) -> index=17 (pool size=18)
+[DBG-CONST] Adding constant type=9 value=coundown: %d
+ -> index=18 (pool size=19)
+[DBG-CONST] Adding constant type=6 value=0 -> index=19 (pool size=20)
+[DBG-CONST] Adding constant type=9 value=string -> index=20 (pool size=21)
+[DBG-CONST] Adding constant type=9 value=char: %c
+ -> index=21 (pool size=22)
+[DBG-CONST] Adding constant type=6 value=5 -> index=22 (pool size=23)
+[DBG-CONST] Adding constant type=6 value=4 -> index=23 (pool size=24)
+[DBG-CONST] Adding constant type=6 value=5 -> index=24 (pool size=25)
+[DBG-CONST] Adding constant type=9 value=ELSE -> index=25 (pool size=26)
+[DBG-CONST] Adding constant type=9 value=onLoad -> index=26 (pool size=27)
+[DBG-CONST] Adding constant type=9 value=onLOaD -->%s
+ -> index=0 (pool size=1)
+[DBG-CONST] Adding constant type=14 value=(type=14) -> index=27 (pool size=28)
+[DBG-CONST] Adding constant type=9 value=onDeath -> index=28 (pool size=29)
+[DBG-CONST] Adding constant type=14 value=(type=14) -> index=29 (pool size=30)
+[DBG-CONST] Adding constant type=9 value=Tam Tam -> index=30 (pool size=31)
+[DBG-CONST] Adding constant type=9 value=onLoad -> index=31 (pool size=32)
+[DBG-CONST] Adding constant type=13 value=(type=13) -> index=32 (pool size=33)
+[DBG-CONST] Adding constant type=9 value=human: %s age=%d
+ -> index=33 (pool size=34)
+[DBG-CONST] Adding constant type=9 value=name -> index=34 (pool size=35)
+[DBG-CONST] Adding constant type=9 value=age -> index=35 (pool size=36)
+[DBG-CONST] Adding constant type=9 value=space %d
+ -> index=36 (pool size=37)
+[DBG-CONST] Adding constant type=6 value=32 -> index=37 (pool size=38)
+[DBG-CONST] Adding constant type=11 value=(type=11) -> index=38 (pool size=39)
+[DBG-CONST] Adding constant type=11 value=(type=11) -> index=39 (pool size=40)
+[DBG-CONST] Adding constant type=11 value=(type=11) -> index=40 (pool size=41)
+[DBG-CONST] Adding constant type=6 value=0 -> index=41 (pool size=42)
+[DBG-CONST] Adding constant type=9 value=%d -> index=42 (pool size=43)
+[DBG-CONST] Adding constant type=9 value= -> index=43 (pool size=44)
+[DBG-CONST] Adding constant type=9 value=%s --> len %d
+ -> index=44 (pool size=45)
+[DBG-CONST] Adding constant type=9 value=, -> index=45 (pool size=46)
+[DBG-CONST] Adding constant type=9 value=Today is %s %d -> index=46 (pool size=47)
+[DBG-CONST] Adding constant type=9 value=monday -> index=47 (pool size=48)
+[DBG-CONST] Adding constant type=6 value=2026 -> index=48 (pool size=49)
+[DBG-CONST] Adding constant type=9 value=name -> index=49 (pool size=50)
+[DBG-CONST] Adding constant type=9 value=Hello %s. Formatted -> index=50 (pool size=51)
+[DBG-CONST] Adding constant type=6 value=1024 -> index=51 (pool size=52)
+[DBG-CONST] Adding constant type=6 value=10 -> index=52 (pool size=53)
+[DBG-CONST] Adding constant type=9 value=1024 / 10 = %s -> index=53 (pool size=54)
+[DBG-CONST] Adding constant type=6 value=1024 -> index=54 (pool size=55)
+[DBG-CONST] Adding constant type=6 value=10 -> index=55 (pool size=56)
+[DBG-CONST] Adding constant type=9 value=1024 %% 10 = %s -> index=56 (pool size=57)
+[DBG-CONST] Adding constant type=6 value=1656 -> index=57 (pool size=58)
+[DBG-CONST] Adding constant type=6 value=112 -> index=58 (pool size=59)
+[DBG-CONST] Adding constant type=9 value=0x678 & 0x70 = %#04x -> index=59 (pool size=60)
+[DBG-CONST] Adding constant type=6 value=255 -> index=60 (pool size=61)
+[DBG-CONST] Adding constant type=9 value=%#06x -> index=61 (pool size=62)
+[DBG-CONST] Adding constant type=6 value=1 -> index=62 (pool size=63)
+[DBG-CONST] Adding constant type=6 value=0 -> index=63 (pool size=64)
+[DBG-CONST] Adding constant type=9 value=this is TRUE -> index=64 (pool size=65)
+[DBG-CONST] Adding constant type=9 value=this is the END -> index=65 (pool size=66)
+[VM] func=0 pc=0 op=0 a=1 b=0 c=0 regs=155
+[VM] func=0 pc=1 op=1 a=0 b=1 c=0 regs=155
+[VM] func=0 pc=2 op=0 a=3 b=1 c=0 regs=155
+[VM] func=0 pc=3 op=1 a=2 b=3 c=0 regs=155
+[VM] func=0 pc=4 op=2 a=2 b=2 c=3 regs=155
+[VM] func=0 pc=5 op=0 a=5 b=2 c=0 regs=155
+[VM] func=0 pc=6 op=1 a=4 b=5 c=0 regs=155
+[VM] func=0 pc=7 op=0 a=7 b=3 c=0 regs=155
+[VM] func=0 pc=8 op=1 a=6 b=7 c=0 regs=155
+[VM] func=0 pc=9 op=0 a=8 b=4 c=0 regs=155
+[VM] func=0 pc=10 op=6 a=0 b=0 c=8 regs=155
+[DBG-RES] op=6 a=0 b=0 c=8 -> regs[0]=44 (b=44, c=12)
+[VM] func=0 pc=11 op=0 a=9 b=5 c=0 regs=155
+[VM] func=0 pc=12 op=6 a=4 b=4 c=9 regs=155
+[DBG-RES] op=6 a=4 b=4 c=9 -> regs[4]=0 (b=0, c=0)
+[VM] func=0 pc=13 op=0 a=11 b=6 c=0 regs=155
+[VM] func=0 pc=14 op=1 a=10 b=11 c=0 regs=155
+[VM] func=0 pc=15 op=0 a=12 b=7 c=0 regs=155
+[VM] func=0 pc=16 op=23 a=13 b=10 c=12 regs=155
+[DBG-RES] op=23 a=13 b=10 c=12 -> regs[13]=1 (b=1, c=5)
+[VM] func=0 pc=17 op=41 a=13 b=24 c=0 regs=155
+[VM] func=0 pc=18 op=1 a=15 b=6 c=0 regs=155
+[VM] func=0 pc=19 op=1 a=16 b=10 c=0 regs=155
+[VM] func=0 pc=20 op=6 a=14 b=15 c=16 regs=155
+[DBG-RES] op=6 a=14 b=15 c=16 -> regs[14]=1 (b=0, c=1)
+[VM] func=0 pc=21 op=1 a=6 b=14 c=0 regs=155
+[VM] func=0 pc=22 op=4 a=10 b=10 c=0 regs=155
+[VM] func=0 pc=23 op=40 a=16 b=0 c=0 regs=155
+[VM] func=0 pc=16 op=23 a=13 b=10 c=12 regs=155
+[DBG-RES] op=23 a=13 b=10 c=12 -> regs[13]=1 (b=2, c=5)
+[VM] func=0 pc=17 op=41 a=13 b=24 c=0 regs=155
+[VM] func=0 pc=18 op=1 a=15 b=6 c=0 regs=155
+[VM] func=0 pc=19 op=1 a=16 b=10 c=0 regs=155
+[VM] func=0 pc=20 op=6 a=14 b=15 c=16 regs=155
+[DBG-RES] op=6 a=14 b=15 c=16 -> regs[14]=3 (b=1, c=2)
+[VM] func=0 pc=21 op=1 a=6 b=14 c=0 regs=155
+[VM] func=0 pc=22 op=4 a=10 b=10 c=0 regs=155
+[VM] func=0 pc=23 op=40 a=16 b=0 c=0 regs=155
+[VM] func=0 pc=16 op=23 a=13 b=10 c=12 regs=155
+[DBG-RES] op=23 a=13 b=10 c=12 -> regs[13]=1 (b=3, c=5)
+[VM] func=0 pc=17 op=41 a=13 b=24 c=0 regs=155
+[VM] func=0 pc=18 op=1 a=15 b=6 c=0 regs=155
+[VM] func=0 pc=19 op=1 a=16 b=10 c=0 regs=155
+[VM] func=0 pc=20 op=6 a=14 b=15 c=16 regs=155
+[DBG-RES] op=6 a=14 b=15 c=16 -> regs[14]=6 (b=3, c=3)
+[VM] func=0 pc=21 op=1 a=6 b=14 c=0 regs=155
+[VM] func=0 pc=22 op=4 a=10 b=10 c=0 regs=155
+[VM] func=0 pc=23 op=40 a=16 b=0 c=0 regs=155
+[VM] func=0 pc=16 op=23 a=13 b=10 c=12 regs=155
+[DBG-RES] op=23 a=13 b=10 c=12 -> regs[13]=1 (b=4, c=5)
+[VM] func=0 pc=17 op=41 a=13 b=24 c=0 regs=155
+[VM] func=0 pc=18 op=1 a=15 b=6 c=0 regs=155
+[VM] func=0 pc=19 op=1 a=16 b=10 c=0 regs=155
+[VM] func=0 pc=20 op=6 a=14 b=15 c=16 regs=155
+[DBG-RES] op=6 a=14 b=15 c=16 -> regs[14]=10 (b=6, c=4)
+[VM] func=0 pc=21 op=1 a=6 b=14 c=0 regs=155
+[VM] func=0 pc=22 op=4 a=10 b=10 c=0 regs=155
+[VM] func=0 pc=23 op=40 a=16 b=0 c=0 regs=155
+[VM] func=0 pc=16 op=23 a=13 b=10 c=12 regs=155
+[DBG-RES] op=23 a=13 b=10 c=12 -> regs[13]=1 (b=5, c=5)
+[VM] func=0 pc=17 op=41 a=13 b=24 c=0 regs=155
+[VM] func=0 pc=18 op=1 a=15 b=6 c=0 regs=155
+[VM] func=0 pc=19 op=1 a=16 b=10 c=0 regs=155
+[VM] func=0 pc=20 op=6 a=14 b=15 c=16 regs=155
+[DBG-RES] op=6 a=14 b=15 c=16 -> regs[14]=15 (b=10, c=5)
+[VM] func=0 pc=21 op=1 a=6 b=14 c=0 regs=155
+[VM] func=0 pc=22 op=4 a=10 b=10 c=0 regs=155
+[VM] func=0 pc=23 op=40 a=16 b=0 c=0 regs=155
+[VM] func=0 pc=16 op=23 a=13 b=10 c=12 regs=155
+[DBG-RES] op=23 a=13 b=10 c=12 -> regs[13]=0 (b=6, c=5)
+[VM] func=0 pc=17 op=41 a=13 b=24 c=0 regs=155
+[VM] func=0 pc=24 op=1 a=18 b=0 c=0 regs=155
+[VM] func=0 pc=25 op=0 a=19 b=8 c=0 regs=155
+[VM] func=0 pc=26 op=19 a=17 b=18 c=19 regs=155
+[DBG-RES] op=19 a=17 b=18 c=19 -> regs[17]=1 (b=44, c=44)
+[VM] func=0 pc=27 op=41 a=17 b=30 c=0 regs=155
+[VM] func=0 pc=28 op=0 a=20 b=9 c=0 regs=155
+[VM] func=0 pc=29 op=6 a=4 b=4 c=20 regs=155
+[DBG-RES] op=6 a=4 b=4 c=20 -> regs[4]=0 (b=0, c=0)
+[VM] func=0 pc=30 op=0 a=22 b=10 c=0 regs=155
+[VM] func=0 pc=31 op=1 a=21 b=22 c=0 regs=155
+[VM] func=0 pc=32 op=1 a=24 b=21 c=0 regs=155
+[VM] func=0 pc=33 op=0 a=25 b=11 c=0 regs=155
+[VM] func=0 pc=34 op=22 a=23 b=24 c=25 regs=155
+[DBG-RES] op=22 a=23 b=24 c=25 -> regs[23]=1 (b=3, c=0)
+[VM] func=0 pc=35 op=41 a=23 b=41 c=0 regs=155
+[VM] func=0 pc=36 op=1 a=27 b=21 c=0 regs=155
+[VM] func=0 pc=37 op=0 a=28 b=12 c=0 regs=155
+[VM] func=0 pc=38 op=7 a=26 b=27 c=28 regs=155
+[DBG-RES] op=7 a=26 b=27 c=28 -> regs[26]=2 (b=3, c=1)
+[VM] func=0 pc=39 op=1 a=21 b=26 c=0 regs=155
+[VM] func=0 pc=40 op=40 a=32 b=0 c=0 regs=155
+[VM] func=0 pc=32 op=1 a=24 b=21 c=0 regs=155
+[VM] func=0 pc=33 op=0 a=25 b=11 c=0 regs=155
+[VM] func=0 pc=34 op=22 a=23 b=24 c=25 regs=155
+[DBG-RES] op=22 a=23 b=24 c=25 -> regs[23]=1 (b=2, c=0)
+[VM] func=0 pc=35 op=41 a=23 b=41 c=0 regs=155
+[VM] func=0 pc=36 op=1 a=27 b=21 c=0 regs=155
+[VM] func=0 pc=37 op=0 a=28 b=12 c=0 regs=155
+[VM] func=0 pc=38 op=7 a=26 b=27 c=28 regs=155
+[DBG-RES] op=7 a=26 b=27 c=28 -> regs[26]=1 (b=2, c=1)
+[VM] func=0 pc=39 op=1 a=21 b=26 c=0 regs=155
+[VM] func=0 pc=40 op=40 a=32 b=0 c=0 regs=155
+[VM] func=0 pc=32 op=1 a=24 b=21 c=0 regs=155
+[VM] func=0 pc=33 op=0 a=25 b=11 c=0 regs=155
+[VM] func=0 pc=34 op=22 a=23 b=24 c=25 regs=155
+[DBG-RES] op=22 a=23 b=24 c=25 -> regs[23]=1 (b=1, c=0)
+[VM] func=0 pc=35 op=41 a=23 b=41 c=0 regs=155
+[VM] func=0 pc=36 op=1 a=27 b=21 c=0 regs=155
+[VM] func=0 pc=37 op=0 a=28 b=12 c=0 regs=155
+[VM] func=0 pc=38 op=7 a=26 b=27 c=28 regs=155
+[DBG-RES] op=7 a=26 b=27 c=28 -> regs[26]=0 (b=1, c=1)
+[VM] func=0 pc=39 op=1 a=21 b=26 c=0 regs=155
+[VM] func=0 pc=40 op=40 a=32 b=0 c=0 regs=155
+[VM] func=0 pc=32 op=1 a=24 b=21 c=0 regs=155
+[VM] func=0 pc=33 op=0 a=25 b=11 c=0 regs=155
+[VM] func=0 pc=34 op=22 a=23 b=24 c=25 regs=155
+[DBG-RES] op=22 a=23 b=24 c=25 -> regs[23]=0 (b=0, c=0)
+[VM] func=0 pc=35 op=41 a=23 b=41 c=0 regs=155
+[VM] func=0 pc=41 op=0 a=30 b=13 c=0 regs=155
+[VM] func=0 pc=42 op=1 a=30 b=30 c=0 regs=155
+[VM] func=0 pc=43 op=27 a=29 b=5 c=1 regs=155
+[VM] func=0 pc=44 op=48 a=32 b=14 c=0 regs=155
+[VM] func=0 pc=45 op=1 a=31 b=32 c=0 regs=155
+[VM] func=0 pc=46 op=0 a=34 b=15 c=0 regs=155
+[VM] func=0 pc=47 op=1 a=34 b=34 c=0 regs=155
+[VM] func=0 pc=48 op=1 a=33 b=31 c=0 regs=155
+[VM] func=0 pc=49 op=46 a=33 b=1 c=1 regs=155
+[pushCall] calleeIndex=1 functions.size()=4 dest=33 argc=1 callerRegs=155
+[pushCall] after arg copy, argc=1
+[pushCall] after push_back
+[pushCall] done
+[VM] func=1 pc=0 op=0 a=2 b=0 c=0 regs=5
+[VM] func=1 pc=1 op=1 a=3 b=0 c=0 regs=5
+[VM] func=1 pc=2 op=1 a=2 b=2 c=0 regs=5
+[VM] func=1 pc=3 op=1 a=3 b=3 c=0 regs=5
+[VM] func=1 pc=4 op=27 a=1 b=5 c=2 regs=5
+[VM] func=1 pc=5 op=0 a=4 b=1 c=0 regs=5
+[VM] func=1 pc=6 op=1 a=0 b=4 c=0 regs=5
+[VM] func=1 pc=7 op=47 a=0 b=0 c=0 regs=5
+[DBG-RET] func=1 dest=33 retVal=1
+[VM] func=0 pc=50 op=0 a=35 b=16 c=0 regs=155
+[VM] func=0 pc=51 op=0 a=36 b=17 c=0 regs=155
+[VM] func=0 pc=52 op=35 a=37 b=36 c=0 regs=155
+[VM] func=0 pc=53 op=21 a=38 b=35 c=37 regs=155
+[DBG-RES] op=21 a=38 b=35 c=37 -> regs[38]=1 (b=0, c=4)
+[VM] func=0 pc=54 op=41 a=38 b=63 c=0 regs=155
+[VM] func=0 pc=55 op=36 a=10 b=36 c=35 regs=155
+[VM] func=0 pc=56 op=0 a=40 b=18 c=0 regs=155
+[VM] func=0 pc=57 op=1 a=41 b=10 c=0 regs=155
+[VM] func=0 pc=58 op=1 a=40 b=40 c=0 regs=155
+[VM] func=0 pc=59 op=1 a=41 b=41 c=0 regs=155
+[VM] func=0 pc=60 op=27 a=39 b=5 c=2 regs=155
+[VM] func=0 pc=61 op=4 a=35 b=35 c=0 regs=155
+[VM] func=0 pc=62 op=40 a=53 b=0 c=0 regs=155
+[VM] func=0 pc=53 op=21 a=38 b=35 c=37 regs=155
+[DBG-RES] op=21 a=38 b=35 c=37 -> regs[38]=1 (b=1, c=4)
+[VM] func=0 pc=54 op=41 a=38 b=63 c=0 regs=155
+[VM] func=0 pc=55 op=36 a=10 b=36 c=35 regs=155
+[VM] func=0 pc=56 op=0 a=40 b=18 c=0 regs=155
+[VM] func=0 pc=57 op=1 a=41 b=10 c=0 regs=155
+[VM] func=0 pc=58 op=1 a=40 b=40 c=0 regs=155
+[VM] func=0 pc=59 op=1 a=41 b=41 c=0 regs=155
+[VM] func=0 pc=60 op=27 a=39 b=5 c=2 regs=155
+[VM] func=0 pc=61 op=4 a=35 b=35 c=0 regs=155
+[VM] func=0 pc=62 op=40 a=53 b=0 c=0 regs=155
+[VM] func=0 pc=53 op=21 a=38 b=35 c=37 regs=155
+[DBG-RES] op=21 a=38 b=35 c=37 -> regs[38]=1 (b=2, c=4)
+[VM] func=0 pc=54 op=41 a=38 b=63 c=0 regs=155
+[VM] func=0 pc=55 op=36 a=10 b=36 c=35 regs=155
+[VM] func=0 pc=56 op=0 a=40 b=18 c=0 regs=155
+[VM] func=0 pc=57 op=1 a=41 b=10 c=0 regs=155
+[VM] func=0 pc=58 op=1 a=40 b=40 c=0 regs=155
+[VM] func=0 pc=59 op=1 a=41 b=41 c=0 regs=155
+[VM] func=0 pc=60 op=27 a=39 b=5 c=2 regs=155
+[VM] func=0 pc=61 op=4 a=35 b=35 c=0 regs=155
+[VM] func=0 pc=62 op=40 a=53 b=0 c=0 regs=155
+[VM] func=0 pc=53 op=21 a=38 b=35 c=37 regs=155
+[DBG-RES] op=21 a=38 b=35 c=37 -> regs[38]=1 (b=3, c=4)
+[VM] func=0 pc=54 op=41 a=38 b=63 c=0 regs=155
+[VM] func=0 pc=55 op=36 a=10 b=36 c=35 regs=155
+[VM] func=0 pc=56 op=0 a=40 b=18 c=0 regs=155
+[VM] func=0 pc=57 op=1 a=41 b=10 c=0 regs=155
+[VM] func=0 pc=58 op=1 a=40 b=40 c=0 regs=155
+[VM] func=0 pc=59 op=1 a=41 b=41 c=0 regs=155
+[VM] func=0 pc=60 op=27 a=39 b=5 c=2 regs=155
+[VM] func=0 pc=61 op=4 a=35 b=35 c=0 regs=155
+[VM] func=0 pc=62 op=40 a=53 b=0 c=0 regs=155
+[VM] func=0 pc=53 op=21 a=38 b=35 c=37 regs=155
+[DBG-RES] op=21 a=38 b=35 c=37 -> regs[38]=0 (b=4, c=4)
+[VM] func=0 pc=54 op=41 a=38 b=63 c=0 regs=155
+[VM] func=0 pc=63 op=0 a=43 b=19 c=0 regs=155
+[VM] func=0 pc=64 op=0 a=44 b=20 c=0 regs=155
+[VM] func=0 pc=65 op=35 a=45 b=44 c=0 regs=155
+[VM] func=0 pc=66 op=21 a=46 b=43 c=45 regs=155
+[DBG-RES] op=21 a=46 b=43 c=45 -> regs[46]=1 (b=0, c=6)
+[VM] func=0 pc=67 op=41 a=46 b=76 c=0 regs=155
+[VM] func=0 pc=68 op=36 a=42 b=44 c=43 regs=155
+[VM] func=0 pc=69 op=0 a=48 b=21 c=0 regs=155
+[VM] func=0 pc=70 op=1 a=49 b=42 c=0 regs=155
+[VM] func=0 pc=71 op=1 a=48 b=48 c=0 regs=155
+[VM] func=0 pc=72 op=1 a=49 b=49 c=0 regs=155
+[VM] func=0 pc=73 op=27 a=47 b=5 c=2 regs=155
+[VM] func=0 pc=74 op=4 a=43 b=43 c=0 regs=155
+[VM] func=0 pc=75 op=40 a=66 b=0 c=0 regs=155
+[VM] func=0 pc=66 op=21 a=46 b=43 c=45 regs=155
+[DBG-RES] op=21 a=46 b=43 c=45 -> regs[46]=1 (b=1, c=6)
+[VM] func=0 pc=67 op=41 a=46 b=76 c=0 regs=155
+[VM] func=0 pc=68 op=36 a=42 b=44 c=43 regs=155
+[VM] func=0 pc=69 op=0 a=48 b=21 c=0 regs=155
+[VM] func=0 pc=70 op=1 a=49 b=42 c=0 regs=155
+[VM] func=0 pc=71 op=1 a=48 b=48 c=0 regs=155
+[VM] func=0 pc=72 op=1 a=49 b=49 c=0 regs=155
+[VM] func=0 pc=73 op=27 a=47 b=5 c=2 regs=155
+[VM] func=0 pc=74 op=4 a=43 b=43 c=0 regs=155
+[VM] func=0 pc=75 op=40 a=66 b=0 c=0 regs=155
+[VM] func=0 pc=66 op=21 a=46 b=43 c=45 regs=155
+[DBG-RES] op=21 a=46 b=43 c=45 -> regs[46]=1 (b=2, c=6)
+[VM] func=0 pc=67 op=41 a=46 b=76 c=0 regs=155
+[VM] func=0 pc=68 op=36 a=42 b=44 c=43 regs=155
+[VM] func=0 pc=69 op=0 a=48 b=21 c=0 regs=155
+[VM] func=0 pc=70 op=1 a=49 b=42 c=0 regs=155
+[VM] func=0 pc=71 op=1 a=48 b=48 c=0 regs=155
+[VM] func=0 pc=72 op=1 a=49 b=49 c=0 regs=155
+[VM] func=0 pc=73 op=27 a=47 b=5 c=2 regs=155
+[VM] func=0 pc=74 op=4 a=43 b=43 c=0 regs=155
+[VM] func=0 pc=75 op=40 a=66 b=0 c=0 regs=155
+[VM] func=0 pc=66 op=21 a=46 b=43 c=45 regs=155
+[DBG-RES] op=21 a=46 b=43 c=45 -> regs[46]=1 (b=3, c=6)
+[VM] func=0 pc=67 op=41 a=46 b=76 c=0 regs=155
+[VM] func=0 pc=68 op=36 a=42 b=44 c=43 regs=155
+[VM] func=0 pc=69 op=0 a=48 b=21 c=0 regs=155
+[VM] func=0 pc=70 op=1 a=49 b=42 c=0 regs=155
+[VM] func=0 pc=71 op=1 a=48 b=48 c=0 regs=155
+[VM] func=0 pc=72 op=1 a=49 b=49 c=0 regs=155
+[VM] func=0 pc=73 op=27 a=47 b=5 c=2 regs=155
+[VM] func=0 pc=74 op=4 a=43 b=43 c=0 regs=155
+[VM] func=0 pc=75 op=40 a=66 b=0 c=0 regs=155
+[VM] func=0 pc=66 op=21 a=46 b=43 c=45 regs=155
+[DBG-RES] op=21 a=46 b=43 c=45 -> regs[46]=1 (b=4, c=6)
+[VM] func=0 pc=67 op=41 a=46 b=76 c=0 regs=155
+[VM] func=0 pc=68 op=36 a=42 b=44 c=43 regs=155
+[VM] func=0 pc=69 op=0 a=48 b=21 c=0 regs=155
+[VM] func=0 pc=70 op=1 a=49 b=42 c=0 regs=155
+[VM] func=0 pc=71 op=1 a=48 b=48 c=0 regs=155
+[VM] func=0 pc=72 op=1 a=49 b=49 c=0 regs=155
+[VM] func=0 pc=73 op=27 a=47 b=5 c=2 regs=155
+[VM] func=0 pc=74 op=4 a=43 b=43 c=0 regs=155
+[VM] func=0 pc=75 op=40 a=66 b=0 c=0 regs=155
+[VM] func=0 pc=66 op=21 a=46 b=43 c=45 regs=155
+[DBG-RES] op=21 a=46 b=43 c=45 -> regs[46]=1 (b=5, c=6)
+[VM] func=0 pc=67 op=41 a=46 b=76 c=0 regs=155
+[VM] func=0 pc=68 op=36 a=42 b=44 c=43 regs=155
+[VM] func=0 pc=69 op=0 a=48 b=21 c=0 regs=155
+[VM] func=0 pc=70 op=1 a=49 b=42 c=0 regs=155
+[VM] func=0 pc=71 op=1 a=48 b=48 c=0 regs=155
+[VM] func=0 pc=72 op=1 a=49 b=49 c=0 regs=155
+[VM] func=0 pc=73 op=27 a=47 b=5 c=2 regs=155
+[VM] func=0 pc=74 op=4 a=43 b=43 c=0 regs=155
+[VM] func=0 pc=75 op=40 a=66 b=0 c=0 regs=155
+[VM] func=0 pc=66 op=21 a=46 b=43 c=45 regs=155
+[DBG-RES] op=21 a=46 b=43 c=45 -> regs[46]=0 (b=6, c=6)
+[VM] func=0 pc=67 op=41 a=46 b=76 c=0 regs=155
+[VM] func=0 pc=76 op=0 a=51 b=22 c=0 regs=155
+[VM] func=0 pc=77 op=1 a=50 b=51 c=0 regs=155
+[VM] func=0 pc=78 op=1 a=53 b=50 c=0 regs=155
+[VM] func=0 pc=79 op=0 a=54 b=23 c=0 regs=155
+[VM] func=0 pc=80 op=19 a=52 b=53 c=54 regs=155
+[DBG-RES] op=19 a=52 b=53 c=54 -> regs[52]=0 (b=5, c=4)
+[VM] func=0 pc=81 op=41 a=52 b=83 c=0 regs=155
+[VM] func=0 pc=83 op=1 a=56 b=50 c=0 regs=155
+[VM] func=0 pc=84 op=0 a=57 b=24 c=0 regs=155
+[VM] func=0 pc=85 op=19 a=55 b=56 c=57 regs=155
+[DBG-RES] op=19 a=55 b=56 c=57 -> regs[55]=1 (b=5, c=5)
+[VM] func=0 pc=86 op=41 a=55 b=90 c=0 regs=155
+[VM] func=0 pc=87 op=0 a=59 b=25 c=0 regs=155
+[VM] func=0 pc=88 op=1 a=59 b=59 c=0 regs=155
+[VM] func=0 pc=89 op=27 a=58 b=4 c=1 regs=155
+[VM] func=0 pc=90 op=37 a=62 b=0 c=0 regs=155
+[VM] func=0 pc=91 op=0 a=63 b=26 c=0 regs=155
+[VM] func=0 pc=92 op=48 a=64 b=27 c=0 regs=155
+[VM] func=0 pc=93 op=39 a=62 b=63 c=64 regs=155
+[VM] func=0 pc=94 op=0 a=65 b=28 c=0 regs=155
+[VM] func=0 pc=95 op=48 a=66 b=29 c=0 regs=155
+[VM] func=0 pc=96 op=39 a=62 b=65 c=66 regs=155
+[VM] func=0 pc=97 op=1 a=61 b=62 c=0 regs=155
+[VM] func=0 pc=98 op=1 a=60 b=61 c=0 regs=155
+[VM] func=0 pc=99 op=2 a=60 b=60 c=13 regs=155
+[VM] func=0 pc=100 op=0 a=68 b=30 c=0 regs=155
+[VM] func=0 pc=101 op=1 a=68 b=68 c=0 regs=155
+[VM] func=0 pc=102 op=1 a=70 b=60 c=0 regs=155
+[VM] func=0 pc=103 op=0 a=71 b=31 c=0 regs=155
+[VM] func=0 pc=104 op=38 a=69 b=70 c=71 regs=155
+[VM] func=0 pc=105 op=1 a=67 b=69 c=0 regs=155
+[VM] func=0 pc=106 op=46 a=67 b=1 c=1 regs=155
+[pushCall] calleeIndex=2 functions.size()=4 dest=67 argc=1 callerRegs=155
+[pushCall] after arg copy, argc=1
+[pushCall] after push_back
+[pushCall] done
+[VM] func=2 pc=0 op=0 a=2 b=0 c=0 regs=4
+[VM] func=2 pc=1 op=1 a=3 b=0 c=0 regs=4
+[VM] func=2 pc=2 op=1 a=2 b=2 c=0 regs=4
+[VM] func=2 pc=3 op=1 a=3 b=3 c=0 regs=4
+[VM] func=2 pc=4 op=27 a=1 b=5 c=2 regs=4
+[VM] func=2 pc=5 op=47 a=0 b=0 c=0 regs=4
+[DBG-RET] func=2 dest=67 retVal=0
+[VM] func=0 pc=107 op=0 a=73 b=32 c=0 regs=155
+[VM] func=0 pc=108 op=1 a=72 b=73 c=0 regs=155
+[VM] func=0 pc=109 op=0 a=75 b=33 c=0 regs=155
+[VM] func=0 pc=110 op=1 a=78 b=72 c=0 regs=155
+[VM] func=0 pc=111 op=0 a=79 b=34 c=0 regs=155
+[VM] func=0 pc=112 op=38 a=76 b=78 c=79 regs=155
+[VM] func=0 pc=113 op=1 a=80 b=72 c=0 regs=155
+[VM] func=0 pc=114 op=0 a=81 b=35 c=0 regs=155
+[VM] func=0 pc=115 op=38 a=77 b=80 c=81 regs=155
+[VM] func=0 pc=116 op=1 a=75 b=75 c=0 regs=155
+[VM] func=0 pc=117 op=1 a=76 b=76 c=0 regs=155
+[VM] func=0 pc=118 op=1 a=77 b=77 c=0 regs=155
+[VM] func=0 pc=119 op=27 a=74 b=5 c=3 regs=155
+[VM] func=0 pc=120 op=0 a=83 b=36 c=0 regs=155
+[VM] func=0 pc=121 op=0 a=84 b=37 c=0 regs=155
+[VM] func=0 pc=122 op=1 a=83 b=83 c=0 regs=155
+[VM] func=0 pc=123 op=1 a=84 b=84 c=0 regs=155
+[VM] func=0 pc=124 op=27 a=82 b=5 c=2 regs=155
+[VM] func=0 pc=125 op=0 a=86 b=38 c=0 regs=155
+[VM] func=0 pc=126 op=1 a=86 b=86 c=0 regs=155
+[VM] func=0 pc=127 op=27 a=85 b=4 c=1 regs=155
+[VM] func=0 pc=128 op=0 a=88 b=39 c=0 regs=155
+[VM] func=0 pc=129 op=1 a=87 b=88 c=0 regs=155
+[VM] func=0 pc=130 op=0 a=89 b=40 c=0 regs=155
+[VM] func=0 pc=131 op=33 a=87 b=89 c=0 regs=155
+[VM] func=0 pc=132 op=0 a=90 b=41 c=0 regs=155
+[VM] func=0 pc=133 op=1 a=91 b=87 c=0 regs=155
+[VM] func=0 pc=134 op=35 a=92 b=91 c=0 regs=155
+[VM] func=0 pc=135 op=21 a=93 b=90 c=92 regs=155
+[DBG-RES] op=21 a=93 b=90 c=92 -> regs[93]=1 (b=0, c=5)
+[VM] func=0 pc=136 op=41 a=93 b=145 c=0 regs=155
+[VM] func=0 pc=137 op=36 a=10 b=91 c=90 regs=155
+[VM] func=0 pc=138 op=0 a=95 b=42 c=0 regs=155
+[VM] func=0 pc=139 op=1 a=96 b=10 c=0 regs=155
+[VM] func=0 pc=140 op=1 a=95 b=95 c=0 regs=155
+[VM] func=0 pc=141 op=1 a=96 b=96 c=0 regs=155
+[VM] func=0 pc=142 op=27 a=94 b=5 c=2 regs=155
+[VM] func=0 pc=143 op=4 a=90 b=90 c=0 regs=155
+[VM] func=0 pc=144 op=40 a=135 b=0 c=0 regs=155
+[VM] func=0 pc=135 op=21 a=93 b=90 c=92 regs=155
+[DBG-RES] op=21 a=93 b=90 c=92 -> regs[93]=1 (b=1, c=5)
+[VM] func=0 pc=136 op=41 a=93 b=145 c=0 regs=155
+[VM] func=0 pc=137 op=36 a=10 b=91 c=90 regs=155
+[VM] func=0 pc=138 op=0 a=95 b=42 c=0 regs=155
+[VM] func=0 pc=139 op=1 a=96 b=10 c=0 regs=155
+[VM] func=0 pc=140 op=1 a=95 b=95 c=0 regs=155
+[VM] func=0 pc=141 op=1 a=96 b=96 c=0 regs=155
+[VM] func=0 pc=142 op=27 a=94 b=5 c=2 regs=155
+[VM] func=0 pc=143 op=4 a=90 b=90 c=0 regs=155
+[VM] func=0 pc=144 op=40 a=135 b=0 c=0 regs=155
+[VM] func=0 pc=135 op=21 a=93 b=90 c=92 regs=155
+[DBG-RES] op=21 a=93 b=90 c=92 -> regs[93]=1 (b=2, c=5)
+[VM] func=0 pc=136 op=41 a=93 b=145 c=0 regs=155
+[VM] func=0 pc=137 op=36 a=10 b=91 c=90 regs=155
+[VM] func=0 pc=138 op=0 a=95 b=42 c=0 regs=155
+[VM] func=0 pc=139 op=1 a=96 b=10 c=0 regs=155
+[VM] func=0 pc=140 op=1 a=95 b=95 c=0 regs=155
+[VM] func=0 pc=141 op=1 a=96 b=96 c=0 regs=155
+[VM] func=0 pc=142 op=27 a=94 b=5 c=2 regs=155
+[VM] func=0 pc=143 op=4 a=90 b=90 c=0 regs=155
+[VM] func=0 pc=144 op=40 a=135 b=0 c=0 regs=155
+[VM] func=0 pc=135 op=21 a=93 b=90 c=92 regs=155
+[DBG-RES] op=21 a=93 b=90 c=92 -> regs[93]=1 (b=3, c=5)
+[VM] func=0 pc=136 op=41 a=93 b=145 c=0 regs=155
+[VM] func=0 pc=137 op=36 a=10 b=91 c=90 regs=155
+[VM] func=0 pc=138 op=0 a=95 b=42 c=0 regs=155
+[VM] func=0 pc=139 op=1 a=96 b=10 c=0 regs=155
+[VM] func=0 pc=140 op=1 a=95 b=95 c=0 regs=155
+[VM] func=0 pc=141 op=1 a=96 b=96 c=0 regs=155
+[VM] func=0 pc=142 op=27 a=94 b=5 c=2 regs=155
+[VM] func=0 pc=143 op=4 a=90 b=90 c=0 regs=155
+[VM] func=0 pc=144 op=40 a=135 b=0 c=0 regs=155
+[VM] func=0 pc=135 op=21 a=93 b=90 c=92 regs=155
+[DBG-RES] op=21 a=93 b=90 c=92 -> regs[93]=1 (b=4, c=5)
+[VM] func=0 pc=136 op=41 a=93 b=145 c=0 regs=155
+[VM] func=0 pc=137 op=36 a=10 b=91 c=90 regs=155
+[VM] func=0 pc=138 op=0 a=95 b=42 c=0 regs=155
+[VM] func=0 pc=139 op=1 a=96 b=10 c=0 regs=155
+[VM] func=0 pc=140 op=1 a=95 b=95 c=0 regs=155
+[VM] func=0 pc=141 op=1 a=96 b=96 c=0 regs=155
+[VM] func=0 pc=142 op=27 a=94 b=5 c=2 regs=155
+[VM] func=0 pc=143 op=4 a=90 b=90 c=0 regs=155
+[VM] func=0 pc=144 op=40 a=135 b=0 c=0 regs=155
+[VM] func=0 pc=135 op=21 a=93 b=90 c=92 regs=155
+[DBG-RES] op=21 a=93 b=90 c=92 -> regs[93]=0 (b=5, c=5)
+[VM] func=0 pc=136 op=41 a=93 b=145 c=0 regs=155
+[VM] func=0 pc=145 op=0 a=98 b=43 c=0 regs=155
+[VM] func=0 pc=146 op=1 a=98 b=98 c=0 regs=155
+[VM] func=0 pc=147 op=27 a=97 b=4 c=1 regs=155
+[VM] func=0 pc=148 op=0 a=100 b=44 c=0 regs=155
+[VM] func=0 pc=149 op=0 a=103 b=45 c=0 regs=155
+[VM] func=0 pc=150 op=1 a=104 b=87 c=0 regs=155
+[VM] func=0 pc=151 op=1 a=102 b=103 c=0 regs=155
+[VM] func=0 pc=152 op=1 a=103 b=104 c=0 regs=155
+[VM] func=0 pc=153 op=27 a=101 b=11 c=2 regs=155
+[VM] func=0 pc=154 op=1 a=105 b=87 c=0 regs=155
+[VM] func=0 pc=155 op=1 a=103 b=105 c=0 regs=155
+[VM] func=0 pc=156 op=27 a=102 b=6 c=1 regs=155
+[VM] func=0 pc=157 op=1 a=100 b=100 c=0 regs=155
+[VM] func=0 pc=158 op=1 a=101 b=101 c=0 regs=155
+[VM] func=0 pc=159 op=1 a=102 b=102 c=0 regs=155
+[VM] func=0 pc=160 op=27 a=99 b=5 c=3 regs=155
+[VM] func=0 pc=161 op=0 a=108 b=46 c=0 regs=155
+[VM] func=0 pc=162 op=0 a=109 b=47 c=0 regs=155
+[VM] func=0 pc=163 op=0 a=110 b=48 c=0 regs=155
+[VM] func=0 pc=164 op=1 a=108 b=108 c=0 regs=155
+[VM] func=0 pc=165 op=1 a=109 b=109 c=0 regs=155
+[VM] func=0 pc=166 op=1 a=110 b=110 c=0 regs=155
+[VM] func=0 pc=167 op=27 a=107 b=13 c=3 regs=155
+[VM] func=0 pc=168 op=1 a=107 b=107 c=0 regs=155
+[VM] func=0 pc=169 op=27 a=106 b=4 c=1 regs=155
+[VM] func=0 pc=170 op=1 a=116 b=72 c=0 regs=155
+[VM] func=0 pc=171 op=0 a=117 b=49 c=0 regs=155
+[VM] func=0 pc=172 op=38 a=115 b=116 c=117 regs=155
+[VM] func=0 pc=173 op=0 a=113 b=50 c=0 regs=155
+[VM] func=0 pc=174 op=1 a=114 b=115 c=0 regs=155
+[VM] func=0 pc=175 op=27 a=112 b=14 c=2 regs=155
+[VM] func=0 pc=176 op=1 a=112 b=112 c=0 regs=155
+[VM] func=0 pc=177 op=27 a=111 b=4 c=1 regs=155
+[VM] func=0 pc=178 op=0 a=120 b=51 c=0 regs=155
+[VM] func=0 pc=179 op=0 a=121 b=52 c=0 regs=155
+[VM] func=0 pc=180 op=9 a=119 b=120 c=121 regs=155
+[DBG-RES] op=9 a=119 b=120 c=121 -> regs[119]=102 (b=1024, c=10)
+[VM] func=0 pc=181 op=1 a=118 b=119 c=0 regs=155
+[VM] func=0 pc=182 op=1 a=126 b=118 c=0 regs=155
+[VM] func=0 pc=183 op=0 a=124 b=53 c=0 regs=155
+[VM] func=0 pc=184 op=1 a=125 b=126 c=0 regs=155
+[VM] func=0 pc=185 op=27 a=123 b=14 c=2 regs=155
+[VM] func=0 pc=186 op=1 a=123 b=123 c=0 regs=155
+[VM] func=0 pc=187 op=27 a=122 b=4 c=1 regs=155
+[VM] func=0 pc=188 op=0 a=128 b=54 c=0 regs=155
+[VM] func=0 pc=189 op=0 a=129 b=55 c=0 regs=155
+[VM] func=0 pc=190 op=10 a=127 b=128 c=129 regs=155
+[DBG-RES] op=10 a=127 b=128 c=129 -> regs[127]=4 (b=1024, c=10)
+[VM] func=0 pc=191 op=1 a=118 b=127 c=0 regs=155
+[VM] func=0 pc=192 op=1 a=134 b=118 c=0 regs=155
+[VM] func=0 pc=193 op=0 a=132 b=56 c=0 regs=155
+[VM] func=0 pc=194 op=1 a=133 b=134 c=0 regs=155
+[VM] func=0 pc=195 op=27 a=131 b=14 c=2 regs=155
+[VM] func=0 pc=196 op=1 a=131 b=131 c=0 regs=155
+[VM] func=0 pc=197 op=27 a=130 b=4 c=1 regs=155
+[VM] func=0 pc=198 op=0 a=136 b=57 c=0 regs=155
+[VM] func=0 pc=199 op=0 a=137 b=58 c=0 regs=155
+[VM] func=0 pc=200 op=11 a=135 b=136 c=137 regs=155
+[DBG-RES] op=11 a=135 b=136 c=137 -> regs[135]=112 (b=1656, c=112)
+[VM] func=0 pc=201 op=1 a=118 b=135 c=0 regs=155
+[VM] func=0 pc=202 op=1 a=142 b=118 c=0 regs=155
+[VM] func=0 pc=203 op=0 a=140 b=59 c=0 regs=155
+[VM] func=0 pc=204 op=1 a=141 b=142 c=0 regs=155
+[VM] func=0 pc=205 op=27 a=139 b=14 c=2 regs=155
+[VM] func=0 pc=206 op=1 a=139 b=139 c=0 regs=155
+[VM] func=0 pc=207 op=27 a=138 b=4 c=1 regs=155
+[VM] func=0 pc=208 op=0 a=147 b=60 c=0 regs=155
+[VM] func=0 pc=209 op=0 a=145 b=61 c=0 regs=155
+[VM] func=0 pc=210 op=1 a=146 b=147 c=0 regs=155
+[VM] func=0 pc=211 op=27 a=144 b=14 c=2 regs=155
+[VM] func=0 pc=212 op=1 a=144 b=144 c=0 regs=155
+[VM] func=0 pc=213 op=27 a=143 b=4 c=1 regs=155
+[VM] func=0 pc=214 op=0 a=151 b=62 c=0 regs=155
+[VM] func=0 pc=215 op=0 a=152 b=63 c=0 regs=155
+[VM] func=0 pc=216 op=19 a=149 b=151 c=152 regs=155
+[DBG-RES] op=19 a=149 b=151 c=152 -> regs[149]=0 (b=1, c=0)
+[VM] func=0 pc=217 op=0 a=150 b=64 c=0 regs=155
+[VM] func=0 pc=218 op=1 a=149 b=149 c=0 regs=155
+[VM] func=0 pc=219 op=1 a=150 b=150 c=0 regs=155
+[VM] func=0 pc=220 op=27 a=148 b=15 c=2 regs=155
+ction
+  [30] string
+  [31] string
+  [32] table
+  [33] string
+  [34] string
+  [35] string
+  [36] string
+  [37] int
+  [38] array
+  [39] array
+  [40] array
+  [41] int
+  [42] string
+  [43] string
+  [44] string
+  [45] string
+  [46] string
+  [47] string
+  [48] int
+  [49] string
+  [50] string
+  [51] int
+  [52] int
+  [53] string
+  [54] int
+  [55] int
+  [56] string
+  [57] int
+  [58] int
+  [59] string
+  [60] int
+  [61] string
+  [62] int
+  [63] int
+  [64] string
+  [65] string
+Louis is TOTO
+hello Sonia
+coundown: 1
+coundown: 2
+coundown: 3
+coundown: 4
+char: s
+char: t
+char: r
+char: i
+char: n
+char: g
+ELSE
+onLOaD -->Tam Tam
+human: Denise age=65
+space 32
+<array>
+12345
+1,2,3,4,5 --> len 5
+Today is monday 2026
+Hello Denise. Formatted
+1024 / 10 = 102
+1024 % 10 = 4
+0x678 & 0x70 = 0x70
+0x00ff
+runtime error at line 90,1: this is TRUE

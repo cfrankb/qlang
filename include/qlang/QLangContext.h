@@ -55,6 +55,15 @@ namespace qlang
     void setFunc(const std::string &name, NativeFunc func);
     const std::unordered_map<std::string, NativeFunc> &nativeFuncs() const { return m_nativeFuncs; }
 
+    // Module registration. A module is a named collection of native functions.
+    // Modules are resolved at compile time by `import` statements.
+    struct Module {
+      std::string name;
+      std::unordered_map<std::string, NativeFunc> funcs;
+    };
+    void registerModule(const std::string &name, const Module &module);
+    const std::vector<Module> &modules() const { return m_modules; }
+
   private:
     // Pimpl: holds the compiled program without creating a circular include.
     struct Pimpl;
@@ -62,6 +71,7 @@ namespace qlang
     std::unordered_map<std::string, QLangValue> m_vars;
     std::unordered_set<std::string> m_injectedConsts;
     std::unordered_map<std::string, NativeFunc> m_nativeFuncs;
+    std::vector<Module> m_modules;
   };
 
 } // namespace qlang

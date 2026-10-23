@@ -287,6 +287,12 @@ int main() {
   expectThrow("global undeclared var",
     "def test() { global z }\ntest()");
 
+  // -- NEW: assert() builtin (spec §397) --
+  expectRun("assert true", "assert(true, \"should not fail\")");
+  expectThrow("assert false", "assert(false, \"assertion failed\")");
+  expectThrow("assert wrong count", "assert(true)");
+  expectThrow("assert bad msg type", "assert(true, 123)");
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

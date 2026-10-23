@@ -63,6 +63,7 @@ enum class TokenType {
   Default,     // default clause keyword
   Global,      // global (import top-level vars into function scope)
   Assert,      // assert (runtime assertion)
+  Import,      // import (module import)
   True,        // true
   False,       // false
   Nil,         // nil (undefined/sentinel value)

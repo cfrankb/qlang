@@ -125,4 +125,25 @@ Closure &QLangValue::asFunction() {
   return *std::get<ClosurePtr>(m_storage);
 }
 
+int64_t toInt64(const QLangValue &v) {
+  switch (v.type()) {
+  case QLangValue::Type::Bool: return static_cast<int64_t>(v.asInt());
+  case QLangValue::Type::Char: return static_cast<int64_t>(v.asChar());
+  case QLangValue::Type::Byte: return static_cast<int64_t>(v.asByte());
+  case QLangValue::Type::Word: return static_cast<int64_t>(v.asWord());
+  case QLangValue::Type::Short: return static_cast<int64_t>(v.asShort());
+  case QLangValue::Type::Int: return static_cast<int64_t>(v.asInt());
+  case QLangValue::Type::Unsigned: return static_cast<int64_t>(v.asUnsigned());
+  case QLangValue::Type::Dword: {
+    uint64_t u = v.asDword();
+    if (u > static_cast<uint64_t>(INT64_MAX))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "dword value exceeds int64_t range");
+    return static_cast<int64_t>(u);
+  }
+  case QLangValue::Type::Float: return static_cast<int64_t>(v.asFloat());
+  default: return 0;
+  }
+}
+
 } // namespace qlang

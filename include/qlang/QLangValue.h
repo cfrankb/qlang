@@ -10,6 +10,11 @@
 
 namespace qlang {
 
+class QLangValue;
+
+// Convert any numeric QLangValue to int64_t. Returns 0 for non-numeric types.
+int64_t toInt64(const QLangValue &v);
+
 // The storage type of every script variable. Mirrors the spec's variable
 // types: string, blob, byte, word, short, int, unsigned, array, float, table.
 class QLangValue {
