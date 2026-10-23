@@ -70,6 +70,10 @@ namespace qlang
     // found.
     void importModule(const std::string &name, const std::string &alias = "");
 
+    // Reload the default built-in modules (math: min, max, sum). Call after
+    // clear() if you need the built-in modules again.
+    void loadBuiltinModules();
+
   private:
     // Pimpl: holds the compiled program without creating a circular include.
     struct Pimpl;

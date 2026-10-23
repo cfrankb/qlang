@@ -144,6 +144,11 @@ namespace qlang
     registerModule(copy.name, copy);
   }
 
+  void QLangContext::loadBuiltinModules()
+  {
+    registerBuiltinModules(*this);
+  }
+
   QLangContext::~QLangContext() = default;
 
   QLangValue QLangContext::call(const std::string &name, const std::vector<QLangValue> &args)

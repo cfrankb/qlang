@@ -226,10 +226,15 @@ local x = 0x678 & 0x70
 println(f"0x678 & 0x70 = {x:#04x}") #  expected: 0x678 & 0x70 = 0x0070
 println(f"{255:#06x}") # expected: "0x00ff"
 
-assert(1==0, "this is TRUE")
+#assert(1==0, "this is TRUE")
 
 println("this is the END")
  
+import math
+
+import user
+
+
 )";
 
   QLangContext ctx;
