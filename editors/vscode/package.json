@@ -1,0 +1,36 @@
+{
+    "name": "qlang",
+    "displayName": "QLang Language Support",
+    "description": "Syntax highlighting for QLang",
+    "version": "0.1.0",
+    "publisher": "cfrankb",
+    "engines": {
+        "vscode": "^1.60.0"
+    },
+    "categories": [
+        "Programming Languages"
+    ],
+    "contributes": {
+        "languages": [
+            {
+                "id": "qlang",
+                "aliases": [
+                    "QLang",
+                    "qlang"
+                ],
+                "extensions": [
+                    ".ql",
+                    ".qlang"
+                ],
+                "configuration": "./language-configuration.json"
+            }
+        ],
+        "grammars": [
+            {
+                "language": "qlang",
+                "scopeName": "source.qlang",
+                "path": "./syntaxes/qlang.tmLanguage.json"
+            }
+        ]
+    }
+}

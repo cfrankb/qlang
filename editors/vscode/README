@@ -1,0 +1,9 @@
+~/.vscode/extensions/qlang/
+├── package.json
+├── language-configuration.json
+└── syntaxes/
+    └── qlang.tmLanguage.json
+
+# test
+python3 -c "import json, os; [json.load(open(os.path.expanduser(f))) for f in ['~/.vscode/extensions/qlang/package.json', '~/.vscode/extensions/qlang/language-configuration.json', '~/.vscode/extensions/qlang/syntaxes/qlang.tmLanguage.json']]"
+

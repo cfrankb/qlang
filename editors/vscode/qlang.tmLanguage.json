@@ -1,0 +1,41 @@
+{
+    "$schema": "https://githubusercontent.com",
+    "name": "QLang",
+    "patterns": [
+        {
+            "name": "comment.line.number-sign.qlang",
+            "match": "#.*$"
+        },
+        {
+            "name": "keyword.control.qlang",
+            "match": "\\b(for|to|in|then|while|continue|break|return|else|range|goto|switch|case|default|step|global|const|end|yield|fetch|if|next)\\b"
+        },
+        {
+            "name": "storage.type.qlang",
+            "match": "\\b(string|str|byte|blob|word|short|int|unsigned|array|float|table|bool|char|dword|class|def|let|local|cast|assert)\\b"
+        },
+        {
+            "name": "constant.language.boolean.qlang",
+            "match": "\\b(true|false)\\b"
+        },
+        {
+            "name": "constant.numeric.qlang",
+            "match": "\\b(0x[0-9a-fA-F]+|\\d+(\\.\\d+)?)\\b"
+        },
+        {
+            "name": "string.quoted.double.qlang",
+            "begin": "\"",
+            "end": "\""
+        },
+        {
+            "name": "string.quoted.single.qlang",
+            "begin": "'",
+            "end": "'"
+        },
+        {
+            "name": "keyword.operator.eval.qlang",
+            "match": "\\$[a-zA-Z_][a-zA-Z0-9_]*"
+        }
+    ],
+    "scopeName": "source.qlang"
+}
