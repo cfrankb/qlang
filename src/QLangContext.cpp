@@ -11,6 +11,27 @@
 namespace qlang
 {
 
+namespace {
+  // Convert a QLangValue into an integer verbosity level (0 for non-numeric /
+  // nil). Used by the set_verbose() builtin below.
+  int levelFromValue(const QLangValue &v) {
+    switch (v.type()) {
+      case QLangValue::Type::Int:   return static_cast<int>(v.asInt());
+      case QLangValue::Type::Dword: return static_cast<int>(static_cast<long long>(v.asDword()));
+      case QLangValue::Type::Float: return static_cast<int>(v.asFloat());
+      default:                      return 0;
+    }
+  }
+
+  // QLang-callable: set_verbose(level). Adjusts the application-wide verbose
+  // level used to gate diagnostic trace output; returns the new level.
+  QLangValue setVerboseFunc(QLangContext &ctx, const std::vector<QLangValue> &args) {
+    int lvl = levelFromValue(args.empty() ? QLangValue() : args[0]);
+    ctx.setVerboseLevel(lvl);
+    return QLangValue::Int(lvl);
+  }
+}
+
   // Pimpl definition — breaks the circular include with QLangCompiler.h.
   struct QLangContext::Pimpl
   {
@@ -21,6 +42,8 @@ namespace qlang
   {
     m_pimpl = std::make_unique<Pimpl>();
     registerBuiltinModules(*this);
+    // Application-wide verbose level, adjustable from QLang via set_verbose().
+    setFunc("set_verbose", setVerboseFunc);
   }
 
   std::vector<StmtPtr> QLangContext::parse(const std::string &source)

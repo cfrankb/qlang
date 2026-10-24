@@ -241,6 +241,7 @@ println(sprintf("max= %d, min=%d, sum=%d", mx, mn, sm))
 )";
 
   QLangContext ctx;
+  ctx.setVerboseLevel(QLangContext::TRACE_OFF);
   try
   {
     std::vector<StmtPtr> program = ctx.parse(src);

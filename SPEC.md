@@ -1,33 +1,15 @@
-# instructions
+# language
 
 scripting language that interfaces with C++
 this language will compile to bytecode.
 
 QLang uses a python-like syntax.
 
-new class QLangContext will host the interpreter context. 
+QLangContext hosts the interpreter context. 
 
 default variable scope is local
 
-this first version will parse text within a context.
-
-`SPEC_COMPLIANCE.md` should track the hash of SPEC.md
-always update `SPEC_COMPLIANCE.md`.
-
-maintain separate targets in the CMakeLists.
-- linkage library src/*.cpp
-- demo application (e,g, examples/hello.cpp)
-- test sets for all the features listed below. 
-
-suggest commit name but don't commit automatically.
-
 everything is case sensitive.
-
-always ask for permission before touching this file.
-
-don't put build file in the source tree
-
-# language
 
 ## variable types
 ```
@@ -247,7 +229,7 @@ if a == 1 return false;
 
 range keyword has different encoding based on context
 
-```
+```python
 if i in range (0,10) {
    ...
 }
@@ -286,6 +268,9 @@ if used, the keyword `continue`  will increment the i. this is implicit
 
 
 ## switch
+
+switch cases fallthrough. 
+
 ```python
 switch (var) {
    case "string2":
@@ -487,9 +472,6 @@ println(join(", ", a))
 a = [1,2,3,4,5]
 b = slice(a, 0, 2)
 # b = [1,2]
-
-
-
 ```
 
 
@@ -729,10 +711,78 @@ TODO:
 - upload new bytecodes into the context
 - version bytecodes to avoid loading incompatible bytecodes
 
-##  verbose level
+## verbose level
 
-**Priority one**:
-application wide verbose level that can adjusted with one function call. 
+**Priority one** — an application-wide verbose level that is adjustable with a single function call.
+
+The verbose level gates *diagnostic trace output only* (printf-style lines written to **stderr**). It never affects *program output* (`print` / `println` / `printf` to stdout). The level is process-global: one call changes it for the whole interpreter, and it can be toggled at runtime from either QLang or C++.
+
+### Granularity
+
+| Level | Trace detail emitted |
+|-------|----------------------|
+| `0` | Off (default). No VM trace emitted. |
+| `1` | Frame / call events (`[pushCall] …`). |
+| `2` | VM loop + opcodes + returns (`[VM] …`, `[DBG-RET] …`). |
+| `3` | Full detail: generators, table ops, bytecode (`[DBG-GEN-EXIT] …`, `[VM-TABCREATE] …`). |
+
+Compiler diagnostics (`[DBG-COMPILER]`, `[DBG-COMP]`, `[DBG-CONST]`, `[DBG-CALL]`, …) are emitted by `QLangCompiler` and are independent of this level.
+
+### QLang API
+
+`set_verbose(level)` sets the level and returns the new value.
+
+```python
+set_verbose(1)          # frame/call trace on stderr
+println(foo())          # program output on stdout — unaffected by verbose
+set_verbose(0)          # turn VM trace back off at runtime
+```
+
+```python
+def f() { local x = 0; x = 1 + 2; return x }
+
+set_verbose(2)          # print the opcode stream to stderr
+println(f())            # >> 3   (stdout, unaffected)
+set_verbose(0)
+```
+
+```
+# stderr (level 2, truncated):
+# [VM] func=1 pc=2 op=0 a=3 b=1 c=0 regs=6
+# [VM] func=1 pc=3 op=0 a=4 b=2 c=0 regs=6
+# [VM] func=1 pc=4 op=6 a=2 b=3 c=4 regs=6
+```
+
+### C++ API
+
+The level lives on `QLangContext` and is readable/writable at any time:
+
+```cpp
+#include "qlang/QLangContext.h"
+using namespace qlang;
+
+QLangContext ctx;
+ctx.setVerboseLevel(2);        // 0 = off, 1 = frames, 2 = VM loop, 3 = full
+int lvl = ctx.verboseLevel();  // read back the current level
+bool on = ctx.isAt(2);         // true when current level >= 2 (used to gate trace)
+
+QLangValue r = ctx.run("println(1)");
+```
+
+### Implementation notes
+
+- `QLangContext` owns the level (`m_verboseLevel`, default `0`) and exposes `setVerboseLevel(int)`, `verboseLevel()`, and `isAt(int)`.
+- `set_verbose` is registered as a native function (`QLangContext.cpp`). It accepts an int/dword/float argument and returns the resulting level.
+- `QLangVM` holds a gated emit helper `trace(minLevel, fmt, …)` (declared inline in `QLangVM.h`). Every diagnostic call site in `QLangVM.cpp` was converted from `fprintf(stderr, …)` to `trace(T, …)` with its tier `T` (1/2/3); sites inside the free function `callBuiltin` call `vm->trace(T, …)`.
+- `trace()` returns immediately when `m_scope.isAt(minLevel)` is false, so no formatting cost is incurred when a tier is disabled.
+
+### Example session
+
+```
+$ ./vtest prog.lang            # prog.lang: set_verbose(1); print(foo())
+42                             # <- stdout: program output
+[pushCall] calleeIndex=1 …     # <- stderr: trace, only when level >= 1
+```
 
 
 
@@ -906,9 +956,6 @@ d = sum([1,4,20], [50,2]) # d = 77
 |tba||||
 
 # user defined classes
-
-TODO: propose a class definition based on the prototype herein
-
 
 ```python
 class Money {

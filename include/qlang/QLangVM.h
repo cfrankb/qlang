@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deque>
+#include <cstdio>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -84,6 +85,18 @@ public:
   std::unordered_map<int, Frame> m_generatorFrames;
 
   static constexpr std::size_t kMaxSteps = 100000000u; // infinite-loop guard
+
+  // Gated diagnostic emit. Prints printf-style output to stderr only when the
+  // context's verbose level is >= minLevel. Program output (print/println) is
+  // unaffected. Tiers: 1 = frame/call events, 2 = VM loop + opcodes,
+  // 3 = full detail (generators, table ops).
+  template <typename... Args>
+  void trace(int minLevel, const char *fmt, Args &&...args) const {
+    if (!m_scope.isAt(minLevel)) return;
+    char buf[2048];
+    int n = std::snprintf(buf, sizeof(buf), fmt, std::forward<Args>(args)...);
+    if (n > 0) std::fputs(buf, stderr);
+  }
 };
 
 } // namespace qlang

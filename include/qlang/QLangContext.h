@@ -55,9 +55,30 @@ namespace qlang
     void setFunc(const std::string &name, NativeFunc func);
     const std::unordered_map<std::string, NativeFunc> &nativeFuncs() const { return m_nativeFuncs; }
 
+    // Application-wide verbose level for diagnostic trace output.
+    //   0 = off (default) — no trace emitted.
+    //   1 = frame/call events.
+    //   2 = VM loop + opcodes.
+    //   3 = full detail (generators, table ops).
+    // Adjust at runtime from QLang via set_verbose(level) or from C++ via this
+    // setter. Program output (print/println/printf) is unaffected.
+    enum
+    {
+      TRACE_OFF,
+      TRACE_FRAME,
+      TRACE_VM_LOOP,
+      TRACE_FULL
+    };
+
+    void setVerboseLevel(int level) { m_verboseLevel = level; }
+    int verboseLevel() const { return m_verboseLevel; }
+    // True when the current level is >= minLevel (used to gate trace output).
+    bool isAt(int minLevel) const { return m_verboseLevel >= minLevel; }
+
     // Module registration. A module is a named collection of native functions.
     // Modules are resolved at compile time by `import` statements.
-    struct Module {
+    struct Module
+    {
       std::string name;
       std::unordered_map<std::string, NativeFunc> funcs;
     };
@@ -81,6 +102,7 @@ namespace qlang
     std::unordered_map<std::string, QLangValue> m_vars;
     std::unordered_set<std::string> m_injectedConsts;
     std::unordered_map<std::string, NativeFunc> m_nativeFuncs;
+    int m_verboseLevel = 0;
     std::vector<Module> m_modules;
   };
 

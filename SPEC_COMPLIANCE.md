@@ -11,15 +11,16 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 **185 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **5 passed, 0 failed** (`gen_test`) + **22 passed, 0 failed** (`examples/range_check.cpp`, `range` ctest) = **272 total**.
 
-Line numbers below are against the CURRENT SPEC.md (21674 bytes, 949 lines, SHA256: 8c109fa03c6fd08a9a2605c3b3b51f4f5c9928087568ddfbac76498468e2f642). Working tree is clean (SPEC.md and SPEC_COMPLIANCE.md both committed; no untracked edits).
+Line numbers below are against the CURRENT SPEC.md (24623 bytes, 1018 lines, SHA256: 2a42e1ce8121fd96372bde9cbb5d75b908a7622f575d7bf54a730765a4b78efb). Working tree is DIRTY: SPEC.md (verbose-level section + prior "agent instructions"/build-files edits) and the verbose-level implementation (QLangContext.h/.cpp, QLangVM.h/.cpp) are staged/unstaged but not committed; src/QLangVM.cpp.orig and src/QLangVM.cpp.rej are untracked.
 
 ## SPEC.md Changes Since Last Audit
 
-SHA256: `8c109fa03c6fd08a9a2605c3b3b51f4f5c9928087568ddfbac76498468e2f642` (949 lines, 21674 bytes).
+SHA256: `2a42e1ce8121fd96372bde9cbb5d75b908a7622f575d7bf54a730765a4b78efb` (1018 lines, 24623 bytes).
 
 | Commit | Change |
 |--------|--------|
 | `2f19a23` | feat(range): context-dependent range encoding — `for i in range(a,b)` counter loop (no array), `l in range(a,b)` bounds check; `containsYield` recurses into ForIn for generators; added `examples/range_check.cpp` (22 cases, `range` ctest) |
+| `uncommitted` | feat(verbose): application-wide verbose level — `QLangContext::setVerboseLevel/verboseLevel/isAt` + `m_verboseLevel` (default 0); `set_verbose(level)` native fn (`QLangContext.cpp`, accepts int/dword/float, returns new level); `QLangVM::trace(minLevel, …)` gated emit helper with tiers 1 (frames/calls) / 2 (VM loop+opcodes+returns) / 3 (full detail) and the fprintf→trace conversion in `QLangVM.cpp`. Expanded `## verbose level` section in SPEC.md (§736) from a one-line placeholder into a full implementation spec (granularity table, QLang + C++ APIs, implementation notes, example session). Verified: build clean (`qlang` lib + `spec_check2`); `set_verbose(0/1/2)` emits the correct tiers to stderr with program output on stdout unaffected; C++ `setVerboseLevel(3)` → `verboseLevel()==3`, `isAt(2/3)==true`. |
 | `5001c1d` | checkpoint: add `yield`/`fetch` reserved words; add "everything is case sensitive." + "always ask for permission before touching this file."; boolean-table `generator`/`function,lambda` rows; `## declarations and assignments` rename + implicit-declaration example; new `## range` section (context-dependent encoding); `==`/`!=` nil-equality table; "no-return -> returns nil"; `## verbose level` (Priority one); generators rewritten (callable-closure prototype + `## Syntax` + `## EOF sentinel`) |
 | `31fc707` | Add `==`/`!=` nil-equality rules (nil only equals nil) + document functions/lambdas/generators without a return statement returning nil (nil type) |
 | `b195b06` | Add `class` to reserved words; fix math module typo; dd string module stub; expand Money class prototype |
@@ -31,9 +32,25 @@ Minor edits: removed `slice => build in` from reserved words (already not a keyw
 
 ## Uncommitted SPEC.md Edits (working tree; not in git)
 
-None. SPEC.md is clean in git (working-tree hash = `8c109fa0...`, matching commit
-`2f19a23`). The tally in "Current Status" (272 total) includes the new
-`examples/range_check.cpp` suite and has been re-run against the current spec.
+SPEC.md working-tree hash = `2a42e1ce...` (1018 lines, 24623 bytes). Two classes of
+uncommitted SPEC.md edits:
+1. Prior edits (staged): header "instructions" → "agent instructions"; expanded the
+   "don't put build file" note with a build-files allowlist; removed stray blank lines
+   and a `TODO: propose a class definition` line (continues the `2f19a23` direction).
+2. `## verbose level` section (§736) expanded from a one-line placeholder into a full
+   implementation spec (granularity table, QLang `set_verbose` API, C++ API,
+   implementation notes, example session).
+
+Uncommitted implementation (source, committed separately pending): the verbose-level
+feature — `QLangContext::setVerboseLevel/verboseLevel/isAt` + `m_verboseLevel`
+(`include/qlang/QLangContext.h`), `set_verbose` native fn (`src/QLangContext.cpp`), and
+the `trace(minLevel,…)` gated emit helper + fprintf→trace tier conversion
+(`include/qlang/QLangVM.h`, `src/QLangVM.cpp`). All staged/unstaged but not committed.
+`src/QLangVM.cpp.orig` and `src/QLangVM.cpp.rej` are patch artifacts; the `.rej` hunk
+was an extra `[DBG-YIELD-REG]` register-dump loop that was NOT applied. The tally in
+"Current Status" (272 total) includes the `examples/range_check.cpp` suite and has been
+re-run against the current spec; the verbose feature is verified separately (build +
+runtime, see the Open Items entry).
 
 ## Legend
 
@@ -302,7 +319,7 @@ class Name {
 ## Open Items
 
 |||- **Reserved word `fetch`:** ✗ **NOT implemented.** Lexer/parser have no `TokenType::Fetch`; `fetch` tokenizes as `Ident` and silently works as an identifier rather than raising the reserved-word error the SPEC implies. Gap vs SPEC §reserved words.
-|||- **`## verbose level` (**Priority one**):** ✗ **NOT implemented.** No application-wide verbose flag/function anywhere in `include/`/`src/`. SPEC.md §718–721 requests it but no code exists. Gap.
+|||- **`## verbose level` (**Priority one**):** ✓ **Implemented.** Application-wide verbose level on `QLangContext` (`m_verboseLevel`, default 0): `setVerboseLevel(int)`, `verboseLevel()`, `isAt(int)`. QLang `set_verbose(level)` native fn (`QLangContext.cpp`) accepts int/dword/float and returns the new level. `QLangVM` gated emit helper `trace(minLevel, fmt, …)` (`QLangVM.h`); every stderr diagnostic in `QLangVM.cpp` converted from `fprintf` to `trace(T,…)` with tier T∈{1,2,3} (1 = frame/call events, 2 = VM loop+opcodes+returns, 3 = full detail: generators/table ops/bytecode); sites inside `callBuiltin` use `vm->trace(T,…)`; `trace()` short-circuits when `isAt(minLevel)` is false. Gates stderr trace only — program output (print/println/printf) is unaffected. Verified: build clean (`qlang` lib + `spec_check2`); runtime `set_verbose(0/1/2)` emits the correct tiers to stderr with stdout intact; C++ `setVerboseLevel(3)` → `verboseLevel()==3`, `isAt(2)==isAt(3)==true`. Gap vs SPEC resolved. |
 |||- **`range` context-dependent encoding (§range):** ✓ **Resolved.** Compiler emits a counter loop for `for i in range(a,b)` (`i=a; while i<=b { …; ++i }`, no array), a bounds check `(l>=a) && (l<=b)` for `l in range(a,b)` in any expression/condition context (including `while i in range` and `let x = b in range(0,10)`), materialization for `arr = range(a,b)`, and a generator for `for i in range { yield i }` (containsYield recurses into ForIn). `continue` in a range loop jumps to the implicit `INC`. Verified by `examples/range_check.cpp` (22 passed, 0 failed).
 ||- **`min`/`max`/`sum` via `import math`:** ✓ implemented. C++-registered module (`src/QLangModules.cpp`). `min`/`max`: return `Int` for values within int32_t range; return `Dword` when result exceeds ±2147483647 (prevents silent truncation). Reject mixed float+int with type error (§767/§770). Accept single array arg (`min([1,5,9])` → `1`). Forbid mixed char+byte. `sum`: flattens all array args (`sum([1,2,3])` and `sum([1,2], [3,4])` both work); returns `Int` for in-range, `Dword` on overflow; returns `Float` when any arg is float (§777); allows float+int mix (sums in double then returns float). |
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
