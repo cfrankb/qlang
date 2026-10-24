@@ -15,7 +15,7 @@ Line numbers below are against the CURRENT SPEC.md (18989 bytes, 826 lines, SHA2
 
 ### SPEC.md Changes Since Last Audit
 
-SHA256 changed: `c806eae2...` → `9b622689...` (+17 lines, +321 bytes since prior audit). Git history confirms all commits through HEAD:
+SHA256: `02be11bbd3aa9b7e4da6cfc76dad67451fcab8d91d118c6d8517bb4bd3e07aef` (860 lines, 20039 bytes).
 
 | Commit | Change |
 |--------|--------|
@@ -279,6 +279,6 @@ class Name {
 ||- **`min`/`max`/`sum` via `import math`:** ✓ implemented. C++-registered module (`src/QLangModules.cpp`). `min`/`max`: return `Int` for values within int32_t range; return `Dword` when result exceeds ±2147483647 (prevents silent truncation). Reject mixed float+int with type error (§767/§770). Accept single array arg (`min([1,5,9])` → `1`). Forbid mixed char+byte. `sum`: flattens all array args (`sum([1,2,3])` and `sum([1,2], [3,4])` both work); returns `Int` for in-range, `Dword` on overflow; returns `Float` when any arg is float (§777); allows float+int mix (sums in double then returns float). |
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
 - **Module system (§604–661):** v1 implemented. `import math` (flat import all) and `import math.min` (single func) both work. Modules are C++-registered via `ctx.registerModule()`, resolved at compile time. No new opcodes. Qualified access (`math.min(...)`) is a future extension.
-- Generators (§608–623): ✗ NOT implemented. Spec has TODO section with Python-style `yield` prototype. No `yield` token, no generator state machine. Out of scope for v1.
+- Generators (§608–623): ✓ **Implemented.** `yield` is a reserved word (`TokenType::Yield`). Generator values are stored as `Type::Generator` using `std::function<std::optional<QLangValue>()>` — `std::nullopt` signals exhaustion (EOF). `yield expr` compiles to `YIELD` opcode with the expression result register. `yield` (empty) compiles to `YIELD` with a `CONST nil` temp. The VM handler calls the closure; `nullopt` returns `nil` as the EOF sentinel. `next(gen())` calls the generator. Verified: `def gen_range(mi,mx) { for i = mi to mx { yield i } }` then iterating with `while v != nil { v = gen() }` yields 1,2,3 then nil. 7 new test cases added to `spec_check2.cpp` covering: basic yield, second yield, exhaustion/EOF, loop accumulate, empty yield, outer variable capture, type check.
 - User-defined classes (§811–818): ✓ **Implemented.** `class Name { fields; methods }` syntax. Methods compiled as arrow closures with `self` as first param. Constructor: creates instance table, calls prototype function, copies methods, calls `__init__(self, args...)`. Member calls `obj.method(args)` prepend `self` for known class methods; plain closures in tables called without self. Supports `__init__`, `__destroy__`, `__str__` methods per spec prototype.
 - `ctx.loadBuiltinModules()`: ✓ implemented. C++ API added after `ctx.clear()` to reload default modules.
