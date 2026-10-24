@@ -9,46 +9,31 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 ## Current Status
 
-**185 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **5 passed, 0 failed** (`gen_test`) = **250 total**.
+**185 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **5 passed, 0 failed** (`gen_test`) + **22 passed, 0 failed** (`examples/range_check.cpp`, `range` ctest) = **272 total**.
 
-Line numbers below are against the CURRENT SPEC.md (21354 bytes, 935 lines, SHA256: 273064b4d6e9ec56490574c4576b4f7b846015dfc2351ed4bd80de56ef12fd5a).
-
-> NOTE: SPEC.md is actively being edited in the working tree (line 26 now says "always ask for permission before touching this file"). This hash is a snapshot at update time and may drift as SPEC.md changes.
+Line numbers below are against the CURRENT SPEC.md (21674 bytes, 949 lines, SHA256: 8c109fa03c6fd08a9a2605c3b3b51f4f5c9928087568ddfbac76498468e2f642). Working tree is clean (SPEC.md and SPEC_COMPLIANCE.md both committed; no untracked edits).
 
 ## SPEC.md Changes Since Last Audit
 
-SHA256: `273064b4d6e9ec56490574c4576b4f7b846015dfc2351ed4bd80de56ef12fd5a` (935 lines, 21354 bytes).
+SHA256: `8c109fa03c6fd08a9a2605c3b3b51f4f5c9928087568ddfbac76498468e2f642` (949 lines, 21674 bytes).
 
 | Commit | Change |
 |--------|--------|
+| `2f19a23` | feat(range): context-dependent range encoding — `for i in range(a,b)` counter loop (no array), `l in range(a,b)` bounds check; `containsYield` recurses into ForIn for generators; added `examples/range_check.cpp` (22 cases, `range` ctest) |
+| `5001c1d` | checkpoint: add `yield`/`fetch` reserved words; add "everything is case sensitive." + "always ask for permission before touching this file."; boolean-table `generator`/`function,lambda` rows; `## declarations and assignments` rename + implicit-declaration example; new `## range` section (context-dependent encoding); `==`/`!=` nil-equality table; "no-return -> returns nil"; `## verbose level` (Priority one); generators rewritten (callable-closure prototype + `## Syntax` + `## EOF sentinel`) |
 | `31fc707` | Add `==`/`!=` nil-equality rules (nil only equals nil) + document functions/lambdas/generators without a return statement returning nil (nil type) |
 | `b195b06` | Add `class` to reserved words; fix math module typo; dd string module stub; expand Money class prototype |
 | `8779c16` | Fix: math.min/max/sum overflow to Dword, sum flattens arrays |
 | `a96121b` | SPEC.md: document `loadBuiltinModules()` |
 | `2c87614` | SPEC_COMPLIANCE: update SHA256 for import form changes (prior audit) |
 
-Minor edits: removed `slice => build in` from reserved words (already not a keyword); fixed comment typo in math module; added string module stub (`tba`); added user-defined classes TODO section with `Money` prototype.
+Minor edits: removed `slice => build in` from reserved words (already not a keyword); fixed comment typo in math module; added string module stub (`tba`); added user-defined classes TODO section with `Money` prototype; added "don't put build file in the source tree."
 
 ## Uncommitted SPEC.md Edits (working tree; not in git)
 
-Snapshot: SHA256 `273064b4d6e9ec56490574c4576b4f7b846015dfc2351ed4bd80de56ef12fd5a` (935 lines, 21354 bytes). These edits sit on top of
-commit `31fc707` and are NOT yet committed. The test tally in "Current Status"
-(250 total) was run against the PRIOR revision and has NOT been re-run against
-this one.
-
-| Change | Implementation status |
-|--------|----------------------|
-| `everything is case sensitive.` | General invariant; lexer/parser already case-sensitive. |
-| `always ask for permission before touching this file.` | Meta instruction; no code. |
-| Reserved word `yield` | Implemented (see Generators below). |
-| Reserved word `fetch` | **NOT implemented** — no `TokenType::Fetch` in lexer/parser. Gap. |
-| Boolean table: `generator => true`, `function/lambda => depends on return` | Not separately asserted in harness; truthiness now covered in Working. |
-| `## range` context-dependent encoding (`if in range`, `for in range`, `arr = range()`, `for in range`+`yield`) | `range` exists as reserved word + builtin `range()`; membership `in range()` works. The explicit encodings (array materialization `arr = range(0,10)`, yield-in-range) are spec wording; verify the array-materialization path. |
-| `## declarations and assignments` (rename + implicit-declaration example) | Implemented (declarations already supported). |
-| `operator == and !=` nil-equality | Implemented/verified (see Working). |
-| `no return -> returns nil` | Implemented/verified (see Working). |
-| `## verbose level` (**Priority one**) | **NOT implemented** — no verbose flag/function in code. Gap. |
-| Generators rewritten: callable-closure prototype + `## Syntax` + `## EOF sentinel` | Implemented/verified (see Generators below). |
+None. SPEC.md is clean in git (working-tree hash = `8c109fa0...`, matching commit
+`2f19a23`). The tally in "Current Status" (272 total) includes the new
+`examples/range_check.cpp` suite and has been re-run against the current spec.
 
 ## Legend
 
@@ -87,6 +72,7 @@ this one.
 - [x] `if ... { } else if ... { } else { }` brace-form conditional chains
 - [x] `if (b in a)` membership test
 - [x] `if a in range(1,10)` range membership test
+- [x] **range context-dependent encodings (SPEC §range):** `for i in range(a,b)` -> counter loop `i=a; while i<=b { ...; ++i }` (no array materialized); `l in range(a,b)` -> bounds check `(l>=a) && (l<=b)` (no array materialized), used in `if`/`while` conditions and `let x = b in range(0,10)`; `arr = range(a,b)` -> materialized array; `for i in range { yield i }` -> generator. `continue` in a range counter loop jumps to the implicit `INC` (spec: "continue will increment the i"). Verified by `examples/range_check.cpp` (22 passed, 0 failed; `range` ctest): counter-loop sum/count/break/continue, bounds-check in/out/edge values, array materialization, generator.
 - [x] `0xc` hex literal
 - [x] `true` / `false` boolean literals; truthiness for booleans, strings,
       arrays, tables, numbers (0 = false, non-zero = true)
@@ -226,6 +212,7 @@ All items below are implemented and verified. Table retained for traceability.
 - `examples/spec_check2.cpp` — 185 test cases covering all spec features including `bool`, `char`, `dword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, method calls, `==`/`!=` nil-equality, and function/generator returns. Result: **185 passed, 0 failed.**
 - `examples/spec_cast_test.cpp` — 20 cast tests: numeric casts (int/float/byte/word/short/unsigned/dword/char/bool), string casts, invalid collection casts, nested casts, expression-context casts, nil cast. Result: **20 passed, 0 failed.**
 - `examples/gen_test.cpp` — 5 generator tests: basic yield, second yield, exhaustion/EOF, loop accumulate, empty yield, outer variable capture, type check. Result: **5 passed, 0 failed.**
+- `examples/range_check.cpp` — 22 range tests: `for i in range(a,b)` counter loop (sum/count/break/continue), `in range(a,b)` bounds check (inside/low/high/above/below/as-value), `arr = range(a,b)` materialization, for-in array membership, generator range. Result: **22 passed, 0 failed.**
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
 Result: **185 passed, 0 failed.** All spec builtins implemented.
@@ -290,7 +277,7 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-Core spec fully implemented. **185 passed, 0 failed** (spec_check2) + **33 passed, 0 failed** (spec_check) + **20 passed, 0 failed** (spec_cast_test) + **7 passed, 0 failed** (test_module) + **5 passed, 0 failed** (gen_test) = **250 total**. This round added the SPEC `==`/`!=` nil-equality rule (nil only equals nil) and the no-return-returns-nil rule, and fixed the generator-exhaustion regression so a consumed generator keeps returning nil instead of restarting.
+Core spec fully implemented. **185 passed, 0 failed** (spec_check2) + **33 passed, 0 failed** (spec_check) + **20 passed, 0 failed** (spec_cast_test) + **7 passed, 0 failed** (test_module) + **5 passed, 0 failed** (gen_test) + **22 passed, 0 failed** (range_check) = **272 total**. Since the prior audit: added the SPEC `==`/`!=` nil-equality rule (nil only equals nil) and the no-return-returns-nil rule, fixed the generator-exhaustion regression so a consumed generator keeps returning nil instead of restarting, and implemented the `## range` context-dependent encodings (counter loop / bounds check / array materialization / generator) with the `examples/range_check.cpp` suite (22 cases).
 
 ## Class Implementation Details
 
@@ -316,7 +303,7 @@ class Name {
 
 |||- **Reserved word `fetch`:** ✗ **NOT implemented.** Lexer/parser have no `TokenType::Fetch`; `fetch` tokenizes as `Ident` and silently works as an identifier rather than raising the reserved-word error the SPEC implies. Gap vs SPEC §reserved words.
 |||- **`## verbose level` (**Priority one**):** ✗ **NOT implemented.** No application-wide verbose flag/function anywhere in `include/`/`src/`. SPEC.md §718–721 requests it but no code exists. Gap.
-|||- **`range` context-dependent encoding (§244–272):** `range` is implemented as a reserved word + builtin `range()` (membership `if/for i in range(...)` works). The new SPEC wording adds context-dependent encodings — array materialization `arr = range(0,10)` and `for i in range(...) { yield i }` — that are not separately verified against the current builtin. Verify the array-materialization path before treating this as closed.
+|||- **`range` context-dependent encoding (§range):** ✓ **Resolved.** Compiler emits a counter loop for `for i in range(a,b)` (`i=a; while i<=b { …; ++i }`, no array), a bounds check `(l>=a) && (l<=b)` for `l in range(a,b)` in any expression/condition context (including `while i in range` and `let x = b in range(0,10)`), materialization for `arr = range(a,b)`, and a generator for `for i in range { yield i }` (containsYield recurses into ForIn). `continue` in a range loop jumps to the implicit `INC`. Verified by `examples/range_check.cpp` (22 passed, 0 failed).
 ||- **`min`/`max`/`sum` via `import math`:** ✓ implemented. C++-registered module (`src/QLangModules.cpp`). `min`/`max`: return `Int` for values within int32_t range; return `Dword` when result exceeds ±2147483647 (prevents silent truncation). Reject mixed float+int with type error (§767/§770). Accept single array arg (`min([1,5,9])` → `1`). Forbid mixed char+byte. `sum`: flattens all array args (`sum([1,2,3])` and `sum([1,2], [3,4])` both work); returns `Int` for in-range, `Dword` on overflow; returns `Float` when any arg is float (§777); allows float+int mix (sums in double then returns float). |
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
 - **Module system (§604–661):** v1 implemented. `import math` (flat import all) and `import math.min` (single func) both work. Modules are C++-registered via `ctx.registerModule()`, resolved at compile time. No new opcodes. Qualified access (`math.min(...)`) is a future extension.
