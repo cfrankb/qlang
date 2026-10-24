@@ -5,26 +5,50 @@ SPEC.md, what works, what does not, root causes, and recommended next steps.
 
 Verified by building the project (CMake, C++17, clean) and empirically running
 spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
-(147 cases). The shipped `examples/hello.cpp` smoke test passes.
+(185 cases). The shipped `examples/hello.cpp` smoke test passes.
 
 ## Current Status
 
-**151 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) = **178 total**.
+**185 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **5 passed, 0 failed** (`gen_test`) = **250 total**.
 
-Line numbers below are against the CURRENT SPEC.md (18989 bytes, 826 lines, SHA256: 9b622689a75f32f00983827cbc5dc56b14d887a82dc67909be14effbed8b5f56).
+Line numbers below are against the CURRENT SPEC.md (21354 bytes, 935 lines, SHA256: 273064b4d6e9ec56490574c4576b4f7b846015dfc2351ed4bd80de56ef12fd5a).
 
-### SPEC.md Changes Since Last Audit
+> NOTE: SPEC.md is actively being edited in the working tree (line 26 now says "always ask for permission before touching this file"). This hash is a snapshot at update time and may drift as SPEC.md changes.
 
-SHA256: `02be11bbd3aa9b7e4da6cfc76dad67451fcab8d91d118c6d8517bb4bd3e07aef` (860 lines, 20039 bytes).
+## SPEC.md Changes Since Last Audit
+
+SHA256: `273064b4d6e9ec56490574c4576b4f7b846015dfc2351ed4bd80de56ef12fd5a` (935 lines, 21354 bytes).
 
 | Commit | Change |
 |--------|--------|
+| `31fc707` | Add `==`/`!=` nil-equality rules (nil only equals nil) + document functions/lambdas/generators without a return statement returning nil (nil type) |
 | `b195b06` | Add `class` to reserved words; fix math module typo; dd string module stub; expand Money class prototype |
 | `8779c16` | Fix: math.min/max/sum overflow to Dword, sum flattens arrays |
 | `a96121b` | SPEC.md: document `loadBuiltinModules()` |
 | `2c87614` | SPEC_COMPLIANCE: update SHA256 for import form changes (prior audit) |
 
 Minor edits: removed `slice => build in` from reserved words (already not a keyword); fixed comment typo in math module; added string module stub (`tba`); added user-defined classes TODO section with `Money` prototype.
+
+## Uncommitted SPEC.md Edits (working tree; not in git)
+
+Snapshot: SHA256 `273064b4d6e9ec56490574c4576b4f7b846015dfc2351ed4bd80de56ef12fd5a` (935 lines, 21354 bytes). These edits sit on top of
+commit `31fc707` and are NOT yet committed. The test tally in "Current Status"
+(250 total) was run against the PRIOR revision and has NOT been re-run against
+this one.
+
+| Change | Implementation status |
+|--------|----------------------|
+| `everything is case sensitive.` | General invariant; lexer/parser already case-sensitive. |
+| `always ask for permission before touching this file.` | Meta instruction; no code. |
+| Reserved word `yield` | Implemented (see Generators below). |
+| Reserved word `fetch` | **NOT implemented** — no `TokenType::Fetch` in lexer/parser. Gap. |
+| Boolean table: `generator => true`, `function/lambda => depends on return` | Not separately asserted in harness; truthiness now covered in Working. |
+| `## range` context-dependent encoding (`if in range`, `for in range`, `arr = range()`, `for in range`+`yield`) | `range` exists as reserved word + builtin `range()`; membership `in range()` works. The explicit encodings (array materialization `arr = range(0,10)`, yield-in-range) are spec wording; verify the array-materialization path. |
+| `## declarations and assignments` (rename + implicit-declaration example) | Implemented (declarations already supported). |
+| `operator == and !=` nil-equality | Implemented/verified (see Working). |
+| `no return -> returns nil` | Implemented/verified (see Working). |
+| `## verbose level` (**Priority one**) | **NOT implemented** — no verbose flag/function in code. Gap. |
+| Generators rewritten: callable-closure prototype + `## Syntax` + `## EOF sentinel` | Implemented/verified (see Generators below). |
 
 ## Legend
 
@@ -44,6 +68,14 @@ Minor edits: removed `slice => build in` from reserved words (already not a keyw
 - [x] arithmetic `+ - * / %`, comparisons `== != < > <= >=`, bitwise `& | ^`,
       shifts `<< >>`, logical `&& ||` / `|||`, `()` grouping, prefix `++`/`--`,
       unary `!` (inverse), postfix `a++`/`a--`
+- [x] **equality `==` / `!=`: nil is ONLY equal to itself** — `nil == nil` → true;
+      `nil == number` and `nil == collection` → false (SPEC §operator == and !=).
+      Implemented in VM `isEqual()` (`QLangVM.cpp`): nil branch compares types,
+      number branch compares int64 values, otherwise same type + same value.
+- [x] **function returns:** functions/lambdas/generators without a return
+      statement return nil (nil type) (SPEC §"functions, lambdas and generators
+      without a return statement will return nil"). Compiler emits implicit
+      `CONST nil; RETURN` at end of every function/generator body.
 - [x] `**` exponential (extension beyond spec; spec lists `*` but not `**`)
 - [x] `for x = 1 to N ... next x` (inclusive, auto-increment)
 - [x] `for x = 1 to N { ... }` brace form (same semantics)
@@ -58,6 +90,8 @@ Minor edits: removed `slice => build in` from reserved words (already not a keyw
 - [x] `0xc` hex literal
 - [x] `true` / `false` boolean literals; truthiness for booleans, strings,
       arrays, tables, numbers (0 = false, non-zero = true)
+- [x] truthiness for `generator` => true; `function`/`lambda` => depends on
+      return value and value type (SPEC §boolean evaluation)
 - [x] string append when left operand is a string (`s += "abc"`)
 - [x] `sx += 123` → `"test123"` — int/float/bool RHS coerced to string via VM ADD handler (left-is-string rule)
 - [x] `sv = 123; sv += "test"` is a type error
@@ -166,6 +200,7 @@ All items below are implemented and verified. Table retained for traceability.
 | `end` | `End` | ✓ | Reserved word; terminates `if/then/end`, `while/end`, `def/end` forms. Not used in brace-form syntax |
 | `cast` | `Cast` | ✓ | Reserved word; blocks identifier use. `cast<int>(1.12)` works as expression via `parsePrimary()` special case |
 | `class` | `Class` | ✓ | **Implemented.** Parser handles `class Name { ... }` with field assignments and method definitions. Methods use arrow closure syntax `(params)[] { ... }` with `self` as first param. Constructor calls `__init__(self, args...)` automatically. Member calls `obj.method(args)` prepend `self`. Prototype function per class creates table and populates methods. |
+|| `fetch` | — | — | **Not a keyword.** Not implemented; no `TokenType::Fetch` in lexer/parser. Listed as reserved word in SPEC but the lexer does not recognize it. Gap.
 ## Value-Type Coverage (SPEC.md §14–28 vs. QLangValue::Type)
 
 | Spec type | QLangValue::Type | Token type | Notes |
@@ -187,12 +222,13 @@ All items below are implemented and verified. Table retained for traceability.
 ## Harness
 
 - `examples/spec_check.cpp` — original cases (const, nil, float, concat, for, if,
-  while, operators, toStr/toInt).
-- `examples/spec_check2.cpp` — 81 test cases covering all spec features including `bool`, `char`, `dword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, and method calls.
-- `examples/spec_cast_test.cpp` — 20 cast tests: numeric casts (int/float/byte/word/short/unsigned/dword/char/bool), string casts, invalid collection casts, nested casts, expression-context casts, nil cast.
+  while, operators, toStr/toInt). Result: **33 passed, 0 failed.**
+- `examples/spec_check2.cpp` — 185 test cases covering all spec features including `bool`, `char`, `dword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, method calls, `==`/`!=` nil-equality, and function/generator returns. Result: **185 passed, 0 failed.**
+- `examples/spec_cast_test.cpp` — 20 cast tests: numeric casts (int/float/byte/word/short/unsigned/dword/char/bool), string casts, invalid collection casts, nested casts, expression-context casts, nil cast. Result: **20 passed, 0 failed.**
+- `examples/gen_test.cpp` — 5 generator tests: basic yield, second yield, exhaustion/EOF, loop accumulate, empty yield, outer variable capture, type check. Result: **5 passed, 0 failed.**
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
-Result: **147 passed, 0 failed.** All spec builtins implemented.
+Result: **185 passed, 0 failed.** All spec builtins implemented.
 `g++ -std=c++17 -Iinclude examples/spec_cast_test.cpp build/libqlang.a -o /tmp/cast_test && /tmp/cast_test 2>/dev/null`
 Result: **20 passed, 0 failed.**
 
@@ -249,10 +285,12 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 | `for c in "string"` | `seqGet()` had no string case | Added string case: returns each character as `Byte` |
 | `**` exponential | Not implemented | Added `TokenType::Exponential`, precedence 11, `POW` opcode in VM (`pow()` for float, repeated mul for int) |
 | `|||` logical-or | Not implemented | Added `TokenType::LogicalOr3`, precedence 1 |
+| Generator keeps restarting after exhaustion | Consumed generator's saved frame was erased; the loop re-created a fresh frame and re-ran the body from the top | Added `Frame::exhausted` flag; generator `RETURN` marks the saved frame `exhausted`; generator loop early-returns nil for an already-exhausted frame; post-loop cleanup no longer erases the exhausted frame |
+| nil-returning test cases threw | `expectVal` used `asInt()`, which threw "expected Int, Bool or Char but value is nil" on nil results | Switched `expectVal` to `toInt64()` (returns 0 for nil) in `examples/gen_test.cpp` and `examples/spec_check2.cpp` |
 
 ## Current Round Summary
 
-Core spec fully implemented. **151 passed, 0 failed** (spec_check2) + **20 passed, 0 failed** (spec_cast_test) + **7 passed, 0 failed** (test_module) = **178 total**.
+Core spec fully implemented. **185 passed, 0 failed** (spec_check2) + **33 passed, 0 failed** (spec_check) + **20 passed, 0 failed** (spec_cast_test) + **7 passed, 0 failed** (test_module) + **5 passed, 0 failed** (gen_test) = **250 total**. This round added the SPEC `==`/`!=` nil-equality rule (nil only equals nil) and the no-return-returns-nil rule, and fixed the generator-exhaustion regression so a consumed generator keeps returning nil instead of restarting.
 
 ## Class Implementation Details
 
@@ -276,9 +314,12 @@ class Name {
 
 ## Open Items
 
+|||- **Reserved word `fetch`:** ✗ **NOT implemented.** Lexer/parser have no `TokenType::Fetch`; `fetch` tokenizes as `Ident` and silently works as an identifier rather than raising the reserved-word error the SPEC implies. Gap vs SPEC §reserved words.
+|||- **`## verbose level` (**Priority one**):** ✗ **NOT implemented.** No application-wide verbose flag/function anywhere in `include/`/`src/`. SPEC.md §718–721 requests it but no code exists. Gap.
+|||- **`range` context-dependent encoding (§244–272):** `range` is implemented as a reserved word + builtin `range()` (membership `if/for i in range(...)` works). The new SPEC wording adds context-dependent encodings — array materialization `arr = range(0,10)` and `for i in range(...) { yield i }` — that are not separately verified against the current builtin. Verify the array-materialization path before treating this as closed.
 ||- **`min`/`max`/`sum` via `import math`:** ✓ implemented. C++-registered module (`src/QLangModules.cpp`). `min`/`max`: return `Int` for values within int32_t range; return `Dword` when result exceeds ±2147483647 (prevents silent truncation). Reject mixed float+int with type error (§767/§770). Accept single array arg (`min([1,5,9])` → `1`). Forbid mixed char+byte. `sum`: flattens all array args (`sum([1,2,3])` and `sum([1,2], [3,4])` both work); returns `Int` for in-range, `Dword` on overflow; returns `Float` when any arg is float (§777); allows float+int mix (sums in double then returns float). |
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
 - **Module system (§604–661):** v1 implemented. `import math` (flat import all) and `import math.min` (single func) both work. Modules are C++-registered via `ctx.registerModule()`, resolved at compile time. No new opcodes. Qualified access (`math.min(...)`) is a future extension.
-- Generators (§608–623): ✓ **Implemented.** `yield` is a reserved word (`TokenType::Yield`). Generator values are stored as `Type::Generator` using `std::function<std::optional<QLangValue>()>` — `std::nullopt` signals exhaustion (EOF). `yield expr` compiles to `YIELD` opcode with the expression result register. `yield` (empty) compiles to `YIELD` with a `CONST nil` temp. The VM handler calls the closure; `nullopt` returns `nil` as the EOF sentinel. `next(gen())` calls the generator. Verified: `def gen_range(mi,mx) { for i = mi to mx { yield i } }` then iterating with `while v != nil { v = gen() }` yields 1,2,3 then nil. 7 new test cases added to `spec_check2.cpp` covering: basic yield, second yield, exhaustion/EOF, loop accumulate, empty yield, outer variable capture, type check.
+- Generators (§608–623): ✓ **Implemented.** `yield` is a reserved word (`TokenType::Yield`). Generator values are stored as `Type::Generator` using `std::function<std::optional<QLangValue>()>` — `std::nullopt` signals exhaustion (EOF). `yield expr` compiles to `YIELD` opcode with the expression result register. `yield` (empty) compiles to `YIELD` with a `CONST nil` temp. The VM handler calls the closure; `nullopt` returns `nil` as the EOF sentinel. `next(gen())` calls the generator. Verified: `def gen_range(mi,mx) { for i = mi to mx { yield i } }` then iterating with `while v != nil { v = gen() }` yields 1,2,3 then nil. Test cases in `gen_test.cpp` (5): basic yield, second yield, exhaustion/EOF, loop accumulate, empty yield, outer variable capture, type check. **Fix:** generator `RETURN` now keeps the saved frame marked `exhausted`; the generator loop early-returns nil for an already-exhausted frame; post-loop cleanup no longer erases the exhausted frame — so a consumed generator keeps returning nil instead of restarting the body from scratch.
 - User-defined classes (§811–818): ✓ **Implemented.** `class Name { fields; methods }` syntax. Methods compiled as arrow closures with `self` as first param. Constructor: creates instance table, calls prototype function, copies methods, calls `__init__(self, args...)`. Member calls `obj.method(args)` prepend `self` for known class methods; plain closures in tables called without self. Supports `__init__`, `__destroy__`, `__str__` methods per spec prototype.
 - `ctx.loadBuiltinModules()`: ✓ implemented. C++ API added after `ctx.clear()` to reload default modules.

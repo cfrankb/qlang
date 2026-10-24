@@ -21,6 +21,10 @@ maintain separate targets in the CMakeLists.
 
 suggest commit name but don't commit automatically.
 
+everything is case sensitive.
+
+always ask for permission before touching this file.
+
 # language
 
 ## variable types
@@ -82,6 +86,8 @@ end
 cast
 assert
 class
+yield
+fetch
 ```
 
 ## constants
@@ -110,10 +116,13 @@ const month:byte = 10;
 |blob| empty => false; non-empty => true
 |number| 0 => false; non-zero => true
 |nil| false
+|generator| true
+|function, lambda|depends on return value and value type
 
 
 
-## declarations
+## declarations and assignments
+
 
 ```python
 local a1  # default variable type int. default value 0
@@ -171,6 +180,8 @@ year = sx # error; constants cannot be assigned to
 
 # anonymous functions inside a table
 local events:table = {
+  version = 0x101,
+  name = "loader",
   onLoad = (name)[] {
     printf("""onLOaD -->%s\n""");
   }, 
@@ -178,6 +189,16 @@ local events:table = {
   }
 }
 
+# implicit declaration/assignment
+events = {
+  version = 0x101,
+  name = "loader",
+  onLoad = (name)[] {
+    printf("""onLOaD -->%s\n""");
+  }, 
+  onDeath = ()[] {
+  }
+}
 ```
 # Control flow
 
@@ -217,6 +238,36 @@ if a in range (1,10) {
 }
 
 if a == 1 return false;
+
+```
+
+## range
+
+range keyword has different encoding based on context
+
+
+```
+if i in range (0,10) {
+   ...
+}
+# encode: if i >=0  and i <= 10 { ... }
+
+for i in range (0,10) {
+   ...
+}
+
+# encode: i = 0; while (i <= 10) { ... }
+
+arr = range(0, 10)
+
+# encode: arr = [0,1,2,3,4,5,6,7,8,9,10]
+
+for i in range (0, 10) {
+   yield i
+}
+
+# encode: i = 0; while (i <= 10) { yield i }
+
 
 ```
 
@@ -378,6 +429,18 @@ operator cast
 |cast\<any>()|n/a| error: empty source. nothing to cast
 |cast\<>(123)|n/a| error: empty cast. nothing to do
 
+operator == and !=
+|var type|operator|var type|result
+|-|-|-|-|
+|nil| ==| nil | true
+|nil| ==| number (int, float etc) | false
+|nil| ==| collection (array, table, class etc) | false
+|nil| !=| nil | false
+|nil| !=| number | true
+|nil| !=| collection | true
+|nil| !=| number | true
+
+*important*: nil is ONLY equal to iself
 
 ## build-in functions
 
@@ -399,6 +462,7 @@ operator cast
 |isset(var)| return true if variable, array index or table field exists. otherwise returns false
 |join(separator, arr)| join the array element using separator
 |assert(bool, str)| if bool is false thrown an exception using text provided by str
+
 
 
 ```python
@@ -463,6 +527,7 @@ reference still maintained even after reassignment
 return value is optiona. defaults to nil
 local always apply to the current scope.
 
+functions, lamdas and generators without a return statement will return nil (nil type)
 
 # C++ api
 
@@ -650,6 +715,13 @@ TODO:
 - upload new bytecodes into the context
 - version bytecodes to avoid loading incompatible bytecodes
 
+##  verbose level
+
+**Priority one**:
+application wide verbose level that can adjusted with one function call. 
+
+
+
 # global scope 
 
 global const and functions are visible everywhere (global, local, function). 
@@ -694,20 +766,57 @@ print(f"Total: ${price:.2f}")  # Output: Total: $19.99
 ```
 
 # generators
-TODO: propose a solution. below is a prototype adapted from python
+
+Generators are created by defining a function that uses `yield`. Each call to
+`yield` pauses the generator and returns the yielded value. A subsequent call
+advances to the next `yield`. When the generator is exhausted, `yield` returns
+`nil` (the eof sentinel).
+
+## PROTOTYPE 1
+
 
 ```
-def gen_fct(mi, mx) {
-   for i in range(mi, mx)
+
+def gen_range(mi, mx) {
+   for i = mi to mx {
       yield i
+   }
 }
 
-local gen = gen_fct(1,3)
-println(next gen)
-println(next gen)
-println(next gen)
-# test for end condition???
+local gen = gen_range(1, 3)
+local v = gen()        # yields 1
+while v != nil {
+   println(v)
+   v = gen()          # yields 2, then 3, then nil
+}
+# output:
+# 1
+# 2
+# 3
 ```
+
+i would favor a variation on prototype 2.
+
+The generator value is a function-like callable that captures its local state.
+Each invocation runs the generator body from its last yield point until the next
+`yield` or until the body returns/exhausts.
+
+## Syntax
+
+```
+yield expr      ; yield a value
+yield           ; yield nil (empty yield, equivalent to `return` from generator)
+```
+
+`yield` is a reserved word; it cannot be used as an identifier.
+
+## EOF sentinel
+
+When a generator is exhausted (body returns or falls off the end), the next call
+returns `nil`. This is the EOF sentinel — distinguishable from a yielded `nil`
+because a yielded `nil` would have been produced by an explicit `yield` statement
+inside the generator body, while the EOF `nil` is produced by the VM's exhaustion
+check.
 
 # modules (internal)
 

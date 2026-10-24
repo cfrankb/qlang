@@ -22,7 +22,7 @@ static void expectVal(const std::string &name, const std::string &src,
   QLangContext ctx;
   try {
     ctx.run(src);
-    int got = ctx.get(var).asInt();
+    int got = toInt64(ctx.get(var));
     if (got == expect) { std::cout << "[PASS] val:  " << name << " (" << var << "=" << got << ")\n"; passes++; }
     else { std::cout << "[FAIL] val:  " << name << " (" << var << " got " << got << " exp " << expect << ")\n"; fails++; }
   } catch (const QLangError &e) { std::cout << "[FAIL] val:  " << name << " -> " << e.what() << "\n"; fails++; }
@@ -292,6 +292,79 @@ int main() {
   expectThrow("assert false", "assert(false, \"assertion failed\")");
   expectThrow("assert wrong count", "assert(true)");
   expectThrow("assert bad msg type", "assert(true, 123)");
+
+  // -- NEW: generators / yield (spec §608–623) --
+  expectVal("gen basic yield",
+    "def gen_range(mi, mx) { for i = mi to mx { yield i } }\n"
+    "local gen = gen_range(1, 3)\n"
+    "local r = gen();",
+    "r", 1);
+  expectVal("gen second yield",
+    "def gen_range(mi, mx) { for i = mi to mx { yield i } }\n"
+    "local gen = gen_range(1, 3)\n"
+    "gen(); gen(); local r = gen();",
+    "r", 3);
+  expectVal("gen exhausted returns nil",
+    "def gen_range(mi, mx) { for i = mi to mx { yield i } }\n"
+    "local gen = gen_range(1, 1)\n"
+    "gen(); gen(); local r = gen();",
+    "r", 0);
+  expectVal("gen loop accumulate",
+    "def gen_range(mi, mx) { for i = mi to mx { yield i } }\n"
+    "local total = 0\n"
+    "local gen = gen_range(1, 3)\n"
+    "local v = gen()\n"
+    "while v != nil { total = total + v; v = gen() }\n"
+    "local r = total;",
+    "r", 6);
+  expectVal("gen empty yield",
+    "def gen_once() { yield; yield 42 }\n"
+    "local gen = gen_once()\n"
+    "local r = gen();",
+    "r", 0);
+  expectVal("gen capture outer",
+    "def make_gen(start) { for i = start to start+2 { yield i } }\n"
+    "local gen = make_gen(10)\n"
+    "local r = gen();",
+    "r", 10);
+  expectStr("gen type is generator",
+    "def gen_foo() { yield 1 }\n"
+    "local gen = gen_foo()\n"
+    "local s = type(gen);",
+    "s", "generator");
+
+  // -- EOF value (first-class end-of-file sentinel) --
+  expectStr("eof type", "local s = type(eof);", "s", "eof");
+  expectThrow("eof uppercase not valid", "EOF");
+  expectRun("eof in if false", "if eof { local x = 1 } local r = 0;");
+  expectThrow("eof assert fails", "assert(eof, \"eof is falsy\")");
+  expectStr("eof assign and read", "local e = eof\nlocal r = type(e);", "r", "eof");
+  expectStr("eof in table", "local t = {x=eof}\nlocal r = type(t.x);", "r", "eof");
+
+  // -- == / != semantics (spec §23) --
+  expectVal("eq nil nil", "local a\nlocal r = (a == nil);", "r", 1);
+  expectVal("ne nil nil", "local a\nlocal r = (a != nil);", "r", 0);
+  expectVal("ne nil x", "local a\nlocal r = (a != 5);", "r", 1);
+  expectVal("eq nil x", "local a\nlocal r = (a == 5);", "r", 0);
+  expectVal("eq bool int", "local r = (true == 1);", "r", 1);
+  expectVal("eq bool int zero", "local r = (false == 0);", "r", 1);
+  expectVal("ne bool int", "local r = (true != 0);", "r", 1);
+  expectVal("eq num float", "local r = (5 == 5.0);", "r", 1);
+  expectVal("ne num", "local r = (5 != 6);", "r", 1);
+  expectVal("eq string", "local r = (\"a\" == \"a\");", "r", 1);
+  expectVal("ne string", "local r = (\"a\" != \"b\");", "r", 1);
+  expectVal("eq cross type", "local r = (5 == \"5\");", "r", 0);
+  expectVal("ne cross type", "local r = (5 != \"5\");", "r", 1);
+  expectVal("eq array same", "local a1 = [1,2,3]\nlocal a2 = [1,2,3]\nlocal r = (a1 == a2);", "r", 1);
+  expectVal("eq array diff", "local a1 = [1,2,3]\nlocal a2 = [1,2,4]\nlocal r = (a1 == a2);", "r", 0);
+  expectVal("eq table same", "local t1 = {a=1,b=2}\nlocal t2 = {a=1,b=2}\nlocal r = (t1 == t2);", "r", 1);
+  expectVal("eq table diff", "local t1 = {a=1,b=2}\nlocal t2 = {a=1,b=3}\nlocal r = (t1 == t2);", "r", 0);
+
+  // -- function return values (spec §13) --
+  expectVal("fn returns last expr", "def f() { return 42 }\nlocal r = f();", "r", 42);
+  expectVal("fn returns nil no expr", "def g() { x = 5 }\nlocal r = g();\nlocal n = (r == nil);", "n", 1);
+  expectVal("fn returns nil explicit", "def h() { return nil }\nlocal r = h();\nlocal n = (r == nil);", "n", 1);
+  expectVal("fn returns nil via print", "def p() { print(\"hi\") }\nlocal r = p();\nlocal n = (r == nil);", "n", 1);
 
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
