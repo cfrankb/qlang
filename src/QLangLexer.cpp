@@ -1,5 +1,6 @@
 #include "qlang/QLangLexer.h"
 
+#include <algorithm>
 #include <cctype>
 
 #include "qlang/QLangErrors.h"
@@ -53,6 +54,8 @@ TokenType keywordType(const std::string &text) {
   if (text == "as") return TokenType::As;
   if (text == "class") return TokenType::Class;
   if (text == "nil") return TokenType::Nil;
+  if (text == "eof") return TokenType::Eof;
+  if (text == "yield") return TokenType::Yield;
   return TokenType::Ident;
 }
 

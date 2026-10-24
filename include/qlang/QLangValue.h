@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -34,7 +35,9 @@ public:
     Array,    // list of mixed values
     Float,    // double
     Table,    // keyed string -> value map
-    Function  // user-defined function (arrow closure)
+    Function, // user-defined function (arrow closure)
+    Generator, // lazy generator (yield-based function)
+    Eof         // end-of-file sentinel value
   };
 
   QLangValue() : m_type(Type::Nil) {}
@@ -117,9 +120,15 @@ public:
     q.m_storage = std::move(v);
     return q;
   }
+  static QLangValue Generator(GeneratorValuePtr v) {
+    QLangValue q(Type::Generator);
+    q.m_storage = std::move(v);
+    return q;
+  }
 
   Type type() const { return m_type; }
   bool isNil() const { return m_type == Type::Nil; }
+  bool isEof() const { return m_type == Type::Eof; }
   const char *typeName() const;
 
   // Accessors. Each throws QLangError (Type kind) if the storage does not
@@ -150,6 +159,8 @@ public:
   TableValue &asTable();
   const Closure &asFunction() const;
   Closure &asFunction();
+  const GeneratorValue &asGenerator() const;
+  GeneratorValue &asGenerator();
 
 private:
   Type m_type;

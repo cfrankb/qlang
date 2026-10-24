@@ -25,6 +25,8 @@ everything is case sensitive.
 
 always ask for permission before touching this file.
 
+don't put build file in the source tree
+
 # language
 
 ## variable types
@@ -245,7 +247,6 @@ if a == 1 return false;
 
 range keyword has different encoding based on context
 
-
 ```
 if i in range (0,10) {
    ...
@@ -256,7 +257,7 @@ for i in range (0,10) {
    ...
 }
 
-# encode: i = 0; while (i <= 10) { ... }
+# encode: i = 0; while (i <= 10) { ...; ++i }
 
 arr = range(0, 10)
 
@@ -266,10 +267,23 @@ for i in range (0, 10) {
    yield i
 }
 
-# encode: i = 0; while (i <= 10) { yield i }
+# encode: i = 0; while (i <= 10) { yield i; ++i }
 
+while i in range (0,10) {
+   ...
+}
 
+# encode: while i >=0 && i <= 10 {...}
+# no increment here
+# if i not defined throw error
+
+let b = 3
+let x = b in range(0,10)
+# encode: x = (b >= x) && (x <=10)
 ```
+
+if used, the keyword `continue`  will increment the i. this is implicit
+
 
 ## switch
 ```python

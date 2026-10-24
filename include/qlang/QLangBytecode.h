@@ -29,7 +29,8 @@ enum class Builtin : int {
   IsSet,     // isset(var_name) -> bool (checks scope existence)
   Sprintf,   // sprintf(fmt, ...) -> string (same format as printf, returns result)
   Format,    // format(template, ...) -> string (f-string interpolation)
-  Assert     // assert(bool, str) -> void (throws if bool is false)
+  Assert,    // assert(bool, str) -> void (throws if bool is false)
+  Next       // next(gen) -> value (resume generator, returns yielded value or nil)
 };
 
 // Register-machine opcodes. This is a small register VM: each script variable
@@ -121,13 +122,22 @@ enum class Opcode {
   // registers by reference at construction time.
   MAKEFUNC, // r[a] = closure(const[b])
 
+  // Construct a generator object in r[a] from the function constant at index b.
+  // The constant must hold a Function value; the VM wraps it in a GeneratorValue
+  // that can be resumed via CALLCLOS until exhaustion.
+  MAKEGEN, // r[a] = generator(const[b])
+
   // Load a captured-by-reference variable into r[a] via the closure capture
   // table entry at index b (live: reads the current value of the outer reg).
   REFLOAD, // r[a] = captures[b].frame->regs[captures[b].reg]
 
   // Store r[a] through the closure capture table entry at index b, writing the
   // enclosing frame's register (reference semantics / write-back).
-  REFSTORE // captures[b].frame->regs[captures[b].reg] = r[a]
+  REFSTORE, // captures[b].frame->regs[captures[b].reg] = r[a]
+
+  // Generator yield. Returns the value in r[b] to the caller; pauses
+  // execution. r[c] is the generator register (used for self-reference).
+  YIELD // r[a] = generator(r[b]); r[c] = generator register
 };
 
 // A single instruction. Operands are plain ints interpreted per-opcode:
@@ -157,6 +167,9 @@ struct Function {
   // variable name to the register index in the enclosing frame where its value
   // lives at the time the closure is constructed.
   std::vector<CaptureRef> captures;
+  // True if the function body contains any `yield` statement; the VM wraps
+  // calls to such functions in a GeneratorValue rather than executing inline.
+  bool isGenerator = false;
 };
 
 // The compiled program: an instruction stream plus a constant pool.

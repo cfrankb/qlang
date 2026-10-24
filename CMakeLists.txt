@@ -40,3 +40,13 @@ target_link_libraries(spec_check2 PRIVATE qlang)
 # Module system smoke test.
 add_executable(test_module examples/test_module.cpp)
 target_link_libraries(test_module PRIVATE qlang)
+
+# Generator test harness.
+add_executable(test_gen_simple examples/test_gen_simple.cpp)
+target_link_libraries(test_gen_simple PRIVATE qlang)
+
+# range keyword tests: for...in range (counter loop), `in range` (bounds check),
+# arr = range() (materialization), and range generators.
+add_executable(range_check examples/range_check.cpp)
+target_link_libraries(range_check PRIVATE qlang)
+add_test(NAME range COMMAND range_check)

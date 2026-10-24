@@ -109,6 +109,7 @@ StmtPtr QLangParser::parseStatement() {
 
   if (check(TokenType::Def)) return parseFunction();
   if (check(TokenType::Return)) return parseReturn();
+  if (check(TokenType::Yield)) return parseYield();
 
   // assert(...) — expression statement
   if (check(TokenType::Assert)) {
@@ -589,6 +590,19 @@ StmtPtr QLangParser::parseReturn() {
   return stmt;
 }
 
+StmtPtr QLangParser::parseYield() {
+  consume(TokenType::Yield, "'yield'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Yield;
+  // Optional value; a bare `yield` (or `yield` before a terminator) yields nil.
+  if (!check(TokenType::Semicolon) && !check(TokenType::End) &&
+      !check(TokenType::RBrace) && !atEnd()) {
+    stmt->yieldValue = parseExpression();
+  }
+  match(TokenType::Semicolon);
+  return stmt;
+}
+
 StmtPtr QLangParser::parseContinue() {
   int line = current().line, col = current().col;
   (void)line;
@@ -956,6 +970,13 @@ ExprPtr QLangParser::parsePrimary() {
     auto node = std::make_shared<Expr>();
     node->kind = ExprKind::Literal;
     node->literal = QLangValue();
+    return node;
+  }
+  case TokenType::Eof: {
+    m_pos++;
+    auto node = std::make_shared<Expr>();
+    node->kind = ExprKind::Literal;
+    node->literal = QLangValue(QLangValue::Type::Eof);
     return node;
   }
   case TokenType::Float: {

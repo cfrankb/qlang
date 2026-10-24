@@ -55,6 +55,9 @@ std::string valueToString(const QLangValue &v) {
   case QLangValue::Type::Blob: return "<blob>";
   case QLangValue::Type::Array: return "<array>";
   case QLangValue::Type::Table: return "<table>";
+  case QLangValue::Type::Function: return "<function>";
+  case QLangValue::Type::Generator: return "<generator>";
+  case QLangValue::Type::Eof: return "<eof>";
   }
   return "?";
 }
@@ -87,6 +90,50 @@ int cmp(const QLangValue &a, const QLangValue &b, const char *op) {
                    std::string("operator '") + op +
                        "' cannot compare " + a.typeName() + " and " +
                        b.typeName());
+}
+
+// Equality per spec §23 (== and !=): Int 1/0. nil == nil true; nil != x true.
+// bool == int (bool stored as Int 1/0 at runtime). Number types compare equal
+// when their int64 values match. Any other comparison: same type and same
+// value. `!=` is the exact negation (handled by the caller).
+bool isEqual(const QLangValue &a, const QLangValue &b) {
+  // nil == nil; nil != anything else.
+  if (a.type() == QLangValue::Type::Nil || b.type() == QLangValue::Type::Nil)
+    return a.type() == b.type();
+  // bool compared as int64 (bool stored as Int 1/0 at runtime).
+  if (a.type() == QLangValue::Type::Bool || b.type() == QLangValue::Type::Bool)
+    return toInt64(a) == toInt64(b);
+  // number types compare equal when their int64 values match.
+  if (isNumeric(a) && isNumeric(b))
+    return toInt64(a) == toInt64(b);
+  // otherwise: same type and same value.
+  if (a.type() != b.type())
+    return false;
+  switch (a.type()) {
+  case QLangValue::Type::String:
+    return a.asString() == b.asString();
+  case QLangValue::Type::Blob:
+    return a.asBlob() == b.asBlob();
+  case QLangValue::Type::Array: {
+    const auto &ea = a.asArray(), eb = b.asArray();
+    if (ea.size() != eb.size()) return false;
+    for (size_t i = 0; i < ea.size(); ++i)
+      if (!isEqual(ea[i], eb[i])) return false;
+    return true;
+  }
+  case QLangValue::Type::Table: {
+    const auto &ta = *a.asTable(), tb = *b.asTable();
+    if (ta.size() != tb.size()) return false;
+    for (const auto &kv : ta) {
+      auto it = tb.find(kv.first);
+      if (it == tb.end()) return false;
+      if (!isEqual(kv.second, it->second)) return false;
+    }
+    return true;
+  }
+  default:
+    return false;
+  }
 }
 
 // Length for len(): string/array/table/blob lengths; any other type is 1
@@ -496,6 +543,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     bool truthy = false;
     const auto &arg0 = args[0];
     if (arg0.type() == QLangValue::Type::Nil) truthy = false;
+    else if (arg0.type() == QLangValue::Type::Eof) truthy = false;
     else if (arg0.type() == QLangValue::Type::String)
       truthy = !arg0.asString().empty();
     else if (isNumeric(arg0))
@@ -505,6 +553,22 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     if (!truthy)
       throw QLangError(QLangErrorKind::Runtime, line, col, args[1].asString());
     return QLangValue();
+  }
+  case Builtin::Next: {
+    need(1, "next");
+    if (args[0].type() != QLangValue::Type::Generator)
+      throw QLangError(QLangErrorKind::Type, 0, 0, "next expects a generator");
+    auto &gen = const_cast<GeneratorValue &>(args[0].asGenerator());
+    fprintf(stderr, "[DBG-NEXT] calling generator, about to invoke gen()\n");
+    auto opt = gen();
+    fprintf(stderr, "[DBG-NEXT] gen() returned, has_value=%d, type=%d\n",
+            opt.has_value() ? 1 : 0,
+            opt.has_value() ? (int)opt->type() : -1);
+    if (opt.has_value()) {
+      fprintf(stderr, "[DBG-NEXT] returning value type=%d val=%lld\n",
+              (int)opt->type(), (long long)toInt64(*opt));
+    }
+    return opt.value_or(QLangValue());
   }
   }
   throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown builtin");
@@ -519,12 +583,19 @@ QLangVM::QLangVM(const CompiledProgram &program, QLangContext &scope)
 bool QLangVM::isTrue(const QLangValue &v) {
   switch (v.type()) {
   case QLangValue::Type::Nil: return false;
+  case QLangValue::Type::Eof: return false;
   case QLangValue::Type::String: return !v.asString().empty();
   default: return isNumeric(v) && (long long)toInt64(v) != 0;
   }
 }
 
 QLangValue QLangVM::callClosure(const QLangValue &closure, const std::vector<QLangValue> &args) {
+  if (closure.type() == QLangValue::Type::Generator) {
+    // Generator: resume the saved frame and run until the next yield or exhaustion.
+    auto &gen = closure.asGenerator();
+    auto opt = gen();
+    return opt.value_or(QLangValue());
+  }
   if (closure.type() != QLangValue::Type::Function)
     throw QLangError(QLangErrorKind::Type, 0, 0, "attempt to call a non-function value");
   return callFunction(closure.asFunction().funcIndex, args);
@@ -720,9 +791,9 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
   case Opcode::LOR:
     return QLangValue::Int(isTrue(a) || isTrue(b) ? 1 : 0);
   case Opcode::EQ:
-    return QLangValue::Int(cmp(a, b, "==") == 0 ? 1 : 0);
+    return QLangValue::Int(isEqual(a, b) ? 1 : 0);
   case Opcode::NE:
-    return QLangValue::Int(cmp(a, b, "!=") != 0 ? 1 : 0);
+    return QLangValue::Int(!isEqual(a, b) ? 1 : 0);
   case Opcode::LT:
     return QLangValue::Int(cmp(a, b, "<") < 0 ? 1 : 0);
   case Opcode::GT:
@@ -789,22 +860,24 @@ void QLangVM::run() {
   m_cur = 0;
 
   // Debug: dump function info
-  const auto &fn = m_prog.functions[0];
-  fprintf(stderr, "[DBG-VM] Main function '%s' has %zu instrs, %zu consts, %d regs\n",
-          fn.name.c_str(), fn.instructions.size(), fn.constants.size(), fn.registerCount);
-  for (size_t i = 0; i < fn.instructions.size(); i++) {
-    auto &inst = fn.instructions[i];
-    fprintf(stderr, "[DBG-VM]   [%zu] op=%d a=%d b=%d c=%d\n", i, (int)inst.op, inst.a, inst.b, inst.c);
-  }
-  fprintf(stderr, "[DBG-VM] Constants:\n");
-  for (size_t i = 0; i < fn.constants.size(); i++) {
-    auto &c = fn.constants[i];
-    if (c.type() == QLangValue::Type::Int)
-      fprintf(stderr, "[DBG-VM]   [%zu] Int(%d)\n", i, (int)c.asInt());
-    else if (c.type() == QLangValue::Type::String)
-      fprintf(stderr, "[DBG-VM]   [%zu] String('%s')\n", i, c.asString().c_str());
-    else
-      fprintf(stderr, "[DBG-VM]   [%zu] type=%d\n", i, (int)c.type());
+  for (size_t fi = 0; fi < m_prog.functions.size(); fi++) {
+    const auto &fn = m_prog.functions[fi];
+    fprintf(stderr, "[DBG-VM] Function[%zu] '%s' has %zu instrs, %zu consts, %d regs, isGen=%d\n",
+            fi, fn.name.c_str(), fn.instructions.size(), fn.constants.size(), fn.registerCount, fn.isGenerator);
+    for (size_t i = 0; i < fn.instructions.size(); i++) {
+      auto &inst = fn.instructions[i];
+      fprintf(stderr, "[DBG-VM]   [%zu] op=%d a=%d b=%d c=%d\n", i, (int)inst.op, inst.a, inst.b, inst.c);
+    }
+    fprintf(stderr, "[DBG-VM]   Constants:\n");
+    for (size_t i = 0; i < fn.constants.size(); i++) {
+      auto &c = fn.constants[i];
+      if (c.type() == QLangValue::Type::Int)
+        fprintf(stderr, "[DBG-VM]     [%zu] Int(%d)\n", i, (int)c.asInt());
+      else if (c.type() == QLangValue::Type::String)
+        fprintf(stderr, "[DBG-VM]     [%zu] String('%s')\n", i, c.asString().c_str());
+      else
+        fprintf(stderr, "[DBG-VM]     [%zu] type=%d\n", i, (int)c.type());
+    }
   }
 
   while (m_cur >= 0) {
@@ -829,6 +902,16 @@ void QLangVM::run() {
     const Instruction &i = instrs[frame.pc];
     Opcode op = i.op;
     fprintf(stderr, "[VM] func=%d pc=%zu op=%d a=%d b=%d c=%d regs=%zu\n", frame.funcIndex, frame.pc, (int)op, i.a, i.b, i.c, frame.regs.size());
+    fprintf(stderr, "[DBG-MAIN] mainFrameRegs=%p mainFrameSize=%zu generatorFrames.size=%zu\n",
+            frame.regs.data(), frame.regs.size(), m_generatorFrames.size());
+    for (auto &kv : m_generatorFrames) {
+      QLangValue *r2 = (kv.second.regs.size() > 2) ? &kv.second.regs[2] : nullptr;
+      fprintf(stderr, "[DBG-MAIN]   map[%d] base=%p size=%zu reg2=%p type=%d val=%lld overlapsMain=%d\n",
+              kv.first, kv.second.regs.data(), kv.second.regs.size(), r2,
+              r2 ? (int)r2->type() : -1, r2 ? (long long)toInt64(*r2) : -1,
+              (r2 && (uintptr_t)r2 >= (uintptr_t)frame.regs.data() &&
+                   (uintptr_t)r2 < (uintptr_t)frame.regs.data() + frame.regs.size()*sizeof(QLangValue)) ? 1 : 0);
+    }
 
     if (op == Opcode::TABPUT) {
       fprintf(stderr, "[VM] About to execute TABPUT a=%d\n", i.a);
@@ -987,16 +1070,25 @@ void QLangVM::run() {
     case Opcode::CALLCLOS: {
       // Arrow-closure value in register a; its funcIndex is read at runtime.
       const QLangValue &cv = frame.regs[i.a];
-      if (cv.type() != QLangValue::Type::Function)
+      if (cv.type() == QLangValue::Type::Generator) {
+        frame.pc += 1;
+        auto &gen = const_cast<GeneratorValue &>(cv.asGenerator());
+        auto result = gen();
+        frame.regs[i.a] = result.value_or(QLangValue());
+        continue;
+      } else if (cv.type() == QLangValue::Type::Function) {
+        frame.pc += 1;
+        pushCall(cv.asFunction().funcIndex, frame.regs, i.a, i.c);
+        // Copy the closure's live-binding capture table into the new callee frame
+        // so that REFLOAD/REFSTORE inside the closure address the correct enclosing
+        // frame registers.
+        m_frames[m_cur].captures = cv.asFunction().captures;
+        continue; // m_cur now points at the new frame; skip the trailing increment
+      } else {
         throw QLangError(QLangErrorKind::Type, 0, 0,
                          "attempt to call a non-function value");
-      frame.pc += 1;
-      pushCall(cv.asFunction().funcIndex, frame.regs, i.a, i.c);
-      // Copy the closure's live-binding capture table into the new callee frame
-      // so that REFLOAD/REFSTORE inside the closure address the correct enclosing
-      // frame registers.
-      m_frames[m_cur].captures = cv.asFunction().captures;
-      continue; // m_cur now points at the new frame; skip the trailing increment
+      }
+      break;
     }
     case Opcode::MAKEFUNC: {
       const QLangValue &cv = consts[i.b];
@@ -1014,6 +1106,24 @@ void QLangVM::run() {
         closure->captures.push_back(bound);
       }
       frame.regs[i.a] = QLangValue::Function(std::move(closure));
+      break;
+    }
+    case Opcode::MAKEGEN: {
+      const QLangValue &cv = consts[i.b];
+      if (cv.type() != QLangValue::Type::Function)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "invalid function constant for generator");
+      const Closure &spec = cv.asFunction();
+      auto gen = std::make_shared<GeneratorValue>();
+      // Read call arguments from frame registers (already placed by compiler).
+      std::vector<QLangValue> callArgs;
+      callArgs.reserve(i.c);
+      for (int k = 0; k < i.c; k++)
+        callArgs.push_back(frame.regs[i.a + 1 + k]);
+      *gen = [this, funcIdx = spec.funcIndex, captureSpec = spec.captures, capturedArgs = std::move(callArgs)]() -> std::optional<QLangValue> {
+        return callFunction(funcIdx, capturedArgs);
+      };
+      frame.regs[i.a] = QLangValue::Generator(gen);
       break;
     }
     case Opcode::REFLOAD: {
@@ -1053,6 +1163,21 @@ void QLangVM::run() {
       if (dest >= 0 && m_cur >= 0)
         m_frames[m_cur].regs[dest] = retVal;
       continue; // caller frame is re-fetched next iteration; skip trailing increment
+    }
+    case Opcode::YIELD: {
+      // Yield inside a generator called from the top-level run() loop.
+      // Save the frame and return the yielded value to the caller.
+      // NOTE: capture the yielded value BEFORE popping, since `frame` is a
+      // reference into m_frames that becomes dangling after pop_back().
+      QLangValue yielded = frame.regs.empty() ? QLangValue() : frame.regs[0];
+      Frame savedFrame = m_frames[m_cur];
+      savedFrame.pc = frame.pc + 1;
+      m_generatorFrames[frame.funcIndex] = std::move(savedFrame);
+      m_frames.pop_back();
+      m_cur--;
+      if (m_cur >= 0 && m_frames[m_cur].callDest >= 0)
+        m_frames[m_cur].regs[m_frames[m_cur].callDest] = yielded;
+      continue;
     }
     case Opcode::ADD:
     case Opcode::SUB:
@@ -1297,6 +1422,24 @@ void QLangVM::runFrames(int startFrame)
       frame.regs[i.a] = QLangValue::Function(std::move(closure));
       break;
     }
+    case Opcode::MAKEGEN: {
+      const QLangValue &cv = consts[i.b];
+      if (cv.type() != QLangValue::Type::Function)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "invalid function constant for generator");
+      const Closure &spec = cv.asFunction();
+      auto gen = std::make_shared<GeneratorValue>();
+      // Read call arguments from frame registers (already placed by compiler).
+      std::vector<QLangValue> callArgs;
+      callArgs.reserve(i.c);
+      for (int k = 0; k < i.c; k++)
+        callArgs.push_back(frame.regs[i.a + 1 + k]);
+      *gen = [this, funcIdx = spec.funcIndex, captureSpec = spec.captures, capturedArgs = std::move(callArgs)]() -> std::optional<QLangValue> {
+        return callFunction(funcIdx, capturedArgs);
+      };
+      frame.regs[i.a] = QLangValue::Generator(gen);
+      break;
+    }
     case Opcode::REFLOAD: {
       const CaptureRef &cr = frame.captures[i.b];
       auto *framePtr = static_cast<Frame *>(cr.frame);
@@ -1315,6 +1458,33 @@ void QLangVM::runFrames(int startFrame)
       m_cur--;
       if (m_cur >= 0)
         m_frames[m_cur].regs[frame.callDest] = retVal;
+      continue;
+    }
+    case Opcode::YIELD: {
+      // Yield is only valid inside generator functions. Save the frame,
+      // pop it, and return the yielded value to the caller.
+      fprintf(stderr, "[DBG-YIELD-ENTER] func=%d m_cur=%d m_frames.size=%zu\n", frame.funcIndex, m_cur, m_frames.size());
+      // NOTE: capture the yielded value BEFORE popping to avoid a dangling
+      // reference (frame is m_frames[m_cur] and becomes invalid after pop).
+      QLangValue yielded = frame.regs.empty() ? QLangValue() : frame.regs[0];
+      Frame savedFrame = m_frames[m_cur];
+      savedFrame.pc = frame.pc + 1;
+      m_generatorFrames[frame.funcIndex] = std::move(savedFrame);
+      m_frames.pop_back();
+      fprintf(stderr, "[DBG-YIELD-AFTERPOP] m_cur=%d m_frames.size=%zu\n", m_cur, m_frames.size());
+      m_cur--;
+      if (m_cur >= 0 && m_frames[m_cur].callDest >= 0)
+        m_frames[m_cur].regs[m_frames[m_cur].callDest] = yielded;
+      // Verify what was saved
+      auto it = m_generatorFrames.find(frame.funcIndex);
+      if (it != m_generatorFrames.end()) {
+        fprintf(stderr, "[DBG-YIELD] Saved frame: pc=%zu regs.size=%zu\\n",
+                it->second.pc, it->second.regs.size());
+        for (size_t k = 0; k < it->second.regs.size(); k++) {
+          fprintf(stderr, "[DBG-YIELD]   saved reg[%zu]=type%d val=%lld\\n",
+                  k, (int)it->second.regs[k].type(), (long long)toInt64(it->second.regs[k]));
+        }
+      }
       continue;
     }
     case Opcode::ADD:
@@ -1370,6 +1540,392 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
   if (funcIndex < 0 || funcIndex >= static_cast<int>(m_prog.functions.size()))
     throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown function");
 
+  const Function &fn = m_prog.functions[funcIndex];
+
+  // --- Generator function: create or resume a suspended frame. ---
+  if (fn.isGenerator) {
+    // Check for a saved frame from a previous call.
+    Frame *saved = nullptr;
+    Frame savedFrame;
+    fprintf(stderr, "[DBG-GEN-CALL] func=%d m_generatorFrames.size=%zu\n", funcIndex, m_generatorFrames.size());
+    auto sit = m_generatorFrames.find(funcIndex);
+    if (sit != m_generatorFrames.end()) {
+      savedFrame = sit->second;   // copy OUT of the map BEFORE erase
+      m_generatorFrames.erase(sit);
+      saved = &savedFrame;         // stable pointer to the local copy
+    }
+
+    // Save the caller's state.
+    int savedCur = m_cur;
+    size_t savedFramesSize = m_frames.size();
+
+    // Create or restore the callee frame.
+    Frame frame;
+    frame.funcIndex = funcIndex;
+    frame.regs.resize(static_cast<size_t>(args.size() + fn.registerCount));
+    for (size_t k = 0; k < args.size(); ++k)
+      frame.regs[k] = args[k];
+    frame.captures = fn.captures;
+    for (auto &cr : frame.captures)
+      cr.frame = &m_frames[savedCur];
+    frame.callDest = 0;
+
+    if (saved) {
+      fprintf(stderr, "[DBG-GEN-SAVED] func=%d saved frame: pc=%zu regs.size=%zu regs.ptr=%p\\n",
+              funcIndex, saved->pc, saved->regs.size(), saved->regs.data());
+      for (size_t k = 0; k < saved->regs.size(); k++) {
+        fprintf(stderr, "[DBG-GEN-SAVED]   saved reg[%zu]=type%d val=%lld ptr=%p\\n",
+                k, (int)saved->regs[k].type(), (long long)toInt64(saved->regs[k]),
+                &saved->regs[k]);
+      }
+      // Resume: restore PC and all registers from the saved frame.
+      frame.pc = saved->pc;
+      frame.regs = saved->regs;
+      frame.captures = saved->captures;
+      for (auto &cr : frame.captures)
+        cr.frame = &m_frames[savedCur];
+      fprintf(stderr, "[DBG-GEN-RESTORE] func=%d restoring frame, pc=%zu regs.size=%zu\\n",
+              funcIndex, frame.pc, frame.regs.size());
+      for (size_t k = 0; k < frame.regs.size(); k++) {
+        fprintf(stderr, "[DBG-GEN-RESTORE]   reg[%zu]=type%d val=%lld\\n",
+                k, (int)frame.regs[k].type(), (long long)toInt64(frame.regs[k]));
+      }
+    } else {
+      fprintf(stderr, "[DBG-GEN-NO-SAVE] func=%d no saved frame found\\n", funcIndex);
+    }
+
+    m_frames.push_back(std::move(frame));
+    m_cur = static_cast<int>(m_frames.size()) - 1;
+    int calleeFrameIdx = m_cur;
+
+    // Run the VM loop for the generator.
+    fprintf(stderr, "[DBG-GEN-ENTER] func=%d entering generator loop, m_cur=%d calleeFrameIdx=%d\n",
+            funcIndex, m_cur, calleeFrameIdx);
+    while (m_cur >= calleeFrameIdx) {
+      Frame &frame = m_frames[m_cur];
+      // Generator already exhausted: return nil without running the body.
+      if (frame.exhausted) {
+        m_frames.pop_back();
+        m_cur--;
+        break;
+      }
+      const Function &genFn = m_prog.functions[frame.funcIndex];
+      const auto &instrs = genFn.instructions;
+      const auto &consts = genFn.constants;
+
+      fprintf(stderr, "[DBG-GEN-LOOP] func=%d m_cur=%d calleeFrameIdx=%d frame.pc=%zu instrs.size=%zu\n",
+              funcIndex, m_cur, calleeFrameIdx, frame.pc, instrs.size());
+      if (frame.pc >= instrs.size()) {
+        // Fell off the end: generator exhausted.
+        fprintf(stderr, "[DBG-GEN-EXIT] func=%d exhausted at pc=%zu\\n", funcIndex, frame.pc);
+        m_frames.pop_back();
+        m_cur--;
+        break;
+      }
+
+      if (++m_steps > kMaxSteps)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "max instruction steps exceeded (possible infinite loop)");
+
+      const Instruction &i = instrs[frame.pc];
+      Opcode op = i.op;
+
+      fprintf(stderr, "[DBG-GEN-STEP] func=%d pc=%zu op=%d a=%d b=%d c=%d (fn instrs.size=%zu)\\n", funcIndex, frame.pc, (int)op, i.a, i.b, i.c, instrs.size());
+
+      switch (op) {
+      case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
+      case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
+      case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+      case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+      case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+      case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+      case Opcode::CONV:
+        frame.regs[i.a] = convert(frame.regs[i.b],
+                                  static_cast<QLangValue::Type>(i.c));
+        break;
+      case Opcode::CAST:
+        frame.regs[i.a] = strict_convert(frame.regs[i.b],
+                                         static_cast<QLangValue::Type>(i.c));
+        break;
+      case Opcode::DELETE:
+        m_deleted.insert(i.a);
+        break;
+      case Opcode::ARRGET: {
+        QLangValue &base = frame.regs[i.b];
+        if (base.type() != QLangValue::Type::Array)
+          throw QLangError(QLangErrorKind::Type, 0, 0,
+                           "cannot subscript non-array value");
+        int64_t idx = (long long)toInt64(frame.regs[i.c]);
+        const auto &elems = base.asArray();
+        if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
+          throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                           "array index out of range");
+        frame.regs[i.a] = elems[static_cast<size_t>(idx)];
+        break;
+      }
+      case Opcode::ARRPUT: {
+        QLangValue &base = frame.regs[i.a];
+        if (base.type() != QLangValue::Type::Array)
+          throw QLangError(QLangErrorKind::Type, 0, 0,
+                           "cannot subscript non-array value");
+        int64_t idx = (long long)toInt64(frame.regs[i.b]);
+        auto &elems = base.asArray();
+        if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
+          throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                           "array index out of range");
+        elems[static_cast<size_t>(idx)] = frame.regs[i.c];
+        break;
+      }
+      case Opcode::ARRAPP: {
+        QLangValue &base = frame.regs[i.a];
+        if (base.type() != QLangValue::Type::Array)
+          throw QLangError(QLangErrorKind::Type, 0, 0,
+                           "cannot append to non-array value");
+        base.asArray().push_back(frame.regs[i.b]);
+        break;
+      }
+      case Opcode::ARRAPPV: {
+        QLangValue &base = frame.regs[i.a];
+        if (base.type() != QLangValue::Type::Array)
+          throw QLangError(QLangErrorKind::Type, 0, 0,
+                           "cannot append non-array to array");
+        if (frame.regs[i.b].type() != QLangValue::Type::Array)
+          throw QLangError(QLangErrorKind::Type, 0, 0,
+                           "cannot append non-array to array");
+        auto &elems = base.asArray();
+        const auto &extra = frame.regs[i.b].asArray();
+        elems.insert(elems.end(), extra.begin(), extra.end());
+        break;
+      }
+      case Opcode::ARRLEN:
+        frame.regs[i.a] =
+            QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+        break;
+      case Opcode::LEN:
+        frame.regs[i.a] =
+            QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+        break;
+      case Opcode::SEQGET:
+        frame.regs[i.a] = seqGet(frame.regs[i.b], (long long)toInt64(frame.regs[i.c]));
+        break;
+      case Opcode::TABGET: {
+        QLangValue &base = frame.regs[i.b];
+        if (base.type() != QLangValue::Type::Table)
+          throw QLangError(QLangErrorKind::Type, 0, 0,
+                           "cannot access member of non-table value");
+        const std::string &key = valueToString(frame.regs[i.c]);
+        const auto &kv = *base.asTable();
+        auto it = kv.find(key);
+        if (it == kv.end())
+          throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                           "table has no member '" + key + "'");
+        frame.regs[i.a] = it->second;
+        break;
+      }
+      case Opcode::TABCREATE:
+        frame.regs[i.a] = QLangValue::Table();
+        break;
+      case Opcode::TABPUT: {
+        QLangValue &base = frame.regs[i.a];
+        if (base.type() != QLangValue::Type::Table)
+          throw QLangError(QLangErrorKind::Type, 0, 0,
+                           "cannot assign member of non-table value");
+        auto tv = base.asTable();
+        if (!tv) {
+          tv = std::make_shared<std::map<std::string, QLangValue>>();
+          base = QLangValue::Table(tv);
+        }
+        const std::string &key = valueToString(frame.regs[i.b]);
+        tv->operator[](key) = frame.regs[i.c];
+        break;
+      }
+      case Opcode::CALL: {
+        int dest = i.a;
+        int argCount = i.c;
+        std::vector<QLangValue> callArgs;
+        callArgs.reserve(argCount);
+        for (int k = 0; k < argCount; k++)
+          callArgs.push_back(frame.regs[dest + 1 + k]);
+        if (i.b < 0) {
+          int idx = -1 - i.b;
+          if (idx < 0 || idx >= static_cast<int>(m_prog.nativeFuncs.size()))
+            throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown native function");
+          frame.regs[dest] = m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, callArgs);
+        } else {
+          QLangValue result = callBuiltin(static_cast<Builtin>(i.b), callArgs, m_scope, m_prog, m_deleted, i.line, i.col, this);
+          fprintf(stderr, "[DBG-CALL-BUILTIN] builtin=%d dest=%d result type=%d val=%lld\\n",
+                  i.b, dest, (int)result.type(), (long long)toInt64(result));
+          frame.regs[dest] = result;
+        }
+        break;
+      }
+      case Opcode::CALLFN: {
+        frame.pc += 1;
+        pushCall(i.b, frame.regs, i.a, i.c);
+        const Function &calleeFn2 = m_prog.functions[i.b];
+        m_frames[m_cur].captures = calleeFn2.captures;
+        for (auto &cr : m_frames[m_cur].captures)
+          cr.frame = &m_frames[m_cur - 1];
+        continue;
+      }
+      case Opcode::CALLCLOS: {
+        const QLangValue &cv = frame.regs[i.a];
+        if (cv.type() == QLangValue::Type::Generator) {
+          // Generator call: inline the resume logic.
+          frame.pc += 1;
+          auto &innerGen = cv.asGenerator();
+          auto innerOpt = innerGen();
+          frame.regs[i.a] = innerOpt.value_or(QLangValue());
+        } else if (cv.type() == QLangValue::Type::Function) {
+          frame.pc += 1;
+          pushCall(cv.asFunction().funcIndex, frame.regs, i.a, i.c);
+          m_frames[m_cur].captures = cv.asFunction().captures;
+          continue;
+        } else {
+          throw QLangError(QLangErrorKind::Type, 0, 0,
+                           "attempt to call a non-function value");
+        }
+        break;
+      }
+      case Opcode::MAKEFUNC: {
+        const QLangValue &cv = consts[i.b];
+        if (cv.type() != QLangValue::Type::Function)
+          throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                           "invalid function constant");
+        const Closure &spec = cv.asFunction();
+        auto closure = std::make_shared<Closure>();
+        closure->funcIndex = spec.funcIndex;
+        for (const CaptureRef &cr : spec.captures) {
+          CaptureRef bound;
+          bound.frame = &m_frames[m_cur];
+          bound.reg = cr.reg;
+          closure->captures.push_back(bound);
+        }
+        frame.regs[i.a] = QLangValue::Function(std::move(closure));
+        break;
+      }
+      case Opcode::REFLOAD: {
+        const CaptureRef &cr = frame.captures[i.b];
+        auto *framePtr = static_cast<Frame *>(cr.frame);
+        frame.regs[i.a] = framePtr->regs[cr.reg];
+        break;
+      }
+      case Opcode::REFSTORE: {
+        CaptureRef &cr = frame.captures[i.b];
+        auto *framePtr = static_cast<Frame *>(cr.frame);
+        framePtr->regs[cr.reg] = frame.regs[i.a];
+        break;
+      }
+      case Opcode::RETURN: {
+        // Generator exhaustion: keep the saved frame marked exhausted so the
+        // next resume returns nil instead of restarting the body from scratch.
+        Frame exhaustedFrame = frame;
+        exhaustedFrame.exhausted = true;
+        m_generatorFrames[frame.funcIndex] = std::move(exhaustedFrame);
+        m_frames.pop_back();
+        m_cur--;
+        break;
+      }
+      case Opcode::YIELD: {
+        // Save the current frame and return the yielded value.
+        // NOTE: capture the yielded value BEFORE popping to avoid a dangling
+        // reference (frame is m_frames[m_cur] and becomes invalid after pop).
+        QLangValue yielded = frame.regs.empty() ? QLangValue() : frame.regs[0];
+        fprintf(stderr, "[DBG-YIELD] func=%d yielded type=%d val=%lld pc=%zu regs[0]=%lld\n",
+                frame.funcIndex, (int)yielded.type(), (long long)toInt64(yielded), frame.pc, (long long)toInt64(yielded));
+        for (size_t ri = 0; ri < frame.regs.size() && ri < 10; ri++) {
+          fprintf(stderr, "[DBG-YIELD]   reg[%zu]=type%d val=%lld\n", ri, (int)frame.regs[ri].type(), (long long)toInt64(frame.regs[ri]));
+        }
+        Frame savedFrame = m_frames[m_cur];
+        savedFrame.pc = frame.pc + 1; // resume at next instruction
+        m_generatorFrames[frame.funcIndex] = std::move(savedFrame);
+        // Verify what was saved
+        auto savedIt = m_generatorFrames.find(frame.funcIndex);
+        if (savedIt != m_generatorFrames.end()) {
+          fprintf(stderr, "[DBG-YIELD-SAVE] func=%d saved in map: pc=%zu regs.size=%zu regs.ptr=%p\\n",
+                  frame.funcIndex, savedIt->second.pc, savedIt->second.regs.size(),
+                  savedIt->second.regs.data());
+          for (size_t k = 0; k < savedIt->second.regs.size(); k++) {
+            fprintf(stderr, "[DBG-YIELD-SAVE]   map reg[%zu]=type%d val=%lld ptr=%p\\n",
+                    k, (int)savedIt->second.regs[k].type(), (long long)toInt64(savedIt->second.regs[k]),
+                    &savedIt->second.regs[k]);
+          }
+        }
+        m_frames.pop_back();
+        m_cur--;
+        fprintf(stderr, "[DBG-YIELD] returning yielded value\\n");
+        // Debug: check if main frame regs alias saved frame regs
+        if (m_cur >= 0 && m_cur < m_frames.size()) {
+          fprintf(stderr, "[DBG-YIELD-DEBUG] main frame regs.ptr=%p\\n", m_frames[m_cur].regs.data());
+          for (size_t k = 0; k < m_frames[m_cur].regs.size(); k++) {
+            fprintf(stderr, "[DBG-YIELD-DEBUG]   main reg[%zu]=type%d val=%lld\\n",
+                    k, (int)m_frames[m_cur].regs[k].type(), (long long)toInt64(m_frames[m_cur].regs[k]));
+          }
+        }
+        // Check saved frame again after pop
+        auto savedIt2 = m_generatorFrames.find(frame.funcIndex);
+        if (savedIt2 != m_generatorFrames.end()) {
+          QLangValue *r2 = (savedIt2->second.regs.size() > 2) ? &savedIt2->second.regs[2] : nullptr;
+          fprintf(stderr, "[DBG-YIELD-AFTERPOP] saved reg[2]=%s val=%lld ptr=%p\n",
+                  r2 ? std::to_string((int)r2->type()).c_str() : "N/A",
+                  r2 ? (long long)toInt64(*r2) : -1, r2 ? (void*)&savedIt2->second.regs[2] : nullptr);
+        }
+        return yielded;
+      }
+      case Opcode::ADD:
+      case Opcode::SUB:
+      case Opcode::MUL:
+      case Opcode::DIV:
+      case Opcode::AND:
+      case Opcode::OR:
+      case Opcode::XOR:
+      case Opcode::SHL:
+      case Opcode::SHR:
+      case Opcode::LAND:
+      case Opcode::LOR:
+      case Opcode::EQ:
+      case Opcode::NE:
+      case Opcode::LT:
+      case Opcode::GT:
+      case Opcode::LE:
+      case Opcode::GE:
+      case Opcode::MOD:
+      case Opcode::POW:
+      case Opcode::IN:
+        frame.regs[i.a] = doBinary(op, frame.regs[i.b], frame.regs[i.c]);
+        break;
+      case Opcode::JMP:
+        frame.pc = static_cast<size_t>(i.a);
+        continue;
+      case Opcode::JMPIFTRUE:
+        if (isTrue(frame.regs[i.a]))
+          frame.pc = static_cast<size_t>(i.b);
+        else
+          frame.pc = frame.pc + 1;
+        continue;
+      case Opcode::CONTINUE:
+        frame.pc = static_cast<size_t>(i.a);
+        continue;
+      case Opcode::BREAK:
+        frame.pc = static_cast<size_t>(i.a);
+        continue;
+      case Opcode::JMPIFFALSE:
+        if (!isTrue(frame.regs[i.a]))
+          frame.pc = static_cast<size_t>(i.b);
+        else
+          frame.pc = frame.pc + 1;
+        continue;
+      }
+      frame.pc += 1;
+    }
+
+    // Generator exhausted: keep the exhausted frame in the map so subsequent
+    // resumes return nil rather than restarting the body from scratch.
+    fprintf(stderr, "[DBG-GEN-EXIT] func=%d exhausted, returning nil\n", funcIndex);
+    return QLangValue();
+  }
+
+  // --- Normal (non-generator) function. ---
   // Save current state so we can restore after the call.
   int savedCur = m_cur;
   size_t savedFramesSize = m_frames.size();
@@ -1396,9 +1952,9 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
   // Run the VM manually until the callee returns (m_cur drops below calleeFrameIdx).
   while (m_cur >= calleeFrameIdx) {
     Frame &frame = m_frames[m_cur];
-    const Function &fn = m_prog.functions[frame.funcIndex];
-    const auto &instrs = fn.instructions;
-    const auto &consts = fn.constants;
+    const Function &fn2 = m_prog.functions[frame.funcIndex];
+    const auto &instrs = fn2.instructions;
+    const auto &consts = fn2.constants;
 
     if (frame.pc >= instrs.size()) {
       // Fell off the end: unwind with nil.
@@ -1506,29 +2062,21 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     }
     case Opcode::TABCREATE: {
       frame.regs[i.a] = QLangValue::Table();
-      fprintf(stderr, "[VM-TABCREATE] a=%d shared_ptr=%p\n", i.a, frame.regs[i.a].asTable().get());
       break;
     }
     case Opcode::TABPUT: {
       QLangValue &base = frame.regs[i.a];
-      fprintf(stderr, "[VM-TABPUT ENTER] a=%d type=%d regs.size=%zu\n", i.a, (int)base.type(), frame.regs.size());
       if (base.type() != QLangValue::Type::Table) {
-        fprintf(stderr, "[VM-TABPUT] NOT A TABLE! type=%d\n", (int)base.type());
         throw QLangError(QLangErrorKind::Type, 0, 0,
                          "cannot assign member of non-table value");
       }
       auto tv = base.asTable();
       if (!tv) {
-        fprintf(stderr, "[VM-TABPUT] NULL shared_ptr!\n");
         tv = std::make_shared<std::map<std::string, QLangValue>>();
         base = QLangValue::Table(tv);
       }
       const std::string &key = valueToString(frame.regs[i.b]);
-      fprintf(stderr, "[VM-TABPUT] base.use_count=%ld key=%s\n",
-              tv.use_count(), key.c_str());
       tv->operator[](key) = frame.regs[i.c];
-      fprintf(stderr, "[VM-TABPUT] after put, size=%zu\n",
-              tv->size());
       break;
     }
     case Opcode::CALL: {
@@ -1559,13 +2107,21 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     }
     case Opcode::CALLCLOS: {
       const QLangValue &cv = frame.regs[i.a];
-      if (cv.type() != QLangValue::Type::Function)
+      if (cv.type() == QLangValue::Type::Generator) {
+        frame.pc += 1;
+        auto &gen = const_cast<GeneratorValue &>(cv.asGenerator());
+        auto result = gen();
+        frame.regs[i.a] = result.value_or(QLangValue());
+      } else if (cv.type() == QLangValue::Type::Function) {
+        frame.pc += 1;
+        pushCall(cv.asFunction().funcIndex, frame.regs, i.a, i.c);
+        m_frames[m_cur].captures = cv.asFunction().captures;
+        continue;
+      } else {
         throw QLangError(QLangErrorKind::Type, 0, 0,
                          "attempt to call a non-function value");
-      frame.pc += 1;
-      pushCall(cv.asFunction().funcIndex, frame.regs, i.a, i.c);
-      m_frames[m_cur].captures = cv.asFunction().captures;
-      continue;
+      }
+      break;
     }
     case Opcode::MAKEFUNC: {
       const QLangValue &cv = consts[i.b];
@@ -1582,6 +2138,24 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         closure->captures.push_back(bound);
       }
       frame.regs[i.a] = QLangValue::Function(std::move(closure));
+      break;
+    }
+    case Opcode::MAKEGEN: {
+      const QLangValue &cv = consts[i.b];
+      if (cv.type() != QLangValue::Type::Function)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "invalid function constant for generator");
+      const Closure &spec = cv.asFunction();
+      auto gen = std::make_shared<GeneratorValue>();
+      // Read call arguments from frame registers (already placed by compiler).
+      std::vector<QLangValue> callArgs;
+      callArgs.reserve(i.c);
+      for (int k = 0; k < i.c; k++)
+        callArgs.push_back(frame.regs[i.a + 1 + k]);
+      *gen = [this, funcIdx = spec.funcIndex, captureSpec = spec.captures, capturedArgs = std::move(callArgs)]() -> std::optional<QLangValue> {
+        return callFunction(funcIdx, capturedArgs);
+      };
+      frame.regs[i.a] = QLangValue::Generator(gen);
       break;
     }
     case Opcode::REFLOAD: {

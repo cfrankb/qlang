@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <variant>
 #include <vector>
@@ -33,16 +35,21 @@ using ClosurePtr = std::shared_ptr<Closure>;
 // The value itself is recursively a QLangValue, so arrays nest freely.
 using ArrayValue = std::vector<QLangValue>;
 
+// A generator value: lazily yields values on each call.
+// Returns std::optional<QLangValue>; nullopt signals exhaustion (EOF).
+using GeneratorValue = std::function<std::optional<QLangValue>()>;
+using GeneratorValuePtr = std::shared_ptr<GeneratorValue>;
+
 // A script table is a keyed map of string -> script value (spec: table).
 // Shared across copies so mutations in callees are visible to callers (self semantics).
 using TableValue = std::shared_ptr<std::map<std::string, QLangValue>>;
 
 // The storage variant for every script variable value. Mirrors the spec's
 // variable types: string, blob, byte, word, short, int, unsigned, array,
-// float, table, function (closure). Index 0 is monostate (nil).
+// float, table, function (closure), generator. Index 0 is monostate (nil).
 using QLangVariant = std::variant<std::monostate, uint8_t, uint16_t, int16_t,
                                   int32_t, uint32_t, uint64_t, double,
                                   std::string, std::vector<uint8_t>, ArrayValue,
-                                  TableValue, ClosurePtr>;
+                                  TableValue, ClosurePtr, GeneratorValuePtr>;
 
 } // namespace qlang

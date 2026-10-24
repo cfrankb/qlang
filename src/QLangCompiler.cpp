@@ -16,6 +16,19 @@ static bool isArrayExpr(const ExprPtr &e) {
   return e && e->kind == ExprKind::Array;
 }
 
+// True when e is a call to the builtin range(a, b) with exactly two arguments.
+// On success, outStart/outEnd are set to the two argument expressions so the
+// compiler can emit a counter loop or bounds check without materializing an
+// array (spec §range).
+static bool isRangeCall(const ExprPtr &e, ExprPtr &outStart, ExprPtr &outEnd) {
+  if (!e || e->kind != ExprKind::Call || e->callee != "range" ||
+      e->args.size() != 2)
+    return false;
+  outStart = e->args[0];
+  outEnd = e->args[1];
+  return true;
+}
+
 QLangCompiler::QLangCompiler(std::vector<StmtPtr> program)
     : m_program(std::move(program)) {}
 
@@ -128,6 +141,26 @@ emit(Opcode::RETURN, 0);
 // its function index. The enclosing function's compilation state is saved and
 // restored so nested definitions work.
 // Collect all variable names referenced in an expression.
+static void collectLocalVars(const StmtPtr &s, std::unordered_set<std::string> &locals) {
+  if (!s) return;
+  if (s->kind == StmtKind::Declaration || s->kind == StmtKind::Const) {
+    locals.insert(s->name);
+  } else if (s->kind == StmtKind::For) {
+    locals.insert(s->loopVar);
+    for (auto &b : s->body) collectLocalVars(b, locals);
+  } else if (s->kind == StmtKind::ForIn) {
+    locals.insert(s->loopVar);
+    for (auto &b : s->body) collectLocalVars(b, locals);
+  } else if (s->kind == StmtKind::If) {
+    for (auto &b : s->ifBody) collectLocalVars(b, locals);
+    for (auto &b : s->elseBody) collectLocalVars(b, locals);
+  } else if (s->kind == StmtKind::While) {
+    for (auto &b : s->whileBody) collectLocalVars(b, locals);
+  } else if (s->kind == StmtKind::Def) {
+    for (auto &b : s->body) collectLocalVars(b, locals);
+  }
+}
+
 static void collectStmtIds(const StmtPtr &s, std::unordered_set<std::string> &ids,
                            const std::unordered_set<std::string> *skip);
 static void collectIds(const ExprPtr &e, std::unordered_set<std::string> &ids,
@@ -183,6 +216,8 @@ static void collectStmtIds(const StmtPtr &s, std::unordered_set<std::string> &id
     for (auto &b : s->whileBody) collectStmtIds(b, ids, skip);
   } else if (s->kind == StmtKind::Return) {
     if (s->returnValue) collectIds(s->returnValue, ids, skip);
+  } else if (s->kind == StmtKind::Yield) {
+    if (s->yieldValue) collectIds(s->yieldValue, ids, skip);
   } else if (s->kind == StmtKind::ExprStmt) {
     if (s->value) collectIds(s->value, ids, skip);
   } else if (s->kind == StmtKind::Def) {
@@ -201,7 +236,12 @@ int QLangCompiler::buildFunction(const std::string &name,
   std::unordered_set<std::string> allIds;
   for (auto &s : body)
     collectStmtIds(s, allIds);
+  // Also collect all locally-declared variables (params + local decls + loop vars)
+  // so we don't mistakenly capture them as free variables.
   std::unordered_set<std::string> paramSet(params.begin(), params.end());
+  std::unordered_set<std::string> localVars = paramSet;
+  for (auto &s : body)
+    collectLocalVars(s, localVars);
 
   // Save the enclosing function's compilation state.
   Bytecode savedCode = m_code;
@@ -215,6 +255,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   auto savedCaptureRegs = m_captureRegs;
   auto savedGlobalVars = m_globalVars;
   auto savedCapturedVars = m_capturedVars;
+  auto savedGeneratorVars = m_generatorVars;
   int savedNextReg = m_nextReg;
   bool savedInFunction = m_inFunction;
 
@@ -229,6 +270,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_varTypes.clear();
   m_closureVars.clear();
   m_captureRegs.clear();
+  m_generatorVars.clear();
   m_labels.clear();
   m_nextReg = 0;
   m_inFunction = true;
@@ -243,6 +285,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   std::vector<std::string> updatedCaptures = captures;
   for (auto &id : allIds) {
     if (paramSet.count(id)) continue;
+    if (localVars.count(id)) continue; // locally declared (loop var, local, etc.)
     if (m_regs.count(id)) continue; // already declared in this function
     if (m_userFuncs.count(id)) continue; // user function name
     if (builtinId(id) >= 0) continue; // builtin
@@ -282,7 +325,10 @@ int QLangCompiler::buildFunction(const std::string &name,
   // Sync captures (modified by global statements) back to updatedCaptures.
   // This ensures fn.captures is populated correctly.
 
-  // Implicit `return nil`.
+  // Implicit `return nil`. The RETURN opcode returns reg 0, but a prior
+  // statement may have left a value there; force reg 0 to nil so a function
+  // with no return statement returns nil (spec: return value defaults to nil).
+  emit(Opcode::CONST, 0, emitConst(QLangValue())); // reg 0 = nil
   emit(Opcode::RETURN, 0);
 
   Function fn;
@@ -304,6 +350,17 @@ int QLangCompiler::buildFunction(const std::string &name,
   Bytecode fnCode = std::move(m_code);
   fn.instructions = std::move(fnCode.instructions());
   fn.constants = std::move(fnCode.constants());
+  // Detect generator: any `yield` statement (at any nesting depth) makes this
+  // a generator function.
+  for (auto &s : body) {
+    if (s && containsYield(s)) {
+      fn.isGenerator = true;
+      break;
+    }
+  }
+  if (fn.isGenerator) {
+    m_generatorFuncIndices.insert(funcIndex);
+  }
   m_functions.push_back(std::move(fn));
 
   // Restore the enclosing function's compilation state.
@@ -318,8 +375,20 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_globalRegMap.clear();
   m_globalVars = std::move(savedGlobalVars);
   m_capturedVars = std::move(savedCapturedVars);
+  m_generatorVars = std::move(savedGeneratorVars);
   m_nextReg = savedNextReg;
   m_inFunction = savedInFunction;
+
+  // Emit generator closure constant into the MAIN bytecode (not the temporary
+  // function bytecode that was just moved into fn). MAKEGEN in compileExpr
+  // references constants in the current m_code.
+  if (fn.isGenerator) {
+    auto closure = std::make_shared<Closure>();
+    closure->funcIndex = funcIndex;
+    closure->captures = fn.captures;
+    int genConstIdx = emitConst(QLangValue::Function(closure));
+    m_generatorConstIndices[funcIndex] = genConstIdx;
+  }
 
   return funcIndex;
 }
@@ -338,6 +407,18 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       emit(Opcode::CONST, t, emitConst(QLangValue())); // `local z` -> nil
     emit(Opcode::MOV, r, t);
     updateVarType(s->name, s->value);
+    // Track generator variables: if RHS calls a generator function, mark LHS.
+    if (s->value && s->value->kind == ExprKind::Call) {
+      auto *e = s->value.get();
+      fprintf(stderr, "[DBG-GENVAR] Tracking gen var '%s' from call to '%s': userFuncs=%d genVars=%d\n",
+              s->name.c_str(), e->callee.c_str(),
+              m_userFuncs.count(e->callee), m_generatorVars.count(e->callee));
+      if (m_userFuncs.count(e->callee) && m_generatorVars.count(e->callee))
+        m_generatorVars.insert(s->name);
+      fprintf(stderr, "[DBG-GENVAR] m_generatorVars after insert: {");
+      for (auto &g : m_generatorVars) fprintf(stderr, " %s", g.c_str());
+      fprintf(stderr, " }\n");
+    }
     // Enforce a typed declaration (e.g. local b:byte = 32).
     if (s->declaredType)
       emit(Opcode::CONV, r, r, static_cast<int>(*s->declaredType));
@@ -470,6 +551,41 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     break;
   }
   case StmtKind::ForIn: {
+    // for i in range(a, b) -> counter loop: i = a; while (i <= b) { ...; ++i }
+    // No array is materialized (spec §range).
+    ExprPtr ra, rb;
+    if (isRangeCall(s->forEnd, ra, rb)) {
+      int x = declareVar(s->loopVar);
+      int startReg = tmpRegister();
+      compileExpr(ra, startReg);
+      emit(Opcode::MOV, x, startReg);
+      int endReg = tmpRegister();
+      compileExpr(rb, endReg);
+      int testLabel = static_cast<int>(m_code.size());
+      int cmpReg = tmpRegister();
+      emit(Opcode::LE, cmpReg, x, endReg); // continue while x <= b
+      emit(Opcode::JMPIFFALSE, cmpReg, 0);
+      int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+
+      m_loops.push_back({0, 0});
+      int bodyStart = static_cast<int>(m_code.instructions().size());
+      for (auto &body : s->body)
+        compileStmt(body);
+      int bodyEnd = static_cast<int>(m_code.instructions().size());
+
+      int incLabel = bodyEnd;
+      emit(Opcode::INC, x, x);
+      emit(Opcode::JMP, testLabel);
+      int exitLabel = static_cast<int>(m_code.size());
+      m_code.instructions()[jumpFalseIdx].b = exitLabel;
+      for (int j = bodyStart; j < bodyEnd; j++) {
+        auto &ci = m_code.instructions()[j];
+        if (ci.op == Opcode::CONTINUE) ci.a = incLabel;
+        else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
+      }
+      m_loops.pop_back();
+      break;
+    }
     // for i in <collection> ... next i : iterate array elements / table keys.
     int x = declareVar(s->loopVar); // loopVar holds each element/key
     int idx = tmpRegister();        // index counter
@@ -586,8 +702,20 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
   }
   case StmtKind::Def: {
     // `def name(params) ... end` (or brace form): a global function.
+    fprintf(stderr, "[DBG-GENVAR] Def stmt for '%s', m_generatorVars={", s->funcName.c_str());
+    for (auto &g : m_generatorVars) fprintf(stderr, " %s", g.c_str());
+    fprintf(stderr, " }, m_functions.size=%d\n", (int)m_functions.size());
     int funcIndex = buildFunction(s->funcName, s->params, {}, s->body);
     m_userFuncs[s->funcName] = funcIndex;
+    // Track generator functions at the outer scope so assignments from them
+    // are recognized as producing generator values.
+    fprintf(stderr, "[DBG-GENVAR] After buildFunction: m_functions.size=%d, back.isGenerator=%d\n",
+            (int)m_functions.size(), m_functions.empty() ? -1 : m_functions.back().isGenerator);
+    if (!m_functions.empty() && m_functions.back().isGenerator)
+      m_generatorVars.insert(s->funcName);
+    fprintf(stderr, "[DBG-GENVAR] After insert: m_generatorVars={");
+    for (auto &g : m_generatorVars) fprintf(stderr, " %s", g.c_str());
+    fprintf(stderr, " }\n");
     break;
   }
   case StmtKind::Arrow: {
@@ -595,6 +723,14 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     int funcIndex = buildFunction(s->name, s->params, s->captures, s->body);
     m_closureVars.insert(s->name);
     m_varTypes[s->name] = QLangValue::Type::Function;
+    // If the closure contains yield (at any nesting depth), mark it as a
+    // generator variable so nested functions emit CALLCLOS for calls to it.
+    for (auto &st : s->body) {
+      if (st && containsYield(st)) {
+        m_generatorVars.insert(s->name);
+        break;
+      }
+    }
     int r = declareVar(s->name);
     int t = tmpRegister();
     // Constant describing the closure: funcIndex + enclosing capture registers.
@@ -625,6 +761,18 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       emit(Opcode::CONST, 0, emitConst(QLangValue())); // nil
     }
     emit(Opcode::RETURN, 0);
+    break;
+  }
+  case StmtKind::Yield: {
+    // Yield value goes into register 0 (the generator's yield register).
+    if (s->yieldValue) {
+      int t = tmpRegister();
+      compileExpr(s->yieldValue, t);
+      emit(Opcode::MOV, 0, t);
+    } else {
+      emit(Opcode::CONST, 0, emitConst(QLangValue())); // nil
+    }
+    emit(Opcode::YIELD, 0);
     break;
   }
   case StmtKind::Continue: {
@@ -742,6 +890,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     auto savedCaptureRegs = m_captureRegs;
     auto savedGlobalVars = m_globalVars;
     auto savedCapturedVars = m_capturedVars;
+    auto savedGeneratorVars = m_generatorVars;
     int savedNextReg = m_nextReg;
     bool savedInFunction = m_inFunction;
 
@@ -752,6 +901,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     m_userFuncs.clear();
     m_closureVars.clear();
     m_captureRegs.clear();
+    m_generatorVars.clear();
     m_globalVars.clear();
     m_capturedVars.clear();
     m_labels.clear();
@@ -803,6 +953,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     m_captureRegs = std::move(savedCaptureRegs);
     m_globalVars = std::move(savedGlobalVars);
     m_capturedVars = std::move(savedCapturedVars);
+    m_generatorVars = std::move(savedGeneratorVars);
     m_nextReg = savedNextReg;
     m_inFunction = savedInFunction;
 
@@ -996,6 +1147,25 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
   case ExprKind::Binary:
   case ExprKind::Unary: {
     if (e->kind == ExprKind::Binary) {
+      // `l in range(a, b)` -> (l >= a) && (l <= b): inclusive bounds check,
+      // no array materialized (spec §range).
+      if (e->op.text == "in") {
+        ExprPtr ra, rb;
+        if (isRangeCall(e->right, ra, rb)) {
+          int l = tmpRegister();
+          compileExpr(e->left, l);
+          int aReg = tmpRegister();
+          compileExpr(ra, aReg);
+          int geReg = tmpRegister();
+          emit(Opcode::GE, geReg, l, aReg);
+          int bReg = tmpRegister();
+          compileExpr(rb, bReg);
+          int leReg = tmpRegister();
+          emit(Opcode::LE, leReg, l, bReg);
+          emit(Opcode::LAND, dest, geReg, leReg);
+          break;
+        }
+      }
       int l = tmpRegister();
       compileExpr(e->left, l);
       int rr = tmpRegister();
@@ -1108,13 +1278,32 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     // User `def` function: funcIndex known at compile time.
     auto uit = m_userFuncs.find(e->callee);
     if (uit != m_userFuncs.end()) {
-      emit(Opcode::CALLFN, dest, uit->second, argCount);
+      // Generator functions: emit MAKEGEN to create a generator object,
+      // not CALLFN which would run the generator inline.
+      if (m_generatorFuncIndices.count(uit->second)) {
+        int constIdx = m_generatorConstIndices[uit->second];
+        emit(Opcode::MAKEGEN, dest, constIdx, argCount);
+        // Clear arg regs so they don't leak into the next instruction.
+        for (int j = 0; j < argCount; j++)
+          emit(Opcode::CONST, argBase + j, m_code.addConstant(QLangValue()), 0);
+      } else {
+        emit(Opcode::CALLFN, dest, uit->second, argCount);
+      }
       break;
     }
     // Arrow-closure variable: the closure value (with its funcIndex) is loaded
     // from the variable register and dispatched at runtime.
     auto cif = m_closureVars.find(e->callee);
     if (cif != m_closureVars.end()) {
+      int cr = regOf(e->callee);
+      emit(Opcode::MOV, dest, cr);
+      emit(Opcode::CALLCLOS, dest, argCount, argCount);
+      break;
+    }
+    // Generator variable: use CALLCLOS (runtime dispatch to resume generator).
+    fprintf(stderr, "[DBG-GENVAR] Call to '%s': in m_generatorVars? %d\n",
+            e->callee.c_str(), m_generatorVars.count(e->callee));
+    if (m_generatorVars.count(e->callee)) {
       int cr = regOf(e->callee);
       emit(Opcode::MOV, dest, cr);
       emit(Opcode::CALLCLOS, dest, argCount, argCount);
@@ -1131,6 +1320,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       }
     }
     emit(Opcode::CALL, dest, funcId, argCount);
+    if (e->callee == "range") fprintf(stderr, "[DBG-RANGE] emitted CALL dest=%d b=%d c=%d\n", dest, funcId, argCount);
     // Propagate source position for runtime error reporting.
     m_code.at(m_code.size() - 1).line = e->callLine;
     m_code.at(m_code.size() - 1).col = e->callCol;
@@ -1399,6 +1589,7 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "sprintf") return static_cast<int>(Builtin::Sprintf);
   if (name == "format") return static_cast<int>(Builtin::Format);
   if (name == "assert") return static_cast<int>(Builtin::Assert);
+  if (name == "next") return static_cast<int>(Builtin::Next);
   return -1;
 }
 
@@ -1554,6 +1745,60 @@ void QLangCompiler::guardNotConst(const std::string &name,
   if (m_constVars.count(name))
     throw QLangError(QLangErrorKind::Parse, 0, 0,
                      std::string("cannot ") + op + " to constant '" + name + "'");
+}
+
+bool QLangCompiler::containsYield(const StmtPtr &s) {
+  if (!s)
+    return false;
+  if (s->kind == StmtKind::Yield)
+    return true;
+  // Recurse into block-bearing statement types.
+  switch (s->kind) {
+  case StmtKind::For:
+    for (auto &st : s->body)
+      if (containsYield(st))
+        return true;
+    return false;
+  case StmtKind::ForIn:
+    for (auto &st : s->body)
+      if (containsYield(st))
+        return true;
+    return false;
+  case StmtKind::While:
+    for (auto &st : s->whileBody)
+      if (containsYield(st))
+        return true;
+    return false;
+  case StmtKind::If:
+    for (auto &st : s->ifBody)
+      if (containsYield(st))
+        return true;
+    for (auto &st : s->elseBody)
+      if (containsYield(st))
+        return true;
+    return false;
+  case StmtKind::Def:
+    for (auto &st : s->body)
+      if (containsYield(st))
+        return true;
+    return false;
+  case StmtKind::Arrow:
+    for (auto &st : s->body)
+      if (containsYield(st))
+        return true;
+    return false;
+  case StmtKind::Switch:
+    for (auto &c : s->cases)
+      for (auto &st : c.body)
+        if (containsYield(st))
+          return true;
+    for (auto &st : s->defaultBody)
+      if (containsYield(st))
+        return true;
+    return false;
+  default:
+    return false;
+  }
 }
 
 } // namespace qlang

@@ -112,6 +112,7 @@ enum class StmtKind {
   Goto,      // goto labelname
   GotoIf,    // if cond goto label (conditional jump)
   Switch,    // switch (expr) { case ... : ... default: ... }
+  Yield,     // yield expression (generator)
   Global,    // global a, b (import top-level vars into function scope)
   Import,    // import math / import math.min
   Class      // class Name { fields + methods end }
@@ -171,6 +172,9 @@ struct Stmt {
   // Return: return [value]  (value optional; defaults to nil).
   ExprPtr returnValue;
 
+  // Yield: yield [value]  (generator value emission; value optional).
+  ExprPtr yieldValue;
+
   // Label: :labelname (records a PC target for goto).
   std::string labelName;
 
@@ -227,6 +231,7 @@ private:
   StmtPtr parseWhile();
   StmtPtr parseIf();
   StmtPtr parseReturn();
+  StmtPtr parseYield();
   StmtPtr parseContinue();
   StmtPtr parseBreak();
   StmtPtr parseGoto();

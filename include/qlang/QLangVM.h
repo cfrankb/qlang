@@ -46,6 +46,10 @@ private:
     // Caller register to receive this frame's return value (>= 0), or -1 for
     // the top-level main frame / a bare call used only for side effects.
     int callDest = -1;
+    // Generator exhaustion flag: once a generator returns nil (fell off the
+    // end), this stays true so every subsequent resume returns nil instead of
+    // restarting the body from scratch.
+    bool exhausted = false;
   };
 
   static bool isTrue(const QLangValue &v);
@@ -74,6 +78,10 @@ public:
   QLangValue m_returnValue; // result handed back to the caller of a call
   std::unordered_set<int> m_deleted; // registers removed by `delete`
   size_t m_steps = 0;
+  // Saved frames for active generator instances, keyed by function index.
+  // Each entry is the most-recently-saved frame for that generator; a new
+  // call with an empty entry creates a fresh instance.
+  std::unordered_map<int, Frame> m_generatorFrames;
 
   static constexpr std::size_t kMaxSteps = 100000000u; // infinite-loop guard
 };

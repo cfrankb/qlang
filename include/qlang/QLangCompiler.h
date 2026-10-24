@@ -97,6 +97,8 @@ private:
   // Compile an index/member assignment target (a[i]=v, t.name=v).
   void compileAssignTarget(const ExprPtr &target, const Token &op,
                            const ExprPtr &value);
+  // Recursively check if a statement (or any of its children) contains a yield.
+  static bool containsYield(const StmtPtr &s);
 
   Bytecode m_code;
   std::vector<StmtPtr> m_program;
@@ -136,6 +138,16 @@ private:
   // Variables explicitly imported into function scope via `global`. These are
   // NOT in m_regs (so they compile as REFLOAD/REFSTORE) but ARE assignable.
   std::unordered_set<std::string> m_capturedVars;
+  // Variable names known to hold a generator (arrow-closure containing yield).
+  // Assignments/calls to these variables inside nested functions use CALLCLOS.
+  std::unordered_set<std::string> m_generatorVars;
+  // Function indices known to be generator functions (contain `yield`).
+  // Persists across buildFunction calls so nested def calls can check without
+  // accessing m_functions (which is restored after each buildFunction).
+  std::unordered_set<int> m_generatorFuncIndices;
+  // Maps generator funcIndex → constant pool index of the Closure constant
+  // used by MAKEGEN to create a GeneratorValue.
+  std::unordered_map<int, int> m_generatorConstIndices;
   // Caller's register mapping saved at function-entry for global keyword support.
   std::unordered_map<std::string, int> m_savedRegs;
   // Mapping from global var name to caller's register number (for capture spec).
