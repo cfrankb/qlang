@@ -29,16 +29,22 @@
 - Always ask for permission before editing AGENTS.md.
 
 ## Build files
-Build artifacts belong in `build/` — that's the correct location. Don't scatter
-build files in the source root:
+Build out-of-source (`cmake -B build`) so generated files never touch the source
+tree — `build/` is their correct home. If you ever build in-source, keep these
+CMake-generated files out of the source root:
 ```
-CMakeFiles/*
 CMakeCache.txt
+CMakeFiles/
 CTestTestfile.cmake
-Makefile
 cmake_install.cmake
+cmake/
+Testing/
+install_manifest.txt
+Makefile
 *.o
 *.a
+*.so
+compiled executables
 *.rej
 *.orig
 ```

@@ -9,18 +9,19 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 ## Current Status
 
-**185 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **5 passed, 0 failed** (`gen_test`) + **22 passed, 0 failed** (`examples/range_check.cpp`, `range` ctest) = **272 total**.
+**185 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **5 passed, 0 failed** (`gen_test`) + **22 passed, 0 failed** (`examples/range_check.cpp`, `range` ctest) = **272 total**. Re-verified 2026-10-24 against the current lib (HEAD `4091c32`); all suites still green. The six suites do **not** exercise the newly-added `step` material, so the `step` gaps below are source-verified, not test-verified.
 
-Line numbers below are against the CURRENT SPEC.md (24623 bytes, 1018 lines, SHA256: 2a42e1ce8121fd96372bde9cbb5d75b908a7622f575d7bf54a730765a4b78efb). Working tree is DIRTY: SPEC.md (verbose-level section + prior "agent instructions"/build-files edits) and the verbose-level implementation (QLangContext.h/.cpp, QLangVM.h/.cpp) are staged/unstaged but not committed; src/QLangVM.cpp.orig and src/QLangVM.cpp.rej are untracked.
+Line numbers below are against the CURRENT SPEC.md (24593 bytes, 1028 lines, SHA256: ca26983def499ee8458a79674754b710cd559f5c703b3a06a70d2bb7f239e2e6). Working tree is DIRTY: SPEC.md (`step` reserved word + range/loop `step` examples) is uncommitted; the verbose-level implementation (QLangContext.h/.cpp, QLangVM.h/.cpp) was committed in `4091c32`. src/QLangVM.cpp.orig and src/QLangVM.cpp.rej are untracked.
 
 ## SPEC.md Changes Since Last Audit
 
-SHA256: `2a42e1ce8121fd96372bde9cbb5d75b908a7622f575d7bf54a730765a4b78efb` (1018 lines, 24623 bytes).
+SHA256: `ca26983def499ee8458a79674754b710cd559f5c703b3a06a70d2bb7f239e2e6` (1028 lines, 24593 bytes).
 
 | Commit | Change |
 |--------|--------|
+| `4091c32` | feat(verbose): application-wide verbose level — `QLangContext::setVerboseLevel/verboseLevel/isAt` + `m_verboseLevel` (default 0); `set_verbose(level)` native fn (`QLangContext.cpp`, accepts int/dword/float, returns new level); `QLangVM::trace(minLevel,…)` gated emit helper with tiers 1 (frames/calls) / 2 (VM loop+opcodes+returns) / 3 (full detail) and the fprintf→trace conversion in `QLangVM.cpp`. Expanded `## verbose level` section in SPEC.md (§736) from a one-line placeholder into a full implementation spec (granularity table, QLang + C++ APIs, implementation notes, example session). **Committed here** (was uncommitted in the prior audit). Verified: build clean (`qlang` lib + `spec_check2`); `set_verbose(0/1/2)` emits the correct tiers to stderr with program output on stdout unaffected; C++ `setVerboseLevel(3)` → `verboseLevel()==3`, `isAt(2/3)==true`. |
+| `uncommitted` | feat(step): `step` added to reserved words (SPEC §reserved words) + range/loop `step` examples — `for i in range(0,10) step 1`, `range(10,0) step -1`, `range(10,0) step j`, `for x = 10 to 0 step -1`, `for x in range(10,0) step -1`, `for x in [1,4,6] step 2` (documented as error). **NOT implemented** — lexer `keywordType()` has no `step` (tokenizes as `Ident`); parser `parseFor()` consumes no `step`. Gap vs SPEC. |
 | `2f19a23` | feat(range): context-dependent range encoding — `for i in range(a,b)` counter loop (no array), `l in range(a,b)` bounds check; `containsYield` recurses into ForIn for generators; added `examples/range_check.cpp` (22 cases, `range` ctest) |
-| `uncommitted` | feat(verbose): application-wide verbose level — `QLangContext::setVerboseLevel/verboseLevel/isAt` + `m_verboseLevel` (default 0); `set_verbose(level)` native fn (`QLangContext.cpp`, accepts int/dword/float, returns new level); `QLangVM::trace(minLevel, …)` gated emit helper with tiers 1 (frames/calls) / 2 (VM loop+opcodes+returns) / 3 (full detail) and the fprintf→trace conversion in `QLangVM.cpp`. Expanded `## verbose level` section in SPEC.md (§736) from a one-line placeholder into a full implementation spec (granularity table, QLang + C++ APIs, implementation notes, example session). Verified: build clean (`qlang` lib + `spec_check2`); `set_verbose(0/1/2)` emits the correct tiers to stderr with program output on stdout unaffected; C++ `setVerboseLevel(3)` → `verboseLevel()==3`, `isAt(2/3)==true`. |
 | `5001c1d` | checkpoint: add `yield`/`fetch` reserved words; add "everything is case sensitive." + "always ask for permission before touching this file."; boolean-table `generator`/`function,lambda` rows; `## declarations and assignments` rename + implicit-declaration example; new `## range` section (context-dependent encoding); `==`/`!=` nil-equality table; "no-return -> returns nil"; `## verbose level` (Priority one); generators rewritten (callable-closure prototype + `## Syntax` + `## EOF sentinel`) |
 | `31fc707` | Add `==`/`!=` nil-equality rules (nil only equals nil) + document functions/lambdas/generators without a return statement returning nil (nil type) |
 | `b195b06` | Add `class` to reserved words; fix math module typo; dd string module stub; expand Money class prototype |
@@ -32,25 +33,24 @@ Minor edits: removed `slice => build in` from reserved words (already not a keyw
 
 ## Uncommitted SPEC.md Edits (working tree; not in git)
 
-SPEC.md working-tree hash = `2a42e1ce...` (1018 lines, 24623 bytes). Two classes of
+SPEC.md working-tree hash = `ca26983d...` (1028 lines, 24593 bytes). One class of
 uncommitted SPEC.md edits:
-1. Prior edits (staged): header "instructions" → "agent instructions"; expanded the
-   "don't put build file" note with a build-files allowlist; removed stray blank lines
-   and a `TODO: propose a class definition` line (continues the `2f19a23` direction).
-2. `## verbose level` section (§736) expanded from a one-line placeholder into a full
-   implementation spec (granularity table, QLang `set_verbose` API, C++ API,
-   implementation notes, example session).
+1. `step` reserved word added (SPEC §reserved words) + range/loop `step` examples
+   (`for i in range(0,10) step 1`, `range(10,0) step -1`, `range(10,0) step j`,
+   `for x = 10 to 0 step -1`, `for x in range(10,0) step -1`,
+   `for x in [1,4,6] step 2` documented as error).
 
-Uncommitted implementation (source, committed separately pending): the verbose-level
-feature — `QLangContext::setVerboseLevel/verboseLevel/isAt` + `m_verboseLevel`
-(`include/qlang/QLangContext.h`), `set_verbose` native fn (`src/QLangContext.cpp`), and
-the `trace(minLevel,…)` gated emit helper + fprintf→trace tier conversion
-(`include/qlang/QLangVM.h`, `src/QLangVM.cpp`). All staged/unstaged but not committed.
+The `## verbose level` section (§736) expansion and the verbose-level implementation
+(`QLangContext::setVerboseLevel/verboseLevel/isAt` + `m_verboseLevel`, `set_verbose`
+native fn, `trace(minLevel,…)` gated emit helper + fprintf→trace tier conversion) were
+**committed in `4091c32`** — no longer uncommitted. The prior header "instructions" →
+"agent instructions" edits and the build-files allowlist are committed.
+
 `src/QLangVM.cpp.orig` and `src/QLangVM.cpp.rej` are patch artifacts; the `.rej` hunk
 was an extra `[DBG-YIELD-REG]` register-dump loop that was NOT applied. The tally in
-"Current Status" (272 total) includes the `examples/range_check.cpp` suite and has been
-re-run against the current spec; the verbose feature is verified separately (build +
-runtime, see the Open Items entry).
+"Current Status" (272 total) has been re-run against the current spec on 2026-10-24; it
+does NOT cover the new `step` material (no suite exercises `step`), so the `step` gaps
+are source-verified, not test-verified.
 
 ## Legend
 
@@ -89,7 +89,7 @@ runtime, see the Open Items entry).
 - [x] `if ... { } else if ... { } else { }` brace-form conditional chains
 - [x] `if (b in a)` membership test
 - [x] `if a in range(1,10)` range membership test
-- [x] **range context-dependent encodings (SPEC §range):** `for i in range(a,b)` -> counter loop `i=a; while i<=b { ...; ++i }` (no array materialized); `l in range(a,b)` -> bounds check `(l>=a) && (l<=b)` (no array materialized), used in `if`/`while` conditions and `let x = b in range(0,10)`; `arr = range(a,b)` -> materialized array; `for i in range { yield i }` -> generator. `continue` in a range counter loop jumps to the implicit `INC` (spec: "continue will increment the i"). Verified by `examples/range_check.cpp` (22 passed, 0 failed; `range` ctest): counter-loop sum/count/break/continue, bounds-check in/out/edge values, array materialization, generator.
+- [x] **range context-dependent encodings (SPEC §range):** `for i in range(a,b)` -> counter loop `i=a; while i<=b { ...; ++i }` (no array materialized); `l in range(a,b)` -> bounds check `(l>=a) && (l<=b)` (no array materialized), used in `if`/`while` conditions and `let x = b in range(0,10)`; `arr = range(a,b)` -> materialized array; `for i in range { yield i }` -> generator. `continue` in a range counter loop jumps to the implicit `INC` (spec: "continue will increment the i"). Verified by `examples/range_check.cpp` (22 passed, 0 failed; `range` ctest): counter-loop sum/count/break/continue, bounds-check in/out/edge values, array materialization, generator. Range `step` variants — `for i in range(a,b) step N`, `range(10,0) step -1`, `range(10,0) step j` — are documented in SPEC but **NOT implemented** (parser parses no `step`); see Open Items.
 - [x] `0xc` hex literal
 - [x] `true` / `false` boolean literals; truthiness for booleans, strings,
       arrays, tables, numbers (0 = false, non-zero = true)
@@ -148,6 +148,15 @@ All items below are implemented and verified. Table retained for traceability.
 | §global scope visibility | `global a, b` keyword | ✓ implemented | `TokenType::Global` in lexer; `keywordType()` maps `"global"`; parser handles `global a, b;` (semicolon optional) in function scope; compiler tracks `m_globalVars`/`m_globalRegMap`; VM routes through saved regs. Top-level `global` throws parse error. Undeclared global throws error. 9 new test cases pass. |
 | §strings (f-strings) | Python-style f"Total: ${price:.2f}" | ✓ implemented | Lexer: FString token; fstringLiteral() parses ${...} interpolation blocks verbatim. Parser: ExprKind::FString with strParts (literal segments), exprParts (inner expression ASTs), and formatSpecs (per-expression format specs like ".2f"). Compiler: emits format(template, expr1, ...) via Builtin::Format; format specs are translated to printf placeholders (:2f -> %.2f, :d -> %d, :x -> %x, :X -> %X, :o -> %o). Width and flag parsing supported: :06x -> %06x (zero-pad), :#06x -> %#06x (alternate hex with 0x prefix), :5d -> %5d (width), :-5s -> %-5s (left-align). VM: format builtin passes full printf substring to snprintf, preserving all flags/width/precision. Verified: f"Total: ${price:.2f}" -> "Total: 19.99", f"${0xff:x}" -> "ff", f"${255:X}" -> "FF", f"${255:#06x}" -> "0x00ff", f"${255:06x}" -> "0000ff", f"${10:05d}" -> "00010", f"${3.14:.2f}" -> "3.14". |
 
+## Not Yet Implemented vs Spec (new since last audit)
+
+|| Spec | Item | Status | Notes |
+|------|------|--------|-------|
+|| §reserved words | `step` | ✗ not implemented | Lexer `keywordType()` has no `step` entry; tokenizes as `Ident`. `local step = 1` parses (should be a reserved-word error per SPEC). Gap. |
+|| §range | `for i in range(a,b) step N` | ✗ not implemented | Parser `parseFor()` parses `forEnd = parseExpression()` and stops; no `step` consumption. `range(0,10) step 1`, `range(10,0) step -1`, `range(10,0) step j` documented in SPEC but not parsed. Gap. |
+|| §loops | `for x = a to b step N` (BASIC-style) | ✗ not implemented | Same root cause — `step` not consumed. `for x = 10 to 0 step -1` documented in SPEC but not parsed. Gap. |
+|| §loops | `for x in [1,4,6] step 2` | ⚠ not the documented error | SPEC says stepping into an array is a parse error; with no `step` handling the trailing `step 2` tokens are left unconsumed. Behavior differs from the documented error. Gap. |
+
 ## Extensions Beyond Spec (present in implementation, absent from spec)
 
 | Feature | Notes |
@@ -203,7 +212,9 @@ All items below are implemented and verified. Table retained for traceability.
 | `end` | `End` | ✓ | Reserved word; terminates `if/then/end`, `while/end`, `def/end` forms. Not used in brace-form syntax |
 | `cast` | `Cast` | ✓ | Reserved word; blocks identifier use. `cast<int>(1.12)` works as expression via `parsePrimary()` special case |
 | `class` | `Class` | ✓ | **Implemented.** Parser handles `class Name { ... }` with field assignments and method definitions. Methods use arrow closure syntax `(params)[] { ... }` with `self` as first param. Constructor calls `__init__(self, args...)` automatically. Member calls `obj.method(args)` prepend `self`. Prototype function per class creates table and populates methods. |
-|| `fetch` | — | — | **Not a keyword.** Not implemented; no `TokenType::Fetch` in lexer/parser. Listed as reserved word in SPEC but the lexer does not recognize it. Gap.
+| `fetch` | — | — | **Not a keyword.** Not implemented; no `TokenType::Fetch` in lexer/parser. Listed as reserved word in SPEC but the lexer does not recognize it. Gap.
+|| `step` | — | — | **Not a keyword.** Not implemented; no `TokenType::Step` in lexer (`keywordType()` has no `step` entry). Listed as reserved word in SPEC (added uncommitted) but the lexer tokenizes it as `Ident` (`local step = 1` parses). Range/loop `step` syntax (`for i in range(a,b) step N`, `for x = a to b step N`) is documented in SPEC but not parsed. Gap.
+
 ## Value-Type Coverage (SPEC.md §14–28 vs. QLangValue::Type)
 
 | Spec type | QLangValue::Type | Token type | Notes |
@@ -319,7 +330,9 @@ class Name {
 ## Open Items
 
 |||- **Reserved word `fetch`:** ✗ **NOT implemented.** Lexer/parser have no `TokenType::Fetch`; `fetch` tokenizes as `Ident` and silently works as an identifier rather than raising the reserved-word error the SPEC implies. Gap vs SPEC §reserved words.
-|||- **`## verbose level` (**Priority one**):** ✓ **Implemented.** Application-wide verbose level on `QLangContext` (`m_verboseLevel`, default 0): `setVerboseLevel(int)`, `verboseLevel()`, `isAt(int)`. QLang `set_verbose(level)` native fn (`QLangContext.cpp`) accepts int/dword/float and returns the new level. `QLangVM` gated emit helper `trace(minLevel, fmt, …)` (`QLangVM.h`); every stderr diagnostic in `QLangVM.cpp` converted from `fprintf` to `trace(T,…)` with tier T∈{1,2,3} (1 = frame/call events, 2 = VM loop+opcodes+returns, 3 = full detail: generators/table ops/bytecode); sites inside `callBuiltin` use `vm->trace(T,…)`; `trace()` short-circuits when `isAt(minLevel)` is false. Gates stderr trace only — program output (print/println/printf) is unaffected. Verified: build clean (`qlang` lib + `spec_check2`); runtime `set_verbose(0/1/2)` emits the correct tiers to stderr with stdout intact; C++ `setVerboseLevel(3)` → `verboseLevel()==3`, `isAt(2)==isAt(3)==true`. Gap vs SPEC resolved. |
+||||- **`## verbose level` (**Priority one**):** ✓ **Implemented** (committed in `4091c32`; was uncommitted at last audit). Application-wide verbose level on `QLangContext` (`m_verboseLevel`, default 0): `setVerboseLevel(int)`, `verboseLevel()`, `isAt(int)`. QLang `set_verbose(level)` native fn (`QLangContext.cpp`) accepts int/dword/float and returns the new level. `QLangVM` gated emit helper `trace(minLevel, fmt, …)` (`QLangVM.h`); every stderr diagnostic in `QLangVM.cpp` converted from `fprintf` to `trace(T,…)` with tier T∈{1,2,3} (1 = frame/call events, 2 = VM loop+opcodes+returns, 3 = full detail: generators/table ops/bytecode); sites inside `callBuiltin` use `vm->trace(T,…)`; `trace()` short-circuits when `isAt(minLevel)` is false. Gates stderr trace only — program output (print/println/printf) is unaffected. Verified: build clean (`qlang` lib + `spec_check2`); runtime `set_verbose(0/1/2)` emits the correct tiers to stderr with stdout intact; C++ `setVerboseLevel(3)` → `verboseLevel()==3`, `isAt(2)==isAt(3)==true`. Gap vs SPEC resolved. |
+||||- **Reserved word `step`:** ✗ **NOT implemented.** Lexer `keywordType()` has no `step` entry; it tokenizes as `Ident`, so `local step = 1` parses instead of raising the reserved-word error SPEC implies. Added to SPEC reserved words uncommitted (working tree `ca26983d`). Gap vs SPEC §reserved words. Same as the `fetch` gap. |
+||||- **`range`/loop `step` (SPEC §range, §loops):** ✗ **NOT implemented.** SPEC documents `for i in range(0,10) step 1`, `range(10,0) step -1`, `range(10,0) step j`, `for x = 10 to 0 step -1`, `for x in range(10,0) step -1`, and `for x in [1,4,6] step 2` (documented as an error). Root cause: parser `parseFor()` (`QLangParser.cpp`) parses `forEnd = parseExpression()` and stops — no `step` consumption; lexer has no `step` keyword (see above). `step` is a language-level construct here, not the VM's `m_steps` infinite-loop guard. Not exercised by any suite, so source-verified only. Gap vs SPEC. |
 |||- **`range` context-dependent encoding (§range):** ✓ **Resolved.** Compiler emits a counter loop for `for i in range(a,b)` (`i=a; while i<=b { …; ++i }`, no array), a bounds check `(l>=a) && (l<=b)` for `l in range(a,b)` in any expression/condition context (including `while i in range` and `let x = b in range(0,10)`), materialization for `arr = range(a,b)`, and a generator for `for i in range { yield i }` (containsYield recurses into ForIn). `continue` in a range loop jumps to the implicit `INC`. Verified by `examples/range_check.cpp` (22 passed, 0 failed).
 ||- **`min`/`max`/`sum` via `import math`:** ✓ implemented. C++-registered module (`src/QLangModules.cpp`). `min`/`max`: return `Int` for values within int32_t range; return `Dword` when result exceeds ±2147483647 (prevents silent truncation). Reject mixed float+int with type error (§767/§770). Accept single array arg (`min([1,5,9])` → `1`). Forbid mixed char+byte. `sum`: flattens all array args (`sum([1,2,3])` and `sum([1,2], [3,4])` both work); returns `Int` for in-range, `Dword` on overflow; returns `Float` when any arg is float (§777); allows float+int mix (sums in double then returns float). |
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.

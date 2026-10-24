@@ -72,6 +72,9 @@ assert
 class
 yield
 fetch
+step
+if
+next
 ```
 
 ## constants
@@ -241,6 +244,27 @@ for i in range (0,10) {
 
 # encode: i = 0; while (i <= 10) { ...; ++i }
 
+for i in range (0,10) step 1 {
+   ...
+}
+
+# encode: i = 0; while (i <= 10) { ...; ++i }
+
+for i in range (10, 0) step - 1 {
+   ...
+}
+
+# encode:  i = 0; while (i <= 10) { ...; --i }
+
+for i in range (10, 0) step j {
+   ...
+}
+
+# encode:  i = 0; while (i <= 10) { ...; i += j }
+# j must be a declared number (variable, constant). 
+# if j is not declared variable or constant then error
+# if j is not a number then error
+
 arr = range(0, 10)
 
 # encode: arr = [0,1,2,3,4,5,6,7,8,9,10]
@@ -289,7 +313,13 @@ switch (var) {
 for x = 1 to 32
 next x
 
+for x = 10 to 0 step -1
+next x
+
 for x in range (0,4)
+next x
+
+for x in range (10,0) step - 1
 next x
 
 for x in [1,25,6,7]
@@ -309,6 +339,14 @@ next # assume y
 a = [1,4,6]
 for x in a
 next # assume x
+
+for x in [1,4,6] step 2 {
+   # error. you can't step into arrays
+}
+
+
+for i in range (10, 0) step - 2 {
+}
 
 for y in range (0,10) {
    for x in range (0,10) {
@@ -389,8 +427,9 @@ if they cross a boundary, trigger an error.
 |! |not (inverse)
 |;  |silent separator (optional)
 |cast|change datatype at runtime
+|$| dynamic key resolution operator
 
-operator +=
+## operator +=
 
 |left-hand|operator|right-hand|result
 |-|-|-|-|
@@ -414,7 +453,7 @@ operator +=
 |{name="toto"}|+=|{age=23}|{name="toto", age=23}
 |{name="toto"}|+=|any other types|error
 
-operator cast
+## operator cast
 |examples|results|notes|
 |-----|-----|-|
 |cast\<int>(1.12)| 1| casting to 1. trunkate decimals
@@ -428,7 +467,7 @@ operator cast
 |cast\<any>()|n/a| error: empty source. nothing to cast
 |cast\<>(123)|n/a| error: empty cast. nothing to do
 
-operator == and !=
+## operator == and !=
 |var type|operator|var type|result
 |-|-|-|-|
 |nil| ==| nil | true
@@ -440,6 +479,56 @@ operator == and !=
 |nil| !=| number | true
 
 *important*: nil is ONLY equal to iself
+
+
+## The \$ Operator (Evaluation / Dynamic Key Resolution)
+
+The `$` operator evaluates an identifier at runtime and forces its value into a string representation. It is primarily used for dynamic property key resolution during table literal construction and dynamic expression formatting.
+
+### Constraints and Type Restrictions
+Unlike the explicit `cast<string>()` operator which falls back on default string representations for all types, the `$` operator is strictly a **scalar-to-string evaluator**. 
+
+* **Supported Types:** `string/str`, `char`, `byte`, `word`, `short`, `int`, `unsigned`, `dword`, `float`, `bool`, and `nil`.
+* **Unsupported Types:** `array`, `table`, and `class`. Invoking the `$` operator on an aggregate collection type will halt execution and throw a compile-time or runtime exception.
+
+### Behavior Matrix
+
+| Operand Type | Value | Evaluation Result | Status |
+|---|---|---|---|
+| `int` | `33` | `"33"` | Valid |
+| `float` | `19.99` | `"19.99"` | Valid |
+| `string` | `"gender"` | `"gender"` | Valid |
+| `bool` | `true` | `"true"` | Valid |
+| `nil` | `nil` | `"false"` (per boolean evaluation) | Valid |
+| `array` | `[1, 2, 3]` | `error: collections not supported` | **Compile/Runtime Error** |
+| `table` | `{age=33}` | `error: collections not supported` | **Compile/Runtime Error** |
+
+### Code Examples
+
+#### 1. Valid Scalar Resolution
+```python
+local age = 33
+local str_age = $age  # str_age becomes "33"
+
+local property = "gender"
+local t:table = {name="Bob", age=99, $property="male"}
+# Resulting table: {name="Bob", age=99, gender="male"}
+```
+
+#### 2. Invalid Collection Evaluation
+```python
+local a = [1, 2, 3]
+local err1 = \$a       # Error: collections not supported
+
+local t = {x=1, y=2}
+local err2 = \$t       # Error: collections not supported
+```
+
+### Compiler and VM Implementation Notes
+1. **Scope Boundaries:** The `$` operator respects QLang scope lookup invariants. If an identifier is located in the global scope, it must be explicitly exposed using the `global` keyword before a local `$` evaluation can resolve it inside a function body.
+2. **Bytecode Generation:** The compiler must emit a specialized `OP_EVAL_KEY` opcode. This opcode is responsible for checking the target variable type tag before performing the stringification step. If the type tag matches an aggregate or compound collection signature, the VM must raise an execution panic.
+
+
 
 ## build-in functions
 
@@ -839,7 +928,7 @@ advances to the next `yield`. When the generator is exhausted, `yield` returns
 ## PROTOTYPE 1
 
 
-```
+```python
 
 def gen_range(mi, mx) {
    for i = mi to mx {
@@ -896,10 +985,6 @@ from math import *            # import all public names from the math
 from math import min, max     # import `min` and `max` 
 
 ```
-
-
-
-
 
 Modules are registered from C++ via `ctx.registerModule(name, module)`. The
 `import` statement is resolved at compile time: each function in the module
@@ -994,3 +1079,11 @@ println(f"balance: {money.balance()}")
 money.spend(15)
 println(f"balance: {money.balance()}")
 ```
+
+# syntax coloring in IDE
+
+find a solution to provide proper coloring of `qlang` source files
+in popular IDE such as
+- vscode
+- geany
+- ...
