@@ -226,44 +226,41 @@ if a in range (1,10) {
 
 if a == 1 return false;
 
+if true return false
+
+if true {
+
+}
+
 ```
 
 ## range
 
-range keyword has different encoding based on context
-
 ```python
+for x = 0 to 10 step 1 {
+   ...
+}
+
 if i in range (0,10) {
    ...
 }
-# encode: if i >=0  and i <= 10 { ... }
+```
 
-for i in range (0,10) {
-   ...
-}
+rules
+- step keyword is optional
+- evaluate the relation ship between start and end value
+- the direction determine the step (+1 or -1)
+- enter the loop once
+- continue to apply step until you are passed the end value
 
-# encode: i = 0; while (i <= 10) { ...; ++i }
+**guard rail.** if step is user specified and step is heading in the wrong direction then enter loop once before leaving
+otherwise apply the same guard logic as above. 
+step 0 creates an infinite loop similar to while true {}
 
-for i in range (0,10) step 1 {
-   ...
-}
+infinit loops are not valid. implement a timeout guard that result in a runtime exception. make the message concise so that tracking the bug will be easier.
 
-# encode: i = 0; while (i <= 10) { ...; ++i }
-
-for i in range (10, 0) step - 1 {
-   ...
-}
-
-# encode:  i = 0; while (i <= 10) { ...; --i }
-
-for i in range (10, 0) step j {
-   ...
-}
-
-# encode:  i = 0; while (i <= 10) { ...; i += j }
-# j must be a declared number (variable, constant). 
-# if j is not declared variable or constant then error
-# if j is not a number then error
+```python
+# range keyword has different encoding based on context
 
 arr = range(0, 10)
 
@@ -286,10 +283,16 @@ while i in range (0,10) {
 let b = 3
 let x = b in range(0,10)
 # encode: x = (b >= x) && (x <=10)
+
+if a in range (1,10) {
+   ...
+}
+
+# encode if a >=1 && a <=10 { ... }
+
 ```
 
-if used, the keyword `continue`  will increment the i. this is implicit
-
+if used, the keyword `continue`  will apply the step. this is implicit
 
 ## switch
 
@@ -309,6 +312,9 @@ switch (var) {
 ```
 
 ## loops
+
+the step keyword applies to ranges in for loops only and is explicitely not allowed when looping on a string or collection.
+
 ```python
 for x = 1 to 32
 next x

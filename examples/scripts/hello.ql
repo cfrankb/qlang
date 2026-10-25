@@ -1,14 +1,21 @@
 local a = 32                 # int
 local b:byte = 32            # byte
 local s = "hello"            # string
+printl(f"s=`{s}`")
+
 local sum = 0                # int
+local sum2 = 0
 
 a += 12                      # compound assignment -> 44
 s += " world"                # string append
+printl(f"s=`{s}`")
 
 for i = 1 to 5               # for auto-increments i, inclusive
   sum = sum + i
+  sum2 += 1
 next i
+
+printl(f"sum={sum} sum2={sum2}")
 
 if a == 44 then
   s += " ok"
