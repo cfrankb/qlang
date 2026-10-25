@@ -570,6 +570,15 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     }
     return opt.value_or(QLangValue());
   }
+  case Builtin::SetMaxSteps: {
+    need(1, "set_max_steps");
+    long long v = toInt64(args[0]);
+    if (v < 0) v = 0;
+    scope.setMaxSteps(static_cast<std::size_t>(v));
+    return QLangValue();
+  }
+  case Builtin::GetMaxSteps:
+    return QLangValue::Int(static_cast<int32_t>(scope.maxSteps()));
   }
   throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown builtin");
 }
@@ -895,9 +904,9 @@ void QLangVM::run() {
       continue;
     }
 
-    if (++m_steps > kMaxSteps)
+    if (++m_steps > m_scope.maxSteps())
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                       "max instruction steps exceeded (possible infinite loop)");
+                       "infinite loop (step limit)");
 
     const Instruction &i = instrs[frame.pc];
     Opcode op = i.op;
@@ -1245,9 +1254,9 @@ void QLangVM::runFrames(int startFrame)
       continue;
     }
 
-    if (++m_steps > kMaxSteps)
+    if (++m_steps > m_scope.maxSteps())
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                       "max instruction steps exceeded (possible infinite loop)");
+                       "infinite loop (step limit)");
 
     const Instruction &i = instrs[frame.pc];
     Opcode op = i.op;
@@ -1623,9 +1632,9 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         break;
       }
 
-      if (++m_steps > kMaxSteps)
+      if (++m_steps > m_scope.maxSteps())
         throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                         "max instruction steps exceeded (possible infinite loop)");
+                         "infinite loop (step limit)");
 
       const Instruction &i = instrs[frame.pc];
       Opcode op = i.op;
@@ -1963,9 +1972,9 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       continue;
     }
 
-    if (++m_steps > kMaxSteps)
+    if (++m_steps > m_scope.maxSteps())
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                       "max instruction steps exceeded (possible infinite loop)");
+                       "infinite loop (step limit)");
 
     const Instruction &i = instrs[frame.pc];
     Opcode op = i.op;

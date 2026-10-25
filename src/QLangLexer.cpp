@@ -15,6 +15,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "for") return TokenType::For;
   if (text == "to") return TokenType::To;
   if (text == "next") return TokenType::Next;
+  if (text == "step") return TokenType::Step;
   if (text == "if") return TokenType::If;
   if (text == "then") return TokenType::Then;
   if (text == "while") return TokenType::While;

@@ -30,7 +30,9 @@ enum class Builtin : int {
   Sprintf,   // sprintf(fmt, ...) -> string (same format as printf, returns result)
   Format,    // format(template, ...) -> string (f-string interpolation)
   Assert,    // assert(bool, str) -> void (throws if bool is false)
-  Next       // next(gen) -> value (resume generator, returns yielded value or nil)
+  Next,      // next(gen) -> value (resume generator, returns yielded value or nil)
+  SetMaxSteps, // set_max_steps(n) -> void (set the VM's infinite-loop step limit)
+  GetMaxSteps  // get_max_steps() -> int (current infinite-loop step limit)
 };
 
 // Register-machine opcodes. This is a small register VM: each script variable

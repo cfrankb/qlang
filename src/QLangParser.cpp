@@ -439,6 +439,12 @@ StmtPtr QLangParser::parseFor() {
     stmt->kind = StmtKind::ForIn;
     stmt->forEnd = parseExpression(); // the collection
 
+    // Optional: step n
+    if (check(TokenType::Step)) {
+      m_pos++; // consume 'step'
+      stmt->stepExpr = parseExpression();
+    }
+
     // Accept either 'next' or '{' as body delimiter
     if (check(TokenType::LBrace)) {
       m_pos++; // consume '{'
@@ -470,6 +476,12 @@ StmtPtr QLangParser::parseFor() {
   stmt->forStart = parseExpression();
   consume(TokenType::To, "'to'");
   stmt->forEnd = parseExpression();
+
+  // Optional: step n
+  if (check(TokenType::Step)) {
+    m_pos++; // consume 'step'
+    stmt->stepExpr = parseExpression();
+  }
 
   // Accept either 'next' or '{' as body delimiter
   if (check(TokenType::LBrace)) {

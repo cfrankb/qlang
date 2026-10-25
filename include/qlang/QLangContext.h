@@ -75,6 +75,13 @@ namespace qlang
     // True when the current level is >= minLevel (used to gate trace output).
     bool isAt(int minLevel) const { return m_verboseLevel >= minLevel; }
 
+    // Infinite-loop step limit for the VM. The VM reads this live at every
+    // step, so it can be lowered from QLang via set_max_steps(n) (or raised)
+    // and the change takes effect immediately — useful for tests that want a
+    // fast failure instead of spinning to the default. Default 100000.
+    void setMaxSteps(std::size_t n) { m_maxSteps = n; }
+    std::size_t maxSteps() const { return m_maxSteps; }
+
     // Module registration. A module is a named collection of native functions.
     // Modules are resolved at compile time by `import` statements.
     struct Module
@@ -103,6 +110,7 @@ namespace qlang
     std::unordered_set<std::string> m_injectedConsts;
     std::unordered_map<std::string, NativeFunc> m_nativeFuncs;
     int m_verboseLevel = 0;
+    std::size_t m_maxSteps = 100000; // live infinite-loop guard (see setMaxSteps)
     std::vector<Module> m_modules;
   };
 

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 
 #include "qlang/QLangErrors.h"
@@ -27,6 +28,29 @@ static bool isRangeCall(const ExprPtr &e, ExprPtr &outStart, ExprPtr &outEnd) {
   outStart = e->args[0];
   outEnd = e->args[1];
   return true;
+}
+
+// Fold an expression to a compile-time integer when it is a numeric literal
+// (Int/Float) or a unary-minus of such a literal. Returns std::nullopt for
+// anything else (variable, binary op, call, ...). Used to decide at compile
+// time whether a `step` value and a range's bounds are constants, which
+// determines whether the loop can be emitted with a fixed comparison (the
+// common, tight case) or needs a runtime direction/path selection.
+static std::optional<int64_t> foldConst(const ExprPtr &e) {
+  if (!e) return std::nullopt;
+  if (e->kind == ExprKind::Literal) {
+    const QLangValue &v = e->literal;
+    if (v.type() == QLangValue::Type::Int)
+      return static_cast<int64_t>(v.asInt());
+    if (v.type() == QLangValue::Type::Float)
+      return static_cast<int64_t>(v.asFloat());
+    return std::nullopt;
+  }
+  if (e->kind == ExprKind::Unary && e->uop.type == TokenType::Minus) {
+    auto inner = foldConst(e->operand);
+    if (inner) return -*inner;
+  }
+  return std::nullopt;
 }
 
 QLangCompiler::QLangCompiler(std::vector<StmtPtr> program)
@@ -91,21 +115,11 @@ void QLangCompiler::emit(Opcode op, int a, int b, int c) {
 }
 
 CompiledProgram QLangCompiler::compile() {
-  fprintf(stderr, "[DBG-COMPILER] QLangCompiler::compile() called, this=%p\n", (void*)this);
   // Compile the top-level program into the main (scratch) function context.
-for (size_t i = 0; i < m_program.size(); i++) {
-    auto &s = m_program[i];
-    fprintf(stderr, "[DBG-COMP] Compiling stmt %zu kind=%d\n", i, (int)s->kind);
+  for (auto &s : m_program)
     compileStmt(s, nullptr);
-    fprintf(stderr, "[DBG-COMP] After stmt %zu: m_code=%zu instrs this=%p\n", i, m_code.instructions().size(), (void*)this);
-    // Dump instructions for debugging
-    for (size_t j = 0; j < m_code.instructions().size(); j++) {
-      auto &inst = m_code.instructions()[j];
-      fprintf(stderr, "[DBG-COMP]   [%zu] op=%d a=%d b=%d c=%d\n", j, (int)inst.op, inst.a, inst.b, inst.c);
-    }
-}
-// Implicit `return nil` at the end of the main program.
-emit(Opcode::RETURN, 0);
+  // Implicit `return nil` at the end of the main program.
+  emit(Opcode::RETURN, 0);
 
   // Wrap the main scratch stream into functions[0].
   Bytecode mainScratch = std::move(m_code);
@@ -518,36 +532,201 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     int startReg = tmpRegister();
     compileExpr(s->forStart, startReg);
     emit(Opcode::MOV, x, startReg);
-
     int endReg = tmpRegister();
     compileExpr(s->forEnd, endReg);
 
-    int testLabel = static_cast<int>(m_code.size());
-    int cmpReg = tmpRegister();
-    emit(Opcode::LE, cmpReg, x, endReg); // continue while x <= end
-    emit(Opcode::JMPIFFALSE, cmpReg, 0); // target fixed up below
-    int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+    bool hasStep = s->stepExpr != nullptr;
+    auto stepVal = hasStep ? foldConst(s->stepExpr) : std::nullopt;
+    auto startFold = foldConst(s->forStart);
+    auto endFold = foldConst(s->forEnd);
+    bool boundsFoldable = startFold && endFold;
+    int64_t correctDir = boundsFoldable
+                             ? ((endFold.value() > startFold.value()) ? 1 : -1)
+                             : 0;
 
-    // Body jump targets (continue -> increment, break -> exit) live AFTER the
-    // body, so patch the CONTINUE/BREAK instructions emitted inside the body
-    // once we know their addresses.
-    m_loops.push_back({0, 0});
-    int bodyStart = static_cast<int>(m_code.instructions().size());
-    for (auto &body : s->body)
-      compileStmt(body);
-    int bodyEnd = static_cast<int>(m_code.instructions().size());
+    if (hasStep && stepVal && boundsFoldable) {
+      // Constant step + constant bounds: fully resolved at compile time.
+      int64_t sv = *stepVal;
+      if (sv == 0) {
+        // step 0 -> infinite loop, x frozen at start.
+        m_loops.push_back({0, 0});
+        int bodyStart = static_cast<int>(m_code.instructions().size());
+        for (auto &body : s->body)
+          compileStmt(body);
+        int bodyEnd = static_cast<int>(m_code.instructions().size());
+        int incLabel = bodyEnd;
+        emit(Opcode::JMP, bodyStart);
+        int exitLabel = static_cast<int>(m_code.size());
+        for (int j = bodyStart; j < bodyEnd; j++) {
+          auto &ci = m_code.instructions()[j];
+          if (ci.op == Opcode::CONTINUE) ci.a = incLabel;
+          else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
+        }
+        m_loops.pop_back();
+      } else if ((sv > 0) != (correctDir > 0)) {
+        // User step points the wrong way: run the body exactly once.
+        m_loops.push_back({0, 0});
+        int bodyStart = static_cast<int>(m_code.instructions().size());
+        for (auto &body : s->body)
+          compileStmt(body);
+        int bodyEnd = static_cast<int>(m_code.instructions().size());
+        int exitLabel = static_cast<int>(m_code.size());
+        for (int j = bodyStart; j < bodyEnd; j++) {
+          auto &ci = m_code.instructions()[j];
+          if (ci.op == Opcode::CONTINUE) ci.a = exitLabel;
+          else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
+        }
+        m_loops.pop_back();
+      } else {
+        // Guard loop in the natural direction with the user's step.
+        m_loops.push_back({0, 0});
+        int stepReg = tmpRegister();
+        compileExpr(s->stepExpr, stepReg);
+        int guardLabel = static_cast<int>(m_code.size());
+        int cmpReg = tmpRegister();
+        // QLang ranges are always inclusive: forward LE (x <= end),
+        // backward GE (x >= end).
+        Opcode fwdCmp = (correctDir > 0) ? Opcode::LE : Opcode::GE;
+        emit(fwdCmp, cmpReg, x, endReg);
+        emit(Opcode::JMPIFFALSE, cmpReg, 0);
+        int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+        int bodyStart = static_cast<int>(m_code.instructions().size());
+        for (auto &body : s->body)
+          compileStmt(body);
+        int bodyEnd = static_cast<int>(m_code.instructions().size());
+        int incLabel = bodyEnd;
+        emit(Opcode::ADD, x, x, stepReg);
+        emit(Opcode::JMP, guardLabel);
+        int exitLabel = static_cast<int>(m_code.size());
+        for (int j = bodyStart; j < bodyEnd; j++) {
+          auto &ci = m_code.instructions()[j];
+          if (ci.op == Opcode::CONTINUE) ci.a = incLabel;
+          else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
+        }
+        m_code.instructions()[jumpFalseIdx].b = exitLabel;
+        m_loops.pop_back();
+      }
+    } else {
+      // Runtime path: variable step and/or variable bounds. The loop's natural
+      // direction is sign(end - start), computed at runtime. A zero step is
+      // normalized to that direction's unit step (so a `step 0` loop advances,
+      // matching the spec's for-step semantics). The user step's sign then
+      // selects one of two bodies:
+      //   1. sign(step) == sign(dir)  -> bounded guard loop
+      //   2. otherwise (wrong direction) -> run the body exactly once
+      m_loops.push_back({0, 0});
 
-    int incLabel = bodyEnd;
-    emit(Opcode::INC, x, x);
-    emit(Opcode::JMP, testLabel);
-    int exitLabel = static_cast<int>(m_code.size());
-    m_code.instructions()[jumpFalseIdx].b = exitLabel;
-    for (int j = bodyStart; j < bodyEnd; j++) {
-      auto &ci = m_code.instructions()[j];
-      if (ci.op == Opcode::CONTINUE) ci.a = incLabel;
-      else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
+      int stepReg = tmpRegister();
+      if (hasStep) {
+        compileExpr(s->stepExpr, stepReg);
+      } else {
+        emit(Opcode::CONST, stepReg, emitConst(QLangValue::Int(1)));
+      }
+      int zeroReg = tmpRegister();
+      emit(Opcode::CONST, zeroReg, emitConst(QLangValue::Int(0)));
+
+      // direction = (end > start) ? 1 : -1
+      int subReg = tmpRegister();
+      emit(Opcode::SUB, subReg, endReg, startReg);
+      int posReg = tmpRegister();
+      emit(Opcode::GT, posReg, subReg, zeroReg);
+      int dirReg = tmpRegister();
+      emit(Opcode::CONST, dirReg, emitConst(QLangValue::Int(-1)));
+      int dPosLabel = static_cast<int>(m_code.size());
+      emit(Opcode::JMPIFTRUE, posReg, 0);
+      int dDoneLabel = static_cast<int>(m_code.size());
+      emit(Opcode::JMP, 0);
+      m_code.instructions()[dPosLabel].b = dPosLabel + 2;
+      emit(Opcode::CONST, dirReg, emitConst(QLangValue::Int(1)));
+      m_code.instructions()[dDoneLabel].a = dPosLabel + 3;
+
+      // No explicit step: advance in the loop's natural direction (unit step).
+      // Without this a backward no-step loop would get step +1 vs dir -1 and
+      // take the run-once path.
+      if (!hasStep)
+        emit(Opcode::MOV, stepReg, dirReg);
+
+      // step == 0 -> natural-direction unit step (so a `step 0` loop advances).
+      int zeroCmp = tmpRegister();
+      emit(Opcode::EQ, zeroCmp, stepReg, zeroReg);
+      int zeroStepLabel = static_cast<int>(m_code.size());
+      emit(Opcode::JMPIFFALSE, zeroCmp, 0);      // step != 0 -> skip normalization
+      emit(Opcode::MOV, stepReg, dirReg);        // step == 0 -> step = dir (+1 / -1)
+      m_code.instructions()[zeroStepLabel].b = zeroStepLabel + 2;
+
+      // runtime conditions
+      int posStep = tmpRegister();
+      emit(Opcode::GT, posStep, stepReg, zeroReg);
+      int posDir = tmpRegister();
+      emit(Opcode::GT, posDir, dirReg, zeroReg);
+      int sameSign = tmpRegister();
+      emit(Opcode::EQ, sameSign, posStep, posDir);
+
+      // Decision: sameSign -> guard loop; else fall through to run-once.
+      int guardLabel = static_cast<int>(m_code.size());
+      emit(Opcode::JMPIFTRUE, sameSign, 0);
+
+      // Run-once body (wrong direction): execute exactly once, then exit.
+      emit(Opcode::MOV, x, startReg);
+      int runOnceBodyStart = static_cast<int>(m_code.instructions().size());
+      for (auto &body : s->body)
+        compileStmt(body);
+      int runOnceBodyEnd = static_cast<int>(m_code.instructions().size());
+      int runOnceJmpIdx = static_cast<int>(m_code.size());
+      emit(Opcode::JMP, 0);                 // patched to loopExit below
+      for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
+        auto &ci = m_code.instructions()[j];
+        if (ci.op == Opcode::CONTINUE) ci.a = 0;   // patched below
+        else if (ci.op == Opcode::BREAK) ci.a = 0; // patched below
+      }
+
+      // Guard loop (natural direction, bounded by a guard check). Direction is
+      // fixed for the whole loop, so the direction branch is a one-time decision
+      // that is cheaply re-evaluated each iteration.
+      //   forward (dir > 0):  `to` bound inclusive -> LE guard (x <= end continues)
+      //   backward (dir <= 0): `to` bound inclusive -> GE guard (x >= end continues)
+      int guardLoopStart = static_cast<int>(m_code.size());
+      emit(Opcode::MOV, x, startReg);
+      int guardOnceLabel = static_cast<int>(m_code.size());
+      emit(Opcode::JMPIFTRUE, posDir, 0);          // forward -> LT guard path
+      int guardCmp = tmpRegister();
+      int guardGeIdx = static_cast<int>(m_code.size());
+      emit(Opcode::GE, guardCmp, x, endReg);       // backward guard (x >= end)
+      emit(Opcode::JMPIFFALSE, guardCmp, 0);       // exit when x < end
+      int guardSkipIdx = static_cast<int>(m_code.size());
+      emit(Opcode::JMP, 0);                        // backward -> loop body
+      int guardFwdIdx = static_cast<int>(m_code.size());
+      emit(Opcode::LE, guardCmp, x, endReg);       // forward guard (x <= end)
+      emit(Opcode::JMPIFFALSE, guardCmp, 0);       // exit when x > end
+      int guardLoopEntry = static_cast<int>(m_code.size());
+      for (auto &body : s->body)
+        compileStmt(body);
+      int guardBodyEnd = static_cast<int>(m_code.instructions().size());
+      emit(Opcode::ADD, x, x, stepReg);
+      emit(Opcode::JMP, guardOnceLabel);           // loop back to direction branch
+      int loopExit = static_cast<int>(m_code.size());
+
+      // Patch the guard loop's branches.
+      m_code.instructions()[guardOnceLabel].b = guardFwdIdx;   // forward -> guard
+      m_code.instructions()[guardGeIdx + 1].b = loopExit;     // backward exit
+      m_code.instructions()[guardFwdIdx + 1].b = loopExit;    // forward exit
+      m_code.instructions()[guardSkipIdx].a = guardLoopEntry; // backward -> body (JMP reads a)
+      for (int j = guardLoopEntry; j < guardBodyEnd; j++) {
+        auto &ci = m_code.instructions()[j];
+        if (ci.op == Opcode::CONTINUE) ci.a = guardBodyEnd;   // -> ADD (still increment)
+        else if (ci.op == Opcode::BREAK) ci.a = loopExit;
+      }
+      // Patch the run-once body to exit (continue/break both leave the loop).
+      m_code.instructions()[runOnceJmpIdx].a = loopExit;
+      for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
+        auto &ci = m_code.instructions()[j];
+        if (ci.op == Opcode::CONTINUE) ci.a = loopExit;
+        else if (ci.op == Opcode::BREAK) ci.a = loopExit;
+      }
+      // Patch the decision jump.
+      m_code.instructions()[guardLabel].b = guardLoopStart;  // sameSign -> guard loop
+      m_loops.pop_back();
     }
-    m_loops.pop_back();
     break;
   }
   case StmtKind::ForIn: {
@@ -561,30 +740,184 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       emit(Opcode::MOV, x, startReg);
       int endReg = tmpRegister();
       compileExpr(rb, endReg);
-      int testLabel = static_cast<int>(m_code.size());
-      int cmpReg = tmpRegister();
-      emit(Opcode::LE, cmpReg, x, endReg); // continue while x <= b
-      emit(Opcode::JMPIFFALSE, cmpReg, 0);
-      int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
 
-      m_loops.push_back({0, 0});
-      int bodyStart = static_cast<int>(m_code.instructions().size());
-      for (auto &body : s->body)
-        compileStmt(body);
-      int bodyEnd = static_cast<int>(m_code.instructions().size());
+      bool hasStep = s->stepExpr != nullptr;
+      auto stepVal = hasStep ? foldConst(s->stepExpr) : std::nullopt;
+      auto startFold = foldConst(ra);
+      auto endFold = foldConst(rb);
+      bool boundsFoldable = startFold && endFold;
+      int64_t correctDir = boundsFoldable
+                               ? ((endFold.value() > startFold.value()) ? 1 : -1)
+                               : 0;
 
-      int incLabel = bodyEnd;
-      emit(Opcode::INC, x, x);
-      emit(Opcode::JMP, testLabel);
-      int exitLabel = static_cast<int>(m_code.size());
-      m_code.instructions()[jumpFalseIdx].b = exitLabel;
-      for (int j = bodyStart; j < bodyEnd; j++) {
-        auto &ci = m_code.instructions()[j];
-        if (ci.op == Opcode::CONTINUE) ci.a = incLabel;
-        else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
+      if (hasStep && stepVal && boundsFoldable) {
+        int64_t sv = *stepVal;
+        if (sv == 0) {
+          m_loops.push_back({0, 0});
+          int bodyStart = static_cast<int>(m_code.instructions().size());
+          for (auto &body : s->body)
+            compileStmt(body);
+          int bodyEnd = static_cast<int>(m_code.instructions().size());
+          int incLabel = bodyEnd;
+          emit(Opcode::JMP, bodyStart);
+          int exitLabel = static_cast<int>(m_code.size());
+          for (int j = bodyStart; j < bodyEnd; j++) {
+            auto &ci = m_code.instructions()[j];
+            if (ci.op == Opcode::CONTINUE) ci.a = incLabel;
+            else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
+          }
+          m_loops.pop_back();
+        } else if ((sv > 0) != (correctDir > 0)) {
+          m_loops.push_back({0, 0});
+          int bodyStart = static_cast<int>(m_code.instructions().size());
+          for (auto &body : s->body)
+            compileStmt(body);
+          int bodyEnd = static_cast<int>(m_code.instructions().size());
+          int exitLabel = static_cast<int>(m_code.size());
+          for (int j = bodyStart; j < bodyEnd; j++) {
+            auto &ci = m_code.instructions()[j];
+            if (ci.op == Opcode::CONTINUE) ci.a = exitLabel;
+            else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
+          }
+          m_loops.pop_back();
+        } else {
+          m_loops.push_back({0, 0});
+          int stepReg = tmpRegister();
+          compileExpr(s->stepExpr, stepReg);
+          int guardLabel = static_cast<int>(m_code.size());
+          int cmpReg = tmpRegister();
+          emit(correctDir > 0 ? Opcode::LE : Opcode::GE, cmpReg, x, endReg);
+          emit(Opcode::JMPIFFALSE, cmpReg, 0);
+          int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+          int bodyStart = static_cast<int>(m_code.instructions().size());
+          for (auto &body : s->body)
+            compileStmt(body);
+          int bodyEnd = static_cast<int>(m_code.instructions().size());
+          int incLabel = bodyEnd;
+          emit(Opcode::ADD, x, x, stepReg);
+          emit(Opcode::JMP, guardLabel);           // loop back to the guard
+          int exitLabel = static_cast<int>(m_code.size());
+          for (int j = bodyStart; j < bodyEnd; j++) {
+            auto &ci = m_code.instructions()[j];
+            if (ci.op == Opcode::CONTINUE) ci.a = incLabel;
+            else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
+          }
+          m_code.instructions()[jumpFalseIdx].b = exitLabel;
+          m_loops.pop_back();
+        }
+      } else {
+        m_loops.push_back({0, 0});
+        int stepReg = tmpRegister();
+        if (hasStep) {
+          compileExpr(s->stepExpr, stepReg);
+        } else {
+          emit(Opcode::CONST, stepReg, emitConst(QLangValue::Int(1)));
+        }
+        int zeroReg = tmpRegister();
+        emit(Opcode::CONST, zeroReg, emitConst(QLangValue::Int(0)));
+        // Natural direction from the (runtime) bounds.
+        int subReg = tmpRegister();
+        emit(Opcode::SUB, subReg, endReg, startReg);
+        int posReg = tmpRegister();
+        emit(Opcode::GT, posReg, subReg, zeroReg);
+        int dirReg = tmpRegister();
+        emit(Opcode::CONST, dirReg, emitConst(QLangValue::Int(-1)));
+        int dPosLabel = static_cast<int>(m_code.size());
+        emit(Opcode::JMPIFTRUE, posReg, 0);
+        int dDoneLabel = static_cast<int>(m_code.size());
+        emit(Opcode::JMP, 0);
+        m_code.instructions()[dPosLabel].b = dPosLabel + 2;
+        emit(Opcode::CONST, dirReg, emitConst(QLangValue::Int(1)));
+        m_code.instructions()[dDoneLabel].a = dPosLabel + 3;
+
+        // step == 0 -> infinite loop: body + increment forever, no guard.
+        int zeroCmp = tmpRegister();
+        emit(Opcode::EQ, zeroCmp, stepReg, zeroReg);
+        int zeroJumpIdx = static_cast<int>(m_code.size());
+        emit(Opcode::JMPIFTRUE, zeroCmp, 0);
+        int infExitLabel = static_cast<int>(m_code.size());
+        int posStep = tmpRegister();
+        emit(Opcode::GT, posStep, stepReg, zeroReg);
+        int posDir = tmpRegister();
+        emit(Opcode::GT, posDir, dirReg, zeroReg);
+        int sameSign = tmpRegister();
+        emit(Opcode::EQ, sameSign, posStep, posDir);
+        int ssJumpIdx = static_cast<int>(m_code.size());
+        emit(Opcode::JMPIFTRUE, sameSign, 0);
+        // Run-once: step and direction disagree -> body executes a single time.
+        emit(Opcode::MOV, x, startReg);
+        int runOnceBodyStart = static_cast<int>(m_code.instructions().size());
+        for (auto &body : s->body)
+          compileStmt(body);
+        int runOnceBodyEnd = static_cast<int>(m_code.instructions().size());
+        int runOnceExitJmpIdx = static_cast<int>(m_code.size());
+        emit(Opcode::JMP, 0); // placeholder, backpatched to guardExit below
+        // Infinite-loop (step == 0) body: x advances forever, no guard.
+        // Emitted before the guarded loop so the guarded loop's exit
+        // (guardExit) falls past it.
+        emit(Opcode::MOV, x, startReg);
+        int infBodyStart = static_cast<int>(m_code.instructions().size());
+        for (auto &body : s->body)
+          compileStmt(body);
+        int infBodyEnd = static_cast<int>(m_code.instructions().size());
+        emit(Opcode::ADD, x, x, stepReg);
+        emit(Opcode::JMP, infBodyStart);
+        for (int j = infBodyStart; j < infBodyEnd; j++) {
+          auto &ci = m_code.instructions()[j];
+          if (ci.op == Opcode::CONTINUE) ci.a = infBodyEnd;
+          else if (ci.op == Opcode::BREAK) ci.a = infExitLabel;
+        }
+        // Guarded loop: init x once, then re-check the direction-selected guard
+        // every pass (forward: x <= end; backward: x >= end).
+        int guardInit = static_cast<int>(m_code.size());
+        emit(Opcode::MOV, x, startReg);
+        int guardLabel = static_cast<int>(m_code.size());
+        int posDir2 = tmpRegister();
+        emit(Opcode::GT, posDir2, dirReg, zeroReg);
+        int fwdGuardIdx = static_cast<int>(m_code.size());
+        emit(Opcode::JMPIFTRUE, posDir2, 0);
+        int cmpReg = tmpRegister();
+        emit(Opcode::GE, cmpReg, x, endReg);
+        int backExitIdx = static_cast<int>(m_code.size());
+        emit(Opcode::JMPIFFALSE, cmpReg, 0);
+        int skipFwdIdx = static_cast<int>(m_code.size());
+        emit(Opcode::JMP, 0);
+        m_code.instructions()[fwdGuardIdx].b = skipFwdIdx + 1;
+        emit(Opcode::LE, cmpReg, x, endReg);
+        int fwdExitIdx = static_cast<int>(m_code.size());
+        emit(Opcode::JMPIFFALSE, cmpReg, 0);
+        int bodyStart = static_cast<int>(m_code.instructions().size());
+        for (auto &body : s->body)
+          compileStmt(body);
+        int bodyEnd = static_cast<int>(m_code.instructions().size());
+        emit(Opcode::ADD, x, x, stepReg);
+        emit(Opcode::JMP, guardLabel);
+        int guardExit = static_cast<int>(m_code.size());
+        for (int j = bodyStart; j < bodyEnd; j++) {
+          auto &ci = m_code.instructions()[j];
+          if (ci.op == Opcode::CONTINUE) ci.a = bodyEnd; // jump to increment
+          else if (ci.op == Opcode::BREAK) ci.a = guardExit;
+        }
+        m_code.instructions()[backExitIdx].b = guardExit;
+        m_code.instructions()[fwdExitIdx].b = guardExit;
+        m_code.instructions()[zeroJumpIdx].b = infBodyStart;
+        m_code.instructions()[ssJumpIdx].b = guardInit;
+        m_code.instructions()[runOnceExitJmpIdx].a = guardExit;
+        for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
+          auto &ci = m_code.instructions()[j];
+          if (ci.op == Opcode::CONTINUE) ci.a = guardExit;
+          else if (ci.op == Opcode::BREAK) ci.a = guardExit;
+        }
+        m_loops.pop_back();
       }
-      m_loops.pop_back();
       break;
+    }
+    // `step` is only meaningful for numeric ranges, not array/table
+    // iteration (whose stride is fixed at 1). Reject it here.
+    if (s->stepExpr != nullptr) {
+      throw QLangError(
+          QLangErrorKind::Type, 0, 0,
+          "step is not supported over array literals in for-in loops");
     }
     // for i in <collection> ... next i : iterate array elements / table keys.
     int x = declareVar(s->loopVar); // loopVar holds each element/key
@@ -1590,6 +1923,8 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "format") return static_cast<int>(Builtin::Format);
   if (name == "assert") return static_cast<int>(Builtin::Assert);
   if (name == "next") return static_cast<int>(Builtin::Next);
+  if (name == "set_max_steps") return static_cast<int>(Builtin::SetMaxSteps);
+  if (name == "get_max_steps") return static_cast<int>(Builtin::GetMaxSteps);
   return -1;
 }
 

@@ -7,36 +7,41 @@ using namespace qlang;
 
 static int passes = 0, fails = 0;
 
-static void expectRun(const std::string &name, const std::string &src) {
+static void expectRunImpl(const std::string &name, const std::string &src, int line) {
   QLangContext ctx;
-  try { ctx.run(src); std::cout << "[PASS] run:  " << name << "\n"; passes++; }
-  catch (const QLangError &e) { std::cout << "[FAIL] run:  " << name << " -> " << e.what() << "\n"; fails++; }
+  try { ctx.run(src); std::cout << "[PASS] run:  [L" << line << "] " << name << "\n"; passes++; }
+  catch (const QLangError &e) { std::cout << "[FAIL] run:  [L" << line << "] " << name << " -> " << e.what() << "\n"; fails++; }
 }
-static void expectThrow(const std::string &name, const std::string &src) {
+static void expectThrowImpl(const std::string &name, const std::string &src, int line) {
   QLangContext ctx;
-  try { ctx.run(src); std::cout << "[FAIL] throw:" << name << " (ran, expected error)\n"; fails++; }
-  catch (const QLangError &e) { std::cout << "[PASS] throw:" << name << " -> " << e.what() << "\n"; passes++; }
+  try { ctx.run(src); std::cout << "[FAIL] throw:[L" << line << "] " << name << " (ran, expected error)\n"; fails++; }
+  catch (const QLangError &e) { std::cout << "[PASS] throw:[L" << line << "] " << name << " -> " << e.what() << "\n"; passes++; }
 }
-static void expectVal(const std::string &name, const std::string &src,
-                      const std::string &var, int expect) {
+static void expectValImpl(const std::string &name, const std::string &src,
+                          const std::string &var, int expect, int line) {
   QLangContext ctx;
   try {
     ctx.run(src);
     int got = toInt64(ctx.get(var));
-    if (got == expect) { std::cout << "[PASS] val:  " << name << " (" << var << "=" << got << ")\n"; passes++; }
-    else { std::cout << "[FAIL] val:  " << name << " (" << var << " got " << got << " exp " << expect << ")\n"; fails++; }
-  } catch (const QLangError &e) { std::cout << "[FAIL] val:  " << name << " -> " << e.what() << "\n"; fails++; }
+    if (got == expect) { std::cout << "[PASS] val:  [L" << line << "] " << name << " (" << var << "=" << got << ")\n"; passes++; }
+    else { std::cout << "[FAIL] val:  [L" << line << "] " << name << " (" << var << " got " << got << " exp " << expect << ")\n"; fails++; }
+  } catch (const QLangError &e) { std::cout << "[FAIL] val:  [L" << line << "] " << name << " -> " << e.what() << "\n"; fails++; }
 }
-static void expectStr(const std::string &name, const std::string &src,
-                      const std::string &var, const std::string &expect) {
+static void expectStrImpl(const std::string &name, const std::string &src,
+                          const std::string &var, const std::string &expect, int line) {
   QLangContext ctx;
   try {
     ctx.run(src);
     std::string got = ctx.get(var).asString();
-    if (got == expect) { std::cout << "[PASS] str:  " << name << " (" << var << "=\""<< got << "\")\n"; passes++; }
-    else { std::cout << "[FAIL] str:  " << name << " (" << var << "=\""<< got << "\" exp \""<< expect << "\")\n"; fails++; }
-  } catch (const QLangError &e) { std::cout << "[FAIL] str:  " << name << " -> " << e.what() << "\n"; fails++; }
+    if (got == expect) { std::cout << "[PASS] str:  [L" << line << "] " << name << " (" << var << "=\""<< got << "\")\n"; passes++; }
+    else { std::cout << "[FAIL] str:  [L" << line << "] " << name << " (" << var << "=\""<< got << "\" exp \""<< expect << ")\n"; fails++; }
+  } catch (const QLangError &e) { std::cout << "[FAIL] str:  [L" << line << "] " << name << " -> " << e.what() << "\n"; fails++; }
 }
+// Macros so __LINE__ expands at the CALL site (a default arg would expand at the definition).
+#define expectRun(name, src)        expectRunImpl(name, src, __LINE__)
+#define expectThrow(name, src)      expectThrowImpl(name, src, __LINE__)
+#define expectVal(name, src, var, expect)  expectValImpl(name, src, var, expect, __LINE__)
+#define expectStr(name, src, var, expect)  expectStrImpl(name, src, var, expect, __LINE__)
 
 int main() {
   // -- const (spec 53-58, 119-120) --
@@ -365,6 +370,80 @@ int main() {
   expectVal("fn returns nil no expr", "def g() { x = 5 }\nlocal r = g();\nlocal n = (r == nil);", "n", 1);
   expectVal("fn returns nil explicit", "def h() { return nil }\nlocal r = h();\nlocal n = (r == nil);", "n", 1);
   expectVal("fn returns nil via print", "def p() { print(\"hi\") }\nlocal r = p();\nlocal n = (r == nil);", "n", 1);
+
+  // -- NEW: for ... step (direction-based guard model) --
+  // ascending, constant step 2
+  expectStr("for step2 asc",
+    "local s = \"\"\nfor x = 0 to 10 step 2 { s = s + toStr(x) + \",\" }\nlocal r = s;",
+    "r", "0,2,4,6,8,10,");
+  // ascending, constant step 3
+  expectStr("for step3 asc",
+    "local s = \"\"\nfor x = 0 to 10 step 3 { s = s + toStr(x) + \",\" }\nlocal r = s;",
+    "r", "0,3,6,9,");
+  // descending, constant step -1 (user step matches natural direction)
+  expectStr("for step -1 desc",
+    "local s = \"\"\nfor x = 5 to 0 step -1 { s = s + toStr(x) + \",\" }\nlocal r = s;",
+    "r", "5,4,3,2,1,0,");
+  // descending, constant step -2
+  expectStr("for step -2 desc",
+    "local s = \"\"\nfor x = 8 to 0 step -2 { s = s + toStr(x) + \",\" }\nlocal r = s;",
+    "r", "8,6,4,2,0,");
+  // wrong direction (asc bounds, neg step): body runs exactly once at start
+  expectStr("for step neg asc once",
+    "local s = \"\"\nfor x = 0 to 10 step -1 { s = s + toStr(x) + \",\" }\nlocal r = s;",
+    "r", "0,");
+  // wrong direction with larger magnitude, still once
+  expectStr("for step neg asc once2",
+    "local s = \"\"\nfor x = 0 to 10 step -3 { s = s + toStr(x) + \",\" }\nlocal r = s;",
+    "r", "0,");
+  // start == end, positive step (natural dir is desc, step is asc -> once)
+  expectStr("for same start end pos step",
+    "local s = \"\"\nfor x = 5 to 5 step 1 { s = s + toStr(x) + \",\" }\nlocal r = s;",
+    "r", "5,");
+  // start == end, negative step (matches desc -> x=5 only, then 4 < 5 stop)
+  expectStr("for same start end neg step",
+    "local s = \"\"\nfor x = 5 to 5 step -1 { s = s + toStr(x) + \",\" }\nlocal r = s;",
+    "r", "5,");
+  // step 0 -> infinite loop (x frozen, break never triggers)
+  expectThrow("for step0 infinite",
+    "local s = \"\"\nfor x = 0 to 10 step 0 { s = s + toStr(x) + \",\"; if x > 5 { break } }\nlocal r = s;");
+  // variable step (positive), ascending
+  expectStr("for var step pos",
+    "local k = 2\nlocal s = \"\"\nfor x = 0 to 10 step k { s = s + toStr(x) + \",\" }\nlocal r = s;",
+    "r", "0,2,4,6,8,10,");
+  // variable step (negative), descending
+  expectStr("for var step neg",
+    "local k = 2\nlocal s = \"\"\nfor x = 10 to 0 step -k { s = s + toStr(x) + \",\" }\nlocal r = s;",
+    "r", "10,8,6,4,2,0,");
+  // variable step wrong direction -> once
+  expectStr("for var step neg asc once",
+    "local k = 2\nlocal s = \"\"\nfor x = 0 to 10 step -k { s = s + toStr(x) + \",\" }\nlocal r = s;",
+    "r", "0,");
+  // variable step 0 -> infinite, guarded by break
+  expectStr("for var step0 break",
+    "local k = 0\nlocal s = \"\"\nfor x = 0 to 10 step k { s = s + toStr(x) + \",\"; if x > 4 { break } }\nlocal r = s;",
+    "r", "0,1,2,3,4,5,");
+  // for-in range: ascending step 2
+  expectStr("forin range step2",
+    "local s = \"\"\nfor i in range(0, 10) step 2 { s = s + toStr(i) + \",\" }\nlocal r = s;",
+    "r", "0,2,4,6,8,10,");
+  // for-in range: descending step -1
+  expectStr("forin range step -1",
+    "local s = \"\"\nfor i in range(5, 0) step -1 { s = s + toStr(i) + \",\" }\nlocal r = s;",
+    "r", "5,4,3,2,1,0,");
+  // for-in range: wrong direction -> once
+  expectStr("forin range step neg once",
+    "local s = \"\"\nfor i in range(0, 10) step -1 { s = s + toStr(i) + \",\" }\nlocal r = s;",
+    "r", "0,");
+  // for-in range: step 0 -> infinite loop (i frozen, break never triggers)
+  expectThrow("forin range step0 infinite",
+    "local s = \"\"\nfor i in range(0, 10) step 0 { s = s + toStr(i) + \",\"; if i > 3 { break } }\nlocal r = s;");
+  // for-in over array literal + step -> error
+  expectThrow("forin array step error", "for i in [1,2,3] step 1 { }");
+  // continue inside a stepped loop
+  expectStr("for step continue",
+    "local s = \"\"\nfor x = 0 to 8 step 2 { if x == 4 { continue } s = s + toStr(x) + \",\" }\nlocal r = s;",
+    "r", "0,2,6,8,");
 
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;

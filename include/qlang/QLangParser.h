@@ -149,6 +149,7 @@ struct Stmt {
   std::string loopVar;
   ExprPtr forStart;
   ExprPtr forEnd;
+  ExprPtr stepExpr; // for x = a to b step n (optional)
   bool forIn = false; // for i in <collection> (forEnd holds the collection)
   std::vector<StmtPtr> body;
 

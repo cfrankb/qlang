@@ -24,6 +24,7 @@ enum class TokenType {
   For,
   To,
   Next,
+  Step,      // step (for x = a to b step n)
   If,
   Then,
   While,

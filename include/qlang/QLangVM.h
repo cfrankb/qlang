@@ -84,7 +84,11 @@ public:
   // call with an empty entry creates a fresh instance.
   std::unordered_map<int, Frame> m_generatorFrames;
 
-  static constexpr std::size_t kMaxSteps = 100000000u; // infinite-loop guard
+  // Default infinite-loop guard. The live limit is owned by the context
+  // (QLangContext::maxSteps), which the VM reads at every step; this constant
+  // is the default seed for it. Override at runtime via set_max_steps(n)
+  // (QLang) or QLangContext::setMaxSteps(n) (C++).
+  static constexpr std::size_t kMaxSteps = 100000u;
 
   // Gated diagnostic emit. Prints printf-style output to stderr only when the
   // context's verbose level is >= minLevel. Program output (print/println) is

@@ -30,6 +30,29 @@ namespace {
     ctx.setVerboseLevel(lvl);
     return QLangValue::Int(lvl);
   }
+
+  // QLang-callable: set_max_steps(n) / get_max_steps(). Lowers/raises the VM's
+  // live infinite-loop step limit; a value of 0 (or a missing arg) restores the
+  // default (100000). set_max_steps returns the new limit; get_max_steps
+  // returns the current limit. Tests use this to fail fast on a runaway loop.
+  QLangValue setMaxStepsFunc(QLangContext &ctx, const std::vector<QLangValue> &args) {
+    std::size_t n = 0;
+    if (!args.empty()) {
+      const QLangValue &v = args[0];
+      switch (v.type()) {
+        case QLangValue::Type::Int:   n = static_cast<std::size_t>(v.asInt());   break;
+        case QLangValue::Type::Dword: n = static_cast<std::size_t>(v.asDword()); break;
+        case QLangValue::Type::Float: n = static_cast<std::size_t>(v.asFloat()); break;
+        default:                      n = 0; break;
+      }
+    }
+    if (n == 0) n = QLangVM::kMaxSteps; // 0 / missing -> default
+    ctx.setMaxSteps(n);
+    return QLangValue::Int(static_cast<int>(n));
+  }
+  QLangValue getMaxStepsFunc(QLangContext &ctx, const std::vector<QLangValue> &) {
+    return QLangValue::Int(static_cast<int>(ctx.maxSteps()));
+  }
 }
 
   // Pimpl definition — breaks the circular include with QLangCompiler.h.
@@ -44,6 +67,9 @@ namespace {
     registerBuiltinModules(*this);
     // Application-wide verbose level, adjustable from QLang via set_verbose().
     setFunc("set_verbose", setVerboseFunc);
+    // VM step limit, adjustable from QLang via set_max_steps(n) / get_max_steps().
+    setFunc("set_max_steps", setMaxStepsFunc);
+    setFunc("get_max_steps", getMaxStepsFunc);
   }
 
   std::vector<StmtPtr> QLangContext::parse(const std::string &source)
