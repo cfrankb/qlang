@@ -75,6 +75,8 @@ fetch
 step
 if
 next
+import
+from
 ```
 
 ## constants
@@ -164,6 +166,15 @@ sx += 123 # sx = test123
 
 sz = year # valid. constants can be copied to vars
 year = sx # error; constants cannot be assigned to
+
+local xbit = 1
+if true {
+    local xbit = 2   # error: duplicate declaration
+}
+
+t = 5
+local t = 9   # duplicate declaration → compile error
+
 
 # anonymous functions inside a table
 local events:table = {
@@ -434,6 +445,7 @@ if they cross a boundary, trigger an error.
 |;  |silent separator (optional)
 |cast|change datatype at runtime
 |$| dynamic key resolution operator
+|$$| indirect access operator
 
 ## operator +=
 
@@ -534,7 +546,147 @@ local err2 = \$t       # Error: collections not supported
 1. **Scope Boundaries:** The `$` operator respects QLang scope lookup invariants. If an identifier is located in the global scope, it must be explicitly exposed using the `global` keyword before a local `$` evaluation can resolve it inside a function body.
 2. **Bytecode Generation:** The compiler must emit a specialized `OP_EVAL_KEY` opcode. This opcode is responsible for checking the target variable type tag before performing the stringification step. If the type tag matches an aggregate or compound collection signature, the VM must raise an execution panic.
 
+## operator $$
 
+The `$$` operator is an **indirect access operator**: it resolves a variable name
+at runtime from a string and reads or assigns the referenced variable. Unlike the
+`$` operator (scalar-to-string evaluation), `$$` does **not** coerce its operand —
+the operand must already be a string.
+
+`$$name` is a first-class expression: it may appear on the right-hand side of
+assignments, as a function argument, in conditions, and as a table value.
+
+```python
+local a = "b"
+local b # b = nil (implicit)
+$$a = "toto"
+println(a) # expected; "b"
+println(b) # expected: "toto"
+
+local c = "d"
+$$c = "etc"  # expected: indirect variable error, `d` not declared
+
+local e = 123
+$$e = "x" # expected: indirect variable error, invalid name `123`
+
+f = $$a
+println(b) # expected: "toto"
+g = $$c # expected: indirect variable error, `d` not declared
+
+# assume global module_owner = "cfrankb"
+global module_owner
+h = "module_owner"
+println($$h) # expected: "cfrankb"
+
+local aa = "bb"
+$$aa = 1   # expected: indirect variable error, `bb` is not declared
+local bb
+
+def foo() { return 1 }
+local a = "foo"
+x = $$a   # expected: indirect variable error, `foo` is a function
+$$a = 5   # expected: indirect variable error, `foo` is a function
+
+const year = 2026
+local y = "year"
+z = $$y   # z = 2026 (local const read is valid)
+$$y = 1   # expected: indirect variable error, `year` is a constant
+
+global module_owner
+$$h = "x" # expected: indirect variable error, global write denied
+```
+
+### restrictions
+
+- the string must hold a valid variable name.
+- assignment requires the variable reference to exist in the local scope. read requires the variable to be visible (local, global declared)
+- no creation of new variables
+- cannot be applied to any function or lambda
+- cannot reference an operator or a reserved word
+- assignment is denied global scope access
+- can read from global variables and const (if exposed via global keyword)
+- can read local const
+- cannot read global functions
+- declarations are sequential
+
+### resolution and check pipeline
+
+Every `$$` expression runs the same staged pipeline; the first failing stage halts
+execution with its error. All messages use the prefix `indirect variable error:`.
+
+| stage | check | failure message |
+|---|---|---|
+| 1 | operand is a string | `invalid name <value>` |
+| 2 | string lexes as a valid identifier | `invalid name <value>` |
+| 3 | name is not a reserved word | `reserved word <name>` |
+| 4 | name is declared and visible (resolution order below) | `<name> not declared` |
+| 5 | binding is not a function/lambda (reads and writes), not a const (writes) | `<name> is a function` / `<name> is a constant` |
+| 6 | (writes only) binding is local, not global | `global write denied` |
+
+**resolution order**
+
+- **writes:** current frame locals only. A local that shadows a global resolves to
+  the local.
+- **reads:** current frame locals, then globals and const exposed via `global` in
+  the current scope. Global const is visible everywhere (per the global scope
+  rules) and does not require `global`.
+
+A read that misses every level is an error — `$$` never returns nil for an
+unresolved name.
+
+### declaration state (sequential declarations)
+
+A name is targetable only after its **declaration event** has executed. The first
+declaration of a name is either an explicit `local`/`let` or its first plain
+assignment; a later explicit `local`/`let` for the same name is a compile error
+(duplicate declaration). There is no block scope: a `local` inside a branch
+declares into the enclosing function frame, so a `$$` targeting a name declared
+in a branch that has not run is a `not declared` error:
+
+```python
+local a = "x"
+if cond {
+   local x = 5
+}
+$$a = 1   # legal only if cond executed true
+```
+
+`$$` never creates variables, so a name whose declaration event has not executed
+cannot be introduced by indirection.
+
+**asymmetry note:** direct references resolve frame-wide at compile time, so a
+direct use of a name before its declaration reads its default value; `$$`
+indirection is deliberately stricter and raises `not declared` until the
+declaration event has executed.
+
+### const and function bindings
+
+- **const** (local and global) is readable via `$$`; assignment through `$$` to a
+  const binding is an error, consistent with direct assignment.
+- **function and lambda** bindings (user `def`, lambda literals, global and
+  native functions) are never valid `$$` targets, for reads or writes. Functions
+  hosted in tables or classes are table entries, not scope names — they remain
+  mutable through ordinary dynamic table access (`t[key]`).
+
+### compiler and VM implementation notes
+
+1. **frame name map:** at compile time the compiler builds, per frame, a static
+   map of name → (register, binding kind, declaration bit). Binding kind is one of
+   `var`, `const`, `function`, `lambda`. The map covers every name directly
+   declared in the frame; a `$$` target absent from the map (and not an exposed
+   global) can only be reached through a dynamic name string and fails at stage 4.
+2. **declaration bit:** a flag on the existing store/init opcode, set once at the
+   name's unique declaration site (explicit `local`/`let` or first plain
+   assignment). No new opcode is required for declaration state.
+3. **new opcodes:** two — `OP_INDIRECT_READ nameReg → dstReg` and
+   `OP_INDIRECT_WRITE nameReg, srcReg`. Both run the pipeline above: string check,
+   identifier lexeme check, reserved-word check, map lookup (frame, then exposed
+   globals for reads), declaration-bit test, binding-kind test, and (writes) the
+   local-only test.
+4. **compile-time fast path (optional):** if a literal form `$$"name"` is ever
+   supported, stages 2–6 for a constant name resolve at compile time, turning
+   unknown names and function/const/global-write violations into compile errors;
+   dynamic names keep the runtime path. Semantics are identical.
 
 ## build-in functions
 
@@ -901,6 +1053,8 @@ def test() {
    global a, b;
    printf("[test] len: %d\n", len(a)) 
    # output >> [test] len: 3
+
+   global c; # error: cannot bind unknown global `c`
 
    a += [4,5,6] # modify global a
 }

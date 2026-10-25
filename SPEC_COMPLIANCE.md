@@ -5,22 +5,26 @@ SPEC.md, what works, what does not, root causes, and recommended next steps.
 
 Verified by building the project (CMake, C++17, clean) and empirically running
 spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
-(185 cases). The shipped `examples/hello.cpp` smoke test passes.
+(204 cases). The shipped `examples/hello.cpp` smoke test passes.
 
 ## Current Status
 
-**185 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `build/libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **5 passed, 0 failed** (`gen_test`) + **22 passed, 0 failed** (`examples/range_check.cpp`, `range` ctest) = **272 total**. Re-verified 2026-10-24 against the current lib (HEAD `4091c32`); all suites still green. The six suites do **not** exercise the newly-added `step` material, so the `step` gaps below are source-verified, not test-verified.
+**204 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **5 passed, 0 failed** (`gen_test`) + **22 passed, 0 failed** (`examples/range_check.cpp`, `range` ctest) = **291 total**. Re-verified 2026-10-25 against the current lib (HEAD `9cc0a3f`); all suites green. `spec_check2` now includes 19 `step` cases (for-to + for-in range, asc/desc, variable step, step-0 infinite guard, array-step error, continue/break), so `step` is test-verified. `$$` is fully specified (SPEC §operator $$) but **not implemented** — no harness cases yet.
 
-Line numbers below are against the CURRENT SPEC.md (24593 bytes, 1028 lines, SHA256: ca26983def499ee8458a79674754b710cd559f5c703b3a06a70d2bb7f239e2e6). Working tree is DIRTY: SPEC.md (`step` reserved word + range/loop `step` examples) is uncommitted; the verbose-level implementation (QLangContext.h/.cpp, QLangVM.h/.cpp) was committed in `4091c32`. src/QLangVM.cpp.orig and src/QLangVM.cpp.rej are untracked.
+Line numbers below are against the CURRENT SPEC.md (33724 bytes, 1249 lines, SHA256: 9cc5482b5ceb6edc275db26e8242ed1e133df6498f2cf0222d0d60316a1251fc). Working tree is DIRTY: the `## operator $$` section is drafted in full (uncommitted; replaces the TODO stub committed in `9cc0a3f`). The `import`/`from` reserved words, duplicate-declaration examples, `$$` operator-table row + TODO stub were committed in `9cc0a3f`; the `step` reserved word + range/loop `step` examples in `d07eb4f`/`21cc1c5`; the `step` implementation + inclusive-endpoint fix is `e955a8d`.
 
 ## SPEC.md Changes Since Last Audit
 
-SHA256: `ca26983def499ee8458a79674754b710cd559f5c703b3a06a70d2bb7f239e2e6` (1028 lines, 24593 bytes).
+SHA256: `9cc5482b5ceb6edc275db26e8242ed1e133df6498f2cf0222d0d60316a1251fc` (1249 lines, 33724 bytes).
 
 | Commit | Change |
 |--------|--------|
+| `uncommitted` | `## operator $$` drafted in full (replaces the TODO stub): definition (indirect access, no operand coercion vs `$`, first-class expression), example blocks (function/const/global-write-denied cases added), restrictions list, six-stage resolution/check pipeline with canonical `indirect variable error:` messages, resolution order (writes: frame locals only; reads: locals + `global`-exposed, global const visible everywhere), declaration-state rules (unique declaration event, no block scope, branch-dependent declarations, direct-vs-indirect forward-reference asymmetry), const/function binding rules, implementation notes (frame name map, declaration bit on existing store/init opcodes, `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE`, optional compile-time fast path). Spec-only — **not implemented**, no harness cases. |
+| `9cc0a3f` | SPEC.md: `import` + `from` added to reserved words (already reserved in the lexer — `keywordType()` → `TokenType::Import`/`From` — documentation gap closed, no implementation gap); duplicate-declaration examples (`local xbit` redeclared in branch → compile error; `t = 5; local t = 9` → compile error); `$$` row in the operator table + `## operator $$` TODO stub with examples/restrictions. Also: `.gitignore`, vscode tmLanguage, docs cleanup. |
 | `4091c32` | feat(verbose): application-wide verbose level — `QLangContext::setVerboseLevel/verboseLevel/isAt` + `m_verboseLevel` (default 0); `set_verbose(level)` native fn (`QLangContext.cpp`, accepts int/dword/float, returns new level); `QLangVM::trace(minLevel,…)` gated emit helper with tiers 1 (frames/calls) / 2 (VM loop+opcodes+returns) / 3 (full detail) and the fprintf→trace conversion in `QLangVM.cpp`. Expanded `## verbose level` section in SPEC.md (§736) from a one-line placeholder into a full implementation spec (granularity table, QLang + C++ APIs, implementation notes, example session). **Committed here** (was uncommitted in the prior audit). Verified: build clean (`qlang` lib + `spec_check2`); `set_verbose(0/1/2)` emits the correct tiers to stderr with program output on stdout unaffected; C++ `setVerboseLevel(3)` → `verboseLevel()==3`, `isAt(2/3)==true`. |
-| `uncommitted` | feat(step): `step` added to reserved words (SPEC §reserved words) + range/loop `step` examples — `for i in range(0,10) step 1`, `range(10,0) step -1`, `range(10,0) step j`, `for x = 10 to 0 step -1`, `for x in range(10,0) step -1`, `for x in [1,4,6] step 2` (documented as error). **NOT implemented** — lexer `keywordType()` has no `step` (tokenizes as `Ident`); parser `parseFor()` consumes no `step`. Gap vs SPEC. |
+| `e955a8d` | feat(step) implementation + fix: `for` endpoint inclusive for all step sizes. `TokenType::Step` + lexer keyword; parser `stepExpr` in both `for` forms; compiler 3-way fork (step==0 → infinite, step & direction agree → guarded, wrong-direction → body runs once); `for x in [..] step n` → type error; constant path `LT`→`LE` and runtime-path `-1` endpoint removed (ranges always inclusive); 19 `step` tests added to `spec_check2`. Verified 2026-10-25: 204/204. |
+| `21cc1c5` | SPEC update: `step` reserved word + range/loop `step` examples — `for i in range(0,10) step 1`, `range(10,0) step -1`, `for x = 10 to 0 step -1`, `for x in [1,4,6] step 2` (documented as error); step rules (direction from start/end, wrong-direction runs once, `step 0` infinite, timeout guard → runtime exception). |
+| `d07eb4f` | SPEC update: loops section rewritten — `next`-based loop forms, array-step error example, nested-range examples; removed the earlier buggy descending encode pseudocode (`i = 0; while (i <= 10) { --i }`), which contradicted its own "start at 10" comment and would loop forever. |
 | `2f19a23` | feat(range): context-dependent range encoding — `for i in range(a,b)` counter loop (no array), `l in range(a,b)` bounds check; `containsYield` recurses into ForIn for generators; added `examples/range_check.cpp` (22 cases, `range` ctest) |
 | `5001c1d` | checkpoint: add `yield`/`fetch` reserved words; add "everything is case sensitive." + "always ask for permission before touching this file."; boolean-table `generator`/`function,lambda` rows; `## declarations and assignments` rename + implicit-declaration example; new `## range` section (context-dependent encoding); `==`/`!=` nil-equality table; "no-return -> returns nil"; `## verbose level` (Priority one); generators rewritten (callable-closure prototype + `## Syntax` + `## EOF sentinel`) |
 | `31fc707` | Add `==`/`!=` nil-equality rules (nil only equals nil) + document functions/lambdas/generators without a return statement returning nil (nil type) |
@@ -33,24 +37,31 @@ Minor edits: removed `slice => build in` from reserved words (already not a keyw
 
 ## Uncommitted SPEC.md Edits (working tree; not in git)
 
-SPEC.md working-tree hash = `ca26983d...` (1028 lines, 24593 bytes). One class of
-uncommitted SPEC.md edits:
-1. `step` reserved word added (SPEC §reserved words) + range/loop `step` examples
-   (`for i in range(0,10) step 1`, `range(10,0) step -1`, `range(10,0) step j`,
-   `for x = 10 to 0 step -1`, `for x in range(10,0) step -1`,
-   `for x in [1,4,6] step 2` documented as error).
+SPEC.md working-tree hash = `9cc5482b...` (1249 lines, 33724 bytes). Uncommitted edit:
+1. `## operator $$` drafted in full — replaces the TODO stub from `9cc0a3f`. Adds:
+   definition paragraph (indirect access; no operand coercion vs `$`; first-class
+   expression), three new example blocks (function target, local const, global write
+   denial), the restrictions list, the six-stage resolution/check pipeline table,
+   resolution order, declaration-state rules (sequential declarations, no block
+   scope, branch-dependent declarations, forward-reference asymmetry note),
+   const/function binding rules, and compiler/VM implementation notes (frame name
+   map, declaration bit, `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE`, optional
+   compile-time fast path for `$$"literal"`). Spec-only — implementation pending.
 
-The `## verbose level` section (§736) expansion and the verbose-level implementation
-(`QLangContext::setVerboseLevel/verboseLevel/isAt` + `m_verboseLevel`, `set_verbose`
-native fn, `trace(minLevel,…)` gated emit helper + fprintf→trace tier conversion) were
-**committed in `4091c32`** — no longer uncommitted. The prior header "instructions" →
-"agent instructions" edits and the build-files allowlist are committed.
+The `import`/`from` reserved words + duplicate-declaration examples + `$$` TODO stub
+are now **committed** (`9cc0a3f`). The `step` reserved word + range/loop `step`
+examples are **committed** (`d07eb4f`/`21cc1c5`) and **implemented** (`e955a8d`).
+The `## verbose level` section and its implementation were committed in `4091c32`.
+The prior header "instructions" → "agent instructions" edits and the build-files
+allowlist are committed.
 
-`src/QLangVM.cpp.orig` and `src/QLangVM.cpp.rej` are patch artifacts; the `.rej` hunk
-was an extra `[DBG-YIELD-REG]` register-dump loop that was NOT applied. The tally in
-"Current Status" (272 total) has been re-run against the current spec on 2026-10-24; it
-does NOT cover the new `step` material (no suite exercises `step`), so the `step` gaps
-are source-verified, not test-verified.
+`docs/QLangVM.cpp.orig` and `docs/QLangVM.cpp.rej` are patch artifacts; the `.rej` hunk
+was an extra `[DBG-YIELD-REG]` register-dump loop that was NOT applied. `docs/` also
+holds handoff notes from the `step` implementation sessions (`step_plan.md`,
+`hand_off.md`, `for_next_step_handoff.md`, `handoff_range_nostep_bug.md`,
+`nostep_range_decode.md`, `compare_bytecode_if.md`, `for_loop_bug.md`, `notes.txt`).
+The tally in "Current Status" (291 total) was re-run on 2026-10-25 and now covers the
+`step` material (19 cases in `spec_check2`).
 
 ## Legend
 
@@ -148,14 +159,13 @@ All items below are implemented and verified. Table retained for traceability.
 | §global scope visibility | `global a, b` keyword | ✓ implemented | `TokenType::Global` in lexer; `keywordType()` maps `"global"`; parser handles `global a, b;` (semicolon optional) in function scope; compiler tracks `m_globalVars`/`m_globalRegMap`; VM routes through saved regs. Top-level `global` throws parse error. Undeclared global throws error. 9 new test cases pass. |
 | §strings (f-strings) | Python-style f"Total: ${price:.2f}" | ✓ implemented | Lexer: FString token; fstringLiteral() parses ${...} interpolation blocks verbatim. Parser: ExprKind::FString with strParts (literal segments), exprParts (inner expression ASTs), and formatSpecs (per-expression format specs like ".2f"). Compiler: emits format(template, expr1, ...) via Builtin::Format; format specs are translated to printf placeholders (:2f -> %.2f, :d -> %d, :x -> %x, :X -> %X, :o -> %o). Width and flag parsing supported: :06x -> %06x (zero-pad), :#06x -> %#06x (alternate hex with 0x prefix), :5d -> %5d (width), :-5s -> %-5s (left-align). VM: format builtin passes full printf substring to snprintf, preserving all flags/width/precision. Verified: f"Total: ${price:.2f}" -> "Total: 19.99", f"${0xff:x}" -> "ff", f"${255:X}" -> "FF", f"${255:#06x}" -> "0x00ff", f"${255:06x}" -> "0000ff", f"${10:05d}" -> "00010", f"${3.14:.2f}" -> "3.14". |
 
-## Not Yet Implemented vs Spec (new since last audit)
+## Not Yet Implemented vs Spec
 
 || Spec | Item | Status | Notes |
 |------|------|--------|-------|
-|| §reserved words | `step` | ✗ not implemented | Lexer `keywordType()` has no `step` entry; tokenizes as `Ident`. `local step = 1` parses (should be a reserved-word error per SPEC). Gap. |
-|| §range | `for i in range(a,b) step N` | ✗ not implemented | Parser `parseFor()` parses `forEnd = parseExpression()` and stops; no `step` consumption. `range(0,10) step 1`, `range(10,0) step -1`, `range(10,0) step j` documented in SPEC but not parsed. Gap. |
-|| §loops | `for x = a to b step N` (BASIC-style) | ✗ not implemented | Same root cause — `step` not consumed. `for x = 10 to 0 step -1` documented in SPEC but not parsed. Gap. |
-|| §loops | `for x in [1,4,6] step 2` | ⚠ not the documented error | SPEC says stepping into an array is a parse error; with no `step` handling the trailing `step 2` tokens are left unconsumed. Behavior differs from the documented error. Gap. |
+|| §operator $$ | `$$` indirect access operator | ✗ not implemented | Now **fully specified** (SPEC §operator $$, drafted 2026-10-25, uncommitted): six-stage check pipeline (string → identifier lexeme → reserved word → declared/visible → binding kind → local-only writes) with canonical `indirect variable error:` messages; resolution order (writes: frame locals only; reads: locals + `global`-exposed, global const visible everywhere); no variable creation; functions/lambdas never targetable, const read-only; sequential declaration state (declaration bit set at the unique declaration event; no block scope, so branch-dependent declarations can be `not declared`). Implementation per spec notes: per-frame name map (name → register, binding kind `var`/`const`/`function`/`lambda`, declaration bit), declaration bit as a flag on existing store/init opcodes (no new opcode for declaration state), two new opcodes `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE`, optional compile-time fast path for a future `$$"literal"` form. No harness cases yet. |
+|| §operator $ | `$` dynamic key resolution | ✗ not implemented | See Open Items. No `Dollar` token, no `OP_EVAL_KEY` opcode. |
+| §reserved words / §range / §loops | `step` (all forms) | ✓ resolved | Implemented in `e955a8d` (19 cases in `spec_check2`); see Open Items. The prior gap rows in this table (no `step` in `keywordType()`, no `stepExpr` in `parseFor()`, array-step behavior) are superseded. |
 
 ## Extensions Beyond Spec (present in implementation, absent from spec)
 
@@ -203,6 +213,8 @@ All items below are implemented and verified. Table retained for traceability.
 | `type` | `Type` | ✓ | Reserved word; blocks identifier use. `local type = 1` → parse error. `type()` builtin call works via `parsePrimary()` special case (same pattern as `str`/`int`). `type(var)` returns type string. |
 | `assert` | `Assert` | ✓ | Reserved word; blocks identifier use. `local assert = 1` → parse error. `assert(bool, str)` works as builtin call via `parsePrimary()` special case (same pattern as `str`/`int`/`type`). Throws runtime error on false condition. |
 | `join` | `Join` | ✓ | Reserved word; blocks identifier use. `local join = 1` → parse error. `join(sep, arr)` works as builtin call. |
+| `import` | `Import` | ✓ | ★ Added to SPEC reserved words in `9cc0a3f`. Already reserved in the lexer (`keywordType()` → `TokenType::Import`) for the import machinery — documentation gap closed, no implementation gap. |
+| `from` | `From` | ✓ | ★ Added to SPEC reserved words in `9cc0a3f`. Already reserved in the lexer (`keywordType()` → `TokenType::From`). |
 | `switch` | `Switch` | ✓ | `switch (expr) { case val: ... case in expr: ... default: ... }` — string/int cases via EQ, membership via IN, break exits switch via `m_breakJmps` patching, implicit JMP prevents fall-through |
 | `case` | `Case` | ✓ | Reserved word; parsed in switch body |
 | `default` | `Default` | ✓ | Reserved word; parsed in switch body as fallback |
@@ -213,7 +225,8 @@ All items below are implemented and verified. Table retained for traceability.
 | `cast` | `Cast` | ✓ | Reserved word; blocks identifier use. `cast<int>(1.12)` works as expression via `parsePrimary()` special case |
 | `class` | `Class` | ✓ | **Implemented.** Parser handles `class Name { ... }` with field assignments and method definitions. Methods use arrow closure syntax `(params)[] { ... }` with `self` as first param. Constructor calls `__init__(self, args...)` automatically. Member calls `obj.method(args)` prepend `self`. Prototype function per class creates table and populates methods. |
 | `fetch` | — | — | **Not a keyword.** Not implemented; no `TokenType::Fetch` in lexer/parser. Listed as reserved word in SPEC but the lexer does not recognize it. Gap.
-|| `step` | — | — | **Not a keyword.** Not implemented; no `TokenType::Step` in lexer (`keywordType()` has no `step` entry). Listed as reserved word in SPEC (added uncommitted) but the lexer tokenizes it as `Ident` (`local step = 1` parses). Range/loop `step` syntax (`for i in range(a,b) step N`, `for x = a to b step N`) is documented in SPEC but not parsed. Gap.
+| `step` | `Step` | ✓ | ★ **Implemented** (`e955a8d`). Reserved word: `local step = 1` → parse error. `for x = a to b step N` and `for i in range(a,b) step N`: direction from start/end; user step in the wrong direction → body runs exactly once; `step 0` → infinite loop, bounded by the VM step-limit guard (satisfies the spec's required "timeout guard that results in a runtime exception" — throws `runtime error: ... infinite loop (step limit)`); `for x in [..] step n` → `type error: step is not supported over array literals in for-in loops`. Constant + variable step; continue/break/next intact. 19 tests in `spec_check2`. |
+| `$` | — | — | ★ **Not implemented.** SPEC §The $ Operator (dynamic key resolution / scalar-to-string evaluator): `$age` → `"33"`, table-literal dynamic keys `{ $property = "male" }`, scalar types only (array/table/class → compile/runtime error), requires a dedicated `OP_EVAL_KEY` opcode with a type-tag check. No `Dollar` token in the lexer, no `OP_EVAL_KEY` in `QLangBytecode.h`. Gap. |
 
 ## Value-Type Coverage (SPEC.md §14–28 vs. QLangValue::Type)
 
@@ -237,13 +250,13 @@ All items below are implemented and verified. Table retained for traceability.
 
 - `examples/spec_check.cpp` — original cases (const, nil, float, concat, for, if,
   while, operators, toStr/toInt). Result: **33 passed, 0 failed.**
-- `examples/spec_check2.cpp` — 185 test cases covering all spec features including `bool`, `char`, `dword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, method calls, `==`/`!=` nil-equality, and function/generator returns. Result: **185 passed, 0 failed.**
+- `examples/spec_check2.cpp` — 204 test cases covering all spec features including `bool`, `char`, `dword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, method calls, `==`/`!=` nil-equality, function/generator returns, and 19 `step` loop cases. Result: **204 passed, 0 failed.**
 - `examples/spec_cast_test.cpp` — 20 cast tests: numeric casts (int/float/byte/word/short/unsigned/dword/char/bool), string casts, invalid collection casts, nested casts, expression-context casts, nil cast. Result: **20 passed, 0 failed.**
 - `examples/gen_test.cpp` — 5 generator tests: basic yield, second yield, exhaustion/EOF, loop accumulate, empty yield, outer variable capture, type check. Result: **5 passed, 0 failed.**
 - `examples/range_check.cpp` — 22 range tests: `for i in range(a,b)` counter loop (sum/count/break/continue), `in range(a,b)` bounds check (inside/low/high/above/below/as-value), `arr = range(a,b)` materialization, for-in array membership, generator range. Result: **22 passed, 0 failed.**
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
-Result: **185 passed, 0 failed.** All spec builtins implemented.
+Result: **204 passed, 0 failed.** All spec builtins implemented.
 `g++ -std=c++17 -Iinclude examples/spec_cast_test.cpp build/libqlang.a -o /tmp/cast_test && /tmp/cast_test 2>/dev/null`
 Result: **20 passed, 0 failed.**
 
@@ -305,7 +318,7 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-Core spec fully implemented. **185 passed, 0 failed** (spec_check2) + **33 passed, 0 failed** (spec_check) + **20 passed, 0 failed** (spec_cast_test) + **7 passed, 0 failed** (test_module) + **5 passed, 0 failed** (gen_test) + **22 passed, 0 failed** (range_check) = **272 total**. Since the prior audit: added the SPEC `==`/`!=` nil-equality rule (nil only equals nil) and the no-return-returns-nil rule, fixed the generator-exhaustion regression so a consumed generator keeps returning nil instead of restarting, and implemented the `## range` context-dependent encodings (counter loop / bounds check / array materialization / generator) with the `examples/range_check.cpp` suite (22 cases).
+Core spec fully implemented. **204 passed, 0 failed** (spec_check2) + **33 passed, 0 failed** (spec_check) + **20 passed, 0 failed** (spec_cast_test) + **7 passed, 0 failed** (test_module) + **5 passed, 0 failed** (gen_test) + **22 passed, 0 failed** (range_check) = **291 total**. Since the prior audit: implemented the `step` loop construct (both `for` forms; 19 new cases) and made the `for` endpoint inclusive for all step sizes (`e955a8d`); SPEC.md gained the `step` reserved word/examples (`d07eb4f`/`21cc1c5`) and an uncommitted `import`/`from` reserved-word addition (already reserved in the lexer).
 
 ## Class Implementation Details
 
@@ -331,8 +344,8 @@ class Name {
 
 |||- **Reserved word `fetch`:** ✗ **NOT implemented.** Lexer/parser have no `TokenType::Fetch`; `fetch` tokenizes as `Ident` and silently works as an identifier rather than raising the reserved-word error the SPEC implies. Gap vs SPEC §reserved words.
 ||||- **`## verbose level` (**Priority one**):** ✓ **Implemented** (committed in `4091c32`; was uncommitted at last audit). Application-wide verbose level on `QLangContext` (`m_verboseLevel`, default 0): `setVerboseLevel(int)`, `verboseLevel()`, `isAt(int)`. QLang `set_verbose(level)` native fn (`QLangContext.cpp`) accepts int/dword/float and returns the new level. `QLangVM` gated emit helper `trace(minLevel, fmt, …)` (`QLangVM.h`); every stderr diagnostic in `QLangVM.cpp` converted from `fprintf` to `trace(T,…)` with tier T∈{1,2,3} (1 = frame/call events, 2 = VM loop+opcodes+returns, 3 = full detail: generators/table ops/bytecode); sites inside `callBuiltin` use `vm->trace(T,…)`; `trace()` short-circuits when `isAt(minLevel)` is false. Gates stderr trace only — program output (print/println/printf) is unaffected. Verified: build clean (`qlang` lib + `spec_check2`); runtime `set_verbose(0/1/2)` emits the correct tiers to stderr with stdout intact; C++ `setVerboseLevel(3)` → `verboseLevel()==3`, `isAt(2)==isAt(3)==true`. Gap vs SPEC resolved. |
-||||- **Reserved word `step`:** ✗ **NOT implemented.** Lexer `keywordType()` has no `step` entry; it tokenizes as `Ident`, so `local step = 1` parses instead of raising the reserved-word error SPEC implies. Added to SPEC reserved words uncommitted (working tree `ca26983d`). Gap vs SPEC §reserved words. Same as the `fetch` gap. |
-||||- **`range`/loop `step` (SPEC §range, §loops):** ✗ **NOT implemented.** SPEC documents `for i in range(0,10) step 1`, `range(10,0) step -1`, `range(10,0) step j`, `for x = 10 to 0 step -1`, `for x in range(10,0) step -1`, and `for x in [1,4,6] step 2` (documented as an error). Root cause: parser `parseFor()` (`QLangParser.cpp`) parses `forEnd = parseExpression()` and stops — no `step` consumption; lexer has no `step` keyword (see above). `step` is a language-level construct here, not the VM's `m_steps` infinite-loop guard. Not exercised by any suite, so source-verified only. Gap vs SPEC. |
+- **Reserved word `step` + range/loop `step` (SPEC §reserved words, §range, §loops):** ✓ **Implemented** (`e955a8d`; committed, was uncommitted at last audit). `TokenType::Step` in `keywordType()` — `local step = 1` now raises the reserved-word error. `for x = a to b step N` and `for i in range(a,b) step N` parse (`stepExpr` in `parseFor()`, both forms) and compile via a 3-way fork: step==0 → infinite loop (guarded by the VM step limit → `runtime error: infinite loop (step limit)`, satisfying the spec's required timeout guard); step and direction agree → normal guarded loop (constant path `LE`-based, endpoint inclusive); user step in the wrong direction → body runs exactly once. `for x in [..] step n` → type error per spec. Variable step, continue/break/next all work. 19 tests in `spec_check2`.
+- **`$` operator (SPEC §The $ Operator):** ✗ **NOT implemented.** No `Dollar` token, no `OP_EVAL_KEY` opcode. `$age` / dynamic table-literal keys unsupported. Gap.
 |||- **`range` context-dependent encoding (§range):** ✓ **Resolved.** Compiler emits a counter loop for `for i in range(a,b)` (`i=a; while i<=b { …; ++i }`, no array), a bounds check `(l>=a) && (l<=b)` for `l in range(a,b)` in any expression/condition context (including `while i in range` and `let x = b in range(0,10)`), materialization for `arr = range(a,b)`, and a generator for `for i in range { yield i }` (containsYield recurses into ForIn). `continue` in a range loop jumps to the implicit `INC`. Verified by `examples/range_check.cpp` (22 passed, 0 failed).
 ||- **`min`/`max`/`sum` via `import math`:** ✓ implemented. C++-registered module (`src/QLangModules.cpp`). `min`/`max`: return `Int` for values within int32_t range; return `Dword` when result exceeds ±2147483647 (prevents silent truncation). Reject mixed float+int with type error (§767/§770). Accept single array arg (`min([1,5,9])` → `1`). Forbid mixed char+byte. `sum`: flattens all array args (`sum([1,2,3])` and `sum([1,2], [3,4])` both work); returns `Int` for in-range, `Dword` on overflow; returns `Float` when any arg is float (§777); allows float+int mix (sums in double then returns float). |
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
