@@ -8,3 +8,8 @@ Makefile
 cmake_install.cmake
 *.o
 *.a
+qlang_example
+spec_check2
+test_module
+test_gen_simple
+range_check

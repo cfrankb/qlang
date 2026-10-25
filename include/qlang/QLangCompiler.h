@@ -5,6 +5,9 @@
 #include <unordered_set>
 #include <vector>
 
+#include <cstdio>
+#include <utility>
+
 #include "QLangBytecode.h"
 #include "QLangContext.h"
 #include "QLangParser.h"
@@ -36,7 +39,7 @@ struct CompiledProgram {
 // is assigned a stable register; control flow is lowered to jumps.
 class QLangCompiler {
 public:
-  explicit QLangCompiler(std::vector<StmtPtr> program);
+  explicit QLangCompiler(std::vector<StmtPtr> program, QLangContext *scope = nullptr);
 
   // Register names that are const because they were injected from the host
   // (not declared with `const` in QLang source). The compiler treats them
@@ -56,8 +59,25 @@ public:
 
   CompiledProgram compile();
 
+  // Gated diagnostic emit (mirrors QLangVM::trace). Prints printf-style
+  // output to stderr only when the owning context's verbose level is >=
+  // minLevel (see the TRACE_* levels in QLangContext). A compiler built
+  // without a context emits nothing. Program output (print/println) is
+  // unaffected.
+  template <typename... Args>
+  void trace(int minLevel, const char *fmt, Args &&...args) const {
+    if (!m_scope || !m_scope->isAt(minLevel)) return;
+    char buf[2048];
+    int n = std::snprintf(buf, sizeof(buf), fmt, std::forward<Args>(args)...);
+    if (n > 0) std::fputs(buf, stderr);
+  }
+
 private:
-  int newRegister();
+ // Owning context, used to gate trace() output on its verbose level.
+ // Null when the compiler is constructed standalone (trace() is then a no-op).
+ QLangContext *m_scope = nullptr;
+
+ int newRegister();
   int tmpRegister();
   int declareVar(const std::string &name);
   int regOf(const std::string &name) const;

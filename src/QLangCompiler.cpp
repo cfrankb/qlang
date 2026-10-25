@@ -53,8 +53,8 @@ static std::optional<int64_t> foldConst(const ExprPtr &e) {
   return std::nullopt;
 }
 
-QLangCompiler::QLangCompiler(std::vector<StmtPtr> program)
-    : m_program(std::move(program)) {}
+QLangCompiler::QLangCompiler(std::vector<StmtPtr> program, QLangContext *scope)
+    : m_program(std::move(program)), m_scope(scope) {}
 
 void QLangCompiler::addExternalConsts(const std::unordered_set<std::string> &names) {
   m_constVars.insert(names.begin(), names.end());
@@ -105,8 +105,8 @@ int QLangCompiler::emitConst(const QLangValue &value) {
     valStr = value.asString();
   else
     valStr = std::string("(type=") + std::to_string((int)value.type()) + ")";
-  fprintf(stderr, "[DBG-CONST] Adding constant type=%d value=%s -> index=%d (pool size=%zu)\n",
-          (int)value.type(), valStr.c_str(), idx, m_code.constants().size());
+  trace(TRACE_FULL, "[DBG-CONST] Adding constant type=%d value=%s -> index=%d (pool size=%zu)\n",
+        (int)value.type(), valStr.c_str(), idx, m_code.constants().size());
   return idx;
 }
 
@@ -275,7 +275,7 @@ int QLangCompiler::buildFunction(const std::string &name,
 
   // Fresh function context: params occupy registers 0..paramCount-1 and must
   // reserve those registers so temporaries never collide with a parameter.
-  fprintf(stderr, "[DBG-BF] Resetting m_code (buildFunction for '%s') this=%p\n", name.c_str(), (void*)this);
+  trace(TRACE_FULL, "[DBG-BF] Resetting m_code (buildFunction for '%s') this=%p\n", name.c_str(), (void*)this);
   m_code = Bytecode();
   m_regs.clear();
   // Keep m_constVars and m_userFuncs populated so global consts and
@@ -424,14 +424,14 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     // Track generator variables: if RHS calls a generator function, mark LHS.
     if (s->value && s->value->kind == ExprKind::Call) {
       auto *e = s->value.get();
-      fprintf(stderr, "[DBG-GENVAR] Tracking gen var '%s' from call to '%s': userFuncs=%d genVars=%d\n",
-              s->name.c_str(), e->callee.c_str(),
-              m_userFuncs.count(e->callee), m_generatorVars.count(e->callee));
+      trace(TRACE_FULL, "[DBG-GENVAR] Tracking gen var '%s' from call to '%s': userFuncs=%d genVars=%d\n",
+            s->name.c_str(), e->callee.c_str(),
+            (int)m_userFuncs.count(e->callee), (int)m_generatorVars.count(e->callee));
       if (m_userFuncs.count(e->callee) && m_generatorVars.count(e->callee))
         m_generatorVars.insert(s->name);
-      fprintf(stderr, "[DBG-GENVAR] m_generatorVars after insert: {");
-      for (auto &g : m_generatorVars) fprintf(stderr, " %s", g.c_str());
-      fprintf(stderr, " }\n");
+      trace(TRACE_FULL, "[DBG-GENVAR] m_generatorVars after insert: {");
+      for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
+      trace(TRACE_FULL, " }\n");
     }
     // Enforce a typed declaration (e.g. local b:byte = 32).
     if (s->declaredType)
@@ -1035,20 +1035,20 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
   }
   case StmtKind::Def: {
     // `def name(params) ... end` (or brace form): a global function.
-    fprintf(stderr, "[DBG-GENVAR] Def stmt for '%s', m_generatorVars={", s->funcName.c_str());
-    for (auto &g : m_generatorVars) fprintf(stderr, " %s", g.c_str());
-    fprintf(stderr, " }, m_functions.size=%d\n", (int)m_functions.size());
+    trace(TRACE_FULL, "[DBG-GENVAR] Def stmt for '%s', m_generatorVars={", s->funcName.c_str());
+    for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
+    trace(TRACE_FULL, " }, m_functions.size=%d\n", (int)m_functions.size());
     int funcIndex = buildFunction(s->funcName, s->params, {}, s->body);
     m_userFuncs[s->funcName] = funcIndex;
     // Track generator functions at the outer scope so assignments from them
     // are recognized as producing generator values.
-    fprintf(stderr, "[DBG-GENVAR] After buildFunction: m_functions.size=%d, back.isGenerator=%d\n",
-            (int)m_functions.size(), m_functions.empty() ? -1 : m_functions.back().isGenerator);
+    trace(TRACE_FULL, "[DBG-GENVAR] After buildFunction: m_functions.size=%d, back.isGenerator=%d\n",
+          (int)m_functions.size(), m_functions.empty() ? -1 : (int)m_functions.back().isGenerator);
     if (!m_functions.empty() && m_functions.back().isGenerator)
       m_generatorVars.insert(s->funcName);
-    fprintf(stderr, "[DBG-GENVAR] After insert: m_generatorVars={");
-    for (auto &g : m_generatorVars) fprintf(stderr, " %s", g.c_str());
-    fprintf(stderr, " }\n");
+    trace(TRACE_FULL, "[DBG-GENVAR] After insert: m_generatorVars={");
+    for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
+    trace(TRACE_FULL, " }\n");
     break;
   }
   case StmtKind::Arrow: {
@@ -1371,13 +1371,13 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       // Compile the case body, then emit an implicit JMP to skip remaining cases.
       caseBodyStarts.push_back(static_cast<int>(m_code.size()));
       for (auto &body : sc.body) {
-        fprintf(stderr, "[DBG-CASE] Case %zu body stmt kind=%d\n", i, (int)body->kind);
+        trace(TRACE_FULL, "[DBG-CASE] Case %zu body stmt kind=%d\n", i, (int)body->kind);
         if (body->kind == StmtKind::Assignment) {
-          fprintf(stderr, "[DBG-CASE]   Assign op=%s value=", body->assignOp.text.c_str());
+          trace(TRACE_FULL, "[DBG-CASE]   Assign op=%s value=", body->assignOp.text.c_str());
           if (body->assignValue && body->assignValue->kind == ExprKind::Literal)
-            fprintf(stderr, "Literal:%d (type=%d)\n", (int)body->assignValue->literal.asInt(), (int)body->assignValue->literal.type());
+            trace(TRACE_FULL, "Literal:%d (type=%d)\n", (int)body->assignValue->literal.asInt(), (int)body->assignValue->literal.type());
           else
-            fprintf(stderr, "non-literal\n");
+            trace(TRACE_FULL, "non-literal\n");
         }
         compileStmt(body);
       }
@@ -1417,12 +1417,12 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     m_switches.pop_back();
 
     // Debug: dump switch bytecode
-    fprintf(stderr, "[DBG-SW] switchEnd=%d instructions.size()=%zu\n", switchEnd, m_code.instructions().size());
+    trace(TRACE_FULL, "[DBG-SW] switchEnd=%d instructions.size()=%zu\n", switchEnd, m_code.instructions().size());
     for (size_t i = 0; i < m_code.instructions().size(); i++) {
       auto &inst = m_code.instructions()[i];
-      fprintf(stderr, "[DBG-SW]   [%zu] op=%d a=%d b=%d c=%d\n", i, (int)inst.op, inst.a, inst.b, inst.c);
+      trace(TRACE_FULL, "[DBG-SW]   [%zu] op=%d a=%d b=%d c=%d\n", i, (int)inst.op, inst.a, inst.b, inst.c);
     }
-    fprintf(stderr, "[DBG-SW] constants.size()=%zu\n", m_code.constants().size());
+    trace(TRACE_FULL, "[DBG-SW] constants.size()=%zu\n", m_code.constants().size());
     for (size_t i = 0; i < m_code.constants().size(); i++) {
       const auto &c = m_code.constants()[i];
       std::string cv;
@@ -1432,7 +1432,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         cv = c.asString();
       else
         cv = std::string("(type=") + std::to_string((int)c.type()) + ")";
-      fprintf(stderr, "[DBG-SW]   const[%zu] type=%d str=%s\n", i, (int)c.type(), cv.c_str());
+      trace(TRACE_FULL, "[DBG-SW]   const[%zu] type=%d str=%s\n", i, (int)c.type(), cv.c_str());
     }
     break;
   }
@@ -1513,8 +1513,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
   }
   case ExprKind::Call: {
     int argCount = static_cast<int>(e->args.size());
-    fprintf(stderr, "[DBG-CALL] Entering call expr for '%s' with %d args\n", e->callee.c_str(), argCount);
-    fprintf(stderr, "[DBG-CALL] &m_code=%p m_code.size=%zu\n", (void*)&m_code, m_code.instructions().size());
+    trace(TRACE_FRAME, "[DBG-CALL] Entering call expr for '%s' with %d args\n", e->callee.c_str(), argCount);
+    trace(TRACE_FULL, "[DBG-CALL] &m_code=%p m_code.size=%zu\n", (void*)&m_code, m_code.instructions().size());
     // Allocate the result slot first, then compile each arg into a temp
     // register. After all args are in place, move them to the VM's expected
     // arg slots (dest+1 .. dest+argCount) and emit CALL.
@@ -1523,9 +1523,9 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     for (int i = 0; i < argCount; i++)
       argRegs[i] = tmpRegister();
     for (int i = 0; i < argCount; i++) {
-      fprintf(stderr, "[DBG-CALL] Compiling arg %d\n", i);
+      trace(TRACE_FULL, "[DBG-CALL] Compiling arg %d\n", i);
       compileExpr(e->args[i], argRegs[i]);
-      fprintf(stderr, "[DBG-CALL] After arg %d: m_code=%zu\n", i, m_code.instructions().size());
+      trace(TRACE_FULL, "[DBG-CALL] After arg %d: m_code=%zu\n", i, m_code.instructions().size());
     }
     // Move each arg into the slot the VM reads from.
     for (int i = 0; i < argCount; i++)
@@ -1634,8 +1634,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       break;
     }
     // Generator variable: use CALLCLOS (runtime dispatch to resume generator).
-    fprintf(stderr, "[DBG-GENVAR] Call to '%s': in m_generatorVars? %d\n",
-            e->callee.c_str(), m_generatorVars.count(e->callee));
+    trace(TRACE_FULL, "[DBG-GENVAR] Call to '%s': in m_generatorVars? %d\n",
+          e->callee.c_str(), (int)m_generatorVars.count(e->callee));
     if (m_generatorVars.count(e->callee)) {
       int cr = regOf(e->callee);
       emit(Opcode::MOV, dest, cr);
@@ -1653,7 +1653,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       }
     }
     emit(Opcode::CALL, dest, funcId, argCount);
-    if (e->callee == "range") fprintf(stderr, "[DBG-RANGE] emitted CALL dest=%d b=%d c=%d\n", dest, funcId, argCount);
+    if (e->callee == "range") trace(TRACE_FULL, "[DBG-RANGE] emitted CALL dest=%d b=%d c=%d\n", dest, funcId, argCount);
     // Propagate source position for runtime error reporting.
     m_code.at(m_code.size() - 1).line = e->callLine;
     m_code.at(m_code.size() - 1).col = e->callCol;

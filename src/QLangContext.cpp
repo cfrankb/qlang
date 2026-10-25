@@ -84,7 +84,7 @@ namespace {
   {
     // Pipeline: source -> AST -> bytecode -> execute.
     std::vector<StmtPtr> program = parse(source);
-    QLangCompiler compiler(std::move(program));
+    QLangCompiler compiler(std::move(program), this);
     compiler.addExternalConsts(m_injectedConsts);
     std::unordered_set<std::string> nativeNames;
     for (const auto &[name, _] : m_nativeFuncs)

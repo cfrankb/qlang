@@ -14,6 +14,19 @@
 - `cmake -B build && cmake --build build`
 - `ctest --test-dir build`  (or build/run a single suite directly, e.g. `spec_check2.cpp` against `build/libqlang.a`)
 
+## Diagnostic output (trace)
+- All diagnostic/trace output goes through the gated `trace()` helper —
+  never raw `fprintf(stderr, …)` for debug output.
+- Levels come from the `TRACE_*` enum in `QLangContext`:
+  `TRACE_OFF` (0), `TRACE_FRAME` (1, frame/call events),
+  `TRACE_VM_LOOP` (2, VM loop + opcodes + returns),
+  `TRACE_FULL` (3, full detail: generators, table ops, compile internals).
+- VM sites call `trace(TRACE_*, …)` on `QLangVM`; compiler sites call
+  `trace(TRACE_*, …)` on `QLangCompiler` (gated on the owning context; a
+  compiler built without one is silent).
+- `trace()` short-circuits below the context's verbose level, so keep the
+  format string cheap and never route program output (print/println) through it.
+
 ## CMake layout
 - Keep separate, independently buildable targets:
   - library: `src/*.cpp` → `libqlang.a`

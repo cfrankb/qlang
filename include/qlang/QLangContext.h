@@ -14,6 +14,18 @@
 namespace qlang
 {
 
+  // Gated trace-output tiers, used by QLangVM::trace / QLangCompiler::trace.
+  // 0 = silent (default); 1 = frame/call events; 2 = VM loop + opcodes +
+  // returns; 3 = full detail (generators, table ops, compile internals).
+  // Program output (print/println) is never affected.
+  enum
+  {
+    TRACE_OFF,
+    TRACE_FRAME,
+    TRACE_VM_LOOP,
+    TRACE_FULL
+  };
+
   // Host for the interpreter. Owns the variable scope and drives lexing,
   // parsing and (in later versions) execution. The first version exposes
   // parsing of source text plus a variable lookup API.
@@ -62,14 +74,6 @@ namespace qlang
     //   3 = full detail (generators, table ops).
     // Adjust at runtime from QLang via set_verbose(level) or from C++ via this
     // setter. Program output (print/println/printf) is unaffected.
-    enum
-    {
-      TRACE_OFF,
-      TRACE_FRAME,
-      TRACE_VM_LOOP,
-      TRACE_FULL
-    };
-
     void setVerboseLevel(int level) { m_verboseLevel = level; }
     int verboseLevel() const { return m_verboseLevel; }
     // True when the current level is >= minLevel (used to gate trace output).

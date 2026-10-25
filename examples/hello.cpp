@@ -147,6 +147,8 @@ local sum = 0                # int
 a += 12                      # compound assignment -> 44
 s += " world"                # string append
 
+println(s)
+
 for i = 1 to 5               # for auto-increments i, inclusive
   sum = sum + i
 next i
@@ -241,7 +243,7 @@ println(sprintf("max= %d, min=%d, sum=%d", mx, mn, sm))
 )";
 
   QLangContext ctx;
-  ctx.setVerboseLevel(QLangContext::TRACE_OFF);
+  ctx.setVerboseLevel(qlang::TRACE_OFF);
   try
   {
     std::vector<StmtPtr> program = ctx.parse(src);
