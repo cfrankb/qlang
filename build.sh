@@ -25,6 +25,7 @@ case "${1:-build}" in
     echo "Build complete ($BUILD_TYPE). Artifacts in $BUILD_DIR/:"
     echo "  lib:      $BUILD_DIR/libqlang.a"
     echo "  example:  $BUILD_DIR/qlang_example"
+    echo "  runner:   $BUILD_DIR/qlang_run"
     echo "  harness:  $BUILD_DIR/spec_check2  $BUILD_DIR/test_module  $BUILD_DIR/test_gen_simple  $BUILD_DIR/range_check"
     ;;
   test)

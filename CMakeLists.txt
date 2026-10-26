@@ -30,6 +30,10 @@ target_compile_options(qlang PRIVATE
 add_executable(qlang_example examples/hello.cpp)
 target_link_libraries(qlang_example PRIVATE qlang)
 
+# Small script runner: qlang_run [--trace-level <0-3>] file.ql
+add_executable(qlang_run examples/qlang_run.cpp)
+target_link_libraries(qlang_run PRIVATE qlang)
+
 enable_testing()
 add_test(NAME smoke COMMAND qlang_example)
 
