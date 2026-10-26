@@ -453,6 +453,10 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     else
       emit(Opcode::CONST, t, emitConst(QLangValue())); // `local z` -> nil
     emit(Opcode::MOV, r, t);
+    // Clear the RHS temp so it doesn't hold an extra reference past the
+    // declaration (matters for tables with finalizers: a lingering temp
+    // reference keeps the instance alive until frame end).
+    emit(Opcode::CONST, t, emitConst(QLangValue()));
     updateVarType(s->name, s->value);
     // Track generator variables: if RHS calls a generator function, mark LHS.
     if (s->value && s->value->kind == ExprKind::Call) {
@@ -483,6 +487,9 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     else
       emit(Opcode::CONST, t, emitConst(QLangValue()));
     emit(Opcode::MOV, r, t);
+    // Clear the RHS temp (extra reference would keep finalized tables alive
+    // until frame end).
+    emit(Opcode::CONST, t, emitConst(QLangValue()));
     updateVarType(s->name, s->value);
     // Enforce a typed declaration (e.g. local b:byte = 32).
     if (s->declaredType)
@@ -541,6 +548,9 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       int t = tmpRegister();
       compileExpr(s->assignValue, t);
       emit(Opcode::MOV, r, t);
+      // Clear the RHS temp (extra reference would keep finalized tables
+      // alive until frame end).
+      emit(Opcode::CONST, t, emitConst(QLangValue()));
       updateVarType(s->name, s->assignValue);
     } else {
       int t = tmpRegister();
@@ -1734,6 +1744,17 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         emit(Opcode::TABGET, valR, protoReg, keyR);
         emit(Opcode::TABPUT, instanceReg, keyR, valR);
       }
+      // Copy field defaults from prototype to instance (Phase 6): a
+      // `v = 7` in the class body is an initial value applied at
+      // construction, not merely a schema entry. Done before the metadata
+      // writes below, like the method copies.
+      for (const auto &fname : rec.fieldNames) {
+        int keyR = tmpRegister();
+        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(fname)));
+        int valR = tmpRegister();
+        emit(Opcode::TABGET, valR, protoReg, keyR);
+        emit(Opcode::TABPUT, instanceReg, keyR, valR);
+      }
       // Closed field set (Phase 1.3): stamp the class name onto the instance
       // BEFORE installing the `__fields__` schema, so the instance is not yet
       // a "class instance" (enforcement key present) while metadata is written.
@@ -1780,6 +1801,17 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       }
       // Save instance to dest before overwriting instanceReg with args.
       emit(Opcode::MOV, dest, instanceReg);
+      // Clear the temp so it does not keep a second reference to the
+      // instance alive (Phase 7: the finalizer must fire when the user's
+      // last reference goes away, not at frame end).
+      {
+        int nilC = m_code.addConstant(QLangValue());
+        emit(Opcode::CONST, instanceReg, nilC, 0);
+      }
+      // Phase 7: attach the `__destroy__` finalizer (no-op if the class has
+      // none). The deleter keeps the closure and owning program alive so the
+      // method can run at final release, even after this run()'s VM is gone.
+      emit(Opcode::TABFINALIZE, dest);
       // Prepend instance as first arg (self): move args into place,
       // then move saved instance as arg[0].
       int newArgCount = argCount + 1;
@@ -1820,6 +1852,15 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // __init__ may return nil; instance was passed as self at newArgBase
       // and survives there (callee frame is separate).
       emit(Opcode::MOV, dest, newArgBase);
+      // Release the caller-frame copies of the call args (self + ctor args)
+      // so they do not extend the instance's lifetime to frame end (Phase 7
+      // finalizers need the true final release; same pattern as the MAKEGEN
+      // arg-register clearing above).
+      {
+        int nilC = m_code.addConstant(QLangValue());
+        for (int j = 0; j < newArgCount; j++)
+          emit(Opcode::CONST, newArgBase + j, nilC, 0);
+      }
       break;
     }
     // User `def` function: funcIndex known at compile time.

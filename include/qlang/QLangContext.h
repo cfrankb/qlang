@@ -63,6 +63,20 @@ namespace qlang
     // Used by the ObjectOps dispatch layer for method calls on tables.
     QLangValue callClosure(const QLangValue &closure, const std::vector<QLangValue> &args);
 
+    // Run a class instance's `__destroy__` finalizer (Phase 7). Called from
+    // the instance table's shared_ptr custom deleter at final release: the
+    // table map `tbl` is still valid here but about to be destroyed by the
+    // caller. Dispatches `closure` in a fresh VM bound to the program at
+    // `programId` in the live-program list. All errors are swallowed — the
+    // deleter may run during stack unwinding, where a throw would abort.
+    void runFinalizer(std::map<std::string, QLangValue> *tbl,
+                      const QLangValue &closure, int programId);
+
+    // Index into the live-program list of the most recently run() program
+    // (-1 if none). Captured by instance finalizers at attach time so the
+    // closure dispatches against the program that compiled it.
+    int currentProgramId() const;
+
     // Inject a C++ function callable from QLang. Called like a builtin:
     //   result = myFunc(arg1, arg2)
     // The first argument is the context (like Lua's lua_State*), followed by

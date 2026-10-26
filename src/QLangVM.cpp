@@ -64,6 +64,37 @@ std::string valueToString(const QLangValue &v) {
   return "?";
 }
 
+// Phase 7: if the table carries a `__destroy__` method, re-wrap it with a
+// finalizer deleter so the method runs exactly once at final release. The
+// deleter keeps the closure and the owning program id alive; dispatch goes
+// through the long-lived QLangContext (runFinalizer). No-op for plain tables
+// and instances without `__destroy__`.
+//
+// Ownership subtlety: `shared_ptr(raw, deleter)` would create a SECOND
+// control block; the original shared_ptr (still in `v`) would then free
+// the map as soon as it is overwritten, dangling the wrapped pointer.
+// Instead the wrapped deleter captures a copy of the original
+// shared_ptr and releases it last — the map is freed exactly once, when
+// the final wrapped reference goes away, with the finalizer running first.
+static void attachFinalizer(QLangValue &v, QLangContext &scope) {
+  if (v.type() != QLangValue::Type::Table)
+    return;
+  const auto &tbl = *v.asTable();
+  auto dit = tbl.find("__destroy__");
+  if (dit == tbl.end() || dit->second.type() != QLangValue::Type::Function)
+    return;
+  QLangValue closure = dit->second; // keep the method alive in the deleter
+  int progId = scope.currentProgramId();
+  auto orig = v.asTable(); // second reference to the original control block
+  auto wrapped = std::shared_ptr<std::map<std::string, QLangValue>>(
+      v.asTable().get(),
+      [&scope, closure, progId, orig](std::map<std::string, QLangValue> *p) mutable {
+        scope.runFinalizer(p, closure, progId);
+        orig.reset(); // last reference: frees the map
+      });
+  v = QLangValue::Table(wrapped);
+}
+
 // Numeric operand with a clear error if the type is wrong.
 int64_t num(const QLangValue &v, const char *op) {
   if (!isNumeric(v))
@@ -207,6 +238,11 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
       if (it != t.end() && it->second.type() == QLangValue::Type::Function && vm) {
         return vm->callClosure(it->second, {args[0]});
       }
+      // Class instances without `__str__` render as their class name
+      // (Phase 5.2); plain tables keep the generic "<table>".
+      auto kit = t.find("__class__");
+      if (kit != t.end() && kit->second.type() == QLangValue::Type::String)
+        return QLangValue::String(kit->second.asString());
     }
     return QLangValue::String(valueToString(args[0]));
   case Builtin::ToInt:
@@ -231,10 +267,11 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
       if (desc && desc->ops)
         return QLangValue::String(desc->ops->kindName);
     }
-    // Type::Table with __type__ key -> use that (table-based classes).
+    // Type::Table with __class__ key -> use that (table-based classes; the
+    // constructor stamps kClassMetaKey, not "__type__").
     if (args[0].type() == QLangValue::Type::Table) {
       const auto &t = *args[0].asTable();
-      auto it = t.find("__type__");
+      auto it = t.find("__class__");
       if (it != t.end() && it->second.type() == QLangValue::Type::String)
         return it->second;
     }
@@ -1054,6 +1091,10 @@ void QLangVM::run() {
       trace(TRACE_FULL, "[VM-TABCREATE] a=%d shared_ptr=%p\n", i.a, frame.regs[i.a].asTable().get());
       break;
     }
+    case Opcode::TABFINALIZE: {
+      attachFinalizer(frame.regs[i.a], m_scope);
+      break;
+    }
     case Opcode::TABPUT: {
       QLangValue &base = frame.regs[i.a];
       const std::string &key = valueToString(frame.regs[i.b]);
@@ -1379,6 +1420,10 @@ void QLangVM::runFrames(int startFrame)
     case Opcode::TABCREATE: {
       frame.regs[i.a] = QLangValue::Table();
       trace(TRACE_FULL, "[VM-TABCREATE] a=%d shared_ptr=%p\n", i.a, frame.regs[i.a].asTable().get());
+      break;
+    }
+    case Opcode::TABFINALIZE: {
+      attachFinalizer(frame.regs[i.a], m_scope);
       break;
     }
     case Opcode::TABPUT: {
@@ -1751,6 +1796,9 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       case Opcode::TABCREATE:
         frame.regs[i.a] = QLangValue::Table();
         break;
+      case Opcode::TABFINALIZE:
+        attachFinalizer(frame.regs[i.a], m_scope);
+        break;
       case Opcode::TABPUT: {
         QLangValue &base = frame.regs[i.a];
         const std::string &key = valueToString(frame.regs[i.b]);
@@ -2088,6 +2136,10 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     }
     case Opcode::TABCREATE: {
       frame.regs[i.a] = QLangValue::Table();
+      break;
+    }
+    case Opcode::TABFINALIZE: {
+      attachFinalizer(frame.regs[i.a], m_scope);
       break;
     }
     case Opcode::TABPUT: {

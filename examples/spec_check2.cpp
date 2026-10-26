@@ -573,6 +573,47 @@ int main() {
     }
   }
 
+  // -- Phase 5: __str__ --
+  expectStr("str: default class name",
+            "class P { x = 1 }\nlocal p = P()\nlocal s = str(p);", "s", "P");
+  expectStr("str: custom __str__",
+            "class Q { name = \"q\" \n__str__ (self) [ ] { return self.name }\n}\n"
+            "local q = Q()\nlocal s = str(q);",
+            "s", "q");
+  expectStr("str: plain table fallback",
+            "local t = {a=1}\nlocal s = str(t);", "s", "<table>");
+  expectStr("type: table class name",
+            "class T2 { x = 1 }\nlocal t = T2()\nlocal s = type(t);", "s", "T2");
+
+  // -- Phase 6: reference counting --
+  expectVal("refcount: alias survives nil",
+            "class R { v = 7 }\nlocal a = R()\nlocal b = a\nb = nil\nlocal x = a.v;",
+            "x", 7);
+  expectVal("refcount: other ref keeps alive",
+            "class R { v = 3 }\nlocal a = R()\nlocal b = a\na = nil\nlocal x = b.v;",
+            "x", 3);
+
+  // -- Phase 7: __destroy__ --
+  expectVal("destroy: runs once on final release",
+            "local log = {n = 0}\n"
+            "class D {\n  log = nil\n"
+            "__init__ (self, lg) [ ] { self.log = lg }\n"
+            "__destroy__ (self) [ ] { local lg = self.log\nlg.n = lg.n + 1 }\n}\n"
+            "local a = D(log)\nlocal b = a\na = nil\nb = nil\nlocal n = log.n;",
+            "n", 1);
+  expectVal("destroy: not before final ref",
+            "local log = {n = 0}\n"
+            "class D {\n  log = nil\n"
+            "__init__ (self, lg) [ ] { self.log = lg }\n"
+            "__destroy__ (self) [ ] { local lg = self.log\nlg.n = lg.n + 1 }\n}\n"
+            "local a = D(log)\nlocal b = a\na = nil\nlocal n = log.n;",
+            "n", 0);
+  expectRun("destroy: absent finalizer no crash",
+            "class E { v = 1 }\nlocal e = E()\ne = nil");
+  expectRun("destroy: writes self field",
+            "class F {\n  flag = 0\n  __destroy__ (self) [ ] { self.flag = 1 }\n}\n"
+            "local f = F()\nf = nil");
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

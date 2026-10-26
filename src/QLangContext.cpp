@@ -59,6 +59,11 @@ namespace {
   struct QLangContext::Pimpl
   {
     std::optional<CompiledProgram> compiled;
+    // Every program compiled by run() stays alive here so instance
+    // finalizers (`__destroy__`) can still dispatch their closures after the
+    // run() VM is gone (Phase 7). Entries are shared_ptrs; cleared by
+    // clear() only AFTER m_vars (which owns the instances) is cleared.
+    std::vector<std::shared_ptr<CompiledProgram>> livePrograms;
   };
 
   QLangContext::QLangContext()
@@ -110,8 +115,12 @@ namespace {
       if (resolved[i])
         compiled.nativeFuncs[i] = resolved[i];
     }
-    // Cache the compiled program for subsequent call() invocations.
-    m_pimpl->compiled = std::move(compiled);
+    // Cache the compiled program for subsequent call() invocations, and keep
+    // it alive in livePrograms so instance finalizers can dispatch against
+    // it later (Phase 7).
+    auto live = std::make_shared<CompiledProgram>(std::move(compiled));
+    m_pimpl->compiled = *live;
+    m_pimpl->livePrograms.push_back(std::move(live));
     QLangVM vm(m_pimpl->compiled.value(), *this);
     vm.run();
   }
@@ -152,10 +161,13 @@ namespace {
 
   void QLangContext::clear()
   {
+    // m_vars first: releasing the instances may fire `__destroy__`
+    // finalizers, which need livePrograms still intact (Phase 7).
     m_vars.clear();
     m_injectedConsts.clear();
     m_nativeFuncs.clear();
     m_modules.clear();
+    m_pimpl->livePrograms.clear();
     m_pimpl->compiled.reset();
   }
 
@@ -243,6 +255,39 @@ namespace {
 
     QLangVM vm(m_pimpl->compiled.value(), *this);
     return vm.callClosure(closure, args);
+  }
+
+  int QLangContext::currentProgramId() const
+  {
+    return static_cast<int>(m_pimpl->livePrograms.size()) - 1;
+  }
+
+  void QLangContext::runFinalizer(std::map<std::string, QLangValue> *tbl,
+                                  const QLangValue &closure, int programId)
+  {
+    // Guard: if the context was cleared (or is being destroyed) the program
+    // is gone — skip the finalizer rather than dispatch into a dead program.
+    if (programId < 0 ||
+        programId >= static_cast<int>(m_pimpl->livePrograms.size()))
+      return;
+    const auto &prog = m_pimpl->livePrograms[static_cast<size_t>(programId)];
+    if (!prog)
+      return;
+    // Own the table transiently with a no-op deleter so the finalizer body
+    // can read/write `self`; the caller's custom deleter destroys the map
+    // after this returns. The transient ref also keeps the refcount > 0
+    // during the call, so the finalizer cannot recursively re-enter it.
+    QLangValue instance = QLangValue::Table(
+        std::shared_ptr<std::map<std::string, QLangValue>>(
+            tbl, [](std::map<std::string, QLangValue> *) {}));
+    try {
+      QLangVM vm(*prog, *this);
+      vm.callClosure(closure, {instance});
+    } catch (const std::exception &) {
+      // Finalizer errors are swallowed: the deleter may run during stack
+      // unwinding, where a rethrow would abort.
+    } catch (...) {
+    }
   }
 
 } // namespace qlang

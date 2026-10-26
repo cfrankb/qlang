@@ -98,6 +98,10 @@ enum class Opcode {
   TABCREATE, // r[a] = new empty table
   TABGET, // r[a] = tables[b][c]                (member read)
   TABPUT, // tables[a][b] = c                   (member write)
+  // Attach a finalizer to a class instance (Phase 7): if the table carries a
+  // `__destroy__` method, re-wrap it so the method runs exactly once at final
+  // release (no-op otherwise).
+  TABFINALIZE, // finalize(r[a]) — install `__destroy__` deleter if present
 
   // Indirect access via $$ operator (read/write through dynamic key)
   INDGET, // r[a] = tables[b][c] via $$ (indirect read)
