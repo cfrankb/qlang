@@ -7,6 +7,26 @@ namespace qlang {
 
 namespace table_ops {
 
+// Reserved instance/prototype keys for the closed field set (Phase 1).
+// `__fields__` holds the field schema (name -> index); `__class__` holds the
+// class name for error messages. Must match the keys emitted by the compiler.
+static const char* kFieldMetaKey = "__fields__";
+static const char* kClassMetaKey = "__class__";
+
+// True when the table is a class instance: it carries the `__fields__` schema.
+static bool isClassInstance(const std::map<std::string, QLangValue>& kv) {
+  auto it = kv.find(kFieldMetaKey);
+  return it != kv.end() && it->second.type() == QLangValue::Type::Table;
+}
+
+// Class name for closed-field-set error messages ("<class>" if absent).
+static std::string classNameOf(const std::map<std::string, QLangValue>& kv) {
+  auto it = kv.find(kClassMetaKey);
+  if (it != kv.end() && it->second.type() == QLangValue::Type::String)
+    return it->second.asString();
+  return "<class>";
+}
+
 QLangValue getField(const QLangValue& obj, const std::string& name,
                     QLangContext& ctx) {
   if (obj.type() != QLangValue::Type::Table) {
@@ -15,6 +35,19 @@ QLangValue getField(const QLangValue& obj, const std::string& name,
   }
   const auto& kv = *obj.asTable();
   auto it = kv.find(name);
+
+  // Closed field set (Phase 1.3): a class instance rejects access to a member
+  // that is neither already present (methods, metadata, set fields) nor a
+  // declared field. A declared-but-unset field reads as nil.
+  if (it == kv.end() && isClassInstance(kv)) {
+    const auto& fkv = *kv.find(kFieldMetaKey)->second.asTable();
+    if (fkv.find(name) == fkv.end()) {
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       classNameOf(kv) + " has no field '" + name + "'");
+    }
+    return QLangValue();
+  }
+
   if (it == kv.end()) {
     throw QLangError(QLangErrorKind::Runtime, 0, 0,
                      "table has no member '" + name + "'");
@@ -32,6 +65,15 @@ void setField(QLangValue& obj, const std::string& name,
   if (!tv) {
     tv = std::make_shared<std::map<std::string, QLangValue>>();
     obj = QLangValue::Table(tv);
+  }
+  // Closed field set (Phase 1.3): a class instance only allows setting
+  // declared fields (methods and metadata are not settable).
+  if (isClassInstance(*tv)) {
+    const auto& fkv = *tv->find(kFieldMetaKey)->second.asTable();
+    if (fkv.find(name) == fkv.end()) {
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       classNameOf(*tv) + " has no field '" + name + "'");
+    }
   }
   tv->operator[](name) = value;
 }

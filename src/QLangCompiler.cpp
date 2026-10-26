@@ -11,6 +11,15 @@
 
 namespace qlang {
 
+// Reserved prototype/instance key holding the closed-field schema: a table
+// mapping each declared field name to its index (Phase 1). The prototype
+// function emits it and the constructor copies it onto each instance so the
+// VM can enforce the closed field set in GETFIELD/SETFIELD.
+static const char *kFieldMetaKey = "__fields__";
+// Reserved instance key holding the class name, stamped by the constructor for
+// closed-field-set error messages (Phase 1.3).
+static const char *kClassMetaKey = "__class__";
+
 // True when an expression is a compile-time array literal (used to decide
 // array-append vs. array-extend for `arr += rhs`).
 static bool isArrayExpr(const ExprPtr &e) {
@@ -1262,6 +1271,9 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
 
     std::vector<std::string> methodNames;
     std::unordered_map<std::string, int> methodFuncIndices;
+    // Closed field set (Phase 1): declared fields in declaration order.
+    std::vector<std::string> fieldNames;
+    std::unordered_map<std::string, int> fieldIndices;
     for (auto &st : s->classBody) {
       if (st->kind == StmtKind::Assignment) {
         int keyR = tmpRegister();
@@ -1269,6 +1281,9 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         int valR = tmpRegister();
         compileExpr(st->assignValue, valR);
         emit(Opcode::TABPUT, 0, keyR, valR);
+        // Record the declared field (name -> index) for the closed field set.
+        fieldIndices[st->name] = static_cast<int>(fieldNames.size());
+        fieldNames.push_back(st->name);
       } else if (st->kind == StmtKind::Arrow) {
         int funcIndex = buildFunction(st->name, st->params, st->captures, st->body);
         auto closure = std::make_shared<Closure>();
@@ -1284,6 +1299,24 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       } else {
         compileStmt(st);
       }
+    }
+
+    // Closed field set (Phase 1): emit `__fields__` metadata (name -> index)
+    // into the prototype table so instances inherit the closed field schema.
+    if (!fieldNames.empty()) {
+      int fieldsReg = tmpRegister();
+      emit(Opcode::TABCREATE, fieldsReg);
+      for (size_t i = 0; i < fieldNames.size(); i++) {
+        int keyR = tmpRegister();
+        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(fieldNames[i])));
+        int valR = tmpRegister();
+        emit(Opcode::CONST, valR,
+             emitConst(QLangValue::Int(static_cast<int32_t>(i))));
+        emit(Opcode::TABPUT, fieldsReg, keyR, valR);
+      }
+      int fkeyR = tmpRegister();
+      emit(Opcode::CONST, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));
+      emit(Opcode::TABPUT, 0, fkeyR, fieldsReg);
     }
 
     emit(Opcode::RETURN, 0);
@@ -1309,6 +1342,8 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     rec.prototypeFunc = prototypeFuncIdx;
     rec.methodNames = std::move(methodNames);
     rec.methodFuncIndices = std::move(methodFuncIndices);
+    rec.fieldNames = std::move(fieldNames);
+    rec.fieldIndices = std::move(fieldIndices);
     m_classes[s->className] = std::move(rec);
     break;
   }
@@ -1600,6 +1635,25 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         int valR = tmpRegister();
         emit(Opcode::TABGET, valR, protoReg, keyR);
         emit(Opcode::TABPUT, instanceReg, keyR, valR);
+      }
+      // Closed field set (Phase 1.3): stamp the class name onto the instance
+      // BEFORE installing the `__fields__` schema, so the instance is not yet
+      // a "class instance" (enforcement key present) while metadata is written.
+      {
+        int ckeyR = tmpRegister();
+        emit(Opcode::CONST, ckeyR, emitConst(QLangValue::String(kClassMetaKey)));
+        int cvalR = tmpRegister();
+        emit(Opcode::CONST, cvalR, emitConst(QLangValue::String(e->callee)));
+        emit(Opcode::TABPUT, instanceReg, ckeyR, cvalR);
+      }
+      // Closed field set (Phase 1): copy the `__fields__` schema from the
+      // prototype onto the instance so GETFIELD/SETFIELD can enforce it.
+      if (!rec.fieldNames.empty()) {
+        int fkeyR = tmpRegister();
+        emit(Opcode::CONST, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));
+        int fvalR = tmpRegister();
+        emit(Opcode::TABGET, fvalR, protoReg, fkeyR);
+        emit(Opcode::TABPUT, instanceReg, fkeyR, fvalR);
       }
       // Save instance to dest before overwriting instanceReg with args.
       emit(Opcode::MOV, dest, instanceReg);

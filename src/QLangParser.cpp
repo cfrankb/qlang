@@ -749,7 +749,13 @@ StmtPtr QLangParser::parseClass() {
   stmt->className = consume(TokenType::Ident, "class name").value;
   consume(TokenType::LBrace, "'{' to open class body");
   while (!check(TokenType::RBrace) && !atEnd()) {
-    stmt->classBody.push_back(parseStatement());
+    auto bodyStmt = parseStatement();
+    // Closed field set (Phase 1): a field declaration is a simple
+    // `name = value` assignment (no index/member target). Methods are Arrow
+    // statements and are not fields; they are tracked separately.
+    if (bodyStmt->kind == StmtKind::Assignment && bodyStmt->target == nullptr)
+      stmt->declaredFields.insert(bodyStmt->name);
+    stmt->classBody.push_back(std::move(bodyStmt));
   }
   consume(TokenType::RBrace, "'}' to close class body");
   match(TokenType::Semicolon);

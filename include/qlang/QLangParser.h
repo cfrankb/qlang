@@ -3,6 +3,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "QLangLexer.h"
@@ -210,6 +211,9 @@ struct Stmt {
   // Class: class Name { fields + methods end }
   std::string className;
   std::vector<StmtPtr> classBody;
+  // Closed field set (Phase 1): names of fields declared in the class body
+  // (simple `name = value` assignments). Methods are not fields.
+  std::unordered_set<std::string> declaredFields;
 };
 
 using StmtPtr = std::shared_ptr<Stmt>;

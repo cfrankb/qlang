@@ -145,6 +145,11 @@ private:
     int prototypeFunc = -1; // function index that creates and returns the prototype table
     std::vector<std::string> methodNames;
     std::unordered_map<std::string, int> methodFuncIndices;
+    // Closed field set (Phase 1): declared fields in declaration order, plus
+    // name -> index. Emitted into the prototype's `__fields__` table and
+    // copied onto each instance so GETFIELD/SETFIELD can enforce the set.
+    std::vector<std::string> fieldNames;
+    std::unordered_map<std::string, int> fieldIndices;
   };
   std::unordered_map<std::string, ClassRecord> m_classes;
   // Variable names that currently hold an arrow-closure value.

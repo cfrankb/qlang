@@ -446,6 +446,19 @@ int main() {
     "local s = \"\"\nfor x = 0 to 8 step 2 { if x == 4 { continue } s = s + toStr(x) + \",\" }\nlocal r = s;",
     "r", "0,2,6,8,");
 
+  // -- Phase 1.4: closed field set (class instances reject undeclared fields) --
+  expectVal("class declared field set/get",
+    "class Money {\ntotal = 0\nadd (self, n) [ ] {\nself.total = self.total + n\n}\n}\n"
+    "local m = Money()\nm.total = 100\nm.add(5)\nlocal r = m.total;",
+    "r", 105);
+  expectThrow("class undeclared field get",
+    "class Money {\ntotal = 0\n}\nlocal m = Money()\nlocal r = m.undeclared;");
+  expectThrow("class undeclared field set",
+    "class Money {\ntotal = 0\n}\nlocal m = Money()\nm.newfield = 1");
+  expectStr("class __class__ name",
+    "class Money {\ntotal = 0\n}\nlocal m = Money()\nlocal r = m.__class__;",
+    "r", "Money");
+
   // -- Phase 0.5: type() on Object instances --
   {
     // Create an ObjectDescriptor with a custom ObjectOps (kindName = "Person").
