@@ -3,6 +3,7 @@
 #include <string>
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
+#include "qlang/QLangObjects.h"
 using namespace qlang;
 
 static int passes = 0, fails = 0;
@@ -444,6 +445,66 @@ int main() {
   expectStr("for step continue",
     "local s = \"\"\nfor x = 0 to 8 step 2 { if x == 4 { continue } s = s + toStr(x) + \",\" }\nlocal r = s;",
     "r", "0,2,6,8,");
+
+  // -- Phase 0.5: type() on Object instances --
+  {
+    // Create an ObjectDescriptor with a custom ObjectOps (kindName = "Person").
+    static const ObjectOps personOps = {
+        .kindName = "Person",
+        .getField = table_ops::getField,
+        .setField = table_ops::setField,
+        .callMethod = table_ops::callMethod,
+        .toStr = table_ops::toStr,
+        .base = table_ops::base,
+    };
+    auto desc = std::make_shared<ObjectDescriptor>();
+    desc->ops = &personOps;
+    QLangValue obj = QLangValue::Object(desc);
+
+    QLangContext ctx;
+    ctx.setFunc("make_person", [&](QLangContext &, const std::vector<QLangValue> &) -> QLangValue {
+      return obj;
+    });
+    try {
+      ctx.run("local o = make_person()\nlocal t = type(o)");
+      std::string got = ctx.get("t").asString();
+      if (got == "Person") {
+        std::cout << "[PASS] str:  [L" << __LINE__ << "] type(object) returns class name (t=\"" << got << "\")\n";
+        passes++;
+      } else {
+        std::cout << "[FAIL] str:  [L" << __LINE__ << "] type(object) returns class name (t=\"" << got << "\" exp \"Person\")\n";
+        fails++;
+      }
+    } catch (const QLangError &e) {
+      std::cout << "[FAIL] str:  [L" << __LINE__ << "] type(object) returns class name -> " << e.what() << "\n";
+      fails++;
+    }
+  }
+  {
+    // Object with null ops should fall back to "object".
+    auto desc2 = std::make_shared<ObjectDescriptor>();
+    desc2->ops = nullptr;
+    QLangValue obj2 = QLangValue::Object(desc2);
+
+    QLangContext ctx2;
+    ctx2.setFunc("make_obj", [&](QLangContext &, const std::vector<QLangValue> &) -> QLangValue {
+      return obj2;
+    });
+    try {
+      ctx2.run("local o = make_obj()\nlocal t = type(o)");
+      std::string got = ctx2.get("t").asString();
+      if (got == "object") {
+        std::cout << "[PASS] str:  [L" << __LINE__ << "] type(object) null ops fallback (t=\"" << got << "\")\n";
+        passes++;
+      } else {
+        std::cout << "[FAIL] str:  [L" << __LINE__ << "] type(object) null ops fallback (t=\"" << got << "\" exp \"object\")\n";
+        fails++;
+      }
+    } catch (const QLangError &e) {
+      std::cout << "[FAIL] str:  [L" << __LINE__ << "] type(object) null ops fallback -> " << e.what() << "\n";
+      fails++;
+    }
+  }
 
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;

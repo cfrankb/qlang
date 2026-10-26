@@ -222,9 +222,24 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     }
     // nil and other non-numeric types return 0 per spec §237
     return QLangValue::Int(0);
-  case Builtin::Type:
+  case Builtin::Type: {
     need(1, "type");
+    // Phase 0.5: class instances report their class name.
+    // Type::Object with non-null ops -> use ops->kindName.
+    if (args[0].type() == QLangValue::Type::Object) {
+      auto &desc = args[0].asObject();
+      if (desc && desc->ops)
+        return QLangValue::String(desc->ops->kindName);
+    }
+    // Type::Table with __type__ key -> use that (table-based classes).
+    if (args[0].type() == QLangValue::Type::Table) {
+      const auto &t = *args[0].asTable();
+      auto it = t.find("__type__");
+      if (it != t.end() && it->second.type() == QLangValue::Type::String)
+        return it->second;
+    }
     return QLangValue::String(args[0].typeName());
+  }
   case Builtin::Print:
     need(1, "print");
     std::cout << valueToString(args[0]);
