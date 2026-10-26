@@ -1275,6 +1275,8 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
 
     std::vector<std::string> methodNames;
     std::unordered_map<std::string, int> methodFuncIndices;
+    // Fixed arity (Phase 4): method name -> declared param count (incl. self).
+    std::unordered_map<std::string, int> methodArities;
     // Closed field set (Phase 1): declared fields in declaration order.
     std::vector<std::string> fieldNames;
     std::unordered_map<std::string, int> fieldIndices;
@@ -1307,6 +1309,9 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         emit(Opcode::TABPUT, 0, keyR, funcR);
         methodNames.push_back(st->name);
         methodFuncIndices[st->name] = funcIndex;
+        // Fixed arity (Phase 4): record the declared parameter count
+        // (includes `self`) for call-site checking.
+        methodArities[st->name] = static_cast<int>(st->params.size());
       } else {
         compileStmt(st);
       }
@@ -1375,6 +1380,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     rec.prototypeFunc = prototypeFuncIdx;
     rec.methodNames = std::move(methodNames);
     rec.methodFuncIndices = std::move(methodFuncIndices);
+    rec.methodArities = std::move(methodArities);
     rec.fieldNames = std::move(fieldNames);
     rec.fieldIndices = std::move(fieldIndices);
     for (const auto &cn : constNames)
@@ -1621,11 +1627,27 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // Prepend self only for known class methods (whose signature includes self).
       // Table-stored closures are called as-is.
       bool prependSelf = false;
+      int declaredArity = -1; // param count incl. self; -1 = unknown
       for (const auto &kv : m_classes) {
         if (kv.second.methodFuncIndices.count(e->callee)) {
           prependSelf = true;
+          auto ait = kv.second.methodArities.find(e->callee);
+          if (ait != kv.second.methodArities.end())
+            declaredArity = ait->second;
           break;
         }
+      }
+      // Fixed arity (Phase 4.2): a known class method must be called with
+      // exactly (declared params - 1) arguments.
+      if (prependSelf && declaredArity > 0 &&
+          argCount + 1 != declaredArity) {
+        int expected = declaredArity - 1;
+        throw QLangError(
+            QLangErrorKind::Parse, e->callLine, e->callCol,
+            "method '" + e->callee + "' expects " +
+            std::to_string(expected) + " argument" +
+            (expected == 1 ? "" : "s") + ", got " +
+            std::to_string(argCount));
       }
       if (prependSelf) {
         // Shift existing args down by one FIRST, before allocating new temps
@@ -1714,10 +1736,32 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         emit(Opcode::MOV, newArgBase + i + 1, argRegs[i], 0);
       }
       emit(Opcode::MOV, newArgBase, dest, 0);
-      // Call __init__.
+      // Call __init__ (fixed arity, Phase 4.3/4.4).
       auto initIt = rec.methodFuncIndices.find("__init__");
       if (initIt == rec.methodFuncIndices.end()) {
+        // Phase 4.4: no __init__ -> the constructor takes zero arguments.
+        if (argCount != 0) {
+          throw QLangError(
+              QLangErrorKind::Parse, e->callLine, e->callCol,
+              "class '" + e->callee + "' has no constructor; expected 0 "
+              "argument" + (argCount == 1 ? "" : "s") + ", got " +
+              std::to_string(argCount));
+        }
         break;
+      }
+      // Phase 4.3: __init__ exists -> check arg count against its declared
+      // arity (params include `self`, so expected = arity - 1).
+      auto ait = rec.methodArities.find("__init__");
+      if (ait != rec.methodArities.end()) {
+        int expected = ait->second - 1;
+        if (argCount != expected) {
+          throw QLangError(
+              QLangErrorKind::Parse, e->callLine, e->callCol,
+              "constructor of '" + e->callee + "' expects " +
+              std::to_string(expected) + " argument" +
+              (expected == 1 ? "" : "s") + ", got " +
+              std::to_string(argCount));
+        }
       }
       int funcIdx = initIt->second;
       emit(Opcode::CALLFN, dest, funcIdx, newArgCount);

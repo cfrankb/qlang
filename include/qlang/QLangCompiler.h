@@ -145,6 +145,10 @@ private:
     int prototypeFunc = -1; // function index that creates and returns the prototype table
     std::vector<std::string> methodNames;
     std::unordered_map<std::string, int> methodFuncIndices;
+    // Fixed arity (Phase 4): method name -> declared parameter count
+    // (INCLUDING `self`). Call sites are checked against this at compile
+    // time: a call must pass exactly arity-1 arguments.
+    std::unordered_map<std::string, int> methodArities;
     // Closed field set (Phase 1): declared fields in declaration order, plus
     // name -> index. Emitted into the prototype's `__fields__` table and
     // copied onto each instance so GETFIELD/SETFIELD can enforce the set.

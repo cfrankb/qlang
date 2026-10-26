@@ -477,6 +477,26 @@ int main() {
   expectRun("class distinct methods ok",
     "class C {\na()[] {}\nb()[] {}\n}\nlocal c = C();");
 
+  // -- Phase 4.5: fixed arity checking --
+  expectThrow("method call too many args",
+    "class Calc {\nadd (self, a, b) [ ] { return a + b }\n}\nlocal c = Calc();\nc.add(1, 2, 3);");
+  expectThrow("method call too few args",
+    "class Calc {\nadd (self, a, b) [ ] { return a + b }\n}\nlocal c = Calc();\nc.add(1);");
+  expectVal("method call right arity ok",
+    "class Calc {\nadd (self, a, b) [ ] { return a + b }\n}\nlocal c = Calc();\nlocal r = c.add(2, 3);",
+    "r", 5);
+  expectThrow("constructor too many args",
+    "class P {\nx = 0\n__init__ (self, v) [ ] { self.x = v }\n}\nlocal p = P(1, 2);");
+  expectThrow("constructor too few args",
+    "class P {\nx = 0\n__init__ (self, v) [ ] { self.x = v }\n}\nlocal p = P();");
+  expectVal("constructor right arity ok",
+    "class P {\nx = 0\n__init__ (self, v) [ ] { self.x = v }\n}\nlocal p = P(7);\nlocal r = p.x;",
+    "r", 7);
+  expectThrow("class without __init__ takes zero args",
+    "class C {\n}\nlocal c = C(1);");
+  expectRun("class without __init__ zero args ok",
+    "class C {\n}\nlocal c = C();");
+
   // -- Phase 0.5: type() on Object instances --
   {
     // Create an ObjectDescriptor with a custom ObjectOps (kindName = "Person").
