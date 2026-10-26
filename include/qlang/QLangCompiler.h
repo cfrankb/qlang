@@ -158,6 +158,12 @@ private:
     // (read-only). Emitted into the prototype's `__const_fields__` table and
     // copied onto each instance so SETFIELD can reject assignment to them.
     std::unordered_set<std::string> constFields;
+    // Field type inference (Phase 5): field name -> type inferred from the
+    // field's default value. Emitted into the prototype's `__field_types__`
+    // table (name -> type-name string) and copied onto each instance so
+    // SETFIELD can reject values that violate the inferred type. A field with
+    // a non-constant (or `nil`) default has no entry -> no constraint.
+    std::unordered_map<std::string, QLangValue::Type> fieldTypes;
   };
   std::unordered_map<std::string, ClassRecord> m_classes;
   // Variable names that currently hold an arrow-closure value.

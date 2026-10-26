@@ -2,6 +2,11 @@
 
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
+#include "qlang/QLangValue.h"
+
+#include <map>
+#include <string>
+#include <vector>
 
 namespace qlang {
 
@@ -13,6 +18,11 @@ namespace table_ops {
 static const char* kFieldMetaKey = "__fields__";
 static const char* kClassMetaKey = "__class__";
 static const char* kConstFieldMetaKey = "__const_fields__";
+// Reserved instance key holding the inferred field types (Phase 5): a table
+// mapping each type-constrained field name to its type-name string, emitted
+// by the compiler and copied onto each instance so SETFIELD can reject values
+// that violate the type inferred from the field's default value.
+static const char* kFieldTypeMetaKey = "__field_types__";
 
 // True when the table is a class instance: it carries the `__fields__` schema.
 static bool isClassInstance(const std::map<std::string, QLangValue>& kv) {
@@ -37,6 +47,25 @@ static bool isConstField(const std::map<std::string, QLangValue>& kv,
     return false;
   const auto& cfkv = *it->second.asTable();
   return cfkv.find(name) != cfkv.end();
+}
+
+// True when a type name is in the numeric tower (Phase 5). Numeric types are
+// mutually assignable (the tower is designed for inter-conversion), so a
+// field inferred as one numeric type accepts values of any numeric type.
+static bool isNumericType(const std::string& t) {
+  return t == "char" || t == "byte" || t == "word" || t == "short" ||
+         t == "int" || t == "unsigned" || t == "dword" || t == "float";
+}
+
+// Phase 5: true when a value of type `got` may be stored in a field whose
+// inferred type is `expected`. Exact match is always ok; a `nil` inferred
+// type means "no constraint"; numeric types are mutually compatible.
+static bool fieldTypeCompatible(const std::string& got,
+                                const std::string& expected) {
+  if (got == expected) return true;
+  if (expected == "nil") return true;
+  if (isNumericType(got) && isNumericType(expected)) return true;
+  return false;
 }
 
 QLangValue getField(const QLangValue& obj, const std::string& name,
@@ -90,6 +119,25 @@ void setField(QLangValue& obj, const std::string& name,
     if (isConstField(*tv, name)) {
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "cannot assign to const field '" + name + "'");
+    }
+  }
+  // Field type inference (Phase 5): reject a value whose type violates the
+  // type inferred from the field's default value (`__field_types__`).
+  {
+    auto ftt = tv->find(kFieldTypeMetaKey);
+    if (ftt != tv->end() && ftt->second.type() == QLangValue::Type::Table) {
+      const auto& ftkv = *ftt->second.asTable();
+      auto fit = ftkv.find(name);
+      if (fit != ftkv.end() && fit->second.type() == QLangValue::Type::String) {
+        const std::string& expected = fit->second.asString();
+        std::string got = value.typeName();
+        if (!fieldTypeCompatible(got, expected)) {
+          throw QLangError(
+              QLangErrorKind::Type, 0, 0,
+              "type mismatch: field '" + name + "' expects " + expected +
+              ", got " + got);
+        }
+      }
     }
   }
   tv->operator[](name) = value;

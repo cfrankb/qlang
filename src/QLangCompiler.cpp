@@ -23,6 +23,11 @@ static const char *kClassMetaKey = "__class__";
 // each `const` field name to 1 (Phase 2). Emitted into the prototype and copied
 // onto each instance so SETFIELD can reject assignment to read-only fields.
 static const char *kConstFieldMetaKey = "__const_fields__";
+// Reserved prototype/instance key holding the inferred field types: a table
+// mapping each type-constrained field name to its type-name string (Phase 5).
+// Emitted into the prototype and copied onto each instance so SETFIELD can
+// reject values that violate the type inferred from the field's default.
+static const char *kFieldTypeMetaKey = "__field_types__";
 
 // True when an expression is a compile-time array literal (used to decide
 // array-append vs. array-extend for `arr += rhs`).
@@ -1282,6 +1287,9 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     std::unordered_map<std::string, int> fieldIndices;
     // Const fields (Phase 2): declared fields marked `const` (read-only).
     std::vector<std::string> constNames;
+    // Field type inference (Phase 5): field name -> type inferred from the
+    // field's default value (name -> type-name string in `__field_types__`).
+    std::unordered_map<std::string, QLangValue::Type> fieldTypes;
     for (auto &st : s->classBody) {
       if (st->kind == StmtKind::Assignment || st->kind == StmtKind::Const) {
         // A field: `name = value` or `const name = value`.
@@ -1297,6 +1305,18 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         fieldNames.push_back(st->name);
         if (st->kind == StmtKind::Const)
           constNames.push_back(st->name);
+        // Field type inference (Phase 5): infer the field's type from its
+        // default value. Only constant defaults yield a constraint; a
+        // non-constant (or `nil`) default leaves the field unconstrained.
+        try {
+          QLangValue def =
+              evalConstExpr(st->kind == StmtKind::Assignment ? st->assignValue
+                                                             : st->value);
+          if (def.type() != QLangValue::Type::Nil)
+            fieldTypes[st->name] = def.type();
+        } catch (...) {
+          // Non-constant default: no compile-time type constraint.
+        }
       } else if (st->kind == StmtKind::Arrow) {
         int funcIndex = buildFunction(st->name, st->params, st->captures, st->body);
         auto closure = std::make_shared<Closure>();
@@ -1335,6 +1355,26 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       emit(Opcode::CONST, cfkeyR,
            emitConst(QLangValue::String(kConstFieldMetaKey)));
       emit(Opcode::TABPUT, 0, cfkeyR, cfieldsReg);
+    }
+
+    // Field types (Phase 5): emit `__field_types__` metadata (name ->
+    // type-name string) into the prototype BEFORE installing `__fields__` for
+    // the same reason as the const-field metadata above.
+    if (!fieldTypes.empty()) {
+      int ftypesReg = tmpRegister();
+      emit(Opcode::TABCREATE, ftypesReg);
+      for (const auto &ft : fieldTypes) {
+        int keyR = tmpRegister();
+        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(ft.first)));
+        int valR = tmpRegister();
+        QLangValue tv(ft.second);
+        emit(Opcode::CONST, valR, emitConst(QLangValue::String(tv.typeName())));
+        emit(Opcode::TABPUT, ftypesReg, keyR, valR);
+      }
+      int ftkeyR = tmpRegister();
+      emit(Opcode::CONST, ftkeyR,
+           emitConst(QLangValue::String(kFieldTypeMetaKey)));
+      emit(Opcode::TABPUT, 0, ftkeyR, ftypesReg);
     }
 
     // Closed field set (Phase 1): emit `__fields__` metadata (name -> index)
@@ -1385,6 +1425,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     rec.fieldIndices = std::move(fieldIndices);
     for (const auto &cn : constNames)
       rec.constFields.insert(cn);
+    rec.fieldTypes = std::move(fieldTypes);
     m_classes[s->className] = std::move(rec);
     break;
   }
@@ -1714,6 +1755,17 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         int cfvalR = tmpRegister();
         emit(Opcode::TABGET, cfvalR, protoReg, cfkeyR);
         emit(Opcode::TABPUT, instanceReg, cfkeyR, cfvalR);
+      }
+      // Field types (Phase 5): copy the `__field_types__` table from the
+      // prototype BEFORE installing `__fields__` (same ordering constraint as
+      // the const-field metadata above).
+      if (!rec.fieldTypes.empty()) {
+        int ftkeyR = tmpRegister();
+        emit(Opcode::CONST, ftkeyR,
+             emitConst(QLangValue::String(kFieldTypeMetaKey)));
+        int ftvalR = tmpRegister();
+        emit(Opcode::TABGET, ftvalR, protoReg, ftkeyR);
+        emit(Opcode::TABPUT, instanceReg, ftkeyR, ftvalR);
       }
       // Closed field set (Phase 1): copy the `__fields__` schema from the
       // prototype onto the instance LAST so GETFIELD/SETFIELD can enforce the

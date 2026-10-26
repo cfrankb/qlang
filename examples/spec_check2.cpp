@@ -497,6 +497,22 @@ int main() {
   expectRun("class without __init__ zero args ok",
     "class C {\n}\nlocal c = C();");
 
+  // -- Phase 5.4: field type inference --
+  expectThrow("field type violation (string into int field)",
+    "class P {\ncount = 0\n__init__ (self, v) [ ] { self.count = v }\n}\nlocal p = P(\"x\");");
+  expectThrow("field type violation (int into string field)",
+    "class S {\nname = \"\"\n__init__ (self, v) [ ] { self.name = v }\n}\nlocal s = S(42);");
+  expectVal("field type match ok",
+    "class P {\ncount = 0\n__init__ (self, v) [ ] { self.count = v }\n}\nlocal p = P(9);\nlocal r = p.count;",
+    "r", 9);
+  expectVal("numeric tower compatible (int into dword field)",
+    "class D {\nbig = 3000000000\n__init__ (self, v) [ ] { self.big = v }\n}\nlocal d = D(5);\nlocal r = d.big;",
+    "r", 5);
+  expectRun("nil default field unconstrained",
+    "class N {\nx = nil\n__init__ (self, v) [ ] { self.x = v }\n}\nlocal n = N(\"anything\");\nlocal m = N(42);");
+  expectThrow("field type violation via method",
+    "class T {\nlabel = \"\"\nset (self, v) [ ] { self.label = v }\n}\nlocal t = T();\nt.set(7);");
+
   // -- Phase 0.5: type() on Object instances --
   {
     // Create an ObjectDescriptor with a custom ObjectOps (kindName = "Person").
