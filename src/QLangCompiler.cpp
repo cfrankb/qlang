@@ -19,6 +19,10 @@ static const char *kFieldMetaKey = "__fields__";
 // Reserved instance key holding the class name, stamped by the constructor for
 // closed-field-set error messages (Phase 1.3).
 static const char *kClassMetaKey = "__class__";
+// Reserved prototype/instance key holding the const-field set: a table mapping
+// each `const` field name to 1 (Phase 2). Emitted into the prototype and copied
+// onto each instance so SETFIELD can reject assignment to read-only fields.
+static const char *kConstFieldMetaKey = "__const_fields__";
 
 // True when an expression is a compile-time array literal (used to decide
 // array-append vs. array-extend for `arr += rhs`).
@@ -1274,16 +1278,23 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     // Closed field set (Phase 1): declared fields in declaration order.
     std::vector<std::string> fieldNames;
     std::unordered_map<std::string, int> fieldIndices;
+    // Const fields (Phase 2): declared fields marked `const` (read-only).
+    std::vector<std::string> constNames;
     for (auto &st : s->classBody) {
-      if (st->kind == StmtKind::Assignment) {
+      if (st->kind == StmtKind::Assignment || st->kind == StmtKind::Const) {
+        // A field: `name = value` or `const name = value`.
         int keyR = tmpRegister();
         emit(Opcode::CONST, keyR, emitConst(QLangValue::String(st->name)));
         int valR = tmpRegister();
-        compileExpr(st->assignValue, valR);
+        compileExpr(st->kind == StmtKind::Assignment ? st->assignValue
+                                                     : st->value,
+                    valR);
         emit(Opcode::TABPUT, 0, keyR, valR);
         // Record the declared field (name -> index) for the closed field set.
         fieldIndices[st->name] = static_cast<int>(fieldNames.size());
         fieldNames.push_back(st->name);
+        if (st->kind == StmtKind::Const)
+          constNames.push_back(st->name);
       } else if (st->kind == StmtKind::Arrow) {
         int funcIndex = buildFunction(st->name, st->params, st->captures, st->body);
         auto closure = std::make_shared<Closure>();
@@ -1301,8 +1312,30 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       }
     }
 
+    // Const fields (Phase 2): emit `__const_fields__` metadata (name -> 1) into
+    // the prototype BEFORE installing `__fields__`, so the prototype is not yet
+    // a "class instance" (enforcement key present) while metadata is written —
+    // setField would otherwise reject the non-declared metadata key.
+    if (!constNames.empty()) {
+      int cfieldsReg = tmpRegister();
+      emit(Opcode::TABCREATE, cfieldsReg);
+      for (const auto &cn : constNames) {
+        int keyR = tmpRegister();
+        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(cn)));
+        int valR = tmpRegister();
+        emit(Opcode::CONST, valR, emitConst(QLangValue::Int(1)));
+        emit(Opcode::TABPUT, cfieldsReg, keyR, valR);
+      }
+      int cfkeyR = tmpRegister();
+      emit(Opcode::CONST, cfkeyR,
+           emitConst(QLangValue::String(kConstFieldMetaKey)));
+      emit(Opcode::TABPUT, 0, cfkeyR, cfieldsReg);
+    }
+
     // Closed field set (Phase 1): emit `__fields__` metadata (name -> index)
-    // into the prototype table so instances inherit the closed field schema.
+    // into the prototype table LAST so instances inherit the closed field
+    // schema. Installing `__fields__` is what makes the prototype a "class
+    // instance" for setField/getField enforcement.
     if (!fieldNames.empty()) {
       int fieldsReg = tmpRegister();
       emit(Opcode::TABCREATE, fieldsReg);
@@ -1344,6 +1377,8 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     rec.methodFuncIndices = std::move(methodFuncIndices);
     rec.fieldNames = std::move(fieldNames);
     rec.fieldIndices = std::move(fieldIndices);
+    for (const auto &cn : constNames)
+      rec.constFields.insert(cn);
     m_classes[s->className] = std::move(rec);
     break;
   }
@@ -1646,8 +1681,22 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         emit(Opcode::CONST, cvalR, emitConst(QLangValue::String(e->callee)));
         emit(Opcode::TABPUT, instanceReg, ckeyR, cvalR);
       }
+      // Const fields (Phase 2): copy the `__const_fields__` set from the
+      // prototype BEFORE installing `__fields__`, so the instance is not yet a
+      // "class instance" (enforcement key present) while metadata is written —
+      // setField would otherwise reject the non-declared metadata key.
+      if (!rec.constFields.empty()) {
+        int cfkeyR = tmpRegister();
+        emit(Opcode::CONST, cfkeyR,
+             emitConst(QLangValue::String(kConstFieldMetaKey)));
+        int cfvalR = tmpRegister();
+        emit(Opcode::TABGET, cfvalR, protoReg, cfkeyR);
+        emit(Opcode::TABPUT, instanceReg, cfkeyR, cfvalR);
+      }
       // Closed field set (Phase 1): copy the `__fields__` schema from the
-      // prototype onto the instance so GETFIELD/SETFIELD can enforce it.
+      // prototype onto the instance LAST so GETFIELD/SETFIELD can enforce the
+      // closed set. Installing `__fields__` is what makes the instance a
+      // "class instance".
       if (!rec.fieldNames.empty()) {
         int fkeyR = tmpRegister();
         emit(Opcode::CONST, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));

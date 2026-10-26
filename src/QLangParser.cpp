@@ -751,10 +751,15 @@ StmtPtr QLangParser::parseClass() {
   while (!check(TokenType::RBrace) && !atEnd()) {
     auto bodyStmt = parseStatement();
     // Closed field set (Phase 1): a field declaration is a simple
-    // `name = value` assignment (no index/member target). Methods are Arrow
-    // statements and are not fields; they are tracked separately.
+    // `name = value` assignment (no index/member target) or a
+    // `const name = value` declaration. Methods are Arrow statements and are
+    // not fields; they are tracked separately.
     if (bodyStmt->kind == StmtKind::Assignment && bodyStmt->target == nullptr)
       stmt->declaredFields.insert(bodyStmt->name);
+    if (bodyStmt->kind == StmtKind::Const) {
+      stmt->declaredFields.insert(bodyStmt->name);
+      stmt->constFields.insert(bodyStmt->name); // Phase 2: read-only field
+    }
     stmt->classBody.push_back(std::move(bodyStmt));
   }
   consume(TokenType::RBrace, "'}' to close class body");

@@ -150,6 +150,10 @@ private:
     // copied onto each instance so GETFIELD/SETFIELD can enforce the set.
     std::vector<std::string> fieldNames;
     std::unordered_map<std::string, int> fieldIndices;
+    // Const fields (Phase 2): the subset of declared fields that are `const`
+    // (read-only). Emitted into the prototype's `__const_fields__` table and
+    // copied onto each instance so SETFIELD can reject assignment to them.
+    std::unordered_set<std::string> constFields;
   };
   std::unordered_map<std::string, ClassRecord> m_classes;
   // Variable names that currently hold an arrow-closure value.

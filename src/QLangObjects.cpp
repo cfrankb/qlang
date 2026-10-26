@@ -12,6 +12,7 @@ namespace table_ops {
 // class name for error messages. Must match the keys emitted by the compiler.
 static const char* kFieldMetaKey = "__fields__";
 static const char* kClassMetaKey = "__class__";
+static const char* kConstFieldMetaKey = "__const_fields__";
 
 // True when the table is a class instance: it carries the `__fields__` schema.
 static bool isClassInstance(const std::map<std::string, QLangValue>& kv) {
@@ -25,6 +26,17 @@ static std::string classNameOf(const std::map<std::string, QLangValue>& kv) {
   if (it != kv.end() && it->second.type() == QLangValue::Type::String)
     return it->second.asString();
   return "<class>";
+}
+
+// True when a class instance's `name` is a const (read-only) field, per the
+// `__const_fields__` set emitted by the compiler (Phase 2).
+static bool isConstField(const std::map<std::string, QLangValue>& kv,
+                         const std::string& name) {
+  auto it = kv.find(kConstFieldMetaKey);
+  if (it == kv.end() || it->second.type() != QLangValue::Type::Table)
+    return false;
+  const auto& cfkv = *it->second.asTable();
+  return cfkv.find(name) != cfkv.end();
 }
 
 QLangValue getField(const QLangValue& obj, const std::string& name,
@@ -73,6 +85,11 @@ void setField(QLangValue& obj, const std::string& name,
     if (fkv.find(name) == fkv.end()) {
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        classNameOf(*tv) + " has no field '" + name + "'");
+    }
+    // Const fields (Phase 2.2): reject assignment to read-only fields.
+    if (isConstField(*tv, name)) {
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "cannot assign to const field '" + name + "'");
     }
   }
   tv->operator[](name) = value;

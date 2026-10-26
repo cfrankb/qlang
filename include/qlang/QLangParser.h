@@ -212,8 +212,12 @@ struct Stmt {
   std::string className;
   std::vector<StmtPtr> classBody;
   // Closed field set (Phase 1): names of fields declared in the class body
-  // (simple `name = value` assignments). Methods are not fields.
+  // (simple `name = value` assignments, or `const name = value`). Methods are
+  // not fields.
   std::unordered_set<std::string> declaredFields;
+  // Const fields (Phase 2): the subset of declaredFields that are `const`
+  // (read-only). Emitted into the prototype's `__const_fields__` table.
+  std::unordered_set<std::string> constFields;
 };
 
 using StmtPtr = std::shared_ptr<Stmt>;

@@ -459,6 +459,18 @@ int main() {
     "class Money {\ntotal = 0\n}\nlocal m = Money()\nlocal r = m.__class__;",
     "r", "Money");
 
+  // -- Phase 2.4: const fields (read-only, enforced in SETFIELD) --
+  expectThrow("class const field assign",
+    "class Money {\nconst total = 0\n}\nlocal m = Money()\nm.total = 1");
+  expectRun("class const field read",
+    "class Money {\nconst total = 0\n}\nlocal m = Money()\nlocal r = m.total;");
+  expectVal("class nonconst field set",
+    "class Money {\nconst total = 0\nother = 5\n}\nlocal m = Money()\nm.other = 99\nlocal r = m.other;",
+    "r", 99);
+  expectVal("class const in __const_fields__",
+    "class Money {\nconst total = 0\nother = 5\n}\nlocal m = Money()\nlocal r = m.__const_fields__.total;",
+    "r", 1);
+
   // -- Phase 0.5: type() on Object instances --
   {
     // Create an ObjectDescriptor with a custom ObjectOps (kindName = "Person").
