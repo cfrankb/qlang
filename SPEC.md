@@ -517,7 +517,7 @@ Unlike the explicit `cast<string>()` operator which falls back on default string
 | `float` | `19.99` | `"19.99"` | Valid |
 | `string` | `"gender"` | `"gender"` | Valid |
 | `bool` | `true` | `"true"` | Valid |
-| `nil` | `nil` | `"false"` (per boolean evaluation) | Valid |
+| `nil` | `nil` | `"nil"` | Valid |
 | `array` | `[1, 2, 3]` | `error: collections not supported` | **Compile/Runtime Error** |
 | `table` | `{age=33}` | `error: collections not supported` | **Compile/Runtime Error** |
 
