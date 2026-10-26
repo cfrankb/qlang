@@ -704,6 +704,22 @@ QLangValue QLangVM::doUnary(Opcode op, const QLangValue &a) {
     return QLangValue::Int(static_cast<int32_t>(num(a, "+") + 1));
   case Opcode::DEC:
     return QLangValue::Int(static_cast<int32_t>(num(a, "-") - 1));
+  case Opcode::EVALKEY: {
+    // $ operator: evaluate identifier and stringify (scalar-to-string)
+    // Per spec: reject arrays, tables, and classes (objects)
+    switch (a.type()) {
+    case QLangValue::Type::Array:
+    case QLangValue::Type::Table:
+    case QLangValue::Type::Object:
+    case QLangValue::Type::Function:
+    case QLangValue::Type::Generator:
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       std::string("operator '$' cannot stringify ") +
+                         a.typeName() + " (collections and functions not supported)");
+    default:
+      return QLangValue::String(valueToString(a));
+    }
+  }
   default:
     throw QLangError(QLangErrorKind::Runtime, 0, 0,
                      std::string("unary operation not implemented: ") +

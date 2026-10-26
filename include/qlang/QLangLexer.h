@@ -76,6 +76,8 @@ enum class TokenType {
 
   // Operators
   Dot,           // .  (table member access: t.name)
+  Dollar,        // $  (dynamic key resolution)
+  DollarDollar,  // $$ (indirect access operator)
   Assign,        // =
   Equal,         // ==
   NotEqual,      // !=

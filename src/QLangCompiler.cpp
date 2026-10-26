@@ -53,6 +53,20 @@ static std::optional<int64_t> foldConst(const ExprPtr &e) {
   return std::nullopt;
 }
 
+// Evaluate a table key expression to a string.
+// Static identifier keys are Variable expressions; dynamic keys ($expr) are
+// other expression forms that must be constant-evaluable at compile time.
+static std::string evalConstKey(const ExprPtr &key) {
+  if (!key)
+    throw QLangError(QLangErrorKind::Parse, 0, 0, "null table key");
+  if (key->kind == ExprKind::Variable)
+    return key->name;
+  if (key->kind == ExprKind::Literal)
+    return key->literal.asString();
+  throw QLangError(QLangErrorKind::Parse, 0, 0,
+                   "non-constant table key");
+}
+
 QLangCompiler::QLangCompiler(std::vector<StmtPtr> program, QLangContext *scope)
     : m_program(std::move(program)), m_scope(scope) {}
 
@@ -199,6 +213,7 @@ static void collectIds(const ExprPtr &e, std::unordered_set<std::string> &ids,
     for (auto &el : e->elements) collectIds(el, ids, skip);
   } else if (e->kind == ExprKind::Table) {
     for (auto &item : e->items) {
+      collectIds(item.first, ids, skip);
       collectIds(item.second, ids, skip);
     }
   } else if (e->kind == ExprKind::Closure) {
@@ -1668,10 +1683,11 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     break;
   }
   case ExprKind::Table: {
-    // Check if all elements are constant-evaluable.
+    // Check if all elements and keys are constant-evaluable.
     bool allConst = true;
     for (auto &item : e->items) {
       try {
+        evalConstKey(item.first);
         evalConstExpr(item.second);
       } catch (...) {
         allConst = false;
@@ -1681,7 +1697,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     if (allConst) {
       TableValue kv = std::make_shared<std::map<std::string, QLangValue>>();
       for (auto &item : e->items)
-        kv->operator[](item.first) = evalConstExpr(item.second);
+        kv->operator[](evalConstKey(item.first)) = evalConstExpr(item.second);
       emit(Opcode::CONST, dest, emitConst(QLangValue::Table(kv)));
       break;
     }
@@ -1690,7 +1706,12 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     emit(Opcode::TABCREATE, baseR);
     for (auto &item : e->items) {
       int keyR = tmpRegister();
-      emit(Opcode::CONST, keyR, emitConst(QLangValue::String(item.first)));
+      // Static identifier keys are Variable expressions - emit as string constant.
+      // Dynamic keys ($expr) are compiled as expressions.
+      if (item.first->kind == ExprKind::Variable)
+        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(item.first->name)));
+      else
+        compileExpr(item.first, keyR);
       int valR = tmpRegister();
       compileExpr(item.second, valR);
       emit(Opcode::TABPUT, baseR, keyR, valR);
@@ -1943,7 +1964,7 @@ QLangValue QLangCompiler::evalConstExpr(const ExprPtr &e) {
   case ExprKind::Table: {
     TableValue kv = std::make_shared<std::map<std::string, QLangValue>>();
     for (auto &item : e->items)
-      kv->operator[](item.first) = evalConstExpr(item.second);
+      kv->operator[](evalConstKey(item.first)) = evalConstExpr(item.second);
     return QLangValue::Table(kv);
   }
   default:
@@ -2072,6 +2093,7 @@ Opcode QLangCompiler::unOp(const std::string &text) const {
   if (text == "++") return Opcode::INC;
   if (text == "-") return Opcode::NEG;
   if (text == "!") return Opcode::NOT;
+  if (text == "$") return Opcode::EVALKEY;
   throw QLangError(QLangErrorKind::Parse, 0, 0, "unsupported unary operator '" + text + "'");
 }
 

@@ -58,6 +58,14 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::GT: return "gt";
   case Opcode::LE: return "le";
   case Opcode::GE: return "ge";
+  case Opcode::MOD: return "mod";
+  case Opcode::POW: return "pow";
+  case Opcode::NOT: return "not";
+  case Opcode::LEN: return "len";
+  case Opcode::SEQGET: return "seqget";
+  case Opcode::CONTINUE: return "continue";
+  case Opcode::BREAK: return "break";
+  case Opcode::YIELD: return "yield";
   case Opcode::CALL: return "call";
   case Opcode::DELETE: return "delete";
   case Opcode::CAST: return "cast";
@@ -69,6 +77,8 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::TABCREATE: return "tabcreate";
   case Opcode::TABGET: return "tabget";
   case Opcode::TABPUT: return "tabput";
+  case Opcode::INDGET: return "indget";
+  case Opcode::INDPUT: return "indput";
   case Opcode::JMP: return "jmp";
   case Opcode::JMPIFFALSE: return "jmpfalse";
   case Opcode::CALLFN: return "callfn";

@@ -63,7 +63,8 @@ struct Expr {
   std::vector<ExprPtr> elements;
 
   // Table literal: { key = value, ... } (value may carry an optional :type).
-  std::vector<std::pair<std::string, ExprPtr>> items;
+  // Keys can be either static strings (identifiers) or dynamic expressions (e.g. $var).
+  std::vector<std::pair<ExprPtr, ExprPtr>> items;
 
   // Index: base[index]  (array subscript access).
   ExprPtr indexBase;

@@ -357,6 +357,10 @@ Token QLangLexer::operatorToken() {
   if (c == '*' && n == '*') return make(TokenType::Exponential, "**", 2);
   if (c == '+' && n == '+') return make(TokenType::Increment, "++", 2);
   if (c == '-' && n == '-') return make(TokenType::Decrement, "--", 2);
+  // $$ operator (indirect access) - must be checked before $
+  if (c == '$' && n == '$') return make(TokenType::DollarDollar, "$$", 2);
+  // $ operator (dynamic key resolution) - must be checked after $$
+  if (c == '$') return make(TokenType::Dollar, "$", 1);
 
   // Single-character operators / punctuation.
   switch (c) {

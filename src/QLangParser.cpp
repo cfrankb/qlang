@@ -871,7 +871,8 @@ ExprPtr QLangParser::parseBinary(int minPrec) {
 
 ExprPtr QLangParser::parseUnary() {
   if (check(TokenType::Decrement) || check(TokenType::Increment) ||
-      check(TokenType::Minus) || check(TokenType::Not)) {
+      check(TokenType::Minus) || check(TokenType::Not) ||
+      check(TokenType::Dollar)) {
     Token op = current();
     m_pos++;
     auto node = std::make_shared<Expr>();
@@ -1353,7 +1354,17 @@ ExprPtr QLangParser::parseTableLiteral() {
   node->kind = ExprKind::Table;
   if (!check(TokenType::RBrace)) {
     do {
-      std::string key = consume(TokenType::Ident, "table key").value;
+      // Parse key: either an identifier or a $ expression for dynamic keys
+      ExprPtr keyExpr;
+      if (match(TokenType::Dollar)) {
+        // Dynamic key: $expr (evaluate expr at runtime and stringify as key)
+        keyExpr = parseUnary();
+      } else {
+        // Static key: identifier
+        keyExpr = std::make_shared<Expr>();
+        keyExpr->kind = ExprKind::Variable;
+        keyExpr->name = consume(TokenType::Ident, "table key").value;
+      }
       ExprPtr val;
       // Optional :type annotation on the value: key:byte = expr
       if (match(TokenType::Colon)) {
@@ -1366,10 +1377,10 @@ ExprPtr QLangParser::parseTableLiteral() {
       }
       consume(TokenType::Assign, "'=' in table entry");
       val = parseExpression();
-      node->items.emplace_back(key, val);
+      node->items.emplace_back(keyExpr, val);
     } while (match(TokenType::Comma));
   }
-  consume(TokenType::RBrace, "}''");
+  consume(TokenType::RBrace, "'}'");
   return node;
 }
 

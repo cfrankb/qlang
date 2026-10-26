@@ -99,6 +99,13 @@ enum class Opcode {
   TABGET, // r[a] = tables[b][c]                (member read)
   TABPUT, // tables[a][b] = c                   (member write)
 
+  // Indirect access via $$ operator (read/write through dynamic key)
+  INDGET, // r[a] = tables[b][c] via $$ (indirect read)
+  INDPUT, // tables[a][b] = c via $$ (indirect write)
+
+  // Dynamic key resolution via $ operator (evaluate identifier and stringify)
+  EVALKEY, // r[a] = str(r[b]) - evaluate variable and convert to string
+
   // Control flow
   JMP,       // pc = a
   JMPIFFALSE, // if !truth(r[a]) pc = b
