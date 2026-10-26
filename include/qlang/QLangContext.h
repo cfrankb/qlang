@@ -59,6 +59,10 @@ namespace qlang
     // compilation.
     QLangValue call(const std::string &name, const std::vector<QLangValue> &args = {});
 
+    // Call a closure value (Function type) with the given arguments.
+    // Used by the ObjectOps dispatch layer for method calls on tables.
+    QLangValue callClosure(const QLangValue &closure, const std::vector<QLangValue> &args);
+
     // Inject a C++ function callable from QLang. Called like a builtin:
     //   result = myFunc(arg1, arg2)
     // The first argument is the context (like Lua's lua_State*), followed by

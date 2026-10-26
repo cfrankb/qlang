@@ -9,17 +9,20 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 ## Current Status
 
-**204 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **5 passed, 0 failed** (`gen_test`) + **22 passed, 0 failed** (`examples/range_check.cpp`, `range` ctest) = **291 total**. Re-verified 2026-10-25 against the current lib (HEAD `9cc0a3f`); all suites green. `spec_check2` now includes 19 `step` cases (for-to + for-in range, asc/desc, variable step, step-0 infinite guard, array-step error, continue/break), so `step` is test-verified. `$$` is fully specified (SPEC §operator $$) but **not implemented** — no harness cases yet.
+**204 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **5 passed, 0 failed** (`gen_test`) + **22 passed, 0 failed** (`examples/range_check.cpp`, `range` ctest) = **291 total**. Re-verified 2026-10-26 against the current lib (HEAD `e08005b`); all suites green. `spec_check2` now includes 19 `step` cases (for-to + for-in range, asc/desc, variable step, step-0 infinite guard, array-step error, continue/break), so `step` is test-verified. `$$` is fully specified (SPEC §operator $$, committed in `c83ebc8`) but **not implemented** — no harness cases yet.
 
-Line numbers below are against the CURRENT SPEC.md (33724 bytes, 1249 lines, SHA256: 9cc5482b5ceb6edc275db26e8242ed1e133df6498f2cf0222d0d60316a1251fc). Working tree is DIRTY: the `## operator $$` section is drafted in full (uncommitted; replaces the TODO stub committed in `9cc0a3f`). The `import`/`from` reserved words, duplicate-declaration examples, `$$` operator-table row + TODO stub were committed in `9cc0a3f`; the `step` reserved word + range/loop `step` examples in `d07eb4f`/`21cc1c5`; the `step` implementation + inclusive-endpoint fix is `e955a8d`.
+Line numbers below are against the CURRENT SPEC.md (38620 bytes, 1357 lines, SHA256: 21b1ce6577552949d847810503e75990b79e703c6d226840e880526966d8a973). Working tree is **clean**: the `## operator $$` section (replacing the `9cc0a3f` TODO stub) and the expanded `## user defined classes` section are now committed (`c83ebc8`, `e08005b`). The `import`/`from` reserved words, duplicate-declaration examples, `$$` operator-table row + TODO stub were committed in `9cc0a3f`; the `step` reserved word + range/loop `step` examples in `d07eb4f`/`21cc1c5`; the `step` implementation + inclusive-endpoint fix is `e955a8d`.
+
+Two sections committed after the prior audit are **not yet conforming**: `## operator $$` (fully specified, no implementation) and the expanded `## user defined classes` (prototype exists; closed field set / `const` / arity / `__str__` / refcount / `__destroy__` / `type(x)` all missing — see "user defined classes — spec conformance" below). New gap found this round: the duplicate-declaration compile check (spec examples in `9cc0a3f`) is **not implemented** — see Open Items.
 
 ## SPEC.md Changes Since Last Audit
 
-SHA256: `9cc5482b5ceb6edc275db26e8242ed1e133df6498f2cf0222d0d60316a1251fc` (1249 lines, 33724 bytes).
+SHA256: `21b1ce6577552949d847810503e75990b79e703c6d226840e880526966d8a973` (1357 lines, 38620 bytes).
 
 | Commit | Change |
 |--------|--------|
-| `uncommitted` | `## operator $$` drafted in full (replaces the TODO stub): definition (indirect access, no operand coercion vs `$`, first-class expression), example blocks (function/const/global-write-denied cases added), restrictions list, six-stage resolution/check pipeline with canonical `indirect variable error:` messages, resolution order (writes: frame locals only; reads: locals + `global`-exposed, global const visible everywhere), declaration-state rules (unique declaration event, no block scope, branch-dependent declarations, direct-vs-indirect forward-reference asymmetry), const/function binding rules, implementation notes (frame name map, declaration bit on existing store/init opcodes, `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE`, optional compile-time fast path). Spec-only — **not implemented**, no harness cases. |
+| `c83ebc8` | SPEC.md: `## operator $$` committed in full (replaces the `9cc0a3f` TODO stub): definition (indirect access, no operand coercion vs `$`, first-class expression), example blocks (function/const/global-write-denied cases), restrictions list, six-stage resolution/check pipeline with canonical `indirect variable error:` messages, resolution order (writes: frame locals only; reads: locals + `global`-exposed, global const visible everywhere), declaration-state rules (unique declaration event, no block scope, branch-dependent declarations, direct-vs-indirect forward-reference asymmetry), const/function binding rules, implementation notes (frame name map, declaration bit on existing store/init opcodes, `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE`, optional compile-time fast path). Spec-only — **not implemented**, no harness cases. Also: `## user defined classes` expanded from the single Money prototype example into the full section (class body, construction, field access, method calls, string conversion, lifetime/ownership, type identity, v1 restrictions, conformance table) — prototype exists, **non-conforming**; see "user defined classes — spec conformance". |
+| `e08005b` | SPEC.md: class example fix — `spend += amount` → `spend -= amount` (the `spend` field is an expense counter); output comments added to the class example. No harness case covered the example, so no test change was needed. |
 | `9cc0a3f` | SPEC.md: `import` + `from` added to reserved words (already reserved in the lexer — `keywordType()` → `TokenType::Import`/`From` — documentation gap closed, no implementation gap); duplicate-declaration examples (`local xbit` redeclared in branch → compile error; `t = 5; local t = 9` → compile error); `$$` row in the operator table + `## operator $$` TODO stub with examples/restrictions. Also: `.gitignore`, vscode tmLanguage, docs cleanup. |
 | `4091c32` | feat(verbose): application-wide verbose level — `QLangContext::setVerboseLevel/verboseLevel/isAt` + `m_verboseLevel` (default 0); `set_verbose(level)` native fn (`QLangContext.cpp`, accepts int/dword/float, returns new level); `QLangVM::trace(minLevel,…)` gated emit helper with tiers 1 (frames/calls) / 2 (VM loop+opcodes+returns) / 3 (full detail) and the fprintf→trace conversion in `QLangVM.cpp`. Expanded `## verbose level` section in SPEC.md (§736) from a one-line placeholder into a full implementation spec (granularity table, QLang + C++ APIs, implementation notes, example session). **Committed here** (was uncommitted in the prior audit). Verified: build clean (`qlang` lib + `spec_check2`); `set_verbose(0/1/2)` emits the correct tiers to stderr with program output on stdout unaffected; C++ `setVerboseLevel(3)` → `verboseLevel()==3`, `isAt(2/3)==true`. |
 | `e955a8d` | feat(step) implementation + fix: `for` endpoint inclusive for all step sizes. `TokenType::Step` + lexer keyword; parser `stepExpr` in both `for` forms; compiler 3-way fork (step==0 → infinite, step & direction agree → guarded, wrong-direction → body runs once); `for x in [..] step n` → type error; constant path `LT`→`LE` and runtime-path `-1` endpoint removed (ranges always inclusive); 19 `step` tests added to `spec_check2`. Verified 2026-10-25: 204/204. |
@@ -35,33 +38,22 @@ SHA256: `9cc5482b5ceb6edc275db26e8242ed1e133df6498f2cf0222d0d60316a1251fc` (1249
 
 Minor edits: removed `slice => build in` from reserved words (already not a keyword); fixed comment typo in math module; added string module stub (`tba`); added user-defined classes TODO section with `Money` prototype; added "don't put build file in the source tree."
 
-## Uncommitted SPEC.md Edits (working tree; not in git)
+## SPEC.md Edits Since Last Audit (all committed)
 
-SPEC.md working-tree hash = `9cc5482b...` (1249 lines, 33724 bytes). Uncommitted edit:
-1. `## operator $$` drafted in full — replaces the TODO stub from `9cc0a3f`. Adds:
-   definition paragraph (indirect access; no operand coercion vs `$`; first-class
-   expression), three new example blocks (function target, local const, global write
-   denial), the restrictions list, the six-stage resolution/check pipeline table,
-   resolution order, declaration-state rules (sequential declarations, no block
-   scope, branch-dependent declarations, forward-reference asymmetry note),
-   const/function binding rules, and compiler/VM implementation notes (frame name
-   map, declaration bit, `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE`, optional
-   compile-time fast path for `$$"literal"`). Spec-only — implementation pending.
-
-The `import`/`from` reserved words + duplicate-declaration examples + `$$` TODO stub
-are now **committed** (`9cc0a3f`). The `step` reserved word + range/loop `step`
-examples are **committed** (`d07eb4f`/`21cc1c5`) and **implemented** (`e955a8d`).
-The `## verbose level` section and its implementation were committed in `4091c32`.
-The prior header "instructions" → "agent instructions" edits and the build-files
-allowlist are committed.
+The working tree is **clean** — the previously uncommitted `## operator $$` draft is
+committed in `c83ebc8`, and the `## user defined classes` expansion plus the class
+example fix landed in `c83ebc8`/`e08005b` (details in the changes table above).
 
 `docs/QLangVM.cpp.orig` and `docs/QLangVM.cpp.rej` are patch artifacts; the `.rej` hunk
 was an extra `[DBG-YIELD-REG]` register-dump loop that was NOT applied. `docs/` also
 holds handoff notes from the `step` implementation sessions (`step_plan.md`,
 `hand_off.md`, `for_next_step_handoff.md`, `handoff_range_nostep_bug.md`,
 `nostep_range_decode.md`, `compare_bytecode_if.md`, `for_loop_bug.md`, `notes.txt`).
-The tally in "Current Status" (291 total) was re-run on 2026-10-25 and now covers the
-`step` material (19 cases in `spec_check2`).
+`docs/EXTERNAL_TYPES.md` (external/C++ type bindings — the design baseline for class
+conformance; §9 object dispatch foundation), `docs/EVENT_HANDLERS.md` and
+`docs/SERIALIZATION.md` are design docs; `HANDOFF.md` is the current handoff note.
+The tally in "Current Status" (291 total) was re-run on 2026-10-26 (HEAD `e08005b`);
+no code changed in `c83ebc8`/`e08005b`, so the suites are unaffected.
 
 ## Legend
 
@@ -139,7 +131,7 @@ The tally in "Current Status" (291 total) was re-run on 2026-10-25 and now cover
 - [x] label/goto: `:label`, `goto label`, `if cond goto label`; same-scope only;
       undefined-label error
 - [x] `assert(bool, str)` — reserved word; builtin call via `parsePrimary()`; throws runtime error on falsy first arg with provided message string
-- [x] **user-defined classes:** `class Name { fields; methods }` — field assignments and arrow-closure methods with `self` param; constructor creates instance table, calls prototype, copies methods, invokes `__init__(self, args...)`; member calls `obj.method(args)` prepend `self` for known class methods
+- [x] **user-defined classes (prototype):** `class Name { fields; methods }` — field assignments and arrow-closure methods with `self` param; constructor creates instance table, calls prototype, copies methods, invokes `__init__(self, args...)`; member calls `obj.method(args)` prepend `self` for known class methods. ★ Prototype only — **non-conforming** to the expanded spec section (`c83ebc8`); see "user defined classes — spec conformance"
 
 ## Missing vs Spec
 
@@ -163,7 +155,7 @@ All items below are implemented and verified. Table retained for traceability.
 
 || Spec | Item | Status | Notes |
 |------|------|--------|-------|
-|| §operator $$ | `$$` indirect access operator | ✗ not implemented | Now **fully specified** (SPEC §operator $$, drafted 2026-10-25, uncommitted): six-stage check pipeline (string → identifier lexeme → reserved word → declared/visible → binding kind → local-only writes) with canonical `indirect variable error:` messages; resolution order (writes: frame locals only; reads: locals + `global`-exposed, global const visible everywhere); no variable creation; functions/lambdas never targetable, const read-only; sequential declaration state (declaration bit set at the unique declaration event; no block scope, so branch-dependent declarations can be `not declared`). Implementation per spec notes: per-frame name map (name → register, binding kind `var`/`const`/`function`/`lambda`, declaration bit), declaration bit as a flag on existing store/init opcodes (no new opcode for declaration state), two new opcodes `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE`, optional compile-time fast path for a future `$$"literal"` form. No harness cases yet. |
+|| §operator $$ | `$$` indirect access operator | ✗ not implemented | Now **fully specified** (SPEC §operator $$, committed `c83ebc8`): six-stage check pipeline (string → identifier lexeme → reserved word → declared/visible → binding kind → local-only writes) with canonical `indirect variable error:` messages; resolution order (writes: frame locals only; reads: locals + `global`-exposed, global const visible everywhere); no variable creation; functions/lambdas never targetable, const read-only; sequential declaration state (declaration bit set at the unique declaration event; no block scope, so branch-dependent declarations can be `not declared`). Implementation per spec notes: per-frame name map (name → register, binding kind `var`/`const`/`function`/`lambda`, declaration bit), declaration bit as a flag on existing store/init opcodes (no new opcode for declaration state), two new opcodes `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE`, optional compile-time fast path for a future `$$"literal"` form. No harness cases yet. |
 || §operator $ | `$` dynamic key resolution | ✗ not implemented | See Open Items. No `Dollar` token, no `OP_EVAL_KEY` opcode. |
 | §reserved words / §range / §loops | `step` (all forms) | ✓ resolved | Implemented in `e955a8d` (19 cases in `spec_check2`); see Open Items. The prior gap rows in this table (no `step` in `keywordType()`, no `stepExpr` in `parseFor()`, array-step behavior) are superseded. |
 
@@ -223,11 +215,11 @@ All items below are implemented and verified. Table retained for traceability.
 | `const` | `Const` | ✓ | Reserved word; blocks identifier use. `const year = 2026;` declares constant; `year = sx` → compile error |
 | `end` | `End` | ✓ | Reserved word; terminates `if/then/end`, `while/end`, `def/end` forms. Not used in brace-form syntax |
 | `cast` | `Cast` | ✓ | Reserved word; blocks identifier use. `cast<int>(1.12)` works as expression via `parsePrimary()` special case |
-| `class` | `Class` | ✓ | **Implemented.** Parser handles `class Name { ... }` with field assignments and method definitions. Methods use arrow closure syntax `(params)[] { ... }` with `self` as first param. Constructor calls `__init__(self, args...)` automatically. Member calls `obj.method(args)` prepend `self`. Prototype function per class creates table and populates methods. |
+| `class` | `Class` | ✓ | **Implemented (prototype only).** Parser handles `class Name { ... }` with field assignments and method definitions. Methods use arrow closure syntax `(params)[] { ... }` with `self` as first param. Constructor calls `__init__(self, args...)` automatically. Member calls `obj.method(args)` prepend `self`. Prototype function per class creates table and populates methods. ★ Spec section expanded in `c83ebc8` — instances are plain tables; closed field set, `const` fields, arity checks, `__str__`, refcount, `__destroy__`, `type(x)` all **missing**. See "user defined classes — spec conformance". |
 | `fetch` | — | — | **Not a keyword.** Not implemented; no `TokenType::Fetch` in lexer/parser. Listed as reserved word in SPEC but the lexer does not recognize it. Gap.
 | `step` | `Step` | ✓ | ★ **Implemented** (`e955a8d`). Reserved word: `local step = 1` → parse error. `for x = a to b step N` and `for i in range(a,b) step N`: direction from start/end; user step in the wrong direction → body runs exactly once; `step 0` → infinite loop, bounded by the VM step-limit guard (satisfies the spec's required "timeout guard that results in a runtime exception" — throws `runtime error: ... infinite loop (step limit)`); `for x in [..] step n` → `type error: step is not supported over array literals in for-in loops`. Constant + variable step; continue/break/next intact. 19 tests in `spec_check2`. |
 | `$` | — | — | ★ **Not implemented.** SPEC §The $ Operator (dynamic key resolution / scalar-to-string evaluator): `$age` → `"33"`, table-literal dynamic keys `{ $property = "male" }`, scalar types only (array/table/class → compile/runtime error), requires a dedicated `OP_EVAL_KEY` opcode with a type-tag check. No `Dollar` token in the lexer, no `OP_EVAL_KEY` in `QLangBytecode.h`. Gap. |
-| `$$` | — | — | ★ **Not implemented** — now **fully specified** (SPEC §operator $$, drafted 2026-10-25, uncommitted): indirect access operator, runtime name resolution from a string. No `DollarDollar` token, no `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE` opcodes. Spec: six-stage check pipeline, local-only writes, reads locals + `global`-exposed (global const visible everywhere), no variable creation, functions/lambdas never targetable, const read-only, sequential declaration state. See Not Yet Implemented + Open Items. |
+| `$$` | — | — | ★ **Not implemented** — now **fully specified** (SPEC §operator $$, committed `c83ebc8`): indirect access operator, runtime name resolution from a string. No `DollarDollar` token, no `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE` opcodes. Spec: six-stage check pipeline, local-only writes, reads locals + `global`-exposed (global const visible everywhere), no variable creation, functions/lambdas never targetable, const read-only, sequential declaration state. See Not Yet Implemented + Open Items. |
 
 ## Value-Type Coverage (SPEC.md §14–28 vs. QLangValue::Type)
 
@@ -321,6 +313,16 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 Core spec fully implemented. **204 passed, 0 failed** (spec_check2) + **33 passed, 0 failed** (spec_check) + **20 passed, 0 failed** (spec_cast_test) + **7 passed, 0 failed** (test_module) + **5 passed, 0 failed** (gen_test) + **22 passed, 0 failed** (range_check) = **291 total**. Since the prior audit: implemented the `step` loop construct (both `for` forms; 19 new cases) and made the `for` endpoint inclusive for all step sizes (`e955a8d`); SPEC.md gained the `step` reserved word/examples (`d07eb4f`/`21cc1c5`); `import`/`from` reserved words, duplicate-declaration examples, and the `$$` operator-table row + TODO stub committed in `9cc0a3f`; **`## operator $$` drafted in full** (uncommitted, replacing the TODO stub): definition, examples, restrictions, six-stage check pipeline, resolution order, sequential declaration-state rules, const/function binding rules, and compiler/VM implementation notes — spec-only, implementation and harness cases pending.
 
+## Round 7 (2026-10-26)
+
+Spec diff audit vs `21b1ce65` (1357 lines; `c83ebc8` + `e08005b` over `9cc0a3f`); harness re-run at HEAD `e08005b`: **204/204** (`spec_check2`), all suites green.
+- `## operator $$` committed in full → tracked as **not implemented** (no `$$` token, no `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE`, no declaration-state tracking, no harness cases).
+- `## user defined classes` expanded → the existing **prototype is non-conforming** (closed field set, `const` fields, unique-name/arity compile checks, `__str__`, reference counting, `__destroy__`, `type(x)` all missing). Conformance baseline: `docs/EXTERNAL_TYPES.md` §9 — the `ObjectOps` dispatch layer must land first (classes are its first consumer).
+- **New gap:** duplicate-declaration compile check is **not implemented** (spec examples committed in `9cc0a3f`; verified 2026-10-26 — duplicates silently compile, initializer becomes a plain assignment).
+- `global c` unknown-binding example: ✓ implemented (compile error; message wording differs).
+- `import`/`from` reserved words: ✓ implemented in the lexer (round 2).
+- Class example `spend` fix (`+=` → `-=`): no harness case covered the example; no test change needed.
+
 ## Class Implementation Details
 
 ### Syntax
@@ -341,17 +343,51 @@ class Name {
 - `local money = Money(125); money.receive(25); println(money.balance());` → outputs `150`
 - Closure in table still works: `local events = { greet = (who)[] { return "hi " + who } }; events.greet("world")` → `"hi world"`
 
+## user defined classes — spec conformance (c83ebc8)
+
+The spec section was expanded from the original Money prototype example into a
+full specification. The current implementation is the **original prototype** and
+does **not** conform to the expanded section. Design baseline for conformance:
+`docs/EXTERNAL_TYPES.md` §9 (object dispatch foundation) — the spec's conformance
+table maps every class concept 1:1 onto external (C++) type bindings
+(`TypeDescriptor`/`FieldBinding`/`MethodBinding`); both object kinds must go
+through the same four dispatch operations (GETFIELD / SETFIELD / CALLMETHOD /
+TOSTRING).
+
+| Spec requirement | Prototype status |
+|---|---|
+| `class Name { ... }` in global scope | ✓ implemented (`parseClass`) |
+| field declarations → instance defaults | ✓ implemented |
+| `__init__(self, ...)` at construction | ✓ implemented (no compile-time arity check) |
+| `self` implicit in method calls | ✓ implemented |
+| **closed field set** — undeclared `obj.f` read/write is a runtime error | ✗ instances are plain tables; any key can be inserted |
+| **`const` fields** — read-only; `x.f = 1` → runtime (Type) error | ✗ no `const` in class bodies |
+| **unique method/dunder names** — compile error | ✗ duplicates silently overwrite (`methodFuncIndices` map) |
+| **fixed arity** — `ClassName(args)` vs `__init__` signature → compile error; class without `__init__` → zero args only | ✗ no arity check at call sites |
+| **`__str__`** — `str(obj)`/f-string whole-object; class default = class name | ✗ not implemented |
+| **reference counting** — share, never copy | ✗ tables are copied |
+| **`__destroy__`** — runs exactly once at final release | ✗ no finalization |
+| **`type(x)`** — returns the class name | ✗ returns `"table"` (`QLangVM.cpp:225`) |
+| instances are not tables — the `$` dynamic-key pipeline does not apply | ✗ instances are tables |
+
+Conformance requires the `ObjectOps` dispatch layer (`docs/EXTERNAL_TYPES.md` §9)
+to land first: classes are the first consumer of the shared object-dispatch
+foundation (build order: dispatch layer → classes, per that document).
+
 ## Open Items
+
+- **Duplicate declaration check (§scope/§variables; examples committed in `9cc0a3f`):** ✗ **NOT implemented.** Spec: the first declaration of a name is either an explicit `local`/`let` or its first plain assignment; a later explicit `local`/`let` for the same name in the same scope is a **compile error** (spec examples: `local xbit` redeclared in a branch; `t = 5; local t = 9`). Verified 2026-10-26: both compile with **no error** — the duplicate declaration is silently ignored and its initializer becomes a plain assignment (no duplicate-declaration check exists anywhere in `QLangCompiler.cpp`).
+- **`global` of an unknown variable (spec example `global c` → "cannot bind unknown global"):** ✓ implemented (compile error at `QLangCompiler.cpp:1309`: `global variable 'c' is not declared` — message wording differs, behavior matches).
 
 |||- **Reserved word `fetch`:** ✗ **NOT implemented.** Lexer/parser have no `TokenType::Fetch`; `fetch` tokenizes as `Ident` and silently works as an identifier rather than raising the reserved-word error the SPEC implies. Gap vs SPEC §reserved words.
 ||||- **`## verbose level` (**Priority one**):** ✓ **Implemented** (committed in `4091c32`; was uncommitted at last audit). Application-wide verbose level on `QLangContext` (`m_verboseLevel`, default 0): `setVerboseLevel(int)`, `verboseLevel()`, `isAt(int)`. QLang `set_verbose(level)` native fn (`QLangContext.cpp`) accepts int/dword/float and returns the new level. `QLangVM` gated emit helper `trace(minLevel, fmt, …)` (`QLangVM.h`); every stderr diagnostic in `QLangVM.cpp` converted from `fprintf` to `trace(T,…)` with tier T∈{1,2,3} (1 = frame/call events, 2 = VM loop+opcodes+returns, 3 = full detail: generators/table ops/bytecode); sites inside `callBuiltin` use `vm->trace(T,…)`; `trace()` short-circuits when `isAt(minLevel)` is false. Gates stderr trace only — program output (print/println/printf) is unaffected. Verified: build clean (`qlang` lib + `spec_check2`); runtime `set_verbose(0/1/2)` emits the correct tiers to stderr with stdout intact; C++ `setVerboseLevel(3)` → `verboseLevel()==3`, `isAt(2)==isAt(3)==true`. Gap vs SPEC resolved. |
 - **Reserved word `step` + range/loop `step` (SPEC §reserved words, §range, §loops):** ✓ **Implemented** (`e955a8d`; committed, was uncommitted at last audit). `TokenType::Step` in `keywordType()` — `local step = 1` now raises the reserved-word error. `for x = a to b step N` and `for i in range(a,b) step N` parse (`stepExpr` in `parseFor()`, both forms) and compile via a 3-way fork: step==0 → infinite loop (guarded by the VM step limit → `runtime error: infinite loop (step limit)`, satisfying the spec's required timeout guard); step and direction agree → normal guarded loop (constant path `LE`-based, endpoint inclusive); user step in the wrong direction → body runs exactly once. `for x in [..] step n` → type error per spec. Variable step, continue/break/next all work. 19 tests in `spec_check2`.
 - **`$` operator (SPEC §The $ Operator):** ✗ **NOT implemented.** No `Dollar` token, no `OP_EVAL_KEY` opcode. `$age` / dynamic table-literal keys unsupported. Gap.
-- **`$$` indirect access operator (SPEC §operator $$):** ✗ **NOT implemented** — spec drafted in full this round (uncommitted, replaces the `9cc0a3f` TODO stub): indirect variable access from a runtime string. Six-stage check pipeline (string → identifier lexeme → reserved word → declared/visible → binding kind → local-only writes) with canonical `indirect variable error:` messages; writes local-only, reads locals + `global`-exposed (global const visible everywhere); no variable creation; functions/lambdas never targetable, const read-only; sequential declaration state (unique declaration event = explicit `local`/`let` or first plain assignment; no block scope, so branch-dependent declarations can be `not declared`; direct-vs-indirect forward-reference asymmetry). Implementation notes in the spec: per-frame name map (name → register, binding kind `var`/`const`/`function`/`lambda`, declaration bit), declaration bit as a flag on existing store/init opcodes, `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE` opcodes, optional compile-time fast path for `$$"literal"`. No harness cases; implementation pending.
+- **`$$` indirect access operator (SPEC §operator $$):** ✗ **NOT implemented** — spec committed in full in `c83ebc8` (replaces the `9cc0a3f` TODO stub): indirect variable access from a runtime string. Six-stage check pipeline (string → identifier lexeme → reserved word → declared/visible → binding kind → local-only writes) with canonical `indirect variable error:` messages; writes local-only, reads locals + `global`-exposed (global const visible everywhere); no variable creation; functions/lambdas never targetable, const read-only; sequential declaration state (unique declaration event = explicit `local`/`let` or first plain assignment; no block scope, so branch-dependent declarations can be `not declared`; direct-vs-indirect forward-reference asymmetry). Implementation notes in the spec: per-frame name map (name → register, binding kind `var`/`const`/`function`/`lambda`, declaration bit), declaration bit as a flag on existing store/init opcodes, `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE` opcodes, optional compile-time fast path for `$$"literal"`. No harness cases; implementation pending.
 |||- **`range` context-dependent encoding (§range):** ✓ **Resolved.** Compiler emits a counter loop for `for i in range(a,b)` (`i=a; while i<=b { …; ++i }`, no array), a bounds check `(l>=a) && (l<=b)` for `l in range(a,b)` in any expression/condition context (including `while i in range` and `let x = b in range(0,10)`), materialization for `arr = range(a,b)`, and a generator for `for i in range { yield i }` (containsYield recurses into ForIn). `continue` in a range loop jumps to the implicit `INC`. Verified by `examples/range_check.cpp` (22 passed, 0 failed).
 ||- **`min`/`max`/`sum` via `import math`:** ✓ implemented. C++-registered module (`src/QLangModules.cpp`). `min`/`max`: return `Int` for values within int32_t range; return `Dword` when result exceeds ±2147483647 (prevents silent truncation). Reject mixed float+int with type error (§767/§770). Accept single array arg (`min([1,5,9])` → `1`). Forbid mixed char+byte. `sum`: flattens all array args (`sum([1,2,3])` and `sum([1,2], [3,4])` both work); returns `Int` for in-range, `Dword` on overflow; returns `Float` when any arg is float (§777); allows float+int mix (sums in double then returns float). |
 - **`next` keyword form:** Resolved. `next` without a variable now works (assumes current loop variable). `next x` with explicit var still works. `next y` where `y != loopVar` is treated as `next` + statement `y` — `y` must be declared separately.
 - **Module system (§604–661):** v1 implemented. `import math` (flat import all) and `import math.min` (single func) both work. Modules are C++-registered via `ctx.registerModule()`, resolved at compile time. No new opcodes. Qualified access (`math.min(...)`) is a future extension.
 - Generators (§608–623): ✓ **Implemented.** `yield` is a reserved word (`TokenType::Yield`). Generator values are stored as `Type::Generator` using `std::function<std::optional<QLangValue>()>` — `std::nullopt` signals exhaustion (EOF). `yield expr` compiles to `YIELD` opcode with the expression result register. `yield` (empty) compiles to `YIELD` with a `CONST nil` temp. The VM handler calls the closure; `nullopt` returns `nil` as the EOF sentinel. `next(gen())` calls the generator. Verified: `def gen_range(mi,mx) { for i = mi to mx { yield i } }` then iterating with `while v != nil { v = gen() }` yields 1,2,3 then nil. Test cases in `gen_test.cpp` (5): basic yield, second yield, exhaustion/EOF, loop accumulate, empty yield, outer variable capture, type check. **Fix:** generator `RETURN` now keeps the saved frame marked `exhausted`; the generator loop early-returns nil for an already-exhausted frame; post-loop cleanup no longer erases the exhausted frame — so a consumed generator keeps returning nil instead of restarting the body from scratch.
-- User-defined classes (§811–818): ✓ **Implemented.** `class Name { fields; methods }` syntax. Methods compiled as arrow closures with `self` as first param. Constructor: creates instance table, calls prototype function, copies methods, calls `__init__(self, args...)`. Member calls `obj.method(args)` prepend `self` for known class methods; plain closures in tables called without self. Supports `__init__`, `__destroy__`, `__str__` methods per spec prototype.
+- User-defined classes: ✓ **Prototype implemented** / ✗ **non-conforming to the expanded spec section** (`c83ebc8`/`e08005b`). `class Name { fields; methods }` syntax. Methods compiled as arrow closures with `self` as first param. Constructor: creates instance table, calls prototype function, copies methods, calls `__init__(self, args...)`. Member calls `obj.method(args)` prepend `self` for known class methods; plain closures in tables called without self. Instances are **plain tables** — closed field set, `const` fields, compile-time arity checks, `__str__`, reference counting, `__destroy__` finalization, and `type(x)` = class name (currently `"table"`) are all **missing**. Conformance requires the `ObjectOps` dispatch layer first (`docs/EXTERNAL_TYPES.md` §9). See "user defined classes — spec conformance".
 - `ctx.loadBuiltinModules()`: ✓ implemented. C++ API added after `ctx.clear()` to reload default modules.

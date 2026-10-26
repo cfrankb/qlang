@@ -22,6 +22,7 @@ const char *QLangValue::typeName() const {
   case Type::Table: return "table";
   case Type::Function: return "function";
   case Type::Generator: return "generator";
+  case Type::Object: return "object";
   case Type::Eof: return "eof";
   }
   return "?";
@@ -139,6 +140,20 @@ GeneratorValue &QLangValue::asGenerator() {
     throw QLangError(QLangErrorKind::Type, 0, 0,
                      std::string("expected Generator but value is ") + typeName());
   return *std::get<GeneratorValuePtr>(m_storage);
+}
+
+const ObjectValue &QLangValue::asObject() const {
+  if (m_type != Type::Object)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected Object but value is ") + typeName());
+  return std::get<ObjectValue>(m_storage);
+}
+
+ObjectValue &QLangValue::asObject() {
+  if (m_type != Type::Object)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected Object but value is ") + typeName());
+  return std::get<ObjectValue>(m_storage);
 }
 
 int64_t toInt64(const QLangValue &v) {

@@ -229,4 +229,20 @@ namespace {
     return vm.callFunction(funcIndex, args);
   }
 
+  QLangValue QLangContext::callClosure(const QLangValue &closure, const std::vector<QLangValue> &args)
+  {
+    // Ensure we have a compiled program.
+    if (!m_pimpl->compiled.has_value())
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "no program compiled; call run() first");
+
+    // Verify the closure is a Function type.
+    if (closure.type() != QLangValue::Type::Function)
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "expected closure value");
+
+    QLangVM vm(m_pimpl->compiled.value(), *this);
+    return vm.callClosure(closure, args);
+  }
+
 } // namespace qlang

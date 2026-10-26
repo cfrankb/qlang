@@ -37,6 +37,7 @@ public:
     Table,    // keyed string -> value map
     Function, // user-defined function (arrow closure)
     Generator, // lazy generator (yield-based function)
+    Object,   // class instance (uses ObjectOps dispatch)
     Eof         // end-of-file sentinel value
   };
 
@@ -125,6 +126,11 @@ public:
     q.m_storage = std::move(v);
     return q;
   }
+  static QLangValue Object(ObjectValue v) {
+    QLangValue q(Type::Object);
+    q.m_storage = std::move(v);
+    return q;
+  }
 
   Type type() const { return m_type; }
   bool isNil() const { return m_type == Type::Nil; }
@@ -161,6 +167,8 @@ public:
   Closure &asFunction();
   const GeneratorValue &asGenerator() const;
   GeneratorValue &asGenerator();
+  const ObjectValue &asObject() const;
+  ObjectValue &asObject();
 
 private:
   Type m_type;

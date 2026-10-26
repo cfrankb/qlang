@@ -13,6 +13,7 @@
 
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
+#include "qlang/QLangObjects.h"
 
 namespace qlang {
 
@@ -58,6 +59,7 @@ std::string valueToString(const QLangValue &v) {
   case QLangValue::Type::Function: return "<function>";
   case QLangValue::Type::Generator: return "<generator>";
   case QLangValue::Type::Eof: return "<eof>";
+  case QLangValue::Type::Object: return "<object>";
   }
   return "?";
 }
@@ -1004,16 +1006,16 @@ void QLangVM::run() {
       break;
     case Opcode::TABGET: {
       QLangValue &base = frame.regs[i.b];
-      if (base.type() != QLangValue::Type::Table)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
-                         "cannot access member of non-table value");
       const std::string &key = valueToString(frame.regs[i.c]);
-      const auto &kv = *base.asTable();
-      auto it = kv.find(key);
-      if (it == kv.end())
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                         "table has no member '" + key + "'");
-      frame.regs[i.a] = it->second;
+      // Use ObjectOps dispatch for member access (Phase 0.4)
+      const ObjectOps* ops = getObjectOps(base);
+      if (ops) {
+        frame.regs[i.a] = ops->getField(base, key, m_scope);
+      } else {
+        // Fallback for types without ObjectOps (should not happen for tables/objects)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot access member of non-object value");
+      }
       break;
     }
     case Opcode::TABCREATE: {
@@ -1023,24 +1025,16 @@ void QLangVM::run() {
     }
     case Opcode::TABPUT: {
       QLangValue &base = frame.regs[i.a];
-      trace(TRACE_FULL, "[VM-TABPUT ENTER] a=%d type=%d regs.size=%zu\n", i.a, (int)base.type(), frame.regs.size());
-      if (base.type() != QLangValue::Type::Table) {
-        trace(TRACE_FULL, "[VM-TABPUT] NOT A TABLE! type=%d\n", (int)base.type());
-        throw QLangError(QLangErrorKind::Type, 0, 0,
-                         "cannot assign member of non-table value");
-      }
-      auto tv = base.asTable();
-      if (!tv) {
-        trace(TRACE_FULL, "[VM-TABPUT] NULL shared_ptr!\n");
-        tv = std::make_shared<std::map<std::string, QLangValue>>();
-        base = QLangValue::Table(tv);
-      }
       const std::string &key = valueToString(frame.regs[i.b]);
-      trace(TRACE_FULL, "[VM-TABPUT] base.use_count=%ld key=%s\n",
-              tv.use_count(), key.c_str());
-      tv->operator[](key) = frame.regs[i.c];
-      trace(TRACE_FULL, "[VM-TABPUT] after put, size=%zu\n",
-              tv->size());
+      // Use ObjectOps dispatch for member assignment (Phase 0.4)
+      const ObjectOps* ops = getObjectOps(base);
+      if (ops) {
+        ops->setField(base, key, frame.regs[i.c], m_scope);
+      } else {
+        // Fallback for types without ObjectOps (should not happen for tables/objects)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot assign member of non-object value");
+      }
       break;
     }
     case Opcode::CALL: {
@@ -1339,16 +1333,16 @@ void QLangVM::runFrames(int startFrame)
       break;
     case Opcode::TABGET: {
       QLangValue &base = frame.regs[i.b];
-      if (base.type() != QLangValue::Type::Table)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
-                         "cannot access member of non-table value");
       const std::string &key = valueToString(frame.regs[i.c]);
-      const auto &kv = *base.asTable();
-      auto it = kv.find(key);
-      if (it == kv.end())
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                         "table has no member '" + key + "'");
-      frame.regs[i.a] = it->second;
+      // Use ObjectOps dispatch for member access (Phase 0.4)
+      const ObjectOps* ops = getObjectOps(base);
+      if (ops) {
+        frame.regs[i.a] = ops->getField(base, key, m_scope);
+      } else {
+        // Fallback for types without ObjectOps (should not happen for tables/objects)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot access member of non-object value");
+      }
       break;
     }
     case Opcode::TABCREATE: {
@@ -1358,24 +1352,16 @@ void QLangVM::runFrames(int startFrame)
     }
     case Opcode::TABPUT: {
       QLangValue &base = frame.regs[i.a];
-      trace(TRACE_FULL, "[VM-TABPUT ENTER] a=%d type=%d regs.size=%zu\n", i.a, (int)base.type(), frame.regs.size());
-      if (base.type() != QLangValue::Type::Table) {
-        trace(TRACE_FULL, "[VM-TABPUT] NOT A TABLE! type=%d\n", (int)base.type());
-        throw QLangError(QLangErrorKind::Type, 0, 0,
-                         "cannot assign member of non-table value");
-      }
-      auto tv = base.asTable();
-      if (!tv) {
-        trace(TRACE_FULL, "[VM-TABPUT] NULL shared_ptr!\n");
-        tv = std::make_shared<std::map<std::string, QLangValue>>();
-        base = QLangValue::Table(tv);
-      }
       const std::string &key = valueToString(frame.regs[i.b]);
-      trace(TRACE_FULL, "[VM-TABPUT] base.use_count=%ld key=%s\n",
-              tv.use_count(), key.c_str());
-      tv->operator[](key) = frame.regs[i.c];
-      trace(TRACE_FULL, "[VM-TABPUT] after put, size=%zu\n",
-              tv->size());
+      // Use ObjectOps dispatch for member assignment (Phase 0.4)
+      const ObjectOps* ops = getObjectOps(base);
+      if (ops) {
+        ops->setField(base, key, frame.regs[i.c], m_scope);
+      } else {
+        // Fallback for types without ObjectOps (should not happen for tables/objects)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot assign member of non-object value");
+      }
       break;
     }
     case Opcode::CALL: {
@@ -1719,16 +1705,16 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         break;
       case Opcode::TABGET: {
         QLangValue &base = frame.regs[i.b];
-        if (base.type() != QLangValue::Type::Table)
-          throw QLangError(QLangErrorKind::Type, 0, 0,
-                           "cannot access member of non-table value");
         const std::string &key = valueToString(frame.regs[i.c]);
-        const auto &kv = *base.asTable();
-        auto it = kv.find(key);
-        if (it == kv.end())
-          throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                           "table has no member '" + key + "'");
-        frame.regs[i.a] = it->second;
+        // Use ObjectOps dispatch for member access (Phase 0.4)
+        const ObjectOps* ops = getObjectOps(base);
+        if (ops) {
+          frame.regs[i.a] = ops->getField(base, key, m_scope);
+        } else {
+          // Fallback for types without ObjectOps (should not happen for tables/objects)
+          throw QLangError(QLangErrorKind::Type, 0, 0,
+                           "cannot access member of non-object value");
+        }
         break;
       }
       case Opcode::TABCREATE:
@@ -1736,16 +1722,16 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         break;
       case Opcode::TABPUT: {
         QLangValue &base = frame.regs[i.a];
-        if (base.type() != QLangValue::Type::Table)
-          throw QLangError(QLangErrorKind::Type, 0, 0,
-                           "cannot assign member of non-table value");
-        auto tv = base.asTable();
-        if (!tv) {
-          tv = std::make_shared<std::map<std::string, QLangValue>>();
-          base = QLangValue::Table(tv);
-        }
         const std::string &key = valueToString(frame.regs[i.b]);
-        tv->operator[](key) = frame.regs[i.c];
+        // Use ObjectOps dispatch for member assignment (Phase 0.4)
+        const ObjectOps* ops = getObjectOps(base);
+        if (ops) {
+          ops->setField(base, key, frame.regs[i.c], m_scope);
+        } else {
+          // Fallback for types without ObjectOps (should not happen for tables/objects)
+          throw QLangError(QLangErrorKind::Type, 0, 0,
+                           "cannot assign member of non-object value");
+        }
         break;
       }
       case Opcode::CALL: {
@@ -2057,16 +2043,16 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       break;
     case Opcode::TABGET: {
       QLangValue &base = frame.regs[i.b];
-      if (base.type() != QLangValue::Type::Table)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
-                         "cannot access member of non-table value");
       const std::string &key = valueToString(frame.regs[i.c]);
-      const auto &kv = *base.asTable();
-      auto it = kv.find(key);
-      if (it == kv.end())
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                         "table has no member '" + key + "'");
-      frame.regs[i.a] = it->second;
+      // Use ObjectOps dispatch for member access (Phase 0.4)
+      const ObjectOps* ops = getObjectOps(base);
+      if (ops) {
+        frame.regs[i.a] = ops->getField(base, key, m_scope);
+      } else {
+        // Fallback for types without ObjectOps (should not happen for tables/objects)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot access member of non-object value");
+      }
       break;
     }
     case Opcode::TABCREATE: {
@@ -2075,17 +2061,16 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     }
     case Opcode::TABPUT: {
       QLangValue &base = frame.regs[i.a];
-      if (base.type() != QLangValue::Type::Table) {
-        throw QLangError(QLangErrorKind::Type, 0, 0,
-                         "cannot assign member of non-table value");
-      }
-      auto tv = base.asTable();
-      if (!tv) {
-        tv = std::make_shared<std::map<std::string, QLangValue>>();
-        base = QLangValue::Table(tv);
-      }
       const std::string &key = valueToString(frame.regs[i.b]);
-      tv->operator[](key) = frame.regs[i.c];
+      // Use ObjectOps dispatch for member assignment (Phase 0.4)
+      const ObjectOps* ops = getObjectOps(base);
+      if (ops) {
+        ops->setField(base, key, frame.regs[i.c], m_scope);
+      } else {
+        // Fallback for types without ObjectOps (should not happen for tables/objects)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "cannot assign member of non-object value");
+      }
       break;
     }
     case Opcode::CALL: {

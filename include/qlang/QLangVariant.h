@@ -44,12 +44,28 @@ using GeneratorValuePtr = std::shared_ptr<GeneratorValue>;
 // Shared across copies so mutations in callees are visible to callers (self semantics).
 using TableValue = std::shared_ptr<std::map<std::string, QLangValue>>;
 
+// Forward declaration for ObjectOps (defined in QLangObjects.h).
+struct ObjectOps;
+
+// Forward declaration for class instances (Object type).
+// The descriptor holds ObjectOps and field/method bindings.
+struct ObjectDescriptor;
+using ObjectValue = std::shared_ptr<ObjectDescriptor>;
+
+// ObjectDescriptor: the runtime representation of a class instance.
+// Holds the ObjectOps dispatch table and instance field storage.
+// Instances are reference-counted via shared_ptr.
+struct ObjectDescriptor {
+  const struct ObjectOps* ops = nullptr;  // dispatch table (null for raw instances)
+  std::map<std::string, QLangValue> fields;  // instance field storage
+};
+
 // The storage variant for every script variable value. Mirrors the spec's
 // variable types: string, blob, byte, word, short, int, unsigned, array,
 // float, table, function (closure), generator. Index 0 is monostate (nil).
 using QLangVariant = std::variant<std::monostate, uint8_t, uint16_t, int16_t,
                                   int32_t, uint32_t, uint64_t, double,
                                   std::string, std::vector<uint8_t>, ArrayValue,
-                                  TableValue, ClosurePtr, GeneratorValuePtr>;
+                                  TableValue, ClosurePtr, GeneratorValuePtr, ObjectValue>;
 
 } // namespace qlang
