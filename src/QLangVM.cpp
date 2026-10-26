@@ -1003,6 +1003,7 @@ void QLangVM::run() {
     case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::EVALKEY: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::CONV:
       frame.regs[i.a] = convert(frame.regs[i.b],
                                 static_cast<QLangValue::Type>(i.c));
@@ -1334,6 +1335,7 @@ void QLangVM::runFrames(int startFrame)
     case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::EVALKEY: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::CONV:
       frame.regs[i.a] = convert(frame.regs[i.b],
                                 static_cast<QLangValue::Type>(i.c));
@@ -1710,6 +1712,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
       case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
       case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::EVALKEY: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
       case Opcode::CONV:
         frame.regs[i.a] = convert(frame.regs[i.b],
                                   static_cast<QLangValue::Type>(i.c));
@@ -2051,6 +2054,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::EVALKEY: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
     case Opcode::CONV:
       frame.regs[i.a] = convert(frame.regs[i.b],
                                 static_cast<QLangValue::Type>(i.c));

@@ -1,171 +1,63 @@
-# Session Handoff — QLang Serialization & External Types Design
+# Handoff — QLang: Phase 7 finalizer fix (COMPLETE)
 
-Date: 2026-10-25
-Stage: **POC** (user-stated). Design docs are the deliverable of this session;
-implementation is explicitly deferred.
+Date: 2026-10-26. Supersedes the 2026-10-25 design handoff (that session's
+docs remain valid: `docs/SERIALIZATION.md`, `docs/EXTERNAL_TYPES.md`,
+`docs/EVENT_HANDLERS.md`, `SPEC.md`).
 
 ## Project
+- `/home/cfrankb/toolkit/gcc/qlang-sandbox` — QLang → register-VM bytecode, C++17.
+- Build: `for f in src/*.cpp; do g++ -std=c++17 -O1 -Iinclude "$f" -c -o "build/$(basename ${f%.cpp}).o"; done && ar rcs build/libqlang.a build/*.o`
+- Test: `g++ -std=c++17 -O1 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && stdbuf -oL -eL /tmp/sc 2>/dev/null`
+  (stderr = debug logging; stdout block-buffered).
 
-- Location: `/home/cfrankb/toolkit/gcc/qlang-sandbox`
-- Build/test harness: see `AGENTS.md` (g++ C++17, `libqlang.a`,
-  `stdbuf -oL -eL` when running — stderr is debug logging, stdout is
-  block-buffered).
-- Public API: `include/qlang/` — QLangValue, QLangContext, QLangCompiler
-  (CompiledProgram), QLangVM, QLangErrors.
+## This session: finalizer bug fixed, verified
+**Bug**: `__destroy__` fired at frame end, not at last user-reference release.
+**Root cause**: statement codegen compiles RHS into temp `t`, then
+`MOV r, t`; `tmpRegister()` never reuses registers, so `t` held the
+instance until frame end → `use_count` never hit 0.
 
-## What exists now (this session's work)
+**Changes (all in place, all verified)**:
+1. `src/QLangCompiler.cpp` — after `MOV r, t` in the `local` declaration
+   (~L460), `Const` (~L490), and `Assignment "="` (~L545) cases, emit
+   `CONST t, nil`. Compound assignments untouched.
+2. `src/QLangVM.cpp` — `attachFinalizer` (~L58) wraps the table deleter:
+   wrapped deleter keeps the original `shared_ptr` alive, calls
+   `scope.runFinalizer(map, closure, progId)`, then `orig.reset()` frees
+   the map. `TABFINALIZE` opcode case calls it.
+3. `src/QLangContext.cpp` — `runFinalizer` re-owns the map with a no-op
+   deleter (refcount > 0 during the call → no recursive re-entry), runs
+   `__destroy__` with the table as `self`, swallows exceptions (deleter
+   may run during unwinding).
+4. Debug instrumentation removed (`g_instanceMap`, `dbgVars()`, per-instr
+   trace, all raw `fprintf(stderr)` lines). No raw stderr prints in src/.
 
-### 1. `qlang_run` app — POC bytecode output (`examples/qlang_run.cpp`)
+**Verification**: 240/240 spec_check2 pass, incl. 4 finalizer tests
+(runs once, not before final ref, absent-finalizer no-crash, writes self
+field). Scenario: `a = D(log); b = a; a = nil; b = nil; n = log.n` →
+finalizer fires at `b = nil`, `n = 1`.
 
-- `--profile` — tracks bytecode compilation time and execution time
-  separately, displayed in ms.
-- `--output <file.qlc>` — writes the compiled program to a `.qlc` file via a
-  `QlcWriter` class in the app. **This writer is a POC prototype** of the
-  library codec; it will be deleted when the library codec lands.
-- Known gap: the writer emits the v1 layout **minus the native name table**
-  (SERIALIZATION.md §4.2). Without it the file is not loadable. POC stage —
-  fix when the library writer is built, not before.
-- A sample `test.qlc` (~8 KB) sits in the project root.
+## Known limits (accepted)
+- Immediacy only for statement-level `local x = D(...)` / `x = D(...)`.
+  Constructor results in deeper expression temps finalize at frame end.
+  Correctness (runs exactly once, sees final state) holds everywhere.
 
-### 2. `docs/SERIALIZATION.md` — .qlc/.qls format spec (draft)
+## Next steps (carried over, in dependency order)
+1. **Serialization library codec** per `docs/SERIALIZATION.md` —
+   `QLangErrorKind::Io`, `QLangBytecodeIO.h`, reader with §5 validation,
+   `QLangContext::loadProgram/execute`. Then delete the app's `QlcWriter`
+   (POC in `examples/qlang_run.cpp`, emits v1 minus native name table).
+2. **External types API** per `docs/EXTERNAL_TYPES.md` — `registerType<T>`,
+   External tag 17, `ObjectOps` kind registration, engine→script callbacks
+   (script holds engine objects via `weak_ptr`, script-constructed via
+   `shared_ptr`).
+3. **Snapshot `QLS1` v2** — only after the program-image loader works
+   end-to-end.
 
-- **§3** value encoding: fixed tag table = `QLangValue::Type` enum order;
-  tag 15 (Generator) never emitted — non-durable values round-trip as Nil.
-- **§4** program image `QLC1` v1: header, functions, **native name table**
-  (slot + name — the fix the POC writer lacks), vars/constVars (order
-  *unspecified* — `unordered_map`/`unordered_set` backing), registerCount.
-- **§5** load contract: bounds-checked reads, structural invariants
-  (`functions[0] == "main"`, `op < kOpcodeCount`, closure index range,
-  unique native slots), native binding = file read + context bind in two
-  steps, all missing natives reported in one error.
-- New API proposed: `QLangErrorKind::Io`, `QLangBytecodeIO.h`
-  (serializeValue/deserializeValue/writeQlc/readQlc),
-  `QLangContext::loadProgram(CompiledProgram&&)` + `execute()`.
-- **§7** snapshot `QLS1` (v2, future): program + SHA-256 hash + steps/
-  deleted/frames/generators/context-var values; frame-slot indirection for
-  capture pointers; codec lives in `QLangVM` (`Frame` is private there).
-- **§8–9** untrusted-input limits (depth 64, 64 Mi values/instructions) and
-  the test matrix (round-trip, malformed suite, native mismatch, resume).
+## Open (need user decision)
+- Inheritance: deferred to v2; `base()` hook reserved in the v1 struct.
 
-### 3. `docs/EXTERNAL_TYPES.md` — C++ structure import design (draft)
-
-- **Core finding**: C++ RTTI cannot reflect member layout. Design = explicit
-  registration tables (`TypeDescriptor`/`FieldBinding`/`MethodBinding`) with
-  RTTI as identity/safety layer only (`type_index` registry key,
-  `dynamic_cast` validation, `type_info::name` for `type()`).
-- `QLangValue::Type::External` = **tag 17**: `{TypeDescriptor*,
-  shared_ptr<void>}`, shared ownership, **not durable** in .qlc (emits Nil).
-- Dunders: `__str__` (optional; absent → Type error on string conversion),
-  `__destroy__` (cleanup hook on final release — resources, not memory).
-- Boundary conversion table (C++ scalar ↔ QLangValue) in §7; C++ exceptions
-  MUST be caught at the binding boundary → `QLangError` (§8).
-- **§9 Object dispatch foundation** — the key architectural decision (below).
-
-### 4. `SPEC.md` — "user defined classes" section completed
-
-Was: one example, no semantics. Now specifies: class body rules (global
-scope, field defaults, **`const` fields** for read-only conformance, unique
-method names, dunders), construction (fixed arity, zero-args without
-`__init__`), **closed field set** (no open key insertion, `$` pipeline N/A),
-method calls (`self` implicit), string conversion (`__str__`; class default
-= class name — documented asymmetry vs. external types), **reference
-counting** with `__destroy__` on final release (the `shared_ptr` analog),
-`type(x)`, v1 restrictions (no inheritance/overloading/statics), and the
-full conformance mapping table to external-type bindings.
-
-Fixed latent bug in the spec example: `spend` did `+= amount`, now `-=`.
-
-### 5. `docs/EVENT_HANDLERS.md` — event handler contract (draft)
-
-**Engine-specifics doc** — how the engine drives QLang as event handlers,
-built *on* the QLang C++ API (not part of it). Key findings: **multi-level**
-dispatch (type-based by type tag, map-based lifecycle, game-level events —
-extensible), not a single flat object; no handler at global scope (handlers
-are enclosed members of level objects the engine holds); all levels dispatch
-through `ObjectOps.callMethod` (hasMethod-guarded, no-op on miss); type level
-keyed by the external-type identity; table-vs-class (class primary);
-ownership/retention (retain listeners, never cache payloads, per-binding
-transfer policy); and execution safety — **step budget** (infinite-loop
-containment), no re-entrancy, no suspension across events, structured handler
-errors. **§0 boundary table** splits the QLang API (dispatch, step counter,
-ownership model, error boundary — all in EXTERNAL_TYPES/SERIALIZATION/SPEC)
-from engine specifics (the handler architecture + its policies); adding a
-level needs no QLang change.
-
-## Key decisions on record
-
-1. **Dispatch-first build order** (EXTERNAL_TYPES §9): land the neutral
-   `ObjectOps` layer (GETFIELD/SETFIELD/CALLMETHOD/TOSTRING + kind registry,
-   table kind as first consumer) *before* both External types and QLang
-   classes. Rationale: prevents the dispatch from being shaped against
-   `TypeDescriptor` and reworked when class semantics land; keeps the two
-   features independently shippable. `base()` hook reserved in the v1 struct
-   for inheritance.
-2. **Dot syntax is settled** — SPEC.md already specifies it (class section +
-   f-strings); there is no syntax fork. External types join the existing
-   object dispatch; scripts cannot distinguish object kinds.
-3. **Native name table is mandatory** in the .qlc format — bytecode
-   references natives by slot index; pointers can't be stored; names are
-   what make the image loadable.
-4. **Engine is the authoritative owner** — C++ owns external objects; the
-   script holds a `weak_ptr` to engine-handoff objects (access after
-   destruction → clean `object destroyed: <type>` error) and a `shared_ptr`
-   only to script-constructed ones. Class instances remain script-owned /
-   reference-counted. `__destroy__` = final-release hook in both models.
-5. **No copy API** — view-only. `to_table`/`from_table` rejected: engine
-   objects are long-lived; a qlang deep copy is a short-lived snapshot that
-   is stale by the next event.
-6. **Codec treats input as untrusted** — bounds checks, depth/count limits,
-   one structured `QLangError(Io)` per failure, no partial out-params.
-7. **Multi-level handler architecture** — handlers are organized by dispatch
-   level (type / map / game, extensible), each level its own container object
-   at global scope with its own selection mechanism; no handler is a global
-   symbol; the engine holds the level objects and dispatches through
-   `ObjectOps`. See `docs/EVENT_HANDLERS.md`.
-8. **Step budget is mandatory** — a looping handler hangs the engine thread;
-   every handler dispatch is wrapped in a VM step budget (reuses the snapshot
-   step counter) so runaway loops are killed, not hung. Bounds instructions,
-   not wall time.
-9. **QLang API vs. engine specifics** — the C++ API (object dispatch, step
-   counter, ownership model, error boundary) is part of **QLang**; the
-   handler architecture and its budget/retention/re-entrancy *policies* are
-   **engine-specifics** built on that API (`docs/EVENT_HANDLERS.md` §0).
-   Adding a handler level needs no QLang change — only engine wiring.
-
-## Next steps (in dependency order)
-
-1. **Dot-access audit** (EXTERNAL_TYPES §9, step 1) — determine what the
-   parser/lexer/VM already implement for `x.name` / `x.name = v` /
-   `x.name(args)` on tables. This sizes the dispatch landing. Nothing in the
-   VM implements classes today; table dot sugar status is the open unknown.
-2. **Object dispatch layer** (`qlang/QLangObjects.{h,cpp}`) per EXTERNAL
-   TYPES §9 build order — table kind port, VM indirection, compiler opcode
-   emission, f-string `toStr` branch. Existing table test corpus must pass
-   unmodified.
-3. **Serialization library codec** per SERIALIZATION.md — `QLangErrorKind::Io`,
-   `QLangBytecodeIO.h`, reader with §5 validation, `QLangContext::
-   loadProgram/execute`. Then delete the app's `QlcWriter`.
-4. **External types API** — `registerType<T>` on `QLangContext`, External
-   value tag 17, `ObjectOps` registration delegating to `TypeDescriptor`,
-   engine→script callback support (event handlers pass live objects as
-   arguments; script holds them weakly).
-
-## Open questions (need user decisions)
-
-1. **Copy vs. view** — resolved: **view only** (see decision 5 above).
-2. **Inheritance** — deferred to v2 (both class and external side); `base`
-   hook reserved.
-3. **Snapshot (v2 / `QLS1`)** — timing: only after the program-image loader
-   works end-to-end.
-
-## File map
-
-| File | Role |
-|---|---|
-| `SPEC.md` | language spec; class section now complete |
-| `docs/SERIALIZATION.md` | .qlc/.qls format spec (draft) |
-| `docs/EXTERNAL_TYPES.md` | C++ import design + dispatch foundation (draft) |
-| `docs/EVENT_HANDLERS.md` | event handler contract: multi-level dispatch, C++ surface, safety (draft) |
-| `AGENTS.md` | build/test harness for agents |
-| `examples/qlang_run.cpp` | app with `--profile`, `--output`, POC `QlcWriter` |
-| `test.qlc` | sample POC bytecode output |
+## Stale
+- The 2026-10-25 handoff's "dot-access audit" and "object dispatch layer"
+  steps are done — class dispatch and `__destroy__` are implemented.
+- The `qlang-sandbox` skill is stale — reload with skill_view and update
+  before relying on it.

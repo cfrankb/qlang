@@ -1,8 +1,13 @@
 # Class Implementation Action Plan
 
-Based on the conformance table, here's the implementation plan. The baseline is `docs/EXTERNAL_TYPES.md` §9 (`ObjectOps` dispatch layer) — classes are its first consumer.
+**Status: COMPLETE (246/246 spec_check2 tests passing).** All 9 phases implemented; every phase has tests in `examples/spec_check2.cpp` (class tests at L450–L626).
 
-## Phase 0: ObjectOps Dispatch Layer (Prerequisite)
+Deviations from this plan as implemented:
+- **Phase 9.2**: `$` on an instance is a **runtime** type error, not a compile error — instances are typed `Table` at compile time (closed field set enforced via `__fields__`/`__const_fields__` descriptors in `QLangObjects.cpp`, not a separate `Object` value type), so the compiler cannot distinguish them. `doUnary(EVALKEY)` rejects Table/Object/Array/Function/Generator.
+- **Phase 9.3**: `obj.$"x"` is not a grammar construct (`$` is a unary prefix operator, not a postfix accessor) — it's a parse error, which is the desired behavior.
+- Phase 0.2: no separate `Object` value type was added; instances are tables carrying an object-ops descriptor.
+
+## Phase 0: ObjectOps Dispatch Layer (Prerequisite) — DONE (VM member access dispatches via `getObjectOps`, e.g. TABPUT in QLangVM.cpp)
 **Goal:** Implement the shared object-dispatch foundation that both `Object` and `Class` types will use.
 
 | Task | Description |
@@ -13,7 +18,7 @@ Based on the conformance table, here's the implementation plan. The baseline is 
 | 0.4 | Update `QLangVM.cpp` to use `ObjectOps` for member access (dispatch via `obj->ops->getfield(...)`) |
 | 0.5 | Add `type(x)` native function returning `obj->typeDescriptor->name` |
 
-## Phase 1: Closed Field Set Enforcement
+## Phase 1: Closed Field Set Enforcement — DONE (tests L454–456)
 **Goal:** Instances reject undeclared field access.
 
 | Task | Description |
@@ -23,7 +28,7 @@ Based on the conformance table, here's the implementation plan. The baseline is 
 | 1.3 | In `GETFIELD`/`SETFIELD`, check if field exists; if not, emit runtime error `field 'x' not found on type 'T'` |
 | 1.4 | Add test: `obj.f` on undeclared field → runtime error |
 
-## Phase 2: `const` Fields
+## Phase 2: `const` Fields — DONE (tests L463–470)
 **Goal:** Read-only fields enforced at runtime.
 
 | Task | Description |
@@ -33,7 +38,7 @@ Based on the conformance table, here's the implementation plan. The baseline is 
 | 2.3 | Parser: recognize `const` keyword in class body |
 | 2.4 | Add test: `obj.c = 1` on const field → runtime error |
 
-## Phase 3: Unique Method/Dunder Names
+## Phase 3: Unique Method/Dunder Names — DONE (tests L475–477)
 **Goal:** Compile-time check for duplicate method definitions.
 
 | Task | Description |
@@ -42,7 +47,7 @@ Based on the conformance table, here's the implementation plan. The baseline is 
 | 3.2 | On duplicate, emit compile error `duplicate method 'm' defined at line X and line Y` |
 | 3.3 | Add test: `class C { m()[] {} m()[] {} }` → compile error |
 
-## Phase 4: Fixed Arity Checking
+## Phase 4: Fixed Arity Checking — DONE (tests L495–497)
 **Goal:** Constructor and method calls must match declared arity.
 
 | Task | Description |
@@ -53,7 +58,7 @@ Based on the conformance table, here's the implementation plan. The baseline is 
 | 4.4 | Class without `__init__`: enforce zero-arg constructor |
 | 4.5 | Add tests: wrong arg count → runtime error |
 
-## Phase 5: `__str__` Implementation
+## Phase 5: `__str__` Implementation — DONE (tests L577–583)
 **Goal:** `str(obj)` returns class name or custom string representation.
 
 | Task | Description |
@@ -64,7 +69,7 @@ Based on the conformance table, here's the implementation plan. The baseline is 
 | 5.4 | In `TOSTRING`, call user-defined `__str__` if present |
 | 5.5 | Add test: `str(obj)` → class name or custom string |
 
-## Phase 6: Reference Counting
+## Phase 6: Reference Counting — DONE (tests L589–592)
 **Goal:** Instances are shared, never copied.
 
 | Task | Description |
@@ -73,7 +78,7 @@ Based on the conformance table, here's the implementation plan. The baseline is 
 | 6.2 | Assignment copies the shared_ptr (reference, not data) |
 | 6.3 | Add test: `local a = obj; local b = a; b = nil; a` → still valid |
 
-## Phase 7: `__destroy__` Finalization
+## Phase 7: `__destroy__` Finalization — DONE (tests L597–613)
 **Goal:** `__destroy__` runs exactly once at final release.
 
 | Task | Description |
@@ -83,7 +88,7 @@ Based on the conformance table, here's the implementation plan. The baseline is 
 | 7.3 | When `shared_ptr` ref-count hits zero, call `__destroy__` if defined |
 | 7.4 | Add test: `__destroy__` called exactly once on final release |
 
-## Phase 8: `type(x)` for Instances
+## Phase 8: `type(x)` for Instances — DONE (tests L539, L585)
 **Goal:** `type(x)` returns the class name for instances.
 
 | Task | Description |
@@ -91,7 +96,7 @@ Based on the conformance table, here's the implementation plan. The baseline is 
 | 8.1 | `type(x)` on `Object` type → return `obj->typeDescriptor->name` |
 | 8.2 | Add test: `type(instance)` → class name string |
 
-## Phase 9: Instances Are NOT Tables
+## Phase 9: Instances Are NOT Tables — DONE (tests L620–625; see deviations above)
 **Goal:** The `$` dynamic-key pipeline does not apply to instances.
 
 | Task | Description |
@@ -102,7 +107,7 @@ Based on the conformance table, here's the implementation plan. The baseline is 
 
 ## Verification & Testing
 After each phase, run:
-- `spec_check2` (204 cases)
+- `spec_check2` (246 cases)
 - Add new test cases for each feature
 - Verify no regressions in existing tests
 

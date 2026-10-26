@@ -1383,9 +1383,14 @@ ExprPtr QLangParser::parseTableLiteral() {
     do {
       // Parse key: either an identifier or a $ expression for dynamic keys
       ExprPtr keyExpr;
-      if (match(TokenType::Dollar)) {
+      if (check(TokenType::Dollar)) {
         // Dynamic key: $expr (evaluate expr at runtime and stringify as key)
-        keyExpr = parseUnary();
+        Token dollar = current();
+        m_pos++;
+        keyExpr = std::make_shared<Expr>();
+        keyExpr->kind = ExprKind::Unary;
+        keyExpr->uop = dollar;
+        keyExpr->operand = parseUnary();
       } else {
         // Static key: identifier
         keyExpr = std::make_shared<Expr>();

@@ -614,6 +614,17 @@ int main() {
             "class F {\n  flag = 0\n  __destroy__ (self) [ ] { self.flag = 1 }\n}\n"
             "local f = F()\nf = nil");
 
+  // -- $ dynamic key / scalar-to-string (Phase 9) --
+  expectStr("$: scalar int", "local x = 42\nlocal s = $x;", "s", "42");
+  expectStr("$: scalar string", "local x = \"abc\"\nlocal s = $x;", "s", "abc");
+  expectRun("$: dynamic table key",
+            "local k = \"a\"\nlocal t = {$k = 1}\nlocal r = t.a;");
+  expectVal("$: dynamic table key val",
+            "local k = \"a\"\nlocal t = {$k = 7}\nlocal r = t.a;", "r", 7);
+  expectThrow("$: rejects table", "local t = {a = 1}\nlocal s = $t;");
+  expectThrow("$: rejects instance",
+              "class C { v = 1 }\nlocal c = C()\nlocal s = $c;");
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }
