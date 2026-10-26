@@ -471,6 +471,12 @@ int main() {
     "class Money {\nconst total = 0\nother = 5\n}\nlocal m = Money()\nlocal r = m.__const_fields__.total;",
     "r", 1);
 
+  // -- Phase 3.3: unique method names (duplicate -> compile error) --
+  expectThrow("class duplicate method",
+    "class C {\nm()[] {}\nm()[] {}\n}");
+  expectRun("class distinct methods ok",
+    "class C {\na()[] {}\nb()[] {}\n}\nlocal c = C();");
+
   // -- Phase 0.5: type() on Object instances --
   {
     // Create an ObjectDescriptor with a custom ObjectOps (kindName = "Person").

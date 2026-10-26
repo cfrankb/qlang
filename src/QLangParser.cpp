@@ -3,6 +3,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <unordered_map>
 
 #include "qlang/QLangErrors.h"
 
@@ -748,8 +749,23 @@ StmtPtr QLangParser::parseClass() {
   stmt->kind = StmtKind::Class;
   stmt->className = consume(TokenType::Ident, "class name").value;
   consume(TokenType::LBrace, "'{' to open class body");
+  // Phase 3: method names must be unique within a class body.
+  // Maps method name -> line of its first definition.
+  std::unordered_map<std::string, int> methodLines;
   while (!check(TokenType::RBrace) && !atEnd()) {
+    int stmtLine = current().line;
+    int stmtCol = current().col;
     auto bodyStmt = parseStatement();
+    if (bodyStmt->kind == StmtKind::Arrow) {
+      auto it = methodLines.find(bodyStmt->name);
+      if (it != methodLines.end()) {
+        throw QLangError(QLangErrorKind::Parse, stmtLine, stmtCol,
+                         "duplicate method '" + bodyStmt->name +
+                         "' defined at line " + std::to_string(it->second) +
+                         " and line " + std::to_string(stmtLine));
+      }
+      methodLines[bodyStmt->name] = stmtLine;
+    }
     // Closed field set (Phase 1): a field declaration is a simple
     // `name = value` assignment (no index/member target) or a
     // `const name = value` declaration. Methods are Arrow statements and are
