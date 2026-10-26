@@ -625,6 +625,20 @@ int main() {
   expectThrow("$: rejects instance",
               "class C { v = 1 }\nlocal c = C()\nlocal s = $c;");
 
+  // --- SPEC # block scope ---
+  expectStr("block scope shadow",
+            "local i = 1\nif true {\nlocal i = 3\n}\nlocal s = $i;", "s", "1");
+  expectStr("block scope crossing i",
+            "local i = 1\nif true {\na = 2\ni = 3\n}\nlocal s = $i;", "s", "3");
+  expectStr("block scope crossing a",
+            "local i = 1\nif true {\na = 2\ni = 3\n}\nlocal s = $a;", "s", "2");
+  expectStr("block scope let",
+            "local j = 5\nwhile (false) {\nlet j = 9\n}\nlocal s = $j;", "s", "5");
+  expectStr("block scope nested shadow",
+            "local k = 1\nif true {\nlocal k = 2\nif true {\nlocal k = 4\n}\n}\nlocal s = $k;", "s", "1");
+  expectStr("block scope for-in shadow",
+            "local m = 0\nfor q in [1,2,3]\nlocal m = 9\nnext q\nlocal s = $m;", "s", "0");
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

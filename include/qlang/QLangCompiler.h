@@ -79,7 +79,7 @@ private:
 
  int newRegister();
   int tmpRegister();
-  int declareVar(const std::string &name);
+  int declareVar(const std::string &name, bool blockScoped = false);
   int regOf(const std::string &name) const;
   int emitConst(const QLangValue &value);
 
@@ -123,6 +123,10 @@ private:
   Bytecode m_code;
   std::vector<StmtPtr> m_program;
   std::unordered_map<std::string, int> m_regs;
+  // Block-scope name maps, innermost last. Only explicit `local`/`let`/`const`
+  // land here (SPEC # block scope); bare assignments and loop vars stay in
+  // m_regs so they cross block boundaries.
+  std::vector<std::unordered_map<std::string, int>> m_blockScopes;
   std::unordered_set<std::string> m_constVars; // names declared with `const`
   // External C++ native functions: name -> negative opcode index.
   // Negative indices (-1, -2, ...) signal the VM to dispatch via the

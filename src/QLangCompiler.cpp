@@ -114,7 +114,16 @@ void QLangCompiler::addModules(const std::vector<QLangContext::Module> &modules)
 int QLangCompiler::newRegister() { return m_nextReg++; }
 int QLangCompiler::tmpRegister() { return newRegister(); }
 
-int QLangCompiler::declareVar(const std::string &name) {
+int QLangCompiler::declareVar(const std::string &name, bool blockScoped) {
+  if (blockScoped && !m_blockScopes.empty()) {
+    auto &top = m_blockScopes.back();
+    auto it = top.find(name);
+    if (it != top.end())
+      return it->second;
+    int r = newRegister();
+    top[name] = r;
+    return r;
+  }
   auto it = m_regs.find(name);
   if (it != m_regs.end())
     return it->second;
@@ -124,6 +133,11 @@ int QLangCompiler::declareVar(const std::string &name) {
 }
 
 int QLangCompiler::regOf(const std::string &name) const {
+  for (auto it = m_blockScopes.rbegin(); it != m_blockScopes.rend(); ++it) {
+    auto f = it->find(name);
+    if (f != it->end())
+      return f->second;
+  }
   auto it = m_regs.find(name);
   return it == m_regs.end() ? -1 : it->second;
 }
@@ -446,7 +460,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     return;
   switch (s->kind) {
   case StmtKind::Declaration: {
-    int r = declareVar(s->name);
+    int r = declareVar(s->name, true);
     int t = tmpRegister();
     if (s->value)
       compileExpr(s->value, t);
@@ -479,7 +493,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     break;
   }
   case StmtKind::Const: {
-    int r = declareVar(s->name);
+    int r = declareVar(s->name, true);
     m_constVars.insert(s->name);
     int t = tmpRegister();
     if (s->value)
@@ -572,6 +586,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
   }
   case StmtKind::For: {
     int x = declareVar(s->loopVar);
+    m_blockScopes.emplace_back(); // body is a block scope (SPEC # block scope)
     int startReg = tmpRegister();
     compileExpr(s->forStart, startReg);
     emit(Opcode::MOV, x, startReg);
@@ -770,11 +785,13 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       m_code.instructions()[guardLabel].b = guardLoopStart;  // sameSign -> guard loop
       m_loops.pop_back();
     }
+    m_blockScopes.pop_back();
     break;
   }
   case StmtKind::ForIn: {
     // for i in range(a, b) -> counter loop: i = a; while (i <= b) { ...; ++i }
     // No array is materialized (spec §range).
+    m_blockScopes.emplace_back(); // body is a block scope (SPEC # block scope)
     ExprPtr ra, rb;
     if (isRangeCall(s->forEnd, ra, rb)) {
       int x = declareVar(s->loopVar);
@@ -953,6 +970,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         }
         m_loops.pop_back();
       }
+      m_blockScopes.pop_back();
       break;
     }
     // `step` is only meaningful for numeric ranges, not array/table
@@ -996,6 +1014,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
     }
     m_loops.pop_back();
+    m_blockScopes.pop_back();
     break;
   }
   case StmtKind::While: {
@@ -1009,8 +1028,10 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     // break -> exit (post-body), so patch BREAK instructions after the body.
     m_loops.push_back({testLabel, 0});
     int bodyStart = static_cast<int>(m_code.instructions().size());
+    m_blockScopes.emplace_back(); // body is a block scope (SPEC # block scope)
     for (auto &body : s->whileBody)
       compileStmt(body);
+    m_blockScopes.pop_back();
     int bodyEnd = static_cast<int>(m_code.instructions().size());
 
     emit(Opcode::JMP, testLabel);
@@ -1028,16 +1049,20 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     emit(Opcode::JMPIFFALSE, condReg, 0);
     int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
 
+    m_blockScopes.emplace_back(); // if body is a block scope (SPEC # block scope)
     for (auto &body : s->ifBody)
       compileStmt(body);
+    m_blockScopes.pop_back();
 
     if (!s->elseBody.empty()) {
       // Emit JMP after if body to skip else body; patch target after else body compiles.
       emit(Opcode::JMP, 0);
       int jumpPastIdx = static_cast<int>(m_code.size()) - 1;
       int elseBodyStart = static_cast<int>(m_code.size());
+      m_blockScopes.emplace_back(); // else body is a separate block scope
       for (auto &body : s->elseBody)
         compileStmt(body);
+      m_blockScopes.pop_back();
       m_code.instructions()[jumpPastIdx].a = static_cast<int>(m_code.size());
       m_code.instructions()[jumpFalseIdx].b = elseBodyStart;
     } else {
@@ -1512,6 +1537,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       caseSkipJmpIdx.push_back(skipJmpIdx);
       // Compile the case body, then emit an implicit JMP to skip remaining cases.
       caseBodyStarts.push_back(static_cast<int>(m_code.size()));
+      m_blockScopes.emplace_back(); // each case body is a block scope
       for (auto &body : sc.body) {
         trace(TRACE_FULL, "[DBG-CASE] Case %zu body stmt kind=%d\n", i, (int)body->kind);
         if (body->kind == StmtKind::Assignment) {
@@ -1523,14 +1549,17 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         }
         compileStmt(body);
       }
+      m_blockScopes.pop_back();
       emit(Opcode::JMP, 0); // implicit exit: patched after default compiles
       caseExitJmpIdx.push_back(static_cast<int>(m_code.size()) - 1);
     }
 
     // Compile the default body (if any).
     int defaultBodyStart = static_cast<int>(m_code.size());
+    m_blockScopes.emplace_back(); // default body is a block scope
     for (auto &db : s->defaultBody)
       compileStmt(db);
+    m_blockScopes.pop_back();
     int defaultBodyEnd = static_cast<int>(m_code.size());
 
     // Now we know where switchEnd is (after all cases and default).
