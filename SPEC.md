@@ -11,6 +11,8 @@ default variable scope is local
 
 everything is case sensitive.
 
+SPEC.md is a living document.
+
 ## variable types
 ```
 string/str (zero terminated)
@@ -169,11 +171,11 @@ year = sx # error; constants cannot be assigned to
 
 local xbit = 1
 if true {
-    local xbit = 2   # error: duplicate declaration
+    local xbit = 2   
 }
 
 t = 5
-local t = 9   # duplicate declaration → compile error
+local t = 9   # warning: duplicate declaration → compile warning
 
 
 # anonymous functions inside a table
@@ -638,8 +640,7 @@ unresolved name.
 
 A name is targetable only after its **declaration event** has executed. The first
 declaration of a name is either an explicit `local`/`let` or its first plain
-assignment; a later explicit `local`/`let` for the same name is a compile error
-(duplicate declaration). There is no block scope: a `local` inside a branch
+assignment; a later explicit `local`/`let` for the same name is a compile warning
 declares into the enclosing function frame, so a `$$` targeting a name declared
 in a branch that has not run is a `not declared` error:
 
@@ -1069,6 +1070,52 @@ printf("[global] len: %d\n", len(a))
 ```
 
 
+# block scope
+
+variable explicitely defined via `local` or `let` keyword while inside a block scope belong to that scope.
+
+```
+local i = 1
+if true {
+   local i = 3  # local declared inside block scope
+}
+println($i) # expected: "1"
+```
+
+example - crossing the block scope
+
+```
+local i = 1
+if true {
+   a = 2
+   i = 3  # assign to variable outside block scope
+}
+println($i) # expected: "3"
+println($a) # expected: "2"
+```
+
+block scope extends to if (conditions), loops (for, while, etc) and switch body.
+
+```
+local j = 0
+for i in range(0, 10) {
+   local j = i
+}
+
+println($j) # expected "0"
+
+local i = 0
+while (i < 10) {
+   ++i;
+   local j = i;
+}
+
+println($j) # expected "0"
+
+```
+
+
+
 # strings
 
 `QLang` to implement `Python f-strings` style
@@ -1170,10 +1217,10 @@ ctx.registerModule("math", {
 
 |functions|-|-|
 |--------|-|-|
-|min(number...|array)| returns the smallest value in a group number (int, float, byte etc). |
-|max(number...|array)| returns the largest value in the group of numbers (int, float, byte etc). |
-|sum(number...|array)| returns a sum of the group of numbers (int, float, byte etc). |
-
+|min(number...\|array)| returns the smallest value in a group number (int, float, byte etc). |
+|max(number...\|array)| returns the largest value in the group of numbers (int, float, byte etc). |
+|sum(number...\|array)| returns a sum of the group of numbers (int, float, byte etc). |
+|rand()|return a random int value|
 
 ```
 import math
