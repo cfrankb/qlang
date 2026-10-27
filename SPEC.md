@@ -79,6 +79,7 @@ if
 next
 import
 from
+static
 ```
 
 ## constants
@@ -448,6 +449,7 @@ if they cross a boundary, trigger an error.
 |cast|change datatype at runtime
 |$| dynamic key resolution operator
 |$$| indirect access operator
+|::| scope resolution operator
 
 ## operator +=
 
@@ -1256,6 +1258,7 @@ apart syntactically. (Dispatch design: `docs/EXTERNAL_TYPES.md` §9.)
 
 ```python
 class Money {
+   static banner = "GreatAccount";
    total = 0
 
    # constructor
@@ -1269,7 +1272,7 @@ class Money {
 
    # string representation
    __str__(self)[] {
-      return f"balance: {self.total}"
+      return f"balance: {self.total} at {banner}"
    }
 
    receive(self, amount)[] {
@@ -1283,6 +1286,13 @@ class Money {
    balance(self)[] {
       return self.total
    }
+
+   static getBanner()[] {
+      return banner;
+   }
+   static setBanner(newBanner)[] {
+      banner = newBanner;
+   }
 }
 
 let money = Money(125)
@@ -1290,7 +1300,36 @@ money.receive(25)
 println(f"balance: {money.balance()}")   # balance: 150
 money.spend(15)
 println(f"balance: {money.balance()}")   # balance: 135
+
+println(money) # expected: output from _str__()
+println(f"{money}") # expected: output from _str__()
+
+Money::setBanner("OrangePumpkin")
+println(Money::getBanner()) # expected: "OrangePumpkin"
+println(f"{Money::banner}") # expected: "OrangePumpkin"
+
+printf(f"banner: {money.banner}") #expected: "OrangePumpkin"
+money.banner = "Turtle"
+printf(f"banner: {money.banner}") #expected: "Turtle"
+printf(f"banner: {Money::banner}") #expected: "Turtle"
+
+
 ```
+
+## static
+
+can only exists inside a class.
+
+`static variables` are bound to the entire class 
+they can be read and modified by functions in the class.
+
+`static functions` can be addressed via the class name.
+
+static can combined with const.
+static cannot be combined with local or let.
+
+`static` (and the `::` scope resolution operator) is a **new extension** beyond v1 —
+v1 classes have no static members (see `## v1 restrictions`).
 
 ## class body
 
