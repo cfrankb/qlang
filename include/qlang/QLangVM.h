@@ -67,6 +67,10 @@ public:
   // `__str__` render as their class name; everything else uses the generic
   // text form.
   std::string displayString(const QLangValue &v);
+  // Implicit __str__ rendering of a value inside a collection (SPEC
+  // `# implicit __str__ rules`): strings double-quoted, nested collections
+  // recursive, scalars in plain display form.
+  std::string renderElement(const QLangValue &v);
 
   // EQ/NE with object dispatch (spec §operator == and !=): a string compared
   // with an object (a table carrying `__str__` or the `__class__` meta key)

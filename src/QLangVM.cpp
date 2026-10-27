@@ -681,8 +681,34 @@ std::string QLangVM::displayString(const QLangValue &v) {
     auto kit = t.find("__class__");
     if (kit != t.end() && kit->second.type() == QLangValue::Type::String)
       return kit->second.asString();
+    // Plain table: implicit __str__ renders the entries (SPEC `# implicit
+    // __str__ rules`): {key=value, key=value}
+    std::string out = "{";
+    bool first = true;
+    for (const auto &kv : t) {
+      if (!first) out += ", ";
+      first = false;
+      out += kv.first + "=" + renderElement(kv.second);
+    }
+    return out + "}";
+  }
+  if (v.type() == QLangValue::Type::Array) {
+    // Implicit __str__ renders the elements: [e1, e2, ...]
+    const auto &a = v.asArray();
+    std::string out = "[";
+    for (size_t i = 0; i < a.size(); i++) {
+      if (i) out += ", ";
+      out += renderElement(a[i]);
+    }
+    return out + "]";
   }
   return valueToString(v);
+}
+
+std::string QLangVM::renderElement(const QLangValue &v) {
+  if (v.type() == QLangValue::Type::String)
+    return "\"" + v.asString() + "\"";
+  return displayString(v);
 }
 
 // True when a table value is an object: a class instance (carries the

@@ -588,8 +588,18 @@ int main() {
             "class Q { name = \"q\" \n__str__ (self) [ ] { return self.name }\n}\n"
             "local q = Q()\nlocal s = str(q);",
             "s", "q");
-  expectStr("str: plain table fallback",
-            "local t = {a=1}\nlocal s = str(t);", "s", "<table>");
+  expectStr("str: plain table renders entries (implicit __str__)",
+            "local t = {a=1}\nlocal s = str(t);", "s", "{a=1}");
+  expectStr("str: array renders elements (implicit __str__)",
+            "local a = [0,1,2,3,4]\nlocal s = str(a);", "s", "[0, 1, 2, 3, 4]");
+  expectStr("str: table strings quoted (implicit __str__)",
+            "local t = {name=\"Bob\", age=9}\nlocal s = str(t);", "s",
+            "{age=9, name=\"Bob\"}");
+  expectStr("str: nested collections (implicit __str__)",
+            "local n = {x=[1,\"two\"], y={z=true, w=nil}}\nlocal s = str(n);",
+            "s", "{x=[1, \"two\"], y={w=nil, z=true}}");
+  expectStr("f-string: array interpolation (implicit __str__)",
+            "local a = [1,2,3]\nlocal s = f\"a={a}\";", "s", "a=[1, 2, 3]");
   expectStr("type: table class name",
             "class T2 { x = 1 }\nlocal t = T2()\nlocal s = type(t);", "s", "T2");
 

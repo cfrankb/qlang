@@ -87,9 +87,9 @@ int main() {
   expectStr("f-string: no __str__ -> class name",
             "class Plain { x = 1 }\nlocal p = Plain()\nlocal s = f\"t={p}\";", "s", "t=Plain");
 
-  // 8. Plain tables unchanged.
-  expectStr("str: plain table", "local t = {a=1}\nlocal s = str(t);", "s", "<table>");
-  expectStr("sprintf %s: plain table", "local t = {a=1}\nlocal s = sprintf(\"%s\", t);", "s", "<table>");
+  // 8. Plain tables render their entries (SPEC # implicit __str__ rules).
+  expectStr("str: plain table", "local t = {a=1}\nlocal s = str(t);", "s", "{a=1}");
+  expectStr("sprintf %s: plain table", "local t = {a=1}\nlocal s = sprintf(\"%s\", t);", "s", "{a=1}");
 
   // 9. __str__ returning a non-string renders via the generic form.
   expectStr("str: __str__ returns number",

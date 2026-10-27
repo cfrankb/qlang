@@ -452,6 +452,23 @@ if they cross a boundary, trigger an error.
 |$$| indirect access operator
 |::| scope resolution operator
 
+## operators < and >
+
+|left hand|right hand|analysis
+|-|-|-|
+|number|number|numeric comparison
+|number|float|coerce and numeric comparison|
+|number|string|invalid comparison
+|number|object|invalid comparison
+|string|string|binary comparison
+|string|object|binary comparison with __str__() for table, class and array
+|nil|any|invalid value for comparison
+|table|table|comparison of each value at the respective indexes
+|table|class|invalid comparison
+|table|class|invalid comparison
+|class|class|bytecode cannot be compared
+
+
 ## operator +=
 
 |left-hand|operator|right-hand|result
