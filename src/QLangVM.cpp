@@ -678,6 +678,41 @@ std::string QLangVM::displayString(const QLangValue &v) {
   return valueToString(v);
 }
 
+// True when a table value is an object: a class instance (carries the
+// __class__ meta key) or a table exposing a __str__ method.
+static bool isObjectValue(const QLangValue &t) {
+  const auto &m = *t.asTable();
+  auto c = m.find("__class__");
+  if (c != m.end() && c->second.type() == QLangValue::Type::String) return true;
+  auto s = m.find("__str__");
+  return s != m.end() && s->second.type() == QLangValue::Type::Function;
+}
+
+// Equality per spec §operator == and != with object dispatch: a string
+// compared with an object is equal only when the object's __str__ value
+// matches the string. displayString provides the __str__ call plus the
+// class-name fallback, with the re-entrancy guard. Every other combination
+// is the free isEqual (nil rules, numeric value equality, same-type values).
+bool QLangVM::valueEqual(const QLangValue &a, const QLangValue &b) {
+  if (a.type() == QLangValue::Type::String && b.type() == QLangValue::Type::Table &&
+      isObjectValue(b))
+    return a.asString() == displayString(b);
+  if (b.type() == QLangValue::Type::String && a.type() == QLangValue::Type::Table &&
+      isObjectValue(a))
+    return b.asString() == displayString(a);
+  return isEqual(a, b);
+}
+
+// VM dispatch for binary opcodes: routes EQ/NE through valueEqual (object
+// __str__ dispatch) and everything else to the static doBinary.
+QLangValue QLangVM::doBinaryVm(Opcode op, const QLangValue &a, const QLangValue &b) {
+  if (op == Opcode::EQ || op == Opcode::NE) {
+    bool eq = valueEqual(a, b);
+    return QLangValue::Int((op == Opcode::EQ) == eq ? 1 : 0);
+  }
+  return doBinary(op, a, b);
+}
+
 // Convert a value to the target declared type. Numeric types truncate/wrap
 // (C-style cast semantics); other types pass through unchanged.
 // For typed declarations — lenient: pass through non-numeric mismatches.
@@ -1289,7 +1324,7 @@ void QLangVM::run() {
     case Opcode::MOD:
     case Opcode::POW:
     case Opcode::IN: {
-      QLangValue result = doBinary(op, frame.regs[i.b], frame.regs[i.c]);
+      QLangValue result = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       frame.regs[i.a] = result;
       trace(TRACE_VM_LOOP, "[DBG-RES] op=%d a=%d b=%d c=%d -> regs[%d]=%lld (b=%lld, c=%lld)\n", (int)op, i.a, i.b, i.c, i.a, (long long)(long long)toInt64(result), (long long)(long long)toInt64(frame.regs[i.b]), (long long)(long long)toInt64(frame.regs[i.c]));
       break;
@@ -1594,7 +1629,7 @@ void QLangVM::runFrames(int startFrame)
     case Opcode::MOD:
     case Opcode::POW:
     case Opcode::IN:
-      frame.regs[i.a] = doBinary(op, frame.regs[i.b], frame.regs[i.c]);
+      frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       break;
     case Opcode::JMP:
       frame.pc = static_cast<size_t>(i.a);
@@ -1983,7 +2018,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       case Opcode::MOD:
       case Opcode::POW:
       case Opcode::IN:
-        frame.regs[i.a] = doBinary(op, frame.regs[i.b], frame.regs[i.c]);
+        frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
         break;
       case Opcode::JMP:
         frame.pc = static_cast<size_t>(i.a);
@@ -2296,7 +2331,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     case Opcode::MOD:
     case Opcode::POW:
     case Opcode::IN:
-      frame.regs[i.a] = doBinary(op, frame.regs[i.b], frame.regs[i.c]);
+      frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       break;
     case Opcode::JMP:
       frame.pc = static_cast<size_t>(i.a);

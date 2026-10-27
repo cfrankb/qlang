@@ -50,9 +50,10 @@ Money::setBanner("OrangePumpkin")
 println(Money::getBanner()) # expected: "OrangePumpkin"
 println(f"{Money::banner}") # expected: "OrangePumpkin"
 
-printf(f"banner: {money.banner}") #expected: "OrangePumpkin"
+println(f"banner: {money.banner}") #expected: "OrangePumpkin"
 money.banner = "Turtle"
-printf(f"banner: {money.banner}") #expected: "Turtle"
-printf(f"banner: {Money::banner}") #expected: "Turtle"
+println(f"banner: {money.banner}") #expected: "Turtle"
+println(f"banner: {Money::banner}") #expected: "Turtle"
 
-money.prefix = "toto"
+# expected to fail
+#money.prefix = "toto"

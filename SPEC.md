@@ -502,6 +502,20 @@ if they cross a boundary, trigger an error.
 
 *important*: nil is ONLY equal to iself
 
+|expr|operator|expr|result|notes
+|-|-|-|-|-|
+|1|==|1|true||
+|1|==|1.0|see notes|only if type coergion is possible and resuls in equivalency|
+|3.0|==|3.0|true||
+|"3"|==|3|false|strings are not numbers. there is no coersion|
+|' '|==|32|true|byte ' ' is 32
+|-1|==|(byte)0xFF|false|comparison between signed and unsigned must match intended value 
+|1|==|(unsigned)1|true|signed and unsigned int are equal when sign bit is not set
+|1|==|object|false|objects are not primitives
+|string|==|object|see notes|true only if the __str__ value of the object matches the string
+|"toto"|==|"toto"|true|string is equal to itself
+
+equivalency worths both ways. `operator !=` is the `boolean` invertion of `operator ==`.
 
 ## The \$ Operator (Evaluation / Dynamic Key Resolution)
 

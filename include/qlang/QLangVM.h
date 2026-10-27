@@ -68,6 +68,13 @@ public:
   // text form.
   std::string displayString(const QLangValue &v);
 
+  // EQ/NE with object dispatch (spec §operator == and !=): a string compared
+  // with an object (a table carrying `__str__` or the `__class__` meta key)
+  // is equal only when the object's `__str__` value matches the string; all
+  // other opcode/operand combinations delegate to the static doBinary.
+  QLangValue doBinaryVm(Opcode op, const QLangValue &a, const QLangValue &b);
+  bool valueEqual(const QLangValue &a, const QLangValue &b);
+
   // Push a callee frame, copying args into its parameter registers, and advance
   // the frame pointer onto it. `dest` is the caller register holding the
   // closure (for CALLCLOS) / the call destination (for CALLFN).

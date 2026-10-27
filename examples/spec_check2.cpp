@@ -366,6 +366,14 @@ int main() {
   expectVal("eq table same", "local t1 = {a=1,b=2}\nlocal t2 = {a=1,b=2}\nlocal r = (t1 == t2);", "r", 1);
   expectVal("eq table diff", "local t1 = {a=1,b=2}\nlocal t2 = {a=1,b=3}\nlocal r = (t1 == t2);", "r", 0);
 
+  // -- string == object via __str__ (spec §operator == and !=) --
+  expectVal("eq str object __str__ match", "class C { __str__(self)[] { return \"toto\" } }\nlocal r = (\"toto\" == C());", "r", 1);
+  expectVal("ne str object __str__ mismatch", "class C { __str__(self)[] { return \"nope\" } }\nlocal r = (\"toto\" == C());", "r", 0);
+  expectVal("eq object str reversed", "class C { __str__(self)[] { return \"toto\" } }\nlocal r = (C() == \"toto\");", "r", 1);
+  expectVal("ne str object negation", "class C { __str__(self)[] { return \"toto\" } }\nlocal r = (\"toto\" != C());", "r", 0);
+  expectVal("eq num object false", "class C { __str__(self)[] { return \"1\" } }\nlocal r = (1 == C());", "r", 0);
+  expectVal("eq str plain table false", "local t = {a=1}\nlocal r = (\"x\" == t);", "r", 0);
+
   // -- function return values (spec §13) --
   expectVal("fn returns last expr", "def f() { return 42 }\nlocal r = f();", "r", 42);
   expectVal("fn returns nil no expr", "def g() { x = 5 }\nlocal r = g();\nlocal n = (r == nil);", "n", 1);

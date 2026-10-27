@@ -55,3 +55,14 @@ target_link_libraries(test_gen_simple PRIVATE qlang)
 add_executable(range_check examples/range_check.cpp)
 target_link_libraries(range_check PRIVATE qlang)
 add_test(NAME range COMMAND range_check)
+
+# __str__ dispatch in all display paths (str/sprintf/printf/f-string/join/print/println).
+add_executable(class_str_test examples/class_str_test.cpp)
+target_link_libraries(class_str_test PRIVATE qlang)
+add_test(NAME class_str COMMAND class_str_test)
+
+# Class `static` members: shared __statics__ table, :: scope resolution,
+# instance-level static access, static const.
+add_executable(class_static_test examples/class_static_test.cpp)
+target_link_libraries(class_static_test PRIVATE qlang)
+add_test(NAME class_static COMMAND class_static_test)
