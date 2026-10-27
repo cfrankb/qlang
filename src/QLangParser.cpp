@@ -1039,14 +1039,14 @@ ExprPtr QLangParser::parsePrimary() {
     m_pos++;
     auto node = std::make_shared<Expr>();
     node->kind = ExprKind::Literal;
-    node->literal = QLangValue::Int(1); // bool true -> 1 (spec: 1/0 stored as Int)
+    node->literal = QLangValue::Bool(1); // bool: type tag Bool, stored as 1/0
     return node;
   }
   case TokenType::False: {
     m_pos++;
     auto node = std::make_shared<Expr>();
     node->kind = ExprKind::Literal;
-    node->literal = QLangValue::Int(0);
+    node->literal = QLangValue::Bool(0);
     return node;
   }
   case TokenType::Nil: {
@@ -1329,6 +1329,36 @@ return node;
     }
     throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
                      std::string("expected '(' after 'assert'"));
+  }
+  case TokenType::Isset: {
+    // isset(name) builtin call. A bare identifier argument is compiled as its
+    // name string so undeclared variables can be probed (isset(xx) -> false
+    // instead of a compile error).
+    m_pos++;
+    if (check(TokenType::LParen)) {
+      m_pos++;
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Call;
+      node->callee = "isset";
+      node->callLine = tok.line;
+      node->callCol = tok.col;
+      if (!check(TokenType::RParen)) {
+        do {
+          auto arg = parseExpression();
+          if (arg->kind == ExprKind::Variable) {
+            auto name = std::make_shared<Expr>();
+            name->kind = ExprKind::Literal;
+            name->literal = QLangValue::String(arg->name);
+            arg = name;
+          }
+          node->args.push_back(arg);
+        } while (match(TokenType::Comma));
+      }
+      consume(TokenType::RParen, "')'");
+      return node;
+    }
+    throw QLangError(QLangErrorKind::Parse, tok.line, tok.col,
+                     std::string("expected '(' after 'isset'"));
   }
   case TokenType::LBracket:
     return parseArrayLiteral();

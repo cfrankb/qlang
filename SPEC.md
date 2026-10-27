@@ -80,6 +80,7 @@ next
 import
 from
 static
+isset
 ```
 
 ## constants
@@ -1455,3 +1456,31 @@ in popular IDE such as
 - vscode
 - geany
 - ...
+
+
+# implicit \_\_str\_\_ rules
+
+|type|example|behavior|
+|--|--|--|
+|numbers|| convert to string
+|strings|| remain unchanged
+|boolean| |"true" or "false"
+|nil|| "nil"
+|array|[0,1,2,3,4]| "[0, 1, 2, 3, 4]"
+|table|{name="Bob", age=9}| "{name="Bob", age=9}"
+|class||use provided \_\_str\_\_() method
+
+# error reporting
+
+Clear and concise error reporting is important to track down bugs.
+
+## requirements
+
+- must report line and column where the error occured (when available)
+- must report the module
+- must report the class/function/table if applicable
+
+## execution trace
+
+provide the stack frame and execution chain when available.
+each node to provide line number, module/class/function/table if applicable.

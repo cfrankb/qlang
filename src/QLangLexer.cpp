@@ -50,6 +50,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "type") return TokenType::Type;
   if (text == "global") return TokenType::Global;
   if (text == "assert") return TokenType::Assert;
+  if (text == "isset") return TokenType::Isset;
   if (text == "import") return TokenType::Import;
   if (text == "from") return TokenType::From;
   if (text == "as") return TokenType::As;
@@ -140,7 +141,11 @@ Token QLangLexer::number() {
 
 Token QLangLexer::stringLiteral(bool triple, char delim, bool singleQuote) {
   int line = m_line, col = m_col;
-  advance(); // opening delimiter
+  if (triple) {
+    advance(); advance(); advance(); // opening delimiters (three quote chars)
+  } else {
+    advance(); // opening delimiter
+  }
   std::string text;
 
   if (triple) {
@@ -206,7 +211,11 @@ Token QLangLexer::stringLiteral(bool triple, char delim, bool singleQuote) {
 // Escapes are processed; ${...} sections are left as-is for the parser.
 Token QLangLexer::fstringLiteral(bool triple, char delim, bool singleQuote) {
   int line = m_line, col = m_col;
-  advance(); // opening delimiter (the quote char)
+  if (triple) {
+    advance(); advance(); advance(); // opening delimiters (three quote chars)
+  } else {
+    advance(); // opening delimiter (the quote char)
+  }
   std::string text;
 
   if (triple) {

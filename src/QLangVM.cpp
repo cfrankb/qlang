@@ -440,9 +440,16 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
           std::snprintf(buf, sizeof(buf), sub.c_str(), toDouble(av));
           out += buf;
         } else if (av.type() == QLangValue::Type::Bool) {
-          char buf[256];
-          std::snprintf(buf, sizeof(buf), sub.c_str(), (long long)toInt64(av));
-          out += buf;
+          // %s placeholder -> "true"/"false" text; numeric specs -> 1/0.
+          // (snprintf("%s", long long) segfaults — never pass the int form
+          // to a string conversion.)
+          if (spec == 's') {
+            out += toInt64(av) ? "true" : "false";
+          } else {
+            char buf[256];
+            std::snprintf(buf, sizeof(buf), sub.c_str(), (long long)toInt64(av));
+            out += buf;
+          }
         } else if (isNumeric(av)) {
           // If the placeholder is %s but the arg is numeric, use %d instead.
           std::string actualFmt = sub;
@@ -566,13 +573,13 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
                        "isset: argument must be a string (variable name)");
     const std::string &name = args[0].asString();
     // Check scope first (for pre-seeded vars set before run()).
-    if (scope.has(name)) return QLangValue::Int(1);
+    if (scope.has(name)) return QLangValue::Bool(1);
     // During execution, vars live in frame registers. Check the program's
     // name->reg map and the deleted set.
     auto it = prog.vars.find(name);
     if (it != prog.vars.end() && !deleted.count(it->second))
-      return QLangValue::Int(1);
-    return QLangValue::Int(0);
+      return QLangValue::Bool(1);
+    return QLangValue::Bool(0);
   }
   case Builtin::Assert: {
     // assert(bool, str) — throws a runtime error with the given message if

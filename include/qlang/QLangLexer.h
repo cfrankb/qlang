@@ -65,6 +65,7 @@ enum class TokenType {
   Default,     // default clause keyword
   Global,      // global (import top-level vars into function scope)
   Assert,      // assert (runtime assertion)
+  Isset,       // isset (reserved; existence probe, undeclared names allowed)
   Import,      // import (module import)
   From,        // from (module import from)
   As,          // as (module alias)
