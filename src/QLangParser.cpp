@@ -1140,6 +1140,8 @@ return node;
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Call;
       node->callee = tok.value;
+      node->callLine = tok.line;
+      node->callCol = tok.col;
       if (!check(TokenType::RParen)) {
         do {
           node->args.push_back(parseExpression());

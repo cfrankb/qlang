@@ -438,7 +438,7 @@ if they cross a boundary, trigger an error.
 |& |binary and
 |\| |binary or
 |&& |logical and
-| \|\| |logical or
+|\|\| |logical or
 |() |parenthesis
 |-- ++ |decremental/incremental
 |%  |modulo
@@ -458,16 +458,18 @@ if they cross a boundary, trigger an error.
 |-|-|-|
 |number|number|numeric comparison
 |number|float|coerce and numeric comparison|
-|number|string|invalid comparison
-|number|object|invalid comparison
+|number|string|error: invalid comparison
+|number|table, array, class, object|error: invalid comparison
 |string|string|binary comparison
-|string|object|binary comparison with __str__() for table, class and array
-|nil|any|invalid value for comparison
-|table|table|comparison of each value at the respective indexes
-|table|class|invalid comparison
-|table|class|invalid comparison
-|class|class|bytecode cannot be compared
+|string|table, class, array, object|binary comparison with __str__() for table, class and array
+|nil|any|error: invalid value for comparison
+|array|array|comparison of each value at their relative indexes
+|table|table|comparison of each key value
+|table|class, object|error: bytecode cannot be compared
+|table|array|error: invalid comparison
+|class, object|any|error: bytecode cannot be compared
 
+same rules apply to `operator <=` and `operator =>`
 
 ## operator +=
 

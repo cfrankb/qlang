@@ -104,7 +104,14 @@ int64_t num(const QLangValue &v, const char *op) {
   return (long long)toInt64(v);
 }
 
-int cmp(const QLangValue &a, const QLangValue &b, const char *op) {
+// `vm` (optional) enables the object-aware ordering rules of SPEC
+// `## operators < and >`: string vs table/array compares against the
+// object's display form (__str__ / class name / implicit collection
+// rendering), and table vs table compares each value at the respective
+// indexes. Callers without a VM (e.g. the `in` opcode) get the legacy
+// numeric/string-only behavior.
+int cmp(const QLangValue &a, const QLangValue &b, const char *op,
+        QLangVM *vm = nullptr) {
   bool numA = isNumeric(a), numB = isNumeric(b);
   if (numA && numB) {
     if (a.type() == QLangValue::Type::Float ||
@@ -118,6 +125,48 @@ int cmp(const QLangValue &a, const QLangValue &b, const char *op) {
   if (a.type() == QLangValue::Type::String &&
       b.type() == QLangValue::Type::String) {
     return a.asString().compare(b.asString());
+  }
+  // string vs object (table/class/array): binary comparison with __str__.
+  if (vm) {
+    if (a.type() == QLangValue::Type::String &&
+        (b.type() == QLangValue::Type::Table ||
+         b.type() == QLangValue::Type::Array))
+      return a.asString().compare(vm->displayString(b));
+    if (b.type() == QLangValue::Type::String &&
+        (a.type() == QLangValue::Type::Table ||
+         a.type() == QLangValue::Type::Array))
+      return vm->displayString(a).compare(b.asString());
+  }
+  // array vs array: each value at the relative index; the first differing
+  // value decides, the shorter array is less.
+  if (a.type() == QLangValue::Type::Array && b.type() == QLangValue::Type::Array) {
+    const auto &ea = a.asArray(), &eb = b.asArray();
+    size_t n = std::min(ea.size(), eb.size());
+    for (size_t i = 0; i < n; i++) {
+      int c = cmp(ea[i], eb[i], op, vm);
+      if (c != 0) return c;
+    }
+    return ea.size() < eb.size() ? -1 : ea.size() > eb.size() ? 1 : 0;
+  }
+  // table vs table: comparison of each key value (key order); the first
+  // differing value decides, the shorter table is less. Class instances
+  // (tables carrying __class__) are not order-comparable (SPEC: table|class
+  // and class|any -> invalid comparison) — they fall through to the throw.
+  // table|array also falls through to the throw (invalid comparison).
+  if (a.type() == QLangValue::Type::Table && b.type() == QLangValue::Type::Table) {
+    const auto &ta = *a.asTable(), &tb = *b.asTable();
+    auto ca = ta.find("__class__"), cb = tb.find("__class__");
+    bool aClass = ca != ta.end() && ca->second.type() == QLangValue::Type::String;
+    bool bClass = cb != tb.end() && cb->second.type() == QLangValue::Type::String;
+    if (!aClass && !bClass) {
+      auto ita = ta.begin(), itb = tb.begin();
+      size_t n = std::min(ta.size(), tb.size());
+      for (size_t i = 0; i < n; i++, ++ita, ++itb) {
+        int c = cmp(ita->second, itb->second, op, vm);
+        if (c != 0) return c;
+      }
+      return ta.size() < tb.size() ? -1 : ta.size() > tb.size() ? 1 : 0;
+    }
   }
   throw QLangError(QLangErrorKind::Type, 0, 0,
                    std::string("operator '") + op +
@@ -741,7 +790,24 @@ bool QLangVM::valueEqual(const QLangValue &a, const QLangValue &b) {
 QLangValue QLangVM::doBinaryVm(Opcode op, const QLangValue &a, const QLangValue &b) {
   if (op == Opcode::EQ || op == Opcode::NE) {
     bool eq = valueEqual(a, b);
-    return QLangValue::Int((op == Opcode::EQ) == eq ? 1 : 0);
+    return QLangValue::Bool((op == Opcode::EQ) == eq ? 1 : 0);
+  }
+  // Ordering comparisons need the VM for the object-aware rules (SPEC
+  // `## operators < and >`): string vs object via __str__, table vs table
+  // per-index.
+  const char *ord = nullptr;
+  if (op == Opcode::LT) ord = "<";
+  else if (op == Opcode::GT) ord = ">";
+  else if (op == Opcode::LE) ord = "<=";
+  else if (op == Opcode::GE) ord = ">=";
+  if (ord) {
+    int c = cmp(a, b, ord, this);
+    switch (op) {
+    case Opcode::LT: return QLangValue::Bool(c < 0 ? 1 : 0);
+    case Opcode::GT: return QLangValue::Bool(c > 0 ? 1 : 0);
+    case Opcode::LE: return QLangValue::Bool(c <= 0 ? 1 : 0);
+    default:         return QLangValue::Bool(c >= 0 ? 1 : 0);
+    }
   }
   return doBinary(op, a, b);
 }
@@ -833,7 +899,7 @@ QLangValue QLangVM::doUnary(Opcode op, const QLangValue &a) {
   case Opcode::NEG:
     return QLangValue::Int(static_cast<int32_t>(-num(a, "-")));
   case Opcode::NOT:
-    return QLangValue::Int(isTrue(a) ? 0 : 1);
+    return QLangValue::Bool(isTrue(a) ? 0 : 1);
   case Opcode::INC:
     return QLangValue::Int(static_cast<int32_t>(num(a, "+") + 1));
   case Opcode::DEC:
@@ -948,34 +1014,34 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
   case Opcode::SHR:
     return QLangValue::Int(static_cast<int32_t>(num(a, ">>") >> num(b, ">>")));
   case Opcode::LAND:
-    return QLangValue::Int(isTrue(a) && isTrue(b) ? 1 : 0);
+    return QLangValue::Bool(isTrue(a) && isTrue(b) ? 1 : 0);
   case Opcode::LOR:
-    return QLangValue::Int(isTrue(a) || isTrue(b) ? 1 : 0);
+    return QLangValue::Bool(isTrue(a) || isTrue(b) ? 1 : 0);
   case Opcode::EQ:
-    return QLangValue::Int(isEqual(a, b) ? 1 : 0);
+    return QLangValue::Bool(isEqual(a, b) ? 1 : 0);
   case Opcode::NE:
-    return QLangValue::Int(!isEqual(a, b) ? 1 : 0);
+    return QLangValue::Bool(!isEqual(a, b) ? 1 : 0);
   case Opcode::LT:
-    return QLangValue::Int(cmp(a, b, "<") < 0 ? 1 : 0);
+    return QLangValue::Bool(cmp(a, b, "<") < 0 ? 1 : 0);
   case Opcode::GT:
-    return QLangValue::Int(cmp(a, b, ">") > 0 ? 1 : 0);
+    return QLangValue::Bool(cmp(a, b, ">") > 0 ? 1 : 0);
   case Opcode::LE:
-    return QLangValue::Int(cmp(a, b, "<=") <= 0 ? 1 : 0);
+    return QLangValue::Bool(cmp(a, b, "<=") <= 0 ? 1 : 0);
   case Opcode::GE:
-    return QLangValue::Int(cmp(a, b, ">=") >= 0 ? 1 : 0);
+    return QLangValue::Bool(cmp(a, b, ">=") >= 0 ? 1 : 0);
   case Opcode::IN: {
     // Membership test: `a in b` where b is an array (element match) or a
-    // table (key match). Returns boolean 1/0 (spec §143-147).
+    // table (key match). Returns a Bool (spec §143-147).
     const QLangValue &col = b;
     if (col.type() == QLangValue::Type::Array) {
       for (const QLangValue &e : col.asArray())
         if (cmp(a, e, "in") == 0)
-          return QLangValue::Int(1);
-      return QLangValue::Int(0);
+          return QLangValue::Bool(1);
+      return QLangValue::Bool(0);
     }
     if (col.type() == QLangValue::Type::Table) {
       std::string key = valueToString(a);
-      return QLangValue::Int(col.asTable()->count(key) ? 1 : 0);
+      return QLangValue::Bool(col.asTable()->count(key) ? 1 : 0);
     }
     throw QLangError(QLangErrorKind::Type, 0, 0,
                      std::string("operator 'in' requires an array or table, got ") +

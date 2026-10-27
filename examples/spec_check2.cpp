@@ -374,6 +374,44 @@ int main() {
   expectVal("eq num object false", "class C { __str__(self)[] { return \"1\" } }\nlocal r = (1 == C());", "r", 0);
   expectVal("eq str plain table false", "local t = {a=1}\nlocal r = (\"x\" == t);", "r", 0);
 
+  // -- operators < and > (spec §operators < and >) --
+  expectVal("lt number number", "local r = (1 < 2);", "r", 1);
+  expectVal("gt number float", "local r = (2.5 > 2);", "r", 1);
+  expectVal("lt string string", "local r = (\"ab\" < \"ac\");", "r", 1);
+  expectVal("lt string object __str__",
+            "local t = {n=1}\nt.__str__ = (self)[] { return \"abc\" }\nlocal r = (\"ab\" < t);",
+            "r", 1);
+  expectVal("lt string class",
+            "class C { __str__(self)[] { return \"xyz\" } }\nlocal r = (\"xy\" < C());",
+            "r", 1);
+  expectVal("lt string array",
+            "local r = (\"[1\" < [1,2,3]);", "r", 1);
+  expectVal("lt table table per-index",
+            "local r = ({a=1,b=2} < {a=1,b=3});", "r", 1);
+  expectVal("lt table table prefix shorter less",
+            "local r = ({a=1} < {a=1,b=2});", "r", 1);
+  expectVal("le table table equal",
+            "local r = ({a=1} <= {a=1});", "r", 1);
+  expectVal("lt array array per-index",
+            "local r = ([1,2] < [1,3]);", "r", 1);
+  expectVal("gt array array per-index",
+            "local r = ([1,9] > [1,3]);", "r", 1);
+  expectVal("lt array array prefix shorter less",
+            "local r = ([1] < [1,2]);", "r", 1);
+  expectVal("ge array array equal",
+            "local r = ([1,2] >= [1,2]);", "r", 1);
+  expectThrow("lt number string invalid", "local r = (1 < \"a\");");
+  expectThrow("lt number object invalid", "local r = (1 < {a=1});");
+  expectThrow("lt nil any invalid", "local r = (nil < 1);");
+  expectThrow("lt table class invalid",
+              "class C { x = 1 }\nlocal r = ({a=1} < C());");
+  expectThrow("lt class class invalid",
+              "class C { x = 1 }\nlocal r = (C() < C());");
+  expectThrow("lt table array invalid",
+              "local r = ({a=1} < [1]);");
+  expectThrow("lt class array invalid",
+              "class C { x = 1 }\nlocal r = (C() < [1]);");
+
   // -- function return values (spec §13) --
   expectVal("fn returns last expr", "def f() { return 42 }\nlocal r = f();", "r", 42);
   expectVal("fn returns nil no expr", "def g() { x = 5 }\nlocal r = g();\nlocal n = (r == nil);", "n", 1);
@@ -656,6 +694,25 @@ int main() {
             "local k = 1\nif true {\nlocal k = 2\nif true {\nlocal k = 4\n}\n}\nlocal s = $k;", "s", "1");
   expectStr("block scope for-in shadow",
             "local m = 0\nfor q in [1,2,3]\nlocal m = 9\nnext q\nlocal s = $m;", "s", "0");
+
+  // -- boolean-producing operators return Bool (cmp.ql report) --
+  expectStr("type: < returns bool",
+            "local s = type(1 < 2);", "s", "bool");
+  expectStr("type: > returns bool",
+            "local s = type(2 > 5);", "s", "bool");
+  expectStr("type: == returns bool",
+            "local s = type(\"a\" == \"b\");", "s", "bool");
+  expectStr("type: && returns bool",
+            "local s = type(true && false);", "s", "bool");
+  expectStr("type: ! returns bool",
+            "local s = type(!true);", "s", "bool");
+  expectStr("type: in returns bool",
+            "local s = type(1 in [1,2,3]);", "s", "bool");
+  expectStr("f-string: bool comparison renders true/false",
+            "local s = f\"{1 < 2} {2 > 5}\";", "s", "true false");
+  expectVal("bool comparison still numeric in arithmetic", "local s = 1 + (1 < 2);", "s", 2);
+  expectThrow("unknown function call is a compile error",
+              "printl(\"x\");");
 
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;

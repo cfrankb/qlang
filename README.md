@@ -11,6 +11,9 @@ the design docs (serialization, external types, event handlers) are the
 deliverable for the next phase, and a few features (classes, the `.qlc`
 loader, external-type dispatch) are spec'd but not yet built.
 
+![Alt text](docs/images/Screenshot_2026-10-27_13-44-43.png)
+
+
 ## Layout
 
 ```

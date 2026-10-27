@@ -2150,6 +2150,11 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         emit(Opcode::CALL, dest, nit->second, argCount);
         break;
       }
+      // Not a user def, closure, generator var, builtin, or native/module
+      // function: an unknown call must be a compile error, not a silent
+      // negative-index CALL (which would dispatch into nativeFuncs[0]).
+      throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
+                       "unknown function '" + e->callee + "'");
     }
     emit(Opcode::CALL, dest, funcId, argCount);
     if (e->callee == "range") trace(TRACE_FULL, "[DBG-RANGE] emitted CALL dest=%d b=%d c=%d\n", dest, funcId, argCount);
