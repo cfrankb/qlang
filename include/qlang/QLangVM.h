@@ -62,6 +62,12 @@ private:
 public:
   QLangValue callClosure(const QLangValue &closure, const std::vector<QLangValue> &args);
 
+  // Display form of a value for print/println/printf/f-string/join: a table
+  // with `__str__` calls it (re-entrancy guarded); class instances without
+  // `__str__` render as their class name; everything else uses the generic
+  // text form.
+  std::string displayString(const QLangValue &v);
+
   // Push a callee frame, copying args into its parameter registers, and advance
   // the frame pointer onto it. `dest` is the caller register holding the
   // closure (for CALLCLOS) / the call destination (for CALLFN).
@@ -79,6 +85,9 @@ public:
   QLangValue m_returnValue; // result handed back to the caller of a call
   std::unordered_set<int> m_deleted; // registers removed by `delete`
   size_t m_steps = 0;
+  // Re-entrancy guard for displayString: an `__str__` that displays `self`
+  // must not recurse — the nested call skips `__str__` and falls back.
+  bool m_inDisplayString = false;
   // Saved frames for active generator instances, keyed by function index.
   // Each entry is the most-recently-saved frame for that generator; a new
   // call with an empty entry creates a fresh instance.

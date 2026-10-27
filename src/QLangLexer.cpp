@@ -54,6 +54,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "from") return TokenType::From;
   if (text == "as") return TokenType::As;
   if (text == "class") return TokenType::Class;
+  if (text == "static") return TokenType::Static;
   if (text == "nil") return TokenType::Nil;
   if (text == "eof") return TokenType::Eof;
   if (text == "yield") return TokenType::Yield;
@@ -357,6 +358,8 @@ Token QLangLexer::operatorToken() {
   if (c == '*' && n == '*') return make(TokenType::Exponential, "**", 2);
   if (c == '+' && n == '+') return make(TokenType::Increment, "++", 2);
   if (c == '-' && n == '-') return make(TokenType::Decrement, "--", 2);
+  // :: scope resolution (ClassName::staticMember) - before single ':'
+  if (c == ':' && n == ':') return make(TokenType::ScopeRes, "::", 2);
   // $$ operator (indirect access) - must be checked before $
   if (c == '$' && n == '$') return make(TokenType::DollarDollar, "$$", 2);
   // $ operator (dynamic key resolution) - must be checked after $$

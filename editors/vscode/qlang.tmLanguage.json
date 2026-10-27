@@ -8,7 +8,7 @@
         },
         {
             "name": "keyword.control.qlang",
-            "match": "\\b(for|to|in|then|while|continue|break|return|else|range|goto|switch|case|default|step|global|const|end|yield|fetch|if|next|import|from)\\b"
+            "match": "\\b(for|to|in|then|while|continue|break|return|else|range|goto|switch|case|default|step|global|const|end|yield|fetch|if|next|import|from|static)\\b"
         },
         {
             "name": "storage.type.qlang",

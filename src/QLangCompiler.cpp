@@ -454,6 +454,19 @@ int QLangCompiler::buildFunction(const std::string &name,
   return funcIndex;
 }
 
+// Register holding the current method's `__statics__` table. In a static
+// method the hidden anchor parameter (register 0) IS the table. In an
+// instance method register 0 is `self`, so emit a TABGET of `self.__statics__`.
+int QLangCompiler::staticsTableReg() {
+  if (m_inStaticMethod)
+    return 0;
+  int r = tmpRegister();
+  int keyR = tmpRegister();
+  emit(Opcode::CONST, keyR, emitConst(QLangValue::String("__statics__")));
+  emit(Opcode::TABGET, r, 0, keyR);
+  return r;
+}
+
 void QLangCompiler::compileStmt(const StmtPtr &s,
                                 std::vector<std::string> *captures) {
   if (!s)
@@ -514,6 +527,29 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     break;
   }
   case StmtKind::Assignment: {
+    // Bare static member name in a method body of a class with statics:
+    // write through the shared `__statics__` table.
+    if (!s->target && !m_classStaticNames.empty() &&
+        m_classStaticNames.count(s->name)) {
+      int staticsR = staticsTableReg();
+      int keyR = tmpRegister();
+      emit(Opcode::CONST, keyR, emitConst(QLangValue::String(s->name)));
+      int t = tmpRegister();
+      compileExpr(s->assignValue, t);
+      const std::string &op = s->assignOp.text;
+      if (op == "=") {
+        emit(Opcode::TABPUT, staticsR, keyR, t);
+      } else {
+        int cur = tmpRegister();
+        emit(Opcode::TABGET, cur, staticsR, keyR);
+        Opcode opCode = (op == "++") ? Opcode::INC
+                                     : (op == "--") ? Opcode::DEC
+                                                    : binOp(op.substr(0, op.size() - 1));
+        emit(opCode, cur, cur, t);
+        emit(Opcode::TABPUT, staticsR, keyR, cur);
+      }
+      break;
+    }
     // Direct assignment to a captured variable (write-back / reference).
     auto cit = m_captureRegs.find(s->name);
     if (cit != m_captureRegs.end() && !s->target) {
@@ -1325,8 +1361,39 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     // Field type inference (Phase 5): field name -> type inferred from the
     // field's default value (name -> type-name string in `__field_types__`).
     std::unordered_map<std::string, QLangValue::Type> fieldTypes;
+    // Static members (new extension beyond v1). Collected in the loop and
+    // compiled into the shared `__statics__` table AFTER the loop: method
+    // bodies must see the full static name set, so static methods are deferred.
+    std::unordered_set<std::string> allStatics;
+    std::vector<std::pair<std::string, ExprPtr>> staticFieldDecls; // (name, value)
+    std::vector<std::string> staticConstNames;
+    struct StaticMethodDecl {
+      std::string name;
+      std::vector<std::string> params;
+      std::vector<std::string> captures;
+      std::vector<StmtPtr> body;
+      int funcIndex = -1; // filled in the post-loop statics build
+    };
+    std::vector<StaticMethodDecl> staticMethodDecls;
+    for (auto &st : s->classBody) {
+      if (!st->isStatic)
+        continue;
+      if (st->kind == StmtKind::Arrow || st->kind == StmtKind::Assignment ||
+          st->kind == StmtKind::Const)
+        allStatics.insert(st->name);
+    }
     for (auto &st : s->classBody) {
       if (st->kind == StmtKind::Assignment || st->kind == StmtKind::Const) {
+        if (st->isStatic) {
+          // Static field: stored in the `__statics__` table, NOT the instance
+          // field schema. Value is compiled in the post-loop statics build.
+          staticFieldDecls.push_back(
+              {st->name, st->kind == StmtKind::Assignment ? st->assignValue
+                                                          : st->value});
+          if (st->kind == StmtKind::Const)
+            staticConstNames.push_back(st->name);
+          continue;
+        }
         // A field: `name = value` or `const name = value`.
         int keyR = tmpRegister();
         emit(Opcode::CONST, keyR, emitConst(QLangValue::String(st->name)));
@@ -1353,7 +1420,19 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
           // Non-constant default: no compile-time type constraint.
         }
       } else if (st->kind == StmtKind::Arrow) {
+        if (st->isStatic) {
+          // Static method: compiled (with a hidden anchor param) in the
+          // post-loop statics build, after all static names are known.
+          staticMethodDecls.push_back(
+              {st->name, st->params, st->captures, st->body});
+          continue;
+        }
+        // Instance method: compile now, with the class's static names visible
+        // so the body can reference statics via `self.__statics__`.
+        m_classStaticNames = allStatics;
+        m_inStaticMethod = false;
         int funcIndex = buildFunction(st->name, st->params, st->captures, st->body);
+        m_classStaticNames.clear();
         auto closure = std::make_shared<Closure>();
         closure->funcIndex = funcIndex;
         int constIdx = emitConst(QLangValue::Function(closure));
@@ -1370,6 +1449,63 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       } else {
         compileStmt(st);
       }
+    }
+
+    // Static members (new extension): build the shared `__statics__` table and
+    // install it into the prototype BEFORE `__fields__` (same metadata-ordering
+    // constraint as `__const_fields__` above). Every instance copies this table
+    // by reference, so instance writes mutate class-level state.
+    if (!staticFieldDecls.empty() || !staticMethodDecls.empty()) {
+      int staticsReg = tmpRegister();
+      emit(Opcode::TABCREATE, staticsReg);
+      for (auto &sf : staticFieldDecls) {
+        int keyR = tmpRegister();
+        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(sf.first)));
+        int valR = tmpRegister();
+        compileExpr(sf.second, valR);
+        emit(Opcode::TABPUT, staticsReg, keyR, valR);
+      }
+      for (auto &sm : staticMethodDecls) {
+        // Hidden anchor parameter (the `__statics__` table) as param 0, so a
+        // static method needs no self and can read/write statics directly.
+        std::vector<std::string> params = {"__anchor__"};
+        for (auto &p : sm.params)
+          params.push_back(p);
+        m_classStaticNames = allStatics;
+        m_inStaticMethod = true;
+        int funcIndex = buildFunction(sm.name, params, sm.captures, sm.body);
+        m_inStaticMethod = false;
+        m_classStaticNames.clear();
+        sm.funcIndex = funcIndex;
+        auto closure = std::make_shared<Closure>();
+        closure->funcIndex = funcIndex;
+        int constIdx = emitConst(QLangValue::Function(closure));
+        int keyR = tmpRegister();
+        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(sm.name)));
+        int funcR = tmpRegister();
+        emit(Opcode::MAKEFUNC, funcR, constIdx);
+        emit(Opcode::TABPUT, staticsReg, keyR, funcR);
+      }
+      // `__static_const__` set (name -> 1) for static const fields, so
+      // SETFIELD can reject assignment to them.
+      if (!staticConstNames.empty()) {
+        int sconstReg = tmpRegister();
+        emit(Opcode::TABCREATE, sconstReg);
+        for (const auto &cn : staticConstNames) {
+          int keyR = tmpRegister();
+          emit(Opcode::CONST, keyR, emitConst(QLangValue::String(cn)));
+          int valR = tmpRegister();
+          emit(Opcode::CONST, valR, emitConst(QLangValue::Int(1)));
+          emit(Opcode::TABPUT, sconstReg, keyR, valR);
+        }
+        int sckeyR = tmpRegister();
+        emit(Opcode::CONST, sckeyR,
+             emitConst(QLangValue::String("__static_const__")));
+        emit(Opcode::TABPUT, staticsReg, sckeyR, sconstReg);
+      }
+      int skeyR = tmpRegister();
+      emit(Opcode::CONST, skeyR, emitConst(QLangValue::String("__statics__")));
+      emit(Opcode::TABPUT, 0, skeyR, staticsReg);
     }
 
     // Const fields (Phase 2): emit `__const_fields__` metadata (name -> 1) into
@@ -1461,7 +1597,22 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     for (const auto &cn : constNames)
       rec.constFields.insert(cn);
     rec.fieldTypes = std::move(fieldTypes);
+    // Static members (new extension): recorded so `C::name` codegen and call
+    // sites can resolve them and check arity.
+    for (auto &sf : staticFieldDecls)
+      rec.staticFields.insert(sf.first);
+    for (const auto &cn : staticConstNames)
+      rec.staticConstFields.insert(cn);
+    for (auto &sm : staticMethodDecls) {
+      rec.staticMethodFuncIndices[sm.name] = sm.funcIndex;
+      rec.staticMethodArities[sm.name] = static_cast<int>(sm.params.size());
+    }
     m_classes[s->className] = std::move(rec);
+    // Cache the prototype table in a hidden variable (`__proto_<Name>`) so
+    // every instance and `C::name` access shares ONE prototype — and with it
+    // the one shared `__statics__` map.
+    int protoVar = declareVar("__proto_" + s->className);
+    emit(Opcode::CALLFN, protoVar, prototypeFuncIdx, 0);
     break;
   }
   case StmtKind::Global: {
@@ -1619,6 +1770,15 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     emit(Opcode::CONST, dest, emitConst(e->literal));
     break;
   case ExprKind::Variable: {
+    // Bare static member name inside a method body of a class with statics:
+    // read from the class-level `__statics__` table (shared across instances).
+    if (!m_classStaticNames.empty() && m_classStaticNames.count(e->name)) {
+      int staticsR = staticsTableReg();
+      int keyR = tmpRegister();
+      emit(Opcode::CONST, keyR, emitConst(QLangValue::String(e->name)));
+      emit(Opcode::TABGET, dest, staticsR, keyR);
+      break;
+    }
     // Captured variable: load through the closure reference (live binding).
     auto cit = m_captureRegs.find(e->name);
     if (cit != m_captureRegs.end()) {
@@ -1704,6 +1864,51 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
 
     // Method call: obj.method(args) -> load the member (closure) first.
     if (e->calleeMember) {
+      // Static method call: C::name(args). The closure lives in the class-level
+      // `__statics__` table and is called with that table as a hidden first
+      // argument (the anchor) — no self.
+      if (e->calleeMember->scopeStatic) {
+        if (e->calleeMember->memberBase->kind != ExprKind::Variable)
+          throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
+                           "'::' requires a class name on the left");
+        const std::string &cname = e->calleeMember->memberBase->name;
+        auto cit = m_classes.find(cname);
+        if (cit == m_classes.end())
+          throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
+                           "'" + cname + "' is not a class");
+        const ClassRecord &rec = cit->second;
+        if (!rec.staticMethodFuncIndices.count(e->callee))
+          throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
+                           "'" + cname + "' has no static method '" +
+                               e->callee + "'");
+        int declaredArity = rec.staticMethodArities.at(e->callee);
+        if (argCount != declaredArity)
+          throw QLangError(
+              QLangErrorKind::Parse, e->callLine, e->callCol,
+              "static method '" + e->callee + "' expects " +
+                  std::to_string(declaredArity) + " argument" +
+                  (declaredArity == 1 ? "" : "s") + ", got " +
+                  std::to_string(argCount));
+        int baseR = tmpRegister();
+        emit(Opcode::MOV, baseR, regOf("__proto_" + cname));
+        int staticsR = tmpRegister();
+        int skR = tmpRegister();
+        emit(Opcode::CONST, skR, emitConst(QLangValue::String("__statics__")));
+        emit(Opcode::TABGET, staticsR, baseR, skR);
+        int keyR = tmpRegister();
+        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(e->callee)));
+        int funcReg = tmpRegister();
+        emit(Opcode::TABGET, funcReg, staticsR, keyR);
+        // Shift user args down by one to make room for the anchor at argBase.
+        for (int i = argCount - 1; i >= 0; i--)
+          emit(Opcode::MOV, argBase + i + 1, argRegs[i], 0);
+        int minReg = argBase + argCount + 1;
+        if (m_nextReg < minReg) m_nextReg = minReg;
+        emit(Opcode::MOV, argBase, staticsR, 0); // anchor = statics table
+        emit(Opcode::MOV, dest, funcReg);
+        emit(Opcode::CALLCLOS, dest, argCount + 1, argCount + 1);
+        break;
+      }
       // Prepend self only for known class methods (whose signature includes self).
       // Table-stored closures are called as-is.
       bool prependSelf = false;
@@ -1762,9 +1967,9 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // Create instance table.
       int instanceReg = tmpRegister();
       emit(Opcode::TABCREATE, instanceReg);
-      // Call prototype function to get the prototype table.
+      // Load the cached prototype table (created once at class definition).
       int protoReg = tmpRegister();
-      emit(Opcode::CALLFN, protoReg, rec.prototypeFunc, 0);
+      emit(Opcode::MOV, protoReg, regOf("__proto_" + e->callee));
       // Copy methods from prototype to instance.
       for (const auto &mname : rec.methodNames) {
         int keyR = tmpRegister();
@@ -1783,6 +1988,16 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         int valR = tmpRegister();
         emit(Opcode::TABGET, valR, protoReg, keyR);
         emit(Opcode::TABPUT, instanceReg, keyR, valR);
+      }
+      // Static members (new extension): copy the shared `__statics__` table
+      // from the prototype BY REFERENCE (it is a table value), so the instance
+      // and every sibling mutate the same class-level map.
+      if (!rec.staticFields.empty() || !rec.staticMethodFuncIndices.empty()) {
+        int skeyR = tmpRegister();
+        emit(Opcode::CONST, skeyR, emitConst(QLangValue::String("__statics__")));
+        int svalR = tmpRegister();
+        emit(Opcode::TABGET, svalR, protoReg, skeyR);
+        emit(Opcode::TABPUT, instanceReg, skeyR, svalR);
       }
       // Closed field set (Phase 1.3): stamp the class name onto the instance
       // BEFORE installing the `__fields__` schema, so the instance is not yet
@@ -2017,6 +2232,35 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     break;
   }
   case ExprKind::Member: {
+    if (e->scopeStatic) {
+      // C::name -> TABGET staticsR, C, "__statics__"; TABGET dest, staticsR,
+      // name. The base must be a known class and the name one of its static
+      // members (compile-time check).
+      if (e->memberBase->kind != ExprKind::Variable)
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "'::' requires a class name on the left");
+      const std::string &cname = e->memberBase->name;
+      auto cit = m_classes.find(cname);
+      if (cit == m_classes.end())
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "'" + cname + "' is not a class");
+      const ClassRecord &rec = cit->second;
+      if (!rec.staticFields.count(e->memberName) &&
+          !rec.staticMethodFuncIndices.count(e->memberName))
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "'" + cname + "' has no static member '" +
+                             e->memberName + "'");
+      int baseR = tmpRegister();
+      emit(Opcode::MOV, baseR, regOf("__proto_" + cname));
+      int staticsR = tmpRegister();
+      int skR = tmpRegister();
+      emit(Opcode::CONST, skR, emitConst(QLangValue::String("__statics__")));
+      emit(Opcode::TABGET, staticsR, baseR, skR);
+      int keyR = tmpRegister();
+      emit(Opcode::CONST, keyR, emitConst(QLangValue::String(e->memberName)));
+      emit(Opcode::TABGET, dest, staticsR, keyR);
+      break;
+    }
     // base.name read -> TABGET dest, baseR, keyR
     int baseR = tmpRegister();
     compileExpr(e->memberBase, baseR);

@@ -168,6 +168,15 @@ private:
     // SETFIELD can reject values that violate the inferred type. A field with
     // a non-constant (or `nil`) default has no entry -> no constraint.
     std::unordered_map<std::string, QLangValue::Type> fieldTypes;
+    // Static members (new extension beyond v1): live in the class-level
+    // `__statics__` table (shared by the prototype and every instance), NOT in
+    // the instance field schema. Static methods are compiled with a hidden
+    // first parameter (the `__statics__` table) so they need no self.
+    std::unordered_set<std::string> staticFields;
+    std::unordered_set<std::string> staticConstFields;
+    std::unordered_map<std::string, int> staticMethodFuncIndices;
+    // Static method arity = declared user param count (NO hidden anchor).
+    std::unordered_map<std::string, int> staticMethodArities;
   };
   std::unordered_map<std::string, ClassRecord> m_classes;
   // Variable names that currently hold an arrow-closure value.
@@ -205,6 +214,18 @@ private:
   int m_nextReg = 0;
   // True when compiling inside a function body (global keyword is only valid there).
   bool m_inFunction = false;
+  // Static-member compile context: static field + method names of the class
+  // currently being compiled, so method bodies can resolve a bare static name
+  // through the class-level `__statics__` table. Empty outside class bodies.
+  std::unordered_set<std::string> m_classStaticNames;
+  // True while compiling a static method body: the hidden anchor parameter
+  // (register 0) IS the `__statics__` table, so static names TABGET directly
+  // from reg 0. In an instance method body reg 0 is `self`; statics are
+  // reached via `self.__statics__`.
+  bool m_inStaticMethod = false;
+  // Register holding the current method's `__statics__` table (emits the
+  // `self.__statics__` TABGET for instance methods; reg 0 for static methods).
+  int staticsTableReg();
 };
 
 } // namespace qlang

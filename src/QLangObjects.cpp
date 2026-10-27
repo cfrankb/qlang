@@ -23,6 +23,11 @@ static const char* kConstFieldMetaKey = "__const_fields__";
 // by the compiler and copied onto each instance so SETFIELD can reject values
 // that violate the type inferred from the field's default value.
 static const char* kFieldTypeMetaKey = "__field_types__";
+// Static members (new extension beyond v1): `__statics__` is the shared
+// class-level table (prototype + every instance point at the same map).
+// `__static_const__` (a set inside `__statics__`) marks read-only statics.
+static const char* kStaticMetaKey = "__statics__";
+static const char* kStaticConstMetaKey = "__static_const__";
 
 // True when the table is a class instance: it carries the `__fields__` schema.
 static bool isClassInstance(const std::map<std::string, QLangValue>& kv) {
@@ -83,6 +88,15 @@ QLangValue getField(const QLangValue& obj, const std::string& name,
   if (it == kv.end() && isClassInstance(kv)) {
     const auto& fkv = *kv.find(kFieldMetaKey)->second.asTable();
     if (fkv.find(name) == fkv.end()) {
+      // Statics fallback: not a declared field, but may be a class-level
+      // static member (shared `__statics__` table).
+      auto st = kv.find(kStaticMetaKey);
+      if (st != kv.end() && st->second.type() == QLangValue::Type::Table) {
+        const auto& skv = *st->second.asTable();
+        auto sit = skv.find(name);
+        if (sit != skv.end())
+          return sit->second;
+      }
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        classNameOf(kv) + " has no field '" + name + "'");
     }
@@ -112,6 +126,27 @@ void setField(QLangValue& obj, const std::string& name,
   if (isClassInstance(*tv)) {
     const auto& fkv = *tv->find(kFieldMetaKey)->second.asTable();
     if (fkv.find(name) == fkv.end()) {
+      // Statics fallback: not a declared field, but may be a class-level
+      // static member. Writes go into the shared `__statics__` map.
+      auto st = tv->find(kStaticMetaKey);
+      if (st != tv->end() && st->second.type() == QLangValue::Type::Table) {
+        const auto& skv = *st->second.asTable();
+        if (skv.find(name) != skv.end()) {
+          // Static const (new extension): reject assignment.
+          auto sc = skv.find(kStaticConstMetaKey);
+          if (sc != skv.end() && sc->second.type() == QLangValue::Type::Table) {
+            const auto& sckv = *sc->second.asTable();
+            if (sckv.find(name) != sckv.end())
+              throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                               "cannot assign to const static field '" +
+                                   name + "'");
+          }
+          // ponytail: no `__field_types__` constraint on static writes —
+          // add if a real type-safety need appears.
+          st->second.asTable()->operator[](name) = value;
+          return;
+        }
+      }
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        classNameOf(*tv) + " has no field '" + name + "'");
     }
@@ -152,10 +187,19 @@ QLangValue callMethod(const QLangValue& obj, const std::string& name,
     throw QLangError(QLangErrorKind::Type, 0, 0,
                      "member '" + name + "' is not a function");
   }
-  // Call the closure with the object as the first argument (self).
+  // First argument: for a static method resolved from `__statics__`, the
+  // hidden anchor is the shared statics table (no self). For an instance
+  // method, it is the object (self).
   std::vector<QLangValue> callArgs;
   callArgs.reserve(args.size() + 1);
-  callArgs.push_back(obj);  // self
+  const auto& kv = *obj.asTable();
+  auto st = kv.find(kStaticMetaKey);
+  bool fromStatics = st != kv.end() && st->second.type() == QLangValue::Type::Table &&
+                     st->second.asTable()->find(name) != st->second.asTable()->end();
+  if (fromStatics)
+    callArgs.push_back(st->second);  // anchor = shared statics table
+  else
+    callArgs.push_back(obj);         // self
   for (const auto& arg : args) {
     callArgs.push_back(arg);
   }
@@ -171,8 +215,17 @@ QLangValue callMethod(const QLangValue& obj, const std::string& name,
 }
 
 QLangValue toStr(const QLangValue& obj, QLangContext& ctx) {
-  // Return "<table>" as the string representation.
-  // This is the default for tables; classes will override with their own.
+  // Same dispatch as QLangVM::displayString: `__str__` if present, then the
+  // class name for instances, then the generic "<table>".
+  if (obj.type() == QLangValue::Type::Table) {
+    const auto& kv = *obj.asTable();
+    auto it = kv.find("__str__");
+    if (it != kv.end() && it->second.type() == QLangValue::Type::Function)
+      return ctx.callClosure(it->second, {obj});
+    auto kit = kv.find(kClassMetaKey);
+    if (kit != kv.end() && kit->second.type() == QLangValue::Type::String)
+      return QLangValue::String(kit->second.asString());
+  }
   return QLangValue::String("<table>");
 }
 

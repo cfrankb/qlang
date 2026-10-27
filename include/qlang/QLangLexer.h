@@ -69,6 +69,7 @@ enum class TokenType {
   From,        // from (module import from)
   As,          // as (module alias)
   Class,       // class (user-defined class)
+  Static,      // static (class-level member, new extension beyond v1)
   True,        // true
   False,       // false
   Nil,         // nil (undefined/sentinel value)
@@ -76,6 +77,7 @@ enum class TokenType {
 
   // Operators
   Dot,           // .  (table member access: t.name)
+  ScopeRes,      // :: (scope resolution: ClassName::staticMember)
   Dollar,        // $  (dynamic key resolution)
   DollarDollar,  // $$ (indirect access operator)
   Assign,        // =

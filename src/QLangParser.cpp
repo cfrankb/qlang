@@ -752,29 +752,71 @@ StmtPtr QLangParser::parseClass() {
   // Phase 3: method names must be unique within a class body.
   // Maps method name -> line of its first definition.
   std::unordered_map<std::string, int> methodLines;
+  // Static member names (new extension beyond v1); a static and an instance
+  // member may not share a name.
+  std::unordered_set<std::string> staticNames;
   while (!check(TokenType::RBrace) && !atEnd()) {
     int stmtLine = current().line;
     int stmtCol = current().col;
+    // `static` prefix: class-level member (field, const field, or method).
+    bool isStatic = match(TokenType::Static);
+    if (isStatic && (check(TokenType::Local) || check(TokenType::Let)))
+      throw QLangError(QLangErrorKind::Parse, current().line, current().col,
+                       "static cannot be combined with local or let");
     auto bodyStmt = parseStatement();
-    if (bodyStmt->kind == StmtKind::Arrow) {
-      auto it = methodLines.find(bodyStmt->name);
-      if (it != methodLines.end()) {
+    if (isStatic) {
+      bool member = bodyStmt->kind == StmtKind::Const ||
+                    (bodyStmt->kind == StmtKind::Assignment &&
+                     bodyStmt->target == nullptr) ||
+                    bodyStmt->kind == StmtKind::Arrow;
+      if (!member)
         throw QLangError(QLangErrorKind::Parse, stmtLine, stmtCol,
-                         "duplicate method '" + bodyStmt->name +
-                         "' defined at line " + std::to_string(it->second) +
-                         " and line " + std::to_string(stmtLine));
+                         "static can only prefix a field, const field, or method");
+      bodyStmt->isStatic = true;
+      if (!staticNames.insert(bodyStmt->name).second)
+        throw QLangError(QLangErrorKind::Parse, stmtLine, stmtCol,
+                         "duplicate static member '" + bodyStmt->name + "'");
+      auto it = methodLines.find(bodyStmt->name);
+      if (it != methodLines.end())
+        throw QLangError(QLangErrorKind::Parse, stmtLine, stmtCol,
+                         "static member '" + bodyStmt->name +
+                         "' conflicts with instance member defined at line " +
+                         std::to_string(it->second));
+      if (bodyStmt->kind == StmtKind::Arrow)
+        stmt->staticMethods.insert(bodyStmt->name);
+      else
+        stmt->staticFields.insert(bodyStmt->name);
+    } else {
+      if (bodyStmt->kind == StmtKind::Arrow) {
+        auto it = methodLines.find(bodyStmt->name);
+        if (it != methodLines.end()) {
+          throw QLangError(QLangErrorKind::Parse, stmtLine, stmtCol,
+                           "duplicate method '" + bodyStmt->name +
+                           "' defined at line " + std::to_string(it->second) +
+                           " and line " + std::to_string(stmtLine));
+        }
+        methodLines[bodyStmt->name] = stmtLine;
       }
-      methodLines[bodyStmt->name] = stmtLine;
-    }
-    // Closed field set (Phase 1): a field declaration is a simple
-    // `name = value` assignment (no index/member target) or a
-    // `const name = value` declaration. Methods are Arrow statements and are
-    // not fields; they are tracked separately.
-    if (bodyStmt->kind == StmtKind::Assignment && bodyStmt->target == nullptr)
-      stmt->declaredFields.insert(bodyStmt->name);
-    if (bodyStmt->kind == StmtKind::Const) {
-      stmt->declaredFields.insert(bodyStmt->name);
-      stmt->constFields.insert(bodyStmt->name); // Phase 2: read-only field
+      // Reverse collision: instance member named after an earlier static.
+      bool member = bodyStmt->kind == StmtKind::Arrow ||
+                    (bodyStmt->kind == StmtKind::Assignment &&
+                     bodyStmt->target == nullptr) ||
+                    bodyStmt->kind == StmtKind::Const;
+      if (member && staticNames.count(bodyStmt->name))
+        throw QLangError(QLangErrorKind::Parse, stmtLine, stmtCol,
+                         "member '" + bodyStmt->name +
+                         "' conflicts with static member");
+      // Closed field set (Phase 1): a field declaration is a simple
+      // `name = value` assignment (no index/member target) or a
+      // `const name = value` declaration. Methods are Arrow statements and
+      // are not fields; they are tracked separately. Static members stay out
+      // of the instance field schema entirely.
+      if (bodyStmt->kind == StmtKind::Assignment && bodyStmt->target == nullptr)
+        stmt->declaredFields.insert(bodyStmt->name);
+      if (bodyStmt->kind == StmtKind::Const) {
+        stmt->declaredFields.insert(bodyStmt->name);
+        stmt->constFields.insert(bodyStmt->name); // Phase 2: read-only field
+      }
     }
     stmt->classBody.push_back(std::move(bodyStmt));
   }
@@ -941,14 +983,16 @@ ExprPtr QLangParser::parsePostfix() {
       node->indexBase = e;
       node->indexExpr = idx;
       e = std::move(node);
-    } else if (check(TokenType::Dot)) {
-      m_pos++; // consume '.'
+    } else if (check(TokenType::Dot) || check(TokenType::ScopeRes)) {
+      bool scopeRes = check(TokenType::ScopeRes);
+      m_pos++; // consume '.' or '::'
       const Token &nameTok = current();
       m_pos++; // consume the member-name token (Ident or keyword)
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Member;
       node->memberBase = e;
       node->memberName = nameTok.value;
+      node->scopeStatic = scopeRes; // `C::name` -> class static member
       e = std::move(node);
     } else {
       break;
@@ -1329,8 +1373,14 @@ return node;
       for (size_t k = 0; k < exprText.size(); k++) {
         if (exprText[k] == '{') braceDepth++;
         else if (exprText[k] == '}') braceDepth--;
-        else if (exprText[k] == ':' && braceDepth == 0 && specPos == std::string::npos)
+        else if (exprText[k] == ':' && braceDepth == 0 && specPos == std::string::npos) {
+          // `::` is scope resolution (C::name), not a format-spec separator.
+          if (k + 1 < exprText.size() && exprText[k + 1] == ':') {
+            k++;
+            continue;
+          }
           specPos = k;
+        }
       }
 
       std::string innerExprText;

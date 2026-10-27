@@ -231,20 +231,9 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
   switch (id) {
   case Builtin::ToStr:
     need(1, "str");
-    // Check for __str__ method on tables (class instances).
-    if (args[0].type() == QLangValue::Type::Table) {
-      const auto &t = *args[0].asTable();
-      auto it = t.find("__str__");
-      if (it != t.end() && it->second.type() == QLangValue::Type::Function && vm) {
-        return vm->callClosure(it->second, {args[0]});
-      }
-      // Class instances without `__str__` render as their class name
-      // (Phase 5.2); plain tables keep the generic "<table>".
-      auto kit = t.find("__class__");
-      if (kit != t.end() && kit->second.type() == QLangValue::Type::String)
-        return QLangValue::String(kit->second.asString());
-    }
-    return QLangValue::String(valueToString(args[0]));
+    // `__str__` dispatch (tables/class instances), class-name fallback,
+    // generic text form — all in displayString.
+    return QLangValue::String(vm->displayString(args[0]));
   case Builtin::ToInt:
     need(1, "toInt");
     if (isNumeric(args[0]))
@@ -279,11 +268,11 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
   }
   case Builtin::Print:
     need(1, "print");
-    std::cout << valueToString(args[0]);
+    std::cout << vm->displayString(args[0]);
     return QLangValue();
   case Builtin::Println:
     need(1, "println");
-    std::cout << valueToString(args[0]) << "\n";
+    std::cout << vm->displayString(args[0]) << "\n";
     return QLangValue();
   case Builtin::Printf: {
     if (args.empty())
@@ -315,7 +304,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
           out += buf;
           break;
         }
-        case 's': out += valueToString(av); break;
+        case 's': out += vm->displayString(av); break;
         case 'c': out += static_cast<char>((long long)toInt64(av)); break;
         default: out += spec; break;
         }
@@ -383,7 +372,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
           out += buf;
           break;
         }
-        case 's': out += valueToString(av); break;
+        case 's': out += vm->displayString(av); break;
         case 'c': out += static_cast<char>((long long)toInt64(av)); break;
         default: out += spec; break;
         }
@@ -468,7 +457,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
           std::snprintf(buf, sizeof(buf), actualFmt.c_str(), (long long)toInt64(av));
           out += buf;
         } else {
-          out += valueToString(av);
+          out += vm->displayString(av);
         }
         i = j + 1;
       } else {
@@ -564,7 +553,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     std::string result;
     for (size_t i = 0; i < elems.size(); ++i) {
       if (i > 0) result += sep;
-      result += valueToString(elems[i]);
+      result += vm->displayString(elems[i]);
     }
     return QLangValue::String(result);
   }
@@ -662,6 +651,31 @@ QLangValue QLangVM::callClosure(const QLangValue &closure, const std::vector<QLa
   if (closure.type() != QLangValue::Type::Function)
     throw QLangError(QLangErrorKind::Type, 0, 0, "attempt to call a non-function value");
   return callFunction(closure.asFunction().funcIndex, args);
+}
+
+// Display form of a value (print/println/printf/sprintf/f-string/join). A
+// table with a `__str__` method renders by calling it with the table as the
+// sole argument; class instances without `__str__` render as their class
+// name. The re-entrancy guard makes an `__str__` that displays `self`
+// terminate: the nested display skips `__str__` and falls back.
+std::string QLangVM::displayString(const QLangValue &v) {
+  if (v.type() == QLangValue::Type::Table) {
+    const auto &t = *v.asTable();
+    if (!m_inDisplayString) {
+      auto it = t.find("__str__");
+      if (it != t.end() && it->second.type() == QLangValue::Type::Function) {
+        m_inDisplayString = true;
+        QLangValue r = callClosure(it->second, {v});
+        m_inDisplayString = false;
+        if (r.type() == QLangValue::Type::String) return r.asString();
+        return valueToString(r);
+      }
+    }
+    auto kit = t.find("__class__");
+    if (kit != t.end() && kit->second.type() == QLangValue::Type::String)
+      return kit->second.asString();
+  }
+  return valueToString(v);
 }
 
 // Convert a value to the target declared type. Numeric types truncate/wrap

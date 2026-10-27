@@ -71,9 +71,11 @@ struct Expr {
   ExprPtr indexBase;
   ExprPtr indexExpr;
 
-  // Member: base.name  (table member access).
+  // Member: base.name  (table member access). With scopeStatic, the access
+  // was written `base::name` (scope resolution to a class static member).
   ExprPtr memberBase;
   std::string memberName;
+  bool scopeStatic = false;
 
   // Closure: (params)[captures] { ... }  (anonymous arrow closure expression).
   std::vector<std::string> params;
@@ -135,6 +137,11 @@ struct Stmt {
 
   // Const: const name[:type] = value (immutable after init)
   bool isConst = false;
+
+  // Class-body member declared with the `static` prefix (Assignment, Const,
+  // or Arrow in a class body). Static members live in the class-level
+  // `__statics__` table, not in the instance field schema.
+  bool isStatic = false;
 
   // Delete: delete var
   std::string delName;
@@ -218,6 +225,12 @@ struct Stmt {
   // Const fields (Phase 2): the subset of declaredFields that are `const`
   // (read-only). Emitted into the prototype's `__const_fields__` table.
   std::unordered_set<std::string> constFields;
+  // Static members (new extension beyond v1): `static name = value` fields
+  // and `static const name = value` const fields. Excluded from
+  // declaredFields (instance schema); stored in the `__statics__` table.
+  std::unordered_set<std::string> staticFields;
+  // Static methods: `static name(params)[] { ... }` in the class body.
+  std::unordered_set<std::string> staticMethods;
 };
 
 using StmtPtr = std::shared_ptr<Stmt>;
