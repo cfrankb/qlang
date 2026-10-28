@@ -1,5 +1,5 @@
 class Money {
-   static const  prefix = "balance"
+   static const prefix = "balance"
    static banner = "GreatAccount"
    total = 0
 

@@ -11,6 +11,7 @@ enum class TokenType {
   // Literals and names
   Integer,
   Float,
+  UInt,    // unsigned integer literal, e.g. 44u
   String,
   Char,   // single-quoted literal, e.g. ' ' -> byte
   FString, // f"..." / f'...' interpolated string

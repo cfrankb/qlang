@@ -82,6 +82,11 @@ int main() {
 
   // -- hex, in, continue/break, for-in, modulo, not, str type, def --
   expectVal("hex 0xc", "local n = 0xc\nlocal m = n;", "m", 12);
+  // -- numeric literal suffixes: 1.0f (float), 44u (unsigned) --
+  expectStr("float suffix type", "local my_float = 1.0f\nlocal s = type(my_float);", "s", "float");
+  expectStr("uint suffix type", "local my_uint = 44u\nlocal s = type(my_uint);", "s", "unsigned");
+  expectVal("uint suffix value", "local my_uint = 44u\nlocal m = my_uint;", "m", 44);
+  expectVal("float suffix arithmetic", "local a = 1.0f\nlocal b = a + 1\nlocal r = b;", "r", 2);
   expectVal("in operator", "local a = [1,2]\nlocal b = 2\nif (b in a) then\nb = 3\nend\nlocal r = b;", "r", 3);
   expectRun("continue stmt", "local n = 0\nfor x = 1 to 3\ncontinue\nnext x");
   expectRun("break stmt", "local n = 0\nfor x = 1 to 3\nbreak\nnext x");

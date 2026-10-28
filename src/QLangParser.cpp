@@ -144,7 +144,8 @@ StmtPtr QLangParser::parseStatement() {
 
   // Bare literal expression statement (e.g. a standalone multiline string).
   if (check(TokenType::String) || check(TokenType::Char) ||
-      check(TokenType::Integer) || check(TokenType::Float)) {
+      check(TokenType::Integer) || check(TokenType::Float) ||
+      check(TokenType::UInt)) {
     auto expr = parseExpression();
     match(TokenType::Semicolon);
     auto stmt = std::make_shared<Stmt>();
@@ -1033,6 +1034,14 @@ ExprPtr QLangParser::parsePrimary() {
       node->literal = QLangValue::Dword(static_cast<uint64_t>(v));
     else
       node->literal = QLangValue::Int(static_cast<int32_t>(v));
+    return node;
+  }
+  case TokenType::UInt: {
+    m_pos++;
+    auto node = std::make_shared<Expr>();
+    node->kind = ExprKind::Literal;
+    node->literal = QLangValue::Unsigned(
+        static_cast<uint32_t>(std::stoull(tok.value)));
     return node;
   }
   case TokenType::True: {

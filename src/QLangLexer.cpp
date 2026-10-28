@@ -130,8 +130,19 @@ Token QLangLexer::number() {
       break;
     }
   }
+  // Type suffixes: 1.0f (float), 44u (unsigned int) — only when directly
+  // attached, so "123 f" stays two tokens.
+  bool isUInt = false;
+  if (peek() == 'f') {
+    isFloat = true;
+    advance();
+  } else if (peek() == 'u' && !isFloat) {
+    isUInt = true;
+    advance();
+  }
   Token tok;
-  tok.type = isFloat ? TokenType::Float : TokenType::Integer;
+  tok.type = isUInt ? TokenType::UInt
+                    : (isFloat ? TokenType::Float : TokenType::Integer);
   tok.text = text;
   tok.value = text;
   tok.line = line;

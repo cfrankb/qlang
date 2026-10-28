@@ -57,7 +57,7 @@ false
 def
 let (alias local)
 else
-range => keyword
+range
 goto
 char
 dword
@@ -201,6 +201,13 @@ events = {
   onDeath = ()[] {
   }
 }
+
+# floats use a special notation
+local my_float = 1.0f
+
+# unsigned int
+local my_uint = 44u
+
 ```
 # Control flow
 
