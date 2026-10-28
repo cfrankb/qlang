@@ -1,0 +1,7 @@
+# .graphifyignore
+build/
+bin/
+.git/
+*.o
+*.a
+*.so

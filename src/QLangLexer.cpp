@@ -49,6 +49,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "table") return TokenType::TypeTable;
   if (text == "qword") return TokenType::TypeQword;
   if (text == "long") return TokenType::TypeLong;
+  if (text == "set") return TokenType::TypeSet;
   if (text == "type") return TokenType::Type;
   if (text == "global") return TokenType::Global;
   if (text == "assert") return TokenType::Assert;

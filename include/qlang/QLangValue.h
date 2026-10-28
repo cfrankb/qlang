@@ -39,7 +39,9 @@ public:
     Generator, // lazy generator (yield-based function)
     Object,   // class instance (uses ObjectOps dispatch)
     Eof,      // end-of-file sentinel value
-    Long      // int64_t (kept last so fixed serialization tags stay stable)
+    Long,     // int64_t
+    Set       // set of unique values (ArrayValue storage; kept last so fixed
+              // serialization tags stay stable)
   };
 
   QLangValue() : m_type(Type::Nil) {}
@@ -106,6 +108,11 @@ public:
     q.m_storage = std::move(v);
     return q;
   }
+  static QLangValue Set(ArrayValue v) {
+    QLangValue q(Type::Set);
+    q.m_storage = std::move(v);
+    return q;
+  }
   static QLangValue Float(double v) {
     QLangValue q(Type::Float);
     q.m_storage = v;
@@ -167,6 +174,8 @@ public:
   std::vector<uint8_t> &asBlob();
   const ArrayValue &asArray() const;
   ArrayValue &asArray();
+  const ArrayValue &asSet() const;
+  ArrayValue &asSet();
   const double &asFloat() const;
   double &asFloat();
   const TableValue &asTable() const;

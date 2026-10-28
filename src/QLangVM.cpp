@@ -57,6 +57,7 @@ std::string valueToString(const QLangValue &v) {
   }
   case QLangValue::Type::Blob: return "<blob>";
   case QLangValue::Type::Array: return "<array>";
+  case QLangValue::Type::Set: return "<set>";
   case QLangValue::Type::Table: return "<table>";
   case QLangValue::Type::Function: return "<function>";
   case QLangValue::Type::Generator: return "<generator>";
@@ -176,6 +177,10 @@ int cmp(const QLangValue &a, const QLangValue &b, const char *op,
                        b.typeName());
 }
 
+// Forward decl: set membership test (defined below with the other set helpers);
+// used by isEqual's Set case.
+static bool setContains(const ArrayValue &elems, const QLangValue &v);
+
 // Equality per spec §23 (== and !=): Int 1/0. nil == nil true; nil != x true.
 // bool == int (bool stored as Int 1/0 at runtime). Number types compare equal
 // when their int64 values match. Any other comparison: same type and same
@@ -215,9 +220,81 @@ bool isEqual(const QLangValue &a, const QLangValue &b) {
     }
     return true;
   }
+  case QLangValue::Type::Set: {
+    // Exact match: same unique elements, order-independent (set order is
+    // implementation-defined per SPEC §sets).
+    const auto &ea = a.asSet(), eb = b.asSet();
+    if (ea.size() != eb.size()) return false;
+    for (const QLangValue &e : ea)
+      if (!setContains(eb, e)) return false;
+    return true;
+  }
   default:
     return false;
   }
+}
+
+// Set element equality (SPEC §sets: sets hold numbers and strings only).
+// Same type + same value; distinct numeric types are distinct elements.
+static bool setElementEq(const QLangValue &a, const QLangValue &b) {
+  if (a.type() != b.type()) return false;
+  switch (a.type()) {
+  case QLangValue::Type::String: return a.asString() == b.asString();
+  case QLangValue::Type::Float: return a.asFloat() == b.asFloat();
+  case QLangValue::Type::Bool:
+  case QLangValue::Type::Char:
+  case QLangValue::Type::Byte:
+  case QLangValue::Type::Word:
+  case QLangValue::Type::Short:
+  case QLangValue::Type::Int:
+  case QLangValue::Type::Unsigned:
+  case QLangValue::Type::Qword:
+  case QLangValue::Type::Long:
+    return toInt64(a) == toInt64(b);
+  default: return false;
+  }
+}
+
+// True if `elems` already holds a value equal to `v` (set dedup).
+static bool setContains(const ArrayValue &elems, const QLangValue &v) {
+  for (const auto &e : elems)
+    if (setElementEq(e, v)) return true;
+  return false;
+}
+
+// Build set storage from source values: numbers and strings only, duplicates
+// dropped, first-seen order kept. Throws (Type) on any other element type.
+static ArrayValue toSetElements(const std::vector<QLangValue> &src) {
+  ArrayValue out;
+  for (const auto &v : src) {
+    if (v.type() != QLangValue::Type::String && !isNumeric(v))
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       std::string("set element must be a number or string, got ") +
+                           v.typeName());
+    if (!setContains(out, v))
+      out.push_back(v);
+  }
+  return out;
+}
+
+// ARRAPP: append one value to a collection. Arrays append unconditionally;
+// sets take numbers/strings only and dedup (SPEC §sets: `s[] = v`).
+static void appendValue(QLangValue &base, const QLangValue &val) {
+  if (base.type() == QLangValue::Type::Array) {
+    base.asArray().push_back(val);
+    return;
+  }
+  if (base.type() == QLangValue::Type::Set) {
+    if (val.type() != QLangValue::Type::String && !isNumeric(val))
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       std::string("set element must be a number or string, got ") +
+                           val.typeName());
+    if (!setContains(base.asSet(), val))
+      base.asSet().push_back(val);
+    return;
+  }
+  throw QLangError(QLangErrorKind::Type, 0, 0,
+                   "cannot append to non-array value");
 }
 
 // Length for len() (SPEC §build-in functions): string/array/table/blob
@@ -230,6 +307,7 @@ int64_t lenOf(const QLangValue &v) {
                      "len: undefined/nil has no length");
   case QLangValue::Type::String: return v.asString().size();
   case QLangValue::Type::Array: return v.asArray().size();
+  case QLangValue::Type::Set: return static_cast<int64_t>(v.asSet().size());
   case QLangValue::Type::Blob: return v.asBlob().size();
   case QLangValue::Type::Table: {
     auto t = v.asTable();
@@ -263,6 +341,12 @@ QLangValue seqGet(const QLangValue &col, int64_t idx) {
     const auto &elems = col.asArray();
     if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
       throw QLangError(QLangErrorKind::Runtime, 0, 0, "array index out of range");
+    return elems[static_cast<size_t>(idx)];
+  }
+  if (col.type() == QLangValue::Type::Set) {
+    const auto &elems = col.asSet();
+    if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0, "set index out of range");
     return elems[static_cast<size_t>(idx)];
   }
   if (col.type() == QLangValue::Type::Table) {
@@ -567,6 +651,16 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     need(0, "blob");
     return QLangValue::Blob(std::vector<uint8_t>{});
   }
+  case Builtin::Set: {
+    // set(1,5,7) variadic, or set([1,2,3]) with a single array argument
+    // (SPEC §sets: array coerced into set).
+    std::vector<QLangValue> src;
+    if (args.size() == 1 && args[0].type() == QLangValue::Type::Array)
+      src = args[0].asArray();
+    else
+      src = args;
+    return QLangValue::Set(toSetElements(src));
+  }
   case Builtin::Substr: {
     // substr(str, start, [length]) — 0-based start (consistent with array
     // indexing, spec §100); length optional (defaults to end of string).
@@ -730,6 +824,7 @@ bool QLangVM::isTrue(const QLangValue &v) {
   case QLangValue::Type::Nil: return false;
   case QLangValue::Type::Eof: return false;
   case QLangValue::Type::String: return !v.asString().empty();
+  case QLangValue::Type::Set: return !v.asSet().empty();
   default: return isNumeric(v) && (long long)toInt64(v) != 0;
   }
 }
@@ -787,6 +882,16 @@ std::string QLangVM::displayString(const QLangValue &v) {
       out += renderElement(a[i]);
     }
     return out + "]";
+  }
+  if (v.type() == QLangValue::Type::Set) {
+    // Set __str__: set(e1, e2, ...) (SPEC §sets).
+    const auto &a = v.asSet();
+    std::string out = "set(";
+    for (size_t i = 0; i < a.size(); i++) {
+      if (i) out += ", ";
+      out += renderElement(a[i]);
+    }
+    return out + ")";
   }
   return valueToString(v);
 }
@@ -873,6 +978,12 @@ QLangValue convert(const QLangValue &v, QLangValue::Type type) {
     return QLangValue::Qword(static_cast<uint64_t>((long long)toInt64(v)));
   case QLangValue::Type::Long:
     return QLangValue::Long(static_cast<int64_t>((long long)toInt64(v)));
+  case QLangValue::Type::Set:
+    // Typed declaration: array coerced into a set (SPEC §sets); a set passes
+    // through; anything else passes through (lenient, like array/table).
+    if (v.type() == QLangValue::Type::Array)
+      return QLangValue::Set(toSetElements(v.asArray()));
+    return v;
   default: return v;
   }
 }
@@ -889,7 +1000,7 @@ QLangValue strict_convert(const QLangValue &v, QLangValue::Type type) {
       type == QLangValue::Type::Long ||
       type == QLangValue::Type::Float) {
     if (v.type() == QLangValue::Type::Array || v.type() == QLangValue::Type::Table ||
-        v.type() == QLangValue::Type::Blob) {
+        v.type() == QLangValue::Type::Set || v.type() == QLangValue::Type::Blob) {
       throw QLangError(QLangErrorKind::Type, 0, 0,
                        std::string("cannot cast ") + v.typeName() + " to " +
                        QLangValue(type).typeName());
@@ -924,9 +1035,16 @@ QLangValue strict_convert(const QLangValue &v, QLangValue::Type type) {
   if (type == QLangValue::Type::String) {
     return QLangValue::String(valueToString(v));
   }
-  // Collection targets: allow same-type, reject others.
-  if (type == QLangValue::Type::Array || type == QLangValue::Type::Table) {
-    if (v.type() != QLangValue::Type::Array && v.type() != QLangValue::Type::Table) {
+  // Collection targets: array <-> set convert (SPEC cast table); table and
+  // same-type collections pass through; anything else is rejected.
+  if (type == QLangValue::Type::Array || type == QLangValue::Type::Table ||
+      type == QLangValue::Type::Set) {
+    if (type == QLangValue::Type::Array && v.type() == QLangValue::Type::Set)
+      return QLangValue::Array(v.asSet()); // cast<array>(set)
+    if (type == QLangValue::Type::Set && v.type() == QLangValue::Type::Array)
+      return QLangValue::Set(toSetElements(v.asArray())); // cast<set>(array)
+    if (v.type() != QLangValue::Type::Array && v.type() != QLangValue::Type::Table &&
+        v.type() != QLangValue::Type::Set) {
       throw QLangError(QLangErrorKind::Type, 0, 0,
                        std::string("cannot cast ") + v.typeName() + " to " +
                        QLangValue(type).typeName());
@@ -1085,8 +1203,13 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
       std::string key = valueToString(a);
       return QLangValue::Bool(col.asTable()->count(key) ? 1 : 0);
     }
+    if (col.type() == QLangValue::Type::Set) {
+      // `x in set` mirrors `x in [..]` (SPEC §sets); element equality is the
+      // same exact-match rule set dedup uses.
+      return QLangValue::Bool(setContains(col.asSet(), a) ? 1 : 0);
+    }
     throw QLangError(QLangErrorKind::Type, 0, 0,
-                     std::string("operator 'in' requires an array or table, got ") +
+                     std::string("operator 'in' requires an array, table or set, got ") +
                          col.typeName());
   }
   default:
@@ -1231,14 +1354,9 @@ void QLangVM::run() {
       elems[static_cast<size_t>(idx)] = frame.regs[i.c];
       break;
     }
-    case Opcode::ARRAPP: {
-      QLangValue &base = frame.regs[i.a];
-      if (base.type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
-                         "cannot append to non-array value");
-      base.asArray().push_back(frame.regs[i.b]);
+    case Opcode::ARRAPP:
+      appendValue(frame.regs[i.a], frame.regs[i.b]);
       break;
-    }
     case Opcode::ARRAPPV: {
       QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Array)
@@ -1563,14 +1681,9 @@ void QLangVM::runFrames(int startFrame)
       elems[static_cast<size_t>(idx)] = frame.regs[i.c];
       break;
     }
-    case Opcode::ARRAPP: {
-      QLangValue &base = frame.regs[i.a];
-      if (base.type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
-                         "cannot append to non-array value");
-      base.asArray().push_back(frame.regs[i.b]);
+    case Opcode::ARRAPP:
+      appendValue(frame.regs[i.a], frame.regs[i.b]);
       break;
-    }
     case Opcode::ARRAPPV: {
       QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Array)
@@ -1940,14 +2053,9 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         elems[static_cast<size_t>(idx)] = frame.regs[i.c];
         break;
       }
-      case Opcode::ARRAPP: {
-        QLangValue &base = frame.regs[i.a];
-        if (base.type() != QLangValue::Type::Array)
-          throw QLangError(QLangErrorKind::Type, 0, 0,
-                           "cannot append to non-array value");
-        base.asArray().push_back(frame.regs[i.b]);
+      case Opcode::ARRAPP:
+        appendValue(frame.regs[i.a], frame.regs[i.b]);
         break;
-      }
       case Opcode::ARRAPPV: {
         QLangValue &base = frame.regs[i.a];
         if (base.type() != QLangValue::Type::Array)
@@ -2282,14 +2390,9 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       elems[static_cast<size_t>(idx)] = frame.regs[i.c];
       break;
     }
-    case Opcode::ARRAPP: {
-      QLangValue &base = frame.regs[i.a];
-      if (base.type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
-                         "cannot append to non-array value");
-      base.asArray().push_back(frame.regs[i.b]);
+    case Opcode::ARRAPP:
+      appendValue(frame.regs[i.a], frame.regs[i.b]);
       break;
-    }
     case Opcode::ARRAPPV: {
       QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Array)

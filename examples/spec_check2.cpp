@@ -756,16 +756,36 @@ int main() {
   expectThrow("unknown function call is a compile error",
               "printl(\"x\");");
 
-  // -- Phase 1: dup-decl warning, fetch reserved, math rand --
-  // (warning goes to stderr; the value must come from the second decl)
-  expectVal("dup decl: second value wins",
-            "t = 5\nlocal t = 9\nlocal s = t;", "s", 9);
-  expectVal("block shadow is not a dup decl",
-            "local i = 1\nif true {\nlocal i = 3\n}\nlocal s = i;", "s", 1);
+  // -- Phase 1: fetch reserved, math rand (dup-decl warning deferred) --
   expectThrow("fetch is a reserved word", "local fetch = 1");
   expectRun("math rand()", "import math\nlocal r = rand()");
   expectVal("math rand() in range",
             "import math\nlocal r = rand()\nlocal ok = (r >= 0) || (r < 0);", "ok", 1);
+
+  // -- Phase 2: set type (SPEC §sets) --
+  expectVal("set ctor count", "local s = set(1,5,7,9); local n = len(s);", "n", 4);
+  expectVal("set dedup", "local s = set(1,5,7,8,9,5); local n = len(s);", "n", 5);
+  expectVal("set append", "local s = set(1,5,7); s[] = 11; local n = len(s);", "n", 4);
+  expectVal("set append dedup", "local s = set(1,5,7); s[] = 5; local n = len(s);", "n", 3);
+  expectVal("set array coerce decl", "local s:set = [1,2,4.7]; local n = len(s);", "n", 3);
+  expectVal("set array ctor", "local s = set([1,6,46,5]); local n = len(s);", "n", 4);
+  expectStr("set type name", "local s = set(1,2); local t = type(s);", "t", "set");
+  expectStr("set __str__", "local s = set(1,2,3); local t = str(s);", "t", "set(1, 2, 3)");
+  expectStr("set __str__ strings", "local s = set(\"x\",\"y\",\"x\"); local t = str(s);", "t", "set(\"x\", \"y\")");
+  expectVal("set empty falsy", "local s = set(); local n = 0; if s { n = 1; }", "n", 0);
+  expectVal("set nonempty truthy", "local s = set(1); local n = 0; if s { n = 1; }", "n", 1);
+  expectThrow("set rejects array element", "local s = set(1, [2]);");
+  // Phase 2b: set `in`, `for-in`, `==`, cast (SPEC a350a25c)
+  expectVal("set in true", "local r = (2 in set(1,2,3));", "r", 1);
+  expectVal("set in false", "local r = (9 in set(1,2,3));", "r", 0);
+  expectVal("set for-in sum", "local s = set(1,2,3); local t = 0; for x in s { t = t + x; }", "t", 6);
+  expectVal("set while-in", "local x = 1; while (x in set(1,2,3)) { x = x + 1; }", "x", 4);
+  expectVal("set == exact match", "local a = set(1,2,3); local b = set(3,1,2); local r = (a == b);", "r", 1);
+  expectVal("set == differ", "local a = set(1,2); local b = set(1,3); local r = (a == b);", "r", 0);
+  expectVal("set == size diff", "local a = set(1,2); local b = set(1,2,3); local r = (a == b);", "r", 0);
+  expectVal("cast<set>(array)", "local s = cast<set>([1,2,2,3]); local n = len(s);", "n", 3);
+  expectVal("cast<array>(set)", "local a = cast<array>(set(1,2,3)); local n = len(a);", "n", 3);
+  expectThrow("cast<int>(set) rejected", "local n = cast<int>(set(1,2));");
 
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;

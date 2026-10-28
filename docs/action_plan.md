@@ -1,7 +1,7 @@
 # QLang Action Plan (excludes `$$` operator and C++ API / external data)
 
-Basis: SPEC.md review (SHA256 `56e3b092…`, 1625 lines) cross-checked against
-`SPEC_COMPLIANCE.md` (431 tests green) and the source tree. Everything below is
+Basis: SPEC.md review (SHA256 `fe8c72fe…`, 1656 lines) cross-checked against
+`SPEC_COMPLIANCE.md` (437 tests green) and the source tree. Everything below is
 QLang-side only. `$$` indirect access and the whole C++ API / external-types
 surface (`ctx.set`, `setFunc`, modules-from-C++, external type bindings, enum
 injection) are **out of scope** per direction.
@@ -14,59 +14,38 @@ range encodings, infinite-loop guard (VM-wide step limit, default 100 000,
 covers `while true {}`), block scope, global scope, f-strings, `$` operator,
 generators, classes (closed fields, const, `__str__`, refcount, `__destroy__`,
 `static` + `::`), builtins (`len` storage sizes, `delete` guards, `substr`,
-`slice`, `join`, `isset`, `assert`, `sprintf`), types (`long`, `qword`,
-`dword` alias, `1.0f`/`44u` suffixes), import/from (flat, v1), verbose levels.
+`slice`, `join`, `isset`, `assert`, `sprintf`, math `rand`), types (`long`,
+`qword`, `dword` alias, `1.0f`/`44u` suffixes), import/from (flat, v1),
+verbose levels.
 
-Remaining gaps (this plan): `set` type, `enum` type, `# error reporting`,
-valueless-`local` default 0, duplicate-declaration warning, `fetch` reserved
-word, math `rand()`.
+Remaining gaps (this plan): `enum` type, `# error reporting`. (`set` ✓ done, Round 26+27.)
+Deferred: duplicate-declaration warning (see Deferred).
 
-## Phase 1 — small fixes (one sitting)
+## Phase 1 — small fixes — DONE (Round 25, 2026-10-28)
 
-1. **Valueless `local` defaults to 0** (SPEC §declarations: `local d` → int 0;
-   implementation still declares nil).
-   - `QLangCompiler`: when a declaration has no initializer, emit
-     `CONST Int(0)` (typed declaration → zero of that type) instead of nil.
-   - Tests: `type(z)` → `"int"`, `z` == 0, typed `local b:byte` → 0.
-2. **Duplicate-declaration compile warning** (SPEC: later explicit
-   `local`/`let` for a name already declared in the same scope → *warning*,
-   not error; currently silent).
-   - `QLangCompiler`: at the explicit-declaration site (not in
-     `declareVar()` — bare assignment must stay implicit), check the name
-     against the current scope map; emit `warning: duplicate declaration of
-     '<name>'` to stderr.
-   - Tests: `t = 5; local t = 9` → warning, value 9; block-scoped shadow in
-     an `if` → no warning (different scope).
-3. **`fetch` reserved word** (in SPEC §reserved words, not in
-   `keywordType()`; `local fetch = 1` currently compiles).
-   - One line: new `TokenType::Fetch` in `keywordType()`. Behavior is
-     unspecified in the spec — reserving is all the spec asks.
-4. **math `rand()`** (SPEC math table lists it; only min/max/sum registered).
-   - One function in `src/QLangModules.cpp` (`std::mt19937`, returns `Int`).
-   - Test: `r = rand()` is a number in range.
-   - (Boundary note: this lives in the C++-registered module file, but the
-     spec'd surface is the QLang builtin — include unless you want it cut.)
+1. ✅ **Valueless `local` defaults to 0** — compiler emits `CONST Int(0)`;
+   typed valueless decl gets zero of its type via CONV.
+2. ✅ **`fetch` reserved word** — `TokenType::Fetch` in `keywordType()`.
+3. ✅ **math `rand()`** — `std::mt19937` in `QLangModules.cpp`, returns `Int`.
+4. ⏸ **Duplicate-declaration warning** — implemented then **reverted/deferred**
+   (see Deferred): the new `# warning` SPEC section requires warnings to be
+   toggleable, so it waits for the warning infrastructure.
 
-## Phase 2 — `set` type (SPEC §sets, 2026-10-28)
+## Phase 2 — `set` type — DONE (Round 26+27, 2026-10-28)
 
-Fully specified: unique-value container of numbers and strings.
-
-- Lexer: `set` → new token (pattern: `str`/`int`/`type` — reserved word that
-  is also callable, via a `parsePrimary()` special case).
-- Value: `QLangValue::Type::Set` appended **last** (keeps `.qlc` tags stable).
-  Storage: `std::vector<QLangValue>` with linear dedup on insert — sets are
-  small, order is implementation-defined, no comparator needed.
-- Semantics:
-  - `set(1,5,7,9)` variadic constructor; duplicates dropped
-  - `local s:set = [1,2,4.7]` and `set([1,6,46,5])` — array coerced
-  - `s[] = v` append (dedup)
-  - `len(s)` = count; truthiness empty → false (by collection analogy)
-  - element types: numbers and strings only; other types → type error
-- Tests: ~8 `spec_check2` cases (constructor dedup, both coercions, append,
-  len, truthiness, type rejection).
-- **Spec gaps to flag (don't invent):** no rule for `in` membership,
-  `str()`/`__str__` rendering of a set, `isset` on set elements, `==` between
-  sets. Implement only what's written; ask before adding.
+- ✅ `TypeSet` lexer keyword (`set` reserved; callable as `set(...)`)
+- ✅ `QLangValue::Type::Set` (ArrayValue storage, appended last)
+- ✅ `Builtin::Set`: `set(1,5,7)` variadic + `set([..])` array coercion,
+  dedup, numbers+strings only
+- ✅ `s:set = [..]` typed-decl coercion (CONV); `s[] = v` dedup append
+  (ARRAPP → shared `appendValue` helper at all 4 dispatch sites)
+- ✅ `len` = count; empty → false; `__str__` → `set(1, 2, 3)`
+- ✅ Round 27 (SPEC `a350a25c` closed the gaps): `x in set` (IN opcode,
+  `setContains`), `for x in set` (seqGet Set branch), `set == set` (isEqual
+  Set case — exact match, order-independent), `cast<set>(array)` +
+  `cast<array>(set)` (parser cast table + `strict_convert`)
+- ✅ 22 `spec_check2` cases (325 → 347)
+- **No set gaps remain** — SPEC §sets is fully covered.
 
 ## Phase 3 — `enum` type (SPEC §enum, 2026-10-28)
 
@@ -106,6 +85,23 @@ Current state: `QLangError` carries line/col but 152/162 throw sites pass
 - Tests: assert messages contain the right line number and function name for
   a known-failing program (parse error, runtime type error, deep call chain).
 
+## Deferred (later plan)
+
+- **Warning infrastructure + duplicate-declaration warning**
+  (SPEC `# warning`, 2026-10-28: "compiler and interpreter warning can be
+  togged off" + §declarations dup-decl warning for `local`/`let`):
+  - warning toggle (on/off, default on) — QLang + C++ access, same shape as
+    the verbose level (`set_verbose` pattern)
+  - then the dup-decl check: explicit `local`/`let` for a name already
+    declared in the same scope (current block scope, else frame map) →
+    `warning: duplicate declaration of '<name>'` through the toggleable
+    warning path; nested-block shadows silent; bare-assignment
+    auto-declaration unaffected
+  - a Round 25 prototype of the check (unconditional stderr at the
+    Declaration site) was reverted — re-land it on the new infrastructure
+  - tests: warning emitted when toggle on, silent when off, value semantics
+    unchanged (`t = 5; local t = 9` → 9)
+
 ## Verification (every phase, per AGENTS.md)
 
 - `cmake -B build && cmake --build build && ctest --test-dir build`
@@ -115,7 +111,8 @@ Current state: `QLangError` carries line/col but 152/162 throw sites pass
 
 ## Suggested commit order
 
-1. `fix(decl): valueless local defaults to 0; dup-decl warning; fetch keyword; math rand`
-2. `feat(set): unique-value container (constructor, coercion, append)`
+1. ~~Phase 1 (done, Round 25)~~
+2. ~~`feat(set): unique-value container (constructor, coercion, append, __str__)`~~ (done, Round 26)
 3. `feat(enum): immutable value collections with :: access`
 4. `feat(errors): line/col, module and execution trace in error reporting`
+5. (later plan) `feat(warnings): toggleable warning infra + dup-decl warning`

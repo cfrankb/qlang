@@ -16,6 +16,7 @@ const char *QLangValue::typeName() const {
   case Type::Unsigned: return "unsigned";
   case Type::Qword: return "qword";
   case Type::Long: return "long";
+  case Type::Set: return "set";
   case Type::String: return "string";
   case Type::Blob: return "blob";
   case Type::Array: return "array";
@@ -69,6 +70,7 @@ QL_ACCESSOR_GETTER(int64_t, Long, int64_t)
 QL_ACCESSOR_GETTER(std::string, String, std::string)
 QL_ACCESSOR_GETTER(std::vector<uint8_t>, Blob, std::vector<uint8_t>)
 QL_ACCESSOR_GETTER(ArrayValue, Array, ArrayValue)
+QL_ACCESSOR_GETTER(ArrayValue, Set, ArrayValue)
 QL_ACCESSOR_GETTER(double, Float, double)
 QL_ACCESSOR_GETTER(TableValue, Table, TableValue)
 
@@ -114,6 +116,7 @@ QL_ACCESSOR_MUT(int64_t, Long, int64_t)
 QL_ACCESSOR_MUT(std::string, String, std::string)
 QL_ACCESSOR_MUT(std::vector<uint8_t>, Blob, std::vector<uint8_t>)
 QL_ACCESSOR_MUT(ArrayValue, Array, ArrayValue)
+QL_ACCESSOR_MUT(ArrayValue, Set, ArrayValue)
 QL_ACCESSOR_MUT(double, Float, double)
 QL_ACCESSOR_MUT(TableValue, Table, TableValue)
 

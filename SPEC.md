@@ -66,15 +66,14 @@ local set_b:set = [1,2,4.7] # array coerced into set
 local set_c = set([1,6,46,5]) # array coerced into set
 ```
 
-sets have their own __str__() function for string coersion.
+sets have their own `__str__()` function for string coersion.
 
 ```
 local set_a = set(1,2,3)
 println("{set_a}") # expected: "set(1, 2, 3)"
-```
 
-**append**
-```
+# append
+
 local set_a = set(1,5,7,8,9,5) # expected: 1,5,7,8,9
 set_a[] = 11  # expected: 1,5,7,8,9,11
 ```
@@ -677,6 +676,8 @@ d = 2 ** [1,2] # expected: error
 |cast\<string>([])|depends on \_\_str__()| collections fallback on their string representations
 |cast\<int>([])|n/a| error: collections cannot be cast to int
 |cast\<array>(123)|n/a| error: numbers cannot be cast to collections
+|cast\<array>(set)|n/a| sets are converted to arrays
+|cast\<set>(array)|n/a| arrays are converted to sets
 |cast\<any>()|n/a| error: empty source. nothing to cast
 |cast\<>(123)|n/a| error: empty cast. nothing to do
 
@@ -1636,6 +1637,12 @@ class model works unchanged on external types.
 |class||use provided \_\_str\_\_() method
 
 table key order is implementation defined (depends on the underlying container).
+
+# warning 
+
+compiler and interpreter warning can be togged off.
+
+all warnings defered until further notice.
 
 # error reporting
 

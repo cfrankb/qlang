@@ -477,16 +477,6 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     return;
   switch (s->kind) {
   case StmtKind::Declaration: {
-    // Compile warning: explicit local/let re-declaring a name already
-    // declared in the same scope (SPEC §declarations). Shadows in a nested
-    // block scope are legal and silent.
-    {
-      const auto &curScope =
-          m_blockScopes.empty() ? m_regs : m_blockScopes.back();
-      if (curScope.count(s->name))
-        std::cerr << "warning: duplicate declaration of '" << s->name
-                  << "'\n";
-    }
     int r = declareVar(s->name, true);
     int t = tmpRegister();
     if (s->value)
@@ -2483,6 +2473,7 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "format") return static_cast<int>(Builtin::Format);
   if (name == "assert") return static_cast<int>(Builtin::Assert);
   if (name == "next") return static_cast<int>(Builtin::Next);
+  if (name == "set") return static_cast<int>(Builtin::Set);
   if (name == "set_max_steps") return static_cast<int>(Builtin::SetMaxSteps);
   if (name == "get_max_steps") return static_cast<int>(Builtin::GetMaxSteps);
   return -1;
