@@ -64,14 +64,32 @@ possible extensions may include: arrays, tables and other sets. tbd
 local set_a = set(1,5,7,9)  # set constructor
 local set_b:set = [1,2,4.7] # array coerced into set
 local set_c = set([1,6,46,5]) # array coerced into set
+```
 
-# append
+sets have their own __str__() function for string coersion.
 
+```
+local set_a = set(1,2,3)
+println("{set_a}") # expected: "set(1, 2, 3)"
+```
+
+**append**
+```
 local set_a = set(1,5,7,8,9,5) # expected: 1,5,7,8,9
 set_a[] = 11  # expected: 1,5,7,8,9,11
 ```
 
+**sets and in keyword**
+
+|example||behavior|
+|-------|-|-|
+|for x in set(1,2,3) {...}|similar to | for x in [1,2,3] {...}
+|while x in set(1,2,3) {...}|similar to | while x in [1,2,3] {...}
+|if x in set(1,2,3) {...}|similar to | if x in [1,2,3] {...}
+
+
 value order is dependant on the implementation.
+TODO: please advise on options
 
 
 ## reserved words
@@ -138,6 +156,11 @@ const # declare a constant
 const year = 2026;
 const month:byte = 10;
 ```
+
+const expressions cannot be redeclared and are immutable. trying to redeclare an existing constant will trigger and error. trying to assign a value to a constant will trigger an error.
+
+global constants are viewable in every scope without needing the `global` keyword. 
+
 
 ## enum
 
@@ -685,6 +708,7 @@ d = 2 ** [1,2] # expected: error
 |"toto"|==|"toto"|true|string is equal to itself
 |table|==|table|depends|only true if all kv pairs must match. no stray keys
 |array|==|array|depends|only true if array is an exact match
+|set|==|set|depends|only true if set is an exact match
 
 equivalency works both ways. `operator !=` is the `boolean` inversion of `operator ==`.
 

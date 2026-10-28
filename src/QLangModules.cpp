@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <random>
 
 namespace qlang {
 
@@ -127,6 +128,12 @@ QLangValue mathMax(QLangContext&, const std::vector<QLangValue>& args) {
   return QLangValue::Int(static_cast<int32_t>(v));
 }
 
+QLangValue mathRand(QLangContext&, const std::vector<QLangValue>&) {
+  static std::mt19937 rng{std::random_device{}()};
+  std::uniform_int_distribution<int32_t> d;
+  return QLangValue::Int(d(rng));
+}
+
 QLangValue mathSum(QLangContext&, const std::vector<QLangValue>& args) {
   auto elems = flattenArgs(args, false);  // sum allows multiple arrays
   if (elems.empty()) return QLangValue::Int(0);
@@ -157,6 +164,7 @@ void registerBuiltinModules(QLangContext& ctx) {
   mathMod.funcs["min"] = mathMin;
   mathMod.funcs["max"] = mathMax;
   mathMod.funcs["sum"] = mathSum;
+  mathMod.funcs["rand"] = mathRand;
   ctx.registerModule("math", mathMod);
 }
 

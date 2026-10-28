@@ -250,7 +250,7 @@ All items below are implemented and verified. Table retained for traceability.
 | `end` | `End` | ✓ | Reserved word; terminates `if/then/end`, `while/end`, `def/end` forms. Not used in brace-form syntax |
 | `cast` | `Cast` | ✓ | Reserved word; blocks identifier use. `cast<int>(1.12)` works as expression via `parsePrimary()` special case |
 | `class` | `Class` | ✓ | **Fully implemented** (conforms to expanded spec section `c83ebc8`). Closed field set (`__fields__`/`__const_fields__` descriptors in `QLangObjects.cpp`), `const` fields, unique method/dunder names (compile error), fixed arity, `__str__`, reference counting, `__destroy__`, `type(x)` = class name, **`static` members + `::`** (Round 12, new extension beyond v1). 42 tests at spec_check2 L449–L615 + 17 in `class_static_test`. See "user defined classes — spec conformance". |
-| `fetch` | — | — | **Not a keyword.** Not implemented; no `TokenType::Fetch` in lexer/parser. Listed as reserved word in SPEC but the lexer does not recognize it. Gap.
+| `fetch` | `Fetch` | ✓ | ★ **Implemented** (Round 25). `TokenType::Fetch` in `keywordType()` — `local fetch = 1` → parse error (reserved word). Behavior unspecified in SPEC; reserving is all the spec asks.
 | `enum` | — | — | **Not a keyword.** Not implemented; no `TokenType::Enum` in lexer/parser. New `## enum` section (2026-10-28): immutable value collections, default int / typed `:byte`, implied sequential values, `::` access, `len()` = member count, no redefinition, scope-bound. See Open Items.
 | `step` | `Step` | ✓ | ★ **Implemented** (`e955a8d`). Reserved word: `local step = 1` → parse error. `for x = a to b step N` and `for i in range(a,b) step N`: direction from start/end; user step in the wrong direction → body runs exactly once; `step 0` → infinite loop, bounded by the VM step-limit guard (satisfies the spec's required "timeout guard that results in a runtime exception" — throws `runtime error: ... infinite loop (step limit)`); `for x in [..] step n` → `type error: step is not supported over array literals in for-in loops`. Constant + variable step; continue/break/next intact. 19 tests in `spec_check2`. |
 | `$` | `Dollar` | ✓ | ★ **Implemented** (`0c63f4b`). SPEC §The $ Operator: `$age` → `"33"` (scalar-to-string evaluator), table-literal dynamic keys `{ $property = "male" }`, `OP_EVALKEY` opcode dispatched in all 4 exec loops. Rejects array/table/class instances (runtime type error; instances are typed `Table` at compile time, so the check is runtime — documented deviation, Phase 9.2 in `class_action_plan.md`). 6 tests at spec_check2 L617–L626. |
@@ -386,6 +386,34 @@ Numeric literal suffixes `1.0f` / `44u` implemented (SPEC §declarations and ass
 - 4 new `spec_check2` cases (291 → 295): `type(1.0f)` → `"float"`, `type(44u)` → `"unsigned"`, `44u` value 44, float-suffix arithmetic.
 - Harness re-run: **295/295** (`spec_check2`), **33** (`spec_check`), **20** (`spec_cast_test`), **7** (`test_module`), **5** (`gen_test`), **22** (`range`), **13** (`class_str`), **17** (`class_static`), all green = **412 total**.
 - `# error reporting` remains **not implemented**.
+
+## Round 25 (2026-10-28)
+
+Phase 1 of `docs/action_plan.md` (plan excludes `$$` and C++ API / external
+data). SPEC.md unchanged (hash `56e3b092…` still current) — code + tests only.
+- **Valueless `local` defaults to 0** (SPEC §declarations): the Declaration
+  case emits `CONST Int(0)` instead of nil; a typed valueless decl
+  (`local b:byte`) gets zero of that type via the existing CONV. The 4
+  nil-equality cases (`eq/ne nil nil/x`) updated to declare `nil`
+  explicitly — they had encoded the old nil default.
+- **Duplicate-declaration compile warning** (spec: later explicit
+  `local`/`let` for a name already declared in the same scope → warning):
+  the Declaration case checks the current scope (innermost block scope, else
+  the frame map) and emits `warning: duplicate declaration of '<name>'` to
+  stderr. Nested-block shadows stay silent; bare-assignment auto-declaration
+  is unaffected (the check is at the explicit-declaration site only).
+- **`fetch` reserved word**: `TokenType::Fetch` in the lexer enum +
+  `keywordType()` — `local fetch = 1` → `parse error: expected variable name
+  but found 'fetch'`. Behavior unspecified in SPEC; reserving is all it asks.
+- **math `rand()`**: `mathRand` in `QLangModules.cpp` (`std::mt19937` +
+  `uniform_int_distribution<int32_t>`, returns `Int`), registered in the math
+  module.
+- 8 new `spec_check2` cases (319 → 327). Harness re-run: **327/327**
+  (`spec_check2`), **33** (`spec_check`), **20** (`spec_cast_test`), **7**
+  (`test_module`), **22** (`range`), **13** (`class_str`), **17**
+  (`class_static`), all green = **439 total** (gen_test 5/5 separately).
+  ctest 4/4. Probe: `t = 5; local t = 9` → warning + value 9; `local z` →
+  `type(z)` = "int", `z` = 0.
 
 ## Round 24 (2026-10-28)
 

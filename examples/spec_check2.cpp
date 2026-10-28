@@ -51,7 +51,11 @@ int main() {
   expectRun("const typed byte", "const month:byte = 10");
 
   // -- nil + float (106, 107) --
-  expectRun("local z nil", "local z");
+  expectRun("local z valueless", "local z");
+  // valueless local is implicit int, default 0 (SPEC §declarations)
+  expectVal("valueless local -> 0", "local z\nlocal s = z;", "s", 0);
+  expectStr("valueless local type int", "local z\nlocal s = type(z);", "s", "int");
+  expectVal("valueless typed local -> 0", "local b:byte\nlocal s = b;", "s", 0);
   expectStr("float toStr", "local f = 1.13\nlocal s = toStr(f);", "s", "1.13");
 
   // -- concat (111,114,117) --
@@ -377,11 +381,11 @@ int main() {
   expectStr("eof assign and read", "local e = eof\nlocal r = type(e);", "r", "eof");
   expectStr("eof in table", "local t = {x=eof}\nlocal r = type(t.x);", "r", "eof");
 
-  // -- == / != semantics (spec §23) --
-  expectVal("eq nil nil", "local a\nlocal r = (a == nil);", "r", 1);
-  expectVal("ne nil nil", "local a\nlocal r = (a != nil);", "r", 0);
-  expectVal("ne nil x", "local a\nlocal r = (a != 5);", "r", 1);
-  expectVal("eq nil x", "local a\nlocal r = (a == 5);", "r", 0);
+  // -- == / != semantics (spec §23) -- (explicit nil: valueless `local` is int 0)
+  expectVal("eq nil nil", "local a = nil\nlocal r = (a == nil);", "r", 1);
+  expectVal("ne nil nil", "local a = nil\nlocal r = (a != nil);", "r", 0);
+  expectVal("ne nil x", "local a = nil\nlocal r = (a != 5);", "r", 1);
+  expectVal("eq nil x", "local a = nil\nlocal r = (a == 5);", "r", 0);
   expectVal("eq bool int", "local r = (true == 1);", "r", 1);
   expectVal("eq bool int zero", "local r = (false == 0);", "r", 1);
   expectVal("ne bool int", "local r = (true != 0);", "r", 1);
@@ -751,6 +755,17 @@ int main() {
   expectVal("bool comparison still numeric in arithmetic", "local s = 1 + (1 < 2);", "s", 2);
   expectThrow("unknown function call is a compile error",
               "printl(\"x\");");
+
+  // -- Phase 1: dup-decl warning, fetch reserved, math rand --
+  // (warning goes to stderr; the value must come from the second decl)
+  expectVal("dup decl: second value wins",
+            "t = 5\nlocal t = 9\nlocal s = t;", "s", 9);
+  expectVal("block shadow is not a dup decl",
+            "local i = 1\nif true {\nlocal i = 3\n}\nlocal s = i;", "s", 1);
+  expectThrow("fetch is a reserved word", "local fetch = 1");
+  expectRun("math rand()", "import math\nlocal r = rand()");
+  expectVal("math rand() in range",
+            "import math\nlocal r = rand()\nlocal ok = (r >= 0) || (r < 0);", "ok", 1);
 
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;

@@ -477,12 +477,25 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     return;
   switch (s->kind) {
   case StmtKind::Declaration: {
+    // Compile warning: explicit local/let re-declaring a name already
+    // declared in the same scope (SPEC §declarations). Shadows in a nested
+    // block scope are legal and silent.
+    {
+      const auto &curScope =
+          m_blockScopes.empty() ? m_regs : m_blockScopes.back();
+      if (curScope.count(s->name))
+        std::cerr << "warning: duplicate declaration of '" << s->name
+                  << "'\n";
+    }
     int r = declareVar(s->name, true);
     int t = tmpRegister();
     if (s->value)
       compileExpr(s->value, t);
     else
-      emit(Opcode::CONST, t, emitConst(QLangValue())); // `local z` -> nil
+      // `local z` -> implicit int, default 0 (SPEC §declarations).
+      // A typed valueless decl (`local b:byte`) gets zero of that type via
+      // the CONV emitted below.
+      emit(Opcode::CONST, t, emitConst(QLangValue::Int(0)));
     emit(Opcode::MOV, r, t);
     // Clear the RHS temp so it doesn't hold an extra reference past the
     // declaration (matters for tables with finalizers: a lingering temp
