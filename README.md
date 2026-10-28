@@ -97,7 +97,7 @@ named native function groups to `import`.
 | `short` | `int16_t` | |
 | `int` | `int32_t` | |
 | `unsigned` | `uint32_t` | |
-| `dword` | `uint64_t` | |
+| `qword` | `uint64_t` | |
 | `string` | null-terminated text | |
 | `blob` | binary data | |
 | `array` | list of mixed values | |

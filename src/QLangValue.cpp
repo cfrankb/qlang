@@ -14,7 +14,7 @@ const char *QLangValue::typeName() const {
   case Type::Short: return "short";
   case Type::Int: return "int";
   case Type::Unsigned: return "unsigned";
-  case Type::Dword: return "dword";
+  case Type::Qword: return "qword";
   case Type::String: return "string";
   case Type::Blob: return "blob";
   case Type::Array: return "array";
@@ -56,11 +56,11 @@ const int32_t &QLangValue::asInt() const {
   return std::get<int32_t>(m_storage);
 }
 QL_ACCESSOR_GETTER(uint32_t, Unsigned, uint32_t)
-// asDword reads from the uint64_t storage.
-const uint64_t &QLangValue::asDword() const {
-  if (m_type != Type::Dword)
+// asQword reads from the uint64_t storage.
+const uint64_t &QLangValue::asQword() const {
+  if (m_type != Type::Qword)
     throw QLangError(QLangErrorKind::Type, 0, 0,
-                     std::string("expected Dword but value is ") + typeName());
+                     std::string("expected Qword but value is ") + typeName());
   return std::get<uint64_t>(m_storage);
 }
 QL_ACCESSOR_GETTER(std::string, String, std::string)
@@ -99,11 +99,11 @@ int32_t &QLangValue::asInt() {
   return std::get<int32_t>(m_storage);
 }
 QL_ACCESSOR_MUT(uint32_t, Unsigned, uint32_t)
-// asDword mut reads from the uint64_t storage.
-uint64_t &QLangValue::asDword() {
-  if (m_type != Type::Dword)
+// asQword mut reads from the uint64_t storage.
+uint64_t &QLangValue::asQword() {
+  if (m_type != Type::Qword)
     throw QLangError(QLangErrorKind::Type, 0, 0,
-                     std::string("expected Dword but value is ") + typeName());
+                     std::string("expected Qword but value is ") + typeName());
   return std::get<uint64_t>(m_storage);
 }
 QL_ACCESSOR_MUT(std::string, String, std::string)
@@ -165,11 +165,11 @@ int64_t toInt64(const QLangValue &v) {
   case QLangValue::Type::Short: return static_cast<int64_t>(v.asShort());
   case QLangValue::Type::Int: return static_cast<int64_t>(v.asInt());
   case QLangValue::Type::Unsigned: return static_cast<int64_t>(v.asUnsigned());
-  case QLangValue::Type::Dword: {
-    uint64_t u = v.asDword();
+  case QLangValue::Type::Qword: {
+    uint64_t u = v.asQword();
     if (u > static_cast<uint64_t>(INT64_MAX))
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                       "dword value exceeds int64_t range");
+                       "Qword value exceeds int64_t range");
     return static_cast<int64_t>(u);
   }
   case QLangValue::Type::Float: return static_cast<int64_t>(v.asFloat());

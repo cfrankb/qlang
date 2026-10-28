@@ -24,7 +24,8 @@ SPEC.md is a living document.
 |word|2 bytes| uint16_t
 |short|2 bytes| int16_t
 |int|4 bytes| int32_t
-|unsigned|4bytes| uint32_t
+|unsigned|4bytes| uint32_t (equivant to dword)
+|dword|4bytes| uint32_t
 |long|8 bytes| int64_t
 |qword|8 bytes| uint64_t
 |array|varying| contain list of mixed variable|
@@ -33,9 +34,9 @@ SPEC.md is a living document.
 |bool|???| true, false
 |set|varying|unique value container|
 
+**NOTES**: type `dword` is another alias for `unsigned` both are 32bits (4 bytes) unsigned int (uint32_t). the original documnetation was in error when `dword` was used  for `8 bytes`.
 
 TODO: ??? set storage space based on type runtime allocation.
-      errata: replace all references to `dword` with `qword`.
 
 
 ## strings
@@ -78,7 +79,7 @@ else
 range
 goto
 char
-dword
+qword
 switch
 case
 default
@@ -508,6 +509,19 @@ if they cross a boundary, trigger an error.
 
 same rules apply to `operator <=` and `operator =>`
 
+## operator *
+
+|left hand|right hand|operation|example|expected|notes|
+|-|-|-|-|-|-|
+|number|number|multiply|2 * 2|4
+|float|float|multiply|1.5 * 1.2|1.8
+|int|float|multiply|1 * 1.2|1|float coerced to int
+|float|int|multiply|1 * 1.2|1.2|int coerced to float
+|string|number|"toto" * 2|error|
+|collection|number|[1,2,3]*2||
+|class|number||error|
+|number|string|copy|2 * "abc"|"abcabc"
+
 ## operator +=
 
 |left-hand|operator|right-hand|result
@@ -581,7 +595,7 @@ The `$` operator evaluates an identifier at runtime and forces its value into a 
 ### Constraints and Type Restrictions
 Unlike the explicit `cast<string>()` operator which falls back on default string representations for all types, the `$` operator is strictly a **scalar-to-string evaluator**. 
 
-* **Supported Types:** `string/str`, `char`, `byte`, `word`, `short`, `int`, `unsigned`, `dword`, `float`, `bool`, and `nil`.
+* **Supported Types:** `string/str`, `char`, `byte`, `word`, `short`, `int`, `unsigned`, `qword`, `float`, `bool`, and `nil`.
 * **Unsupported Types:** `array`, `table`, and `class`. Invoking the `$` operator on an aggregate collection type will halt execution and throw a compile-time or runtime exception.
 
 ### Behavior Matrix
@@ -875,7 +889,7 @@ qval_word(uint16_t)
 qval_short(int16_t)
 qval_int(int32_t)
 qval_unsigned(uint32_t)
-qval_dword(uint64_t)
+qval_qword(uint64_t)
 qval_float(double)
 qval_str(const char*) / qval_str(const std::string&)
 qval_blob(const std::vector<uint8_t>&)
@@ -1092,7 +1106,7 @@ QLangValue r = ctx.run("println(1)");
 ### Implementation notes
 
 - `QLangContext` owns the level (`m_verboseLevel`, default `0`) and exposes `setVerboseLevel(int)`, `verboseLevel()`, and `isAt(int)`.
-- `set_verbose` is registered as a native function (`QLangContext.cpp`). It accepts an int/dword/float argument and returns the resulting level.
+- `set_verbose` is registered as a native function (`QLangContext.cpp`). It accepts an int/qword/float argument and returns the resulting level.
 - `QLangVM` holds a gated emit helper `trace(minLevel, fmt, …)` (declared inline in `QLangVM.h`). Every diagnostic call site in `QLangVM.cpp` was converted from `fprintf(stderr, …)` to `trace(T, …)` with its tier `T` (1/2/3); sites inside the free function `callBuiltin` call `vm->trace(T, …)`.
 - `trace()` returns immediately when `m_scope.isAt(minLevel)` is false, so no formatting cost is incurred when a tier is disabled.
 

@@ -97,7 +97,7 @@ bool parseTraceLevel(const std::string &s, int &out)
 //     Bool / Int: i32
 //     Char / Short: i32
 //     Byte: u8    Word: u32    Unsigned: u32
-//     Dword: u64  Float: f64
+//     Qword: u64  Float: f64
 //     String / Blob: u32 len + bytes
 //     Array: u32 count + values
 //     Table: u32 count + (u32 keyLen + key + value)
@@ -151,8 +151,8 @@ struct QlcWriter
     case T::Unsigned:
       u32(v.asUnsigned());
       break;
-    case T::Dword:
-      u64(v.asDword());
+    case T::Qword:
+      u64(v.asQword());
       break;
     case T::Float:
       f64(v.asFloat());

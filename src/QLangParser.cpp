@@ -324,7 +324,7 @@ StmtPtr QLangParser::parseDeclaration() {
         (tt >= TokenType::TypeBool && tt <= TokenType::TypeTable) ||
         tt == TokenType::StrType ||
         tt == TokenType::TypeChar ||
-        tt == TokenType::TypeDword;
+        tt == TokenType::TypeQword;
     if (isType) {
       // Explicit lookup table (formula is wrong — enums have different layouts).
       static const std::pair<int,int> tmap[] = {
@@ -340,7 +340,7 @@ StmtPtr QLangParser::parseDeclaration() {
         {static_cast<int>(TokenType::TypeArray), static_cast<int>(QLangValue::Type::Array)},
         {static_cast<int>(TokenType::TypeFloat), static_cast<int>(QLangValue::Type::Float)},
         {static_cast<int>(TokenType::TypeTable), static_cast<int>(QLangValue::Type::Table)},
-        {static_cast<int>(TokenType::TypeDword), static_cast<int>(QLangValue::Type::Dword)},
+        {static_cast<int>(TokenType::TypeQword), static_cast<int>(QLangValue::Type::Qword)},
       };
       int ttv = static_cast<int>(tt);
       QLangValue::Type vt = QLangValue::Type::Nil;
@@ -380,7 +380,7 @@ StmtPtr QLangParser::parseConst() {
         (tt >= TokenType::TypeBool && tt <= TokenType::TypeTable) ||
         tt == TokenType::StrType ||
         tt == TokenType::TypeChar ||
-        tt == TokenType::TypeDword;
+        tt == TokenType::TypeQword;
     if (isType) {
       // Explicit lookup table (formula is wrong — enums have different layouts).
       static const std::pair<int,int> tmap[] = {
@@ -396,7 +396,7 @@ StmtPtr QLangParser::parseConst() {
         {static_cast<int>(TokenType::TypeArray), static_cast<int>(QLangValue::Type::Array)},
         {static_cast<int>(TokenType::TypeFloat), static_cast<int>(QLangValue::Type::Float)},
         {static_cast<int>(TokenType::TypeTable), static_cast<int>(QLangValue::Type::Table)},
-        {static_cast<int>(TokenType::TypeDword), static_cast<int>(QLangValue::Type::Dword)},
+        {static_cast<int>(TokenType::TypeQword), static_cast<int>(QLangValue::Type::Qword)},
       };
       int ttv = static_cast<int>(tt);
       QLangValue::Type vt = QLangValue::Type::Nil;
@@ -422,6 +422,9 @@ StmtPtr QLangParser::parseConst() {
 
 StmtPtr QLangParser::parseDelete() {
   consume(TokenType::Delete, "'delete'");
+  if (check(TokenType::Nil))
+    throw QLangError(QLangErrorKind::Parse, current().line, current().col,
+                     "cannot delete nil");
   auto stmt = std::make_shared<Stmt>();
   stmt->kind = StmtKind::Delete;
   stmt->delName = consume(TokenType::Ident, "variable name").value;
@@ -1028,10 +1031,10 @@ ExprPtr QLangParser::parsePrimary() {
       v = std::stoll(tok.value, nullptr, 16); // 0x... hexadecimal
     auto node = std::make_shared<Expr>();
     node->kind = ExprKind::Literal;
-    // Use Dword for values outside int32_t range so the full value is preserved.
+    // Use Qword for values outside int32_t range so the full value is preserved.
     if (v > static_cast<long long>(std::numeric_limits<int32_t>::max()) ||
         v < static_cast<long long>(std::numeric_limits<int32_t>::min()))
-      node->literal = QLangValue::Dword(static_cast<uint64_t>(v));
+      node->literal = QLangValue::Qword(static_cast<uint64_t>(v));
     else
       node->literal = QLangValue::Int(static_cast<int32_t>(v));
     return node;
@@ -1107,7 +1110,7 @@ return node;
           !check(TokenType::TypeUnsigned) && !check(TokenType::TypeString) &&
           !check(TokenType::TypeBlob) && !check(TokenType::TypeArray) &&
           !check(TokenType::TypeFloat) && !check(TokenType::TypeTable) &&
-          !check(TokenType::TypeDword) && !check(TokenType::StrType)) {
+          !check(TokenType::TypeQword) && !check(TokenType::StrType)) {
         throw QLangError(QLangErrorKind::Parse, current().line, current().col,
                          std::string("invalid cast target type '") + current().text + "'");
       }
@@ -1126,7 +1129,7 @@ return node;
         {static_cast<int>(TokenType::TypeArray), static_cast<int>(QLangValue::Type::Array)},
         {static_cast<int>(TokenType::TypeFloat), static_cast<int>(QLangValue::Type::Float)},
         {static_cast<int>(TokenType::TypeTable), static_cast<int>(QLangValue::Type::Table)},
-        {static_cast<int>(TokenType::TypeDword), static_cast<int>(QLangValue::Type::Dword)},
+        {static_cast<int>(TokenType::TypeQword), static_cast<int>(QLangValue::Type::Qword)},
       };
       int ttv = static_cast<int>(current().type);
       targetType = QLangValue::Type::Nil;

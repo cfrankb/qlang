@@ -17,7 +17,7 @@ namespace {
   int levelFromValue(const QLangValue &v) {
     switch (v.type()) {
       case QLangValue::Type::Int:   return static_cast<int>(v.asInt());
-      case QLangValue::Type::Dword: return static_cast<int>(static_cast<long long>(v.asDword()));
+      case QLangValue::Type::Qword: return static_cast<int>(static_cast<long long>(v.asQword()));
       case QLangValue::Type::Float: return static_cast<int>(v.asFloat());
       default:                      return 0;
     }
@@ -41,7 +41,7 @@ namespace {
       const QLangValue &v = args[0];
       switch (v.type()) {
         case QLangValue::Type::Int:   n = static_cast<std::size_t>(v.asInt());   break;
-        case QLangValue::Type::Dword: n = static_cast<std::size_t>(v.asDword()); break;
+        case QLangValue::Type::Qword: n = static_cast<std::size_t>(v.asQword()); break;
         case QLangValue::Type::Float: n = static_cast<std::size_t>(v.asFloat()); break;
         default:                      n = 0; break;
       }
@@ -91,6 +91,11 @@ namespace {
     std::vector<StmtPtr> program = parse(source);
     QLangCompiler compiler(std::move(program), this);
     compiler.addExternalConsts(m_injectedConsts);
+    std::unordered_set<std::string> externalVars;
+    for (const auto &[name, _] : m_vars)
+      if (m_injectedConsts.find(name) == m_injectedConsts.end())
+        externalVars.insert(name);
+    compiler.addExternalVars(externalVars);
     std::unordered_set<std::string> nativeNames;
     for (const auto &[name, _] : m_nativeFuncs)
       nativeNames.insert(name);

@@ -92,6 +92,10 @@ void QLangCompiler::addExternalConsts(const std::unordered_set<std::string> &nam
   m_constVars.insert(names.begin(), names.end());
 }
 
+void QLangCompiler::addExternalVars(const std::unordered_set<std::string> &names) {
+  m_externalVars.insert(names.begin(), names.end());
+}
+
 void QLangCompiler::addExternalFuncs(const std::unordered_set<std::string> &names) {
   int idx = -1;
   for (const auto &name : names) {
@@ -614,9 +618,13 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
   }
   case StmtKind::Delete: {
     int r = regOf(s->delName);
-    if (r < 0)
+    if (r < 0) {
+      if (m_externalVars.count(s->delName))
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "cannot delete external variable '" + s->delName + "'");
       throw QLangError(QLangErrorKind::Parse, 0, 0,
                        "delete of undeclared variable '" + s->delName + "'");
+    }
     emit(Opcode::DELETE, r);
     break;
   }

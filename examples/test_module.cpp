@@ -13,7 +13,7 @@ static int64_t toInt64_(const QLangValue &v) {
   case QLangValue::Type::Short:   return static_cast<int64_t>(v.asShort());
   case QLangValue::Type::Int:     return static_cast<int64_t>(v.asInt());
   case QLangValue::Type::Unsigned:return static_cast<int64_t>(v.asUnsigned());
-  case QLangValue::Type::Dword:   return static_cast<int64_t>(v.asDword());
+  case QLangValue::Type::Qword:   return static_cast<int64_t>(v.asQword());
   case QLangValue::Type::Float:   return static_cast<int64_t>(v.asFloat());
   default: return 0;
   }

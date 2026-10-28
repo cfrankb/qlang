@@ -46,6 +46,11 @@ public:
   // the same as source-level const vars for guardNotConst purposes.
   void addExternalConsts(const std::unordered_set<std::string> &names);
 
+  // Register names injected as writable host variables (not consts). Used
+  // only to give `delete` a precise error (SPEC: delete of an external
+  // variable is an error).
+  void addExternalVars(const std::unordered_set<std::string> &names);
+
   // Register names of C++ native functions. The compiler assigns them
   // negative indices so the VM can dispatch them at runtime.
   void addExternalFuncs(const std::unordered_set<std::string> &names);
@@ -128,6 +133,7 @@ private:
   // m_regs so they cross block boundaries.
   std::vector<std::unordered_map<std::string, int>> m_blockScopes;
   std::unordered_set<std::string> m_constVars; // names declared with `const`
+  std::unordered_set<std::string> m_externalVars; // injected writable host vars
   // External C++ native functions: name -> negative opcode index.
   // Negative indices (-1, -2, ...) signal the VM to dispatch via the
   // context's native function registry.

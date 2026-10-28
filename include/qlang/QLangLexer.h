@@ -49,7 +49,7 @@ enum class TokenType {
   TypeArray,
   TypeFloat,   // float
   TypeTable,   // table
-  TypeDword,   // dword (uint64_t)
+  TypeQword,   // qword (uint64_t)
   StrType,     // str (alias for string; kept outside the range above)
   Type,        // type (reserved; used as builtin function)
 

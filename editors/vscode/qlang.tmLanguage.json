@@ -12,7 +12,7 @@
         },
         {
             "name": "storage.type.qlang",
-            "match": "\\b(string|str|byte|blob|word|short|int|unsigned|array|float|table|bool|char|dword|class|def|let|local|cast|assert)\\b"
+            "match": "\\b(string|str|byte|blob|word|short|int|unsigned|array|float|table|bool|char|dword|class|def|let|local|cast|assert|qword)\\b"
         },
         {
             "name": "constant.language.boolean.qlang",

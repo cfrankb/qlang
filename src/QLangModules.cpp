@@ -10,7 +10,7 @@ namespace qlang {
 
 namespace {
 
-// Return true if the value is a signed integer type (char, short, int, dword-as-signed).
+// Return true if the value is a signed integer type (char, short, int, Qword-as-signed).
 static bool isSignedInt(QLangValue::Type t) {
   return t == QLangValue::Type::Char || t == QLangValue::Type::Short ||
          t == QLangValue::Type::Int;
@@ -22,14 +22,14 @@ static bool isUnsignedInt(QLangValue::Type t) {
          t == QLangValue::Type::Unsigned;
 }
 
-// Return true if the value is a dword (unsigned 64-bit, but treat as unsigned).
-static bool isDword(QLangValue::Type t) {
-  return t == QLangValue::Type::Dword;
+// Return true if the value is a Qword (unsigned 64-bit, but treat as unsigned).
+static bool isQword(QLangValue::Type t) {
+  return t == QLangValue::Type::Qword;
 }
 
 // Check whether a collection has mixed char (signed) and byte (unsigned).
 // Spec §774: "sum return int if data is mixed signed and unsigned types (char and byte)"
-// min/max §767: same rule. Other signed/unsigned combos (int+dword) are allowed.
+// min/max §767: same rule. Other signed/unsigned combos (int+Qword) are allowed.
 static void checkCharByteMix(const std::vector<QLangValue>& elems) {
   bool hasChar = false;
   bool hasByte = false;
@@ -49,7 +49,7 @@ static void checkMinMixFloat(const std::vector<QLangValue>& elems) {
   bool hasInt = false;
   for (auto& e : elems) {
     if (e.type() == QLangValue::Type::Float) hasFloat = true;
-    else if (isSignedInt(e.type()) || isUnsignedInt(e.type()) || isDword(e.type()))
+    else if (isSignedInt(e.type()) || isUnsignedInt(e.type()) || isQword(e.type()))
       hasInt = true;
   }
   if (hasFloat && hasInt)
@@ -98,7 +98,7 @@ QLangValue mathMin(QLangContext&, const std::vector<QLangValue>& args) {
   if (hasFloat) return QLangValue::Float(static_cast<double>(v));
   if (v < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
       v > static_cast<double>(std::numeric_limits<int32_t>::max()))
-    return QLangValue::Dword(static_cast<uint64_t>(v));
+    return QLangValue::Qword(static_cast<uint64_t>(v));
   return QLangValue::Int(static_cast<int32_t>(v));
 }
 
@@ -119,7 +119,7 @@ QLangValue mathMax(QLangContext&, const std::vector<QLangValue>& args) {
   if (hasFloat) return QLangValue::Float(static_cast<double>(v));
   if (v < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
       v > static_cast<double>(std::numeric_limits<int32_t>::max()))
-    return QLangValue::Dword(static_cast<uint64_t>(v));
+    return QLangValue::Qword(static_cast<uint64_t>(v));
   return QLangValue::Int(static_cast<int32_t>(v));
 }
 
@@ -141,7 +141,7 @@ QLangValue mathSum(QLangContext&, const std::vector<QLangValue>& args) {
   if (hasFloat) return QLangValue::Float(static_cast<double>(s));
   if (s < static_cast<double>(std::numeric_limits<int32_t>::min()) ||
       s > static_cast<double>(std::numeric_limits<int32_t>::max()))
-    return QLangValue::Dword(static_cast<uint64_t>(s));
+    return QLangValue::Qword(static_cast<uint64_t>(s));
   return QLangValue::Int(static_cast<int32_t>(s));
 }
 

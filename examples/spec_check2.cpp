@@ -70,6 +70,19 @@ int main() {
   expectVal("len array", "local a = len([1,2,3]);", "a", 3);
   expectVal("len string", "local s = len(\"hello\");", "s", 5);
   expectVal("len table", "local t = {a=1,b=2,c=3}\nlocal n = len(t);", "n", 3);
+  // -- NEW: len() storage byte size for numbers; nil is an error (spec errata) --
+  expectVal("len int -> 4", "local n = len(123);", "n", 4);
+  expectVal("len unsigned -> 4", "local u:unsigned = 3\nlocal n = len(u);", "n", 4);
+  expectVal("len qword -> 8", "local d:qword = 5\nlocal n = len(d);", "n", 8);
+  expectVal("len float -> 8", "local n = len(1.5);", "n", 8);
+  expectVal("len byte -> 1", "local b:byte = 3\nlocal n = len(b);", "n", 1);
+  expectVal("len word -> 2", "local w:word = 3\nlocal n = len(w);", "n", 2);
+  expectVal("len bool -> 1", "local n = len(true);", "n", 1);
+  expectVal("len class instance -> 1", "class C { x = 1 }\nlocal c = C()\nlocal n = len(c);", "n", 1);
+  expectThrow("len nil -> error", "local n = len(nil);");
+  // -- NEW: delete guards (spec: external variable/struct or nil is an error) --
+  expectThrow("delete nil -> error", "local x = 1\ndelete nil;");
+  expectRun("delete local -> ok", "local x = 1\ndelete x;");
   expectRun("type()", "local t = type(5);");
   expectStr("substr", "local s = substr(\"hello\", 1, 3);", "s", "ell");
 
@@ -203,12 +216,12 @@ int main() {
   expectVal("char != byte type", "local b:byte = 42\nlocal c:char = 42\nlocal r = (type(b) == \"byte\");", "r", 1);
   expectVal("char != byte type2", "local b:byte = 42\nlocal c:char = 42\nlocal r = (type(c) == \"char\");", "r", 1);
 
-  // -- NEW: dword type (spec §24) --
-  expectStr("dword typed", "local d:dword = 4294967296\nlocal s = toStr(d);", "s", "4294967296");
-  expectStr("dword type returns dword", "local d:dword = 1\nlocal s = type(d);", "s", "dword");
-  expectStr("dword max u32", "local d:dword = 4294967295\nlocal s = toStr(d);", "s", "4294967295");
-  expectRun("dword const", "const big:dword = 10000000000");
-  expectVal("dword arithmetic", "local a:dword = 100\nlocal b:dword = 200\nlocal r = a + b;", "r", 300);
+  // -- NEW: qword type (spec §24; was `dword`, renamed per spec errata) --
+  expectStr("qword typed", "local d:qword = 4294967296\nlocal s = toStr(d);", "s", "4294967296");
+  expectStr("qword type returns qword", "local d:qword = 1\nlocal s = type(d);", "s", "qword");
+  expectStr("qword max u32", "local d:qword = 4294967295\nlocal s = toStr(d);", "s", "4294967295");
+  expectRun("qword const", "const big:qword = 10000000000");
+  expectVal("qword arithmetic", "local a:qword = 100\nlocal b:qword = 200\nlocal r = a + b;", "r", 300);
 
   // -- NEW: switch/case/default (spec §208-221) --
   expectVal("switch basic int", "local x = 2\nswitch (x) {\n  case 1: x = 10\n  case 2: x = 20\n  case 3: x = 30\n  default: x = 99\n}\nlocal r = x;", "r", 20);
@@ -556,7 +569,7 @@ int main() {
   expectVal("field type match ok",
     "class P {\ncount = 0\n__init__ (self, v) [ ] { self.count = v }\n}\nlocal p = P(9);\nlocal r = p.count;",
     "r", 9);
-  expectVal("numeric tower compatible (int into dword field)",
+  expectVal("numeric tower compatible (int into qword field)",
     "class D {\nbig = 3000000000\n__init__ (self, v) [ ] { self.big = v }\n}\nlocal d = D(5);\nlocal r = d.big;",
     "r", 5);
   expectRun("nil default field unconstrained",

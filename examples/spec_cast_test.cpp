@@ -24,7 +24,7 @@ static void expectVal(const std::string &name, const std::string &src,
     case QLangValue::Type::Short: got = v.asShort(); break;
     case QLangValue::Type::Int: got = v.asInt(); break;
     case QLangValue::Type::Unsigned: got = static_cast<int64_t>(v.asUnsigned()); break;
-    case QLangValue::Type::Dword: got = static_cast<int64_t>(v.asDword()); break;
+    case QLangValue::Type::Qword: got = static_cast<int64_t>(v.asQword()); break;
     case QLangValue::Type::Float: got = static_cast<int64_t>(v.asFloat()); break;
     default: break;
     }
@@ -79,8 +79,8 @@ int main() {
   expectVal("cast to short", "local a = cast<short>(100)\nlocal r = a;", "r", 100);
   // cast to unsigned
   expectVal("cast to unsigned", "local a = cast<unsigned>(-5)\nlocal r = a;", "r", 4294967291u);
-  // cast to dword
-  expectStr("cast to dword", "local a = cast<dword>(4294967296)\nlocal s = toStr(a);", "s", "4294967296");
+  // cast to qword
+  expectStr("cast to qword", "local a = cast<qword>(4294967296)\nlocal s = toStr(a);", "s", "4294967296");
   // cast to bool
   expectVal("cast to bool from non-zero", "local a = cast<bool>(42)\nlocal r = a;", "r", 1);
   expectVal("cast to bool from zero", "local a = cast<bool>(0)\nlocal r = a;", "r", 0);

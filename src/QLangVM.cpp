@@ -24,7 +24,7 @@ bool isNumeric(const QLangValue &v) {
   return t == QLangValue::Type::Bool || t == QLangValue::Type::Char ||
          t == QLangValue::Type::Byte || t == QLangValue::Type::Word ||
          t == QLangValue::Type::Short || t == QLangValue::Type::Int ||
-         t == QLangValue::Type::Unsigned || t == QLangValue::Type::Dword ||
+         t == QLangValue::Type::Unsigned || t == QLangValue::Type::Qword ||
          t == QLangValue::Type::Float;
 }
 
@@ -47,7 +47,7 @@ std::string valueToString(const QLangValue &v) {
   case QLangValue::Type::Short: return std::to_string(v.asShort());
   case QLangValue::Type::Int: return std::to_string(v.asInt());
   case QLangValue::Type::Unsigned: return std::to_string(v.asUnsigned());
-  case QLangValue::Type::Dword: return std::to_string(v.asDword());
+  case QLangValue::Type::Qword: return std::to_string(v.asQword());
   case QLangValue::Type::Float: {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%.15g", v.asFloat());
@@ -218,15 +218,31 @@ bool isEqual(const QLangValue &a, const QLangValue &b) {
   }
 }
 
-// Length for len(): string/array/table/blob lengths; any other type is 1
-// (per spec: "other type return 1").
+// Length for len() (SPEC §build-in functions): string/array/table/blob
+// element counts; numbers return storage byte size; class instances and
+// any other type return 1; nil/undefined is an error.
 int64_t lenOf(const QLangValue &v) {
   switch (v.type()) {
+  case QLangValue::Type::Nil:
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "len: undefined/nil has no length");
   case QLangValue::Type::String: return v.asString().size();
   case QLangValue::Type::Array: return v.asArray().size();
-  case QLangValue::Type::Table: return v.asTable()->size();
   case QLangValue::Type::Blob: return v.asBlob().size();
-  default: return 1;
+  case QLangValue::Type::Table: {
+    auto t = v.asTable();
+    if (t->find("__class__") != t->end()) return 1; // class instance
+    return static_cast<int64_t>(t->size());
+  }
+  case QLangValue::Type::Char:
+  case QLangValue::Type::Byte: return 1;
+  case QLangValue::Type::Word:
+  case QLangValue::Type::Short: return 2;
+  case QLangValue::Type::Int:
+  case QLangValue::Type::Unsigned: return 4;
+  case QLangValue::Type::Qword:
+  case QLangValue::Type::Float: return 8;
+  default: return 1; // bool, function, generator, ...
   }
 }
 
@@ -832,8 +848,8 @@ QLangValue convert(const QLangValue &v, QLangValue::Type type) {
     return QLangValue::Int(static_cast<int32_t>((long long)toInt64(v)));
   case QLangValue::Type::Unsigned:
     return QLangValue::Unsigned(static_cast<uint32_t>((long long)toInt64(v)));
-  case QLangValue::Type::Dword:
-    return QLangValue::Dword(static_cast<uint64_t>((long long)toInt64(v)));
+  case QLangValue::Type::Qword:
+    return QLangValue::Qword(static_cast<uint64_t>((long long)toInt64(v)));
   default: return v;
   }
 }
@@ -846,7 +862,7 @@ QLangValue strict_convert(const QLangValue &v, QLangValue::Type type) {
   if (type == QLangValue::Type::Bool || type == QLangValue::Type::Char ||
       type == QLangValue::Type::Byte || type == QLangValue::Type::Word ||
       type == QLangValue::Type::Short || type == QLangValue::Type::Int ||
-      type == QLangValue::Type::Unsigned || type == QLangValue::Type::Dword ||
+      type == QLangValue::Type::Unsigned || type == QLangValue::Type::Qword ||
       type == QLangValue::Type::Float) {
     if (v.type() == QLangValue::Type::Array || v.type() == QLangValue::Type::Table ||
         v.type() == QLangValue::Type::Blob) {
@@ -870,8 +886,8 @@ QLangValue strict_convert(const QLangValue &v, QLangValue::Type type) {
       return QLangValue::Int(static_cast<int32_t>(n));
     case QLangValue::Type::Unsigned:
       return QLangValue::Unsigned(static_cast<uint32_t>(n));
-    case QLangValue::Type::Dword:
-      return QLangValue::Dword(static_cast<uint64_t>(n));
+    case QLangValue::Type::Qword:
+      return QLangValue::Qword(static_cast<uint64_t>(n));
     case QLangValue::Type::Float:
       return QLangValue::Float(static_cast<double>(n));
     default:

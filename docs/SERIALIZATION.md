@@ -42,8 +42,8 @@ Every `QLangValue` serializes as `u8 tag` + payload. Tags are the
 | 4   | Word    | `u32` (high 16 bits zero) |
 | 5   | Short   | `i32` |
 | 6   | Int     | `i32` |
-| 7   | Unsigned| `u32` |
-| 8   | Dword   | `u64` |
+| 7   | Unsigned/Dword| `u32` |
+| 8   | Qword   | `u64` |
 | 9   | String  | `u32 len` + `len` bytes |
 | 10  | Blob    | `u32 len` + `len` bytes |
 | 11  | Array   | `u32 count` + `count` × Value |

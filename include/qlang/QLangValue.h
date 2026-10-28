@@ -29,7 +29,7 @@ public:
     Short,    // int16_t
     Int,      // int32_t
     Unsigned, // uint32_t
-    Dword,    // uint64_t
+    Qword,    // uint64_t
     String,   // null-terminated text
     Blob,     // arbitrary binary data
     Array,    // list of mixed values
@@ -80,8 +80,8 @@ public:
     q.m_storage = v;
     return q;
   }
-  static QLangValue Dword(uint64_t v) {
-    QLangValue q(Type::Dword);
+  static QLangValue Qword(uint64_t v) {
+    QLangValue q(Type::Qword);
     q.m_storage = v;
     return q;
   }
@@ -151,8 +151,8 @@ public:
   int32_t &asInt();
   const uint32_t &asUnsigned() const;
   uint32_t &asUnsigned();
-  const uint64_t &asDword() const;
-  uint64_t &asDword();
+  const uint64_t &asQword() const;
+  uint64_t &asQword();
   const std::string &asString() const;
   std::string &asString();
   const std::vector<uint8_t> &asBlob() const;

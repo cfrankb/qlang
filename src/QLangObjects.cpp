@@ -59,7 +59,7 @@ static bool isConstField(const std::map<std::string, QLangValue>& kv,
 // field inferred as one numeric type accepts values of any numeric type.
 static bool isNumericType(const std::string& t) {
   return t == "char" || t == "byte" || t == "word" || t == "short" ||
-         t == "int" || t == "unsigned" || t == "dword" || t == "float";
+         t == "int" || t == "unsigned" || t == "qword" || t == "float";
 }
 
 // Phase 5: true when a value of type `got` may be stored in a field whose
