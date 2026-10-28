@@ -25,22 +25,22 @@ SPEC.md is a living document.
 |word|2 bytes| uint16_t
 |short|2 bytes| int16_t
 |int|4 bytes| int32_t
-|unsigned|4bytes| uint32_t |equivant to dword
+|unsigned|4bytes| uint32_t |equivalent to dword
 |dword|4bytes| uint32_t
 |long|8 bytes| int64_t
 |qword|8 bytes| uint64_t
 |array|varying| contain list of mixed variable|
-|float|???||
+|float|8 bytes||
 |table|varying||
-|bool|???| true, false
+|bool|1 byte| true, false
 |set|varying|unique value container|
 
-**NOTES**: type `dword` is another alias for `unsigned` both are 32bits (4 bytes) unsigned int (uint32_t). the original documnetation was in error when `dword` was used  for `8 bytes`.
-
-TODO: ??? set storage space based on type runtime allocation.
+**NOTES**: type `dword` is another alias for `unsigned` both are 32bits (4 bytes) unsigned int (uint32_t). the original documentation was in error when `dword` was used  for `8 bytes`.
 
 
 ## strings
+
+string are zero terminated arrays of bytes.
 
 `QLang` to implement `Python f-strings` style
 
@@ -48,6 +48,30 @@ TODO: ??? set storage space based on type runtime allocation.
 price = 19.99
 print(f"Total: ${price:.2f}")  # Output: Total: $19.99
 ```
+qlang also has standard `printf` and `sprintf` functions.
+
+## sets
+
+sets are container of `unique values`.
+
+sets can contains numbers and strings.
+
+possible extensions may include: arrays, tables and other sets. tbd
+
+**declaration**
+
+```
+local set_a = set(1,5,7,9)  # set constructor
+local set_b:set = [1,2,4.7] # array coerced into set
+local set_c = set([1,6,46,5]) # array coerced into set
+
+# append
+
+local set_a = set(1,5,7,8,9,5) # expected: 1,5,7,8,9
+set_a[] = 11  # expected: 1,5,7,8,9,11
+```
+
+value order is dependant on the implementation.
 
 
 ## reserved words
@@ -103,7 +127,7 @@ static
 isset
 set
 long
-qword
+enum
 ```
 
 ## constants
@@ -114,6 +138,58 @@ const # declare a constant
 const year = 2026;
 const month:byte = 10;
 ```
+
+## enum
+
+enum are collection of immutable values
+
+enum type default to int
+
+```
+enum Animal {
+   Dog, # implied 0
+   Cat, # implied 1
+   Horse # implied 2
+}
+
+# enum type: byte
+enum SoftDrimk:byte {
+   CocaCola , # implied 0
+   Pepsi, # implied 1
+   SevenUp # implied 2
+}
+
+# trigger error: cannot redeclare enum Animal
+enum Animal {
+   Turle, # implied 0
+   Fish, # implied 1
+   Moose # implied 2
+}
+
+enum Language {
+   Cpp = 100, 
+   Python = 101, 
+   Pascal # implied 102
+}
+
+println(f"language Cpp = {Language::Cpp}")
+
+# both notation is valid
+let python = Language::Python # python = 101
+let dog = Animal.Dog # dog = 0
+
+println("size: {len(Language)}") # expected: "size: 3"
+```
+
+restrictions and special considerations
+
+- enum are binded to the current scope (global, function, lambda). 
+- using local or let qualifier, enum can be restricted to block scope.
+- global enums are visible everywhere.
+- enum cannot be redefined. 
+- C++ api needed to inject enums to the global context (needs discussion)
+- trying to reference an unknown enum, triggers an error
+- valueless enum triggers an error
 
 ## comments 
 
@@ -133,7 +209,7 @@ const month:byte = 10;
 |number| 0 => false; non-zero => true
 |nil| false
 |generator| true
-|function, lambda|depends on return value and value type
+|function, lambda|truthiness evaluated based on its return value
 
 
 
@@ -146,6 +222,7 @@ you can coerse the type using `var:type` modifier.
 local a = 0xff             # int (4 bytes)
 local b:byte = 0xff        # byte (1 byte)
 local c = cast<short>(b)   # short (2 bytes)
+local d                    # implicit int. default value 0
 ```
 
 here are some general purpose cases to illustrate how variables and constants are declared and assign.
@@ -187,7 +264,7 @@ ab += 5 # append to array
 local ac = aa + ab # append both array into a new array (ac)
 ac += [6,7] # append new array to ac
 
-local z # this nil 
+local z # int, default 0
 local f = 1.13 # float
 
 c = a  # copy a to c
@@ -311,7 +388,7 @@ rules
 otherwise apply the same guard logic as above. 
 step 0 creates an infinite loop similar to while true {}
 
-infinit loops are not valid. implement a timeout guard that result in a runtime exception. make the message concise so that tracking the bug will be easier.
+infinite loops are not valid. implement a timeout guard that result in a runtime exception. make the message concise so that tracking the bug will be easier.
 
 ```python
 # range keyword has different encoding based on context
@@ -336,7 +413,7 @@ while i in range (0,10) {
 
 let b = 3
 let x = b in range(0,10)
-# encode: x = (b >= x) && (x <=10)
+# encode: x = (b >= 0) && (b <= 10)
 
 if a in range (1,10) {
    ...
@@ -350,12 +427,13 @@ if used, the keyword `continue`  will apply the step. this is implicit
 
 ## switch
 
-switch cases fallthrough. 
+switch cases fallthrough until they reach break, return, goto or end of switch. 
 
 ```python
 switch (var) {
    case "string2":
    case "string1":
+      # var value is either "string1" or "string2" here
       break;
    case 123:
       break;
@@ -367,7 +445,7 @@ switch (var) {
 
 ## loops
 
-the step keyword applies to ranges in for loops only and is explicitely not allowed when looping on a string or collection.
+the step keyword applies to ranges in for loops only and is explicitly not allowed when looping on a string or collection.
 
 ```python
 for x = 1 to 32
@@ -442,7 +520,7 @@ for c in "string" {
    printf("char: %c\n", c)
 }
 
-# loops i from 1 to 10
+# loops i from 1 to 10 (inclusive)
 for i in range(1,10) {
 
 }
@@ -462,6 +540,8 @@ label and goto must reside in the same scope.
 if they cross a boundary, trigger an error.
 
 # syntax
+
+type coersion between numbers is always guided by the left operand.
 
 ## operators
 
@@ -504,11 +584,26 @@ if they cross a boundary, trigger an error.
 |nil|any|error: invalid value for comparison
 |array|array|comparison of each value at their relative indexes
 |table|table|comparison of each key value
-|table|class, object|error: bytecode cannot be compared
+|table|class, object|error: objects cannot be compared
 |table|array|error: invalid comparison
-|class, object|any|error: bytecode cannot be compared
+|class, object|any|error: objects cannot be compared
 
-same rules apply to `operator <=` and `operator =>`
+same rules apply to `operator <=` and `operator >=`
+
+## operator **
+
+pow is only valid when left and right operands are numbers.
+in this implementation, all other cases will return an error.
+
+```
+a = 2
+b = 3
+c = a ** b
+println("{c}") # expected: 8
+
+d = 2 ** [1,2] # expected: error
+```
+
 
 ## operator *
 
@@ -517,9 +612,10 @@ same rules apply to `operator <=` and `operator =>`
 |number|number|multiply|2 * 2|4
 |float|float|multiply|1.5 * 1.2|1.8
 |int|float|multiply|1 * 1.2|1|float coerced to int
-|float|int|multiply|1 * 1.2|1.2|int coerced to float
+|float|int|multiply|1.2 * 1|1.2|int coerced to float
 |string|number|"toto" * 2|error|
-|collection|number|[1,2,3]*2||
+|array|number|multiply|[1,2,3]*2|[2,4,6]|
+|table|any|n/a|error
 |class|number||error|
 |number|string|copy|2 * "abc"|"abcabc"
 
@@ -550,12 +646,12 @@ same rules apply to `operator <=` and `operator =>`
 ## operator cast
 |examples|results|notes|
 |-----|-----|-|
-|cast\<int>(1.12)| 1| casting to 1. trunkate decimals
-|cast\<float>(1)|1.0f| make the iht into a floating point
+|cast\<int>(1.12)| 1| casting to 1. truncate decimals
+|cast\<float>(1)|1.0f| make the int into a floating point
 |cast\<string>(13)|"13"| turns int into string
 |cast\<string>(1.3)|"1.3"| turns float into string
-|cast\<word>(-1)|65535| converting int to word removes signage
-|cast\<string>([])|"\<string>"| collections fallback on their string representations
+|cast\<word>(-1)|65535| converting int to word removes sign
+|cast\<string>([])|depends on \_\_str__()| collections fallback on their string representations
 |cast\<int>([])|n/a| error: collections cannot be cast to int
 |cast\<array>(123)|n/a| error: numbers cannot be cast to collections
 |cast\<any>()|n/a| error: empty source. nothing to cast
@@ -566,18 +662,19 @@ same rules apply to `operator <=` and `operator =>`
 |-|-|-|-|
 |nil| ==| nil | true
 |nil| ==| number (int, float etc) | false
-|nil| ==| collection (array, table, class etc) | false
+|nil| ==| collection | false
+|nil| ==| table | false
 |nil| !=| nil | false
 |nil| !=| number | true
 |nil| !=| collection | true
-|nil| !=| number | true
+|nil| !=| table | true
 
-*important*: nil is ONLY equal to iself
+*important*: `nil` is ONLY equal to itself. ``collection`` implies (table, array, class, set)
 
 |expr|operator|expr|result|notes
 |-|-|-|-|-|
 |1|==|1|true||
-|1|==|1.0|see notes|only if type coergion is possible and resuls in equivalency|
+|1|==|1.0|see notes|only if type coercion is possible and results in equivalency|
 |3.0|==|3.0|true||
 |"3"|==|3|false|strings are not numbers. there is no coersion|
 |' '|==|32|true|byte ' ' is 32
@@ -586,8 +683,10 @@ same rules apply to `operator <=` and `operator =>`
 |1|==|object|false|objects are not primitives
 |string|==|object|see notes|true only if the __str__ value of the object matches the string
 |"toto"|==|"toto"|true|string is equal to itself
+|table|==|table|depends|only true if all kv pairs must match. no stray keys
+|array|==|array|depends|only true if array is an exact match
 
-equivalency worths both ways. `operator !=` is the `boolean` invertion of `operator ==`.
+equivalency works both ways. `operator !=` is the `boolean` inversion of `operator ==`.
 
 ## The \$ Operator (Evaluation / Dynamic Key Resolution)
 
@@ -597,7 +696,7 @@ The `$` operator evaluates an identifier at runtime and forces its value into a 
 Unlike the explicit `cast<string>()` operator which falls back on default string representations for all types, the `$` operator is strictly a **scalar-to-string evaluator**. 
 
 * **Supported Types:** `string/str`, `char`, `byte`, `word`, `short`, `int`, `unsigned`, `qword`, `float`, `bool`, and `nil`.
-* **Unsupported Types:** `array`, `table`, and `class`. Invoking the `$` operator on an aggregate collection type will halt execution and throw a compile-time or runtime exception.
+* **Unsupported Types:** `array`, `table`, and `class`. Invoking the `$` operator on an aggregate collection type will halt execution and depeding on when evaluation is taking place, it will throw either an exception or a compilation error. 
 
 ### Behavior Matrix
 
@@ -788,9 +887,9 @@ declaration event has executed.
 |println(var)     | print a string with carriage return
 |printf(fmt, ...) | mirror C printf
 |sprintf(fmt, ...) |same format as sprintf. return new string
-|len(var)         | return size of string, table, blob or array; numbers return storage byte size; structures return storage sizes, classes return and other types return 1; error on undefined/nil.
-|substr(str, start, lenght)| return a substring fron index start. lenght is optional
-|delete var      | delete variable. error when trying to to delete external variables/structures or nil.
+|len(var)         | structures return storage sizes, collections return their length and other types return 0
+|substr(str, start, length)| return a substring from index start. length is optional
+|delete var      | delete variable. error when trying to delete external variables/structures or nil.
 |str(var)        | return string representation of variable
 |int(var)        | return variable cast to int; string are parsed as decimal. other types return 0
 |slice(array, start, length) | return an array slice
@@ -810,8 +909,7 @@ b = slice(a, 0, 2)
 ```
 
 
-functions (qlang native)
-==================
+## functions (qlang native)
 
 ```python
 def function_name(param1, param2)
@@ -1159,7 +1257,7 @@ printf("[global] len: %d\n", len(a))
 
 # block scope
 
-variable explicitely defined via `local` or `let` keyword while inside a block scope belong to that scope.
+variable explicitly defined via `local` or `let` keyword while inside a block scope belong to that scope.
 
 ```
 local i = 1
@@ -1213,7 +1311,6 @@ advances to the next `yield`. When the generator is exhausted, `yield` returns
 
 
 ```python
-
 def gen_range(mi, mx) {
    for i = mi to mx {
       yield i
@@ -1316,12 +1413,6 @@ d = sum([1,4,20], [50,2]) # d = 77
 # sum return float if a type float is present. coerce non-float to float
 # sum return int   if data is mixed signed and unsigned types (char and byte) and no float are present
 ```
-
-## string module
-
-|functions|-|-|
-|--------|-|-|
-|tba||||
 
 # user defined classes
 
@@ -1508,15 +1599,6 @@ Both kinds of object go through the same four dispatch operations
 (GETFIELD / SETFIELD / CALLMETHOD / TOSTRING), so code written against the
 class model works unchanged on external types.
 
-# syntax coloring in IDE
-
-find a solution to provide proper coloring of `qlang` source files
-in popular IDE such as
-- vscode
-- geany
-- ...
-
-
 # implicit \_\_str\_\_ rules
 
 |type|example|behavior|
@@ -1528,6 +1610,8 @@ in popular IDE such as
 |array|[0,1,2,3,4]| "[0, 1, 2, 3, 4]"
 |table|{name="Bob", age=9}| "{name="Bob", age=9}"
 |class||use provided \_\_str\_\_() method
+
+table key order is implementation defined (depends on the underlying container).
 
 # error reporting
 
