@@ -13,22 +13,40 @@ everything is case sensitive.
 
 SPEC.md is a living document.
 
-## variable types
+## data types
+
+|type|size|notes|
+|-|-|-|
+|string/str|varying| zero terminated
+|blob|varying|  binary data
+|char|1 byte| int8_t
+|byte|1 byte| uint8_t
+|word|2 bytes| uint16_t
+|short|2 bytes| int16_t
+|int|4 bytes| int32_t
+|unsigned|4bytes| uint32_t
+|long|8 bytes| int64_t
+|qword|8 bytes| uint64_t
+|array|varying| contain list of mixed variable|
+|float|???||
+|table|varying||
+|bool|???| true, false
+|set|varying|unique value container|
+
+
+TODO: ??? set storage space based on type runtime allocation.
+      errata: replace all references to `dword` with `qword`.
+
+
+## strings
+
+`QLang` to implement `Python f-strings` style
+
+```python
+price = 19.99
+print(f"Total: ${price:.2f}")  # Output: Total: $19.99
 ```
-string/str (zero terminated)
-blob  (binary data)
-char (int8_t)
-byte (uint8_t)
-word (uint16_t)
-short (int16_t)
-int (int32_t)
-unsigned (uint32_t)
-dword (uint64_t)
-array (contain list of mixed variable)
-float
-table
-bool (true, false)
-```
+
 
 ## reserved words
 ```
@@ -81,6 +99,9 @@ import
 from
 static
 isset
+set
+long
+qword
 ```
 
 ## constants
@@ -116,6 +137,16 @@ const month:byte = 10;
 
 ## declarations and assignments
 
+the compiler tries to guess the type based on right hand.
+you can coerse the type using `var:type` modifier.
+
+```python
+local a = 0xff             # int (4 bytes)
+local b:byte = 0xff        # byte (1 byte)
+local c = cast<short>(b)   # short (2 bytes)
+```
+
+here are some general purpose cases to illustrate how variables and constants are declared and assign.
 
 ```python
 local a1  # default variable type int. default value 0
@@ -178,7 +209,6 @@ if true {
 
 t = 5
 local t = 9   # warning: duplicate declaration → compile warning
-
 
 # anonymous functions inside a table
 local events:table = {
@@ -743,16 +773,15 @@ declaration event has executed.
 |println(var)     | print a string with carriage return
 |printf(fmt, ...) | mirror C printf
 |sprintf(fmt, ...) |same format as sprintf. return new string
-|len(var)         | return size of string, table, blob or array; other type return 1; error on undefined/nil.
+|len(var)         | return size of string, table, blob or array; numbers return storage byte size; structures return storage sizes, classes return and other types return 1; error on undefined/nil.
 |substr(str, start, lenght)| return a substring fron index start. lenght is optional
-|delete var      | delete variable
+|delete var      | delete variable. error when trying to to delete external variables/structures or nil.
 |str(var)        | return string representation of variable
 |int(var)        | return variable cast to int; string are parsed as decimal. other types return 0
 |slice(array, start, length) | return an array slice
 |isset(var)| return true if variable, array index or table field exists. otherwise returns false
 |join(separator, arr)| join the array element using separator
 |assert(bool, str)| if bool is false thrown an exception using text provided by str
-
 
 
 ```python
@@ -1158,16 +1187,6 @@ println($j) # expected "0"
 ```
 
 
-
-# strings
-
-`QLang` to implement `Python f-strings` style
-
-```python
-price = 19.99
-print(f"Total: ${price:.2f}")  # Output: Total: $19.99
-```
-
 # generators
 
 Generators are created by defining a function that uses `yield`. Each call to
@@ -1198,7 +1217,6 @@ while v != nil {
 # 3
 ```
 
-i would favor a variation on prototype 2.
 
 The generator value is a function-like callable that captures its local state.
 Each invocation runs the generator body from its last yield point until the next
@@ -1279,8 +1297,8 @@ c = min([3,5,6,1], [2,5,1,2]) # errror: only 1 array allowed
 d = sum(1,10,20) # d = 31
 d = sum([1,4,20]) # d = 25
 d = sum([1,4,20], [50,2]) # d = 77
-# sum accepts: numbers (int, char, float) or arrays ONLY
-# sum return float if a type float is present
+# sum accepts: numbers (int, char, float etc) or arrays ONLY
+# sum return float if a type float is present. coerce non-float to float
 # sum return int   if data is mixed signed and unsigned types (char and byte) and no float are present
 ```
 
