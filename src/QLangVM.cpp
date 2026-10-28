@@ -505,7 +505,11 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
           out += buf;
         } else if (av.type() == QLangValue::Type::Float) {
           char buf[256];
-          std::snprintf(buf, sizeof(buf), sub.c_str(), toDouble(av));
+          // %s with a double is UB — render like valueToString.
+          if (spec == 's')
+            std::snprintf(buf, sizeof(buf), "%.15g", toDouble(av));
+          else
+            std::snprintf(buf, sizeof(buf), sub.c_str(), toDouble(av));
           out += buf;
         } else if (av.type() == QLangValue::Type::Bool) {
           // %s placeholder -> "true"/"false" text; numeric specs -> 1/0.
@@ -518,15 +522,29 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
             std::snprintf(buf, sizeof(buf), sub.c_str(), (long long)toInt64(av));
             out += buf;
           }
+        } else if (av.type() == QLangValue::Type::Qword) {
+          // uint64_t — %llu; a plain %d/%lld truncates or overflows.
+          std::string actualFmt = sub;
+          char last = actualFmt.back();
+          if (last == 's' || last == 'd' || last == 'i' || last == 'u')
+            actualFmt = actualFmt.substr(0, actualFmt.size() - 1) + "llu";
+          char buf[256];
+          std::snprintf(buf, sizeof(buf), actualFmt.c_str(),
+                        (unsigned long long)av.asQword());
+          out += buf;
         } else if (isNumeric(av)) {
           // If the placeholder is %s but the arg is numeric, use %d instead.
+          // The arg is long long, so the conversion must be 'lld' — a plain
+          // 'd' reads only 32 bits (4294967295 would print as -1).
           std::string actualFmt = sub;
           if (sub == "%s" || sub == "%+s" || sub == "% s" || sub == "%0s" ||
               sub == "%#s") {
             // Build a numeric placeholder with the same width/flags.
-            // Strip the 's' and replace with 'd'.
+            // Strip the 's' and replace with 'lld'.
             std::string prefix = sub.substr(0, sub.size() - 1);
-            actualFmt = prefix + "d";
+            actualFmt = prefix + "lld";
+          } else if (sub.back() == 'd' || sub.back() == 'i') {
+            actualFmt = sub.substr(0, sub.size() - 1) + "lld";
           }
           char buf[256];
           std::snprintf(buf, sizeof(buf), actualFmt.c_str(), (long long)toInt64(av));
@@ -897,7 +915,7 @@ QLangValue strict_convert(const QLangValue &v, QLangValue::Type type) {
     case QLangValue::Type::Long:
       return QLangValue::Long(static_cast<int64_t>(n));
     case QLangValue::Type::Float:
-      return QLangValue::Float(static_cast<double>(n));
+      return QLangValue::Float(toDouble(v));
     default:
       return v;
     }
@@ -1157,9 +1175,9 @@ void QLangVM::run() {
             frame.regs.data(), frame.regs.size(), m_generatorFrames.size());
     for (auto &kv : m_generatorFrames) {
       QLangValue *r2 = (kv.second.regs.size() > 2) ? &kv.second.regs[2] : nullptr;
-      trace(TRACE_VM_LOOP, "[DBG-MAIN]   map[%d] base=%p size=%zu reg2=%p type=%d val=%lld overlapsMain=%d\n",
+      trace(TRACE_VM_LOOP, "[DBG-MAIN]   map[%d] base=%p size=%zu reg2=%p type=%d val=%s overlapsMain=%d\n",
               kv.first, kv.second.regs.data(), kv.second.regs.size(), r2,
-              r2 ? (int)r2->type() : -1, r2 ? (long long)toInt64(*r2) : -1,
+              r2 ? (int)r2->type() : -1, r2 ? valueToString(*r2).c_str() : "nil",
               (r2 && (uintptr_t)r2 >= (uintptr_t)frame.regs.data() &&
                    (uintptr_t)r2 < (uintptr_t)frame.regs.data() + frame.regs.size()*sizeof(QLangValue)) ? 1 : 0);
     }
@@ -1393,7 +1411,7 @@ void QLangVM::run() {
       // (the deque keeps frame pointers stable, so the caller frame is valid).
       QLangValue retVal = frame.regs.empty() ? QLangValue() : frame.regs[0];
       int dest = frame.callDest;
-      trace(TRACE_VM_LOOP, "[DBG-RET] func=%d dest=%d retVal=%lld\n", frame.funcIndex, dest, (long long)toInt64(retVal));
+      trace(TRACE_VM_LOOP, "[DBG-RET] func=%d dest=%d retVal=%s\n", frame.funcIndex, dest, valueToString(retVal).c_str());
       if (m_cur == 0) {
         // Returning from main: sync the frame back into the scope before
         // unwinding so script variables persist.
@@ -1449,7 +1467,7 @@ void QLangVM::run() {
     case Opcode::IN: {
       QLangValue result = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       frame.regs[i.a] = result;
-      trace(TRACE_VM_LOOP, "[DBG-RES] op=%d a=%d b=%d c=%d -> regs[%d]=%lld (b=%lld, c=%lld)\n", (int)op, i.a, i.b, i.c, i.a, (long long)(long long)toInt64(result), (long long)(long long)toInt64(frame.regs[i.b]), (long long)(long long)toInt64(frame.regs[i.c]));
+      trace(TRACE_VM_LOOP, "[DBG-RES] op=%d a=%d b=%d c=%d -> regs[%d]=%s (b=%s, c=%s)\n", (int)op, i.a, i.b, i.c, i.a, valueToString(result).c_str(), valueToString(frame.regs[i.b]).c_str(), valueToString(frame.regs[i.c]).c_str());
       break;
     }
     case Opcode::JMP:
@@ -2080,10 +2098,10 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         // NOTE: capture the yielded value BEFORE popping to avoid a dangling
         // reference (frame is m_frames[m_cur] and becomes invalid after pop).
         QLangValue yielded = frame.regs.empty() ? QLangValue() : frame.regs[0];
-        trace(TRACE_FULL, "[DBG-YIELD] func=%d yielded type=%d val=%lld pc=%zu regs[0]=%lld\n",
-                frame.funcIndex, (int)yielded.type(), (long long)toInt64(yielded), frame.pc, (long long)toInt64(yielded));
+        trace(TRACE_FULL, "[DBG-YIELD] func=%d yielded type=%d val=%s pc=%zu regs[0]=%s\n",
+                frame.funcIndex, (int)yielded.type(), valueToString(yielded).c_str(), frame.pc, valueToString(yielded).c_str());
         for (size_t ri = 0; ri < frame.regs.size() && ri < 10; ri++) {
-          trace(TRACE_FULL, "[DBG-YIELD]   reg[%zu]=type%d val=%lld\n", ri, (int)frame.regs[ri].type(), (long long)toInt64(frame.regs[ri]));
+          trace(TRACE_FULL, "[DBG-YIELD]   reg[%zu]=type%d val=%s\n", ri, (int)frame.regs[ri].type(), valueToString(frame.regs[ri]).c_str());
         }
         Frame savedFrame = m_frames[m_cur];
         savedFrame.pc = frame.pc + 1; // resume at next instruction

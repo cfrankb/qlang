@@ -740,6 +740,14 @@ int main() {
             "local s = type(1 in [1,2,3]);", "s", "bool");
   expectStr("f-string: bool comparison renders true/false",
             "local s = f\"{1 < 2} {2 > 5}\";", "s", "true false");
+  expectStr("f-string: float renders (no UB via %s)",
+            "local s = f\"{1.24}\";", "s", "1.24");
+  expectStr("f-string: unsigned > int32 max renders full value",
+            "local a = cast<dword>(-1); local s = f\"{a}\";", "s", "4294967295");
+  expectStr("f-string: qword max renders full value",
+            "local a = cast<qword>(-1); local s = f\"{a}\";", "s", "18446744073709551615");
+  expectStr("cast<float> of float keeps fraction",
+            "local s = toStr(cast<float>(1.24));", "s", "1.24");
   expectVal("bool comparison still numeric in arithmetic", "local s = 1 + (1 < 2);", "s", 2);
   expectThrow("unknown function call is a compile error",
               "printl(\"x\");");

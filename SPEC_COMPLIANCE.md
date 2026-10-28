@@ -9,18 +9,19 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 ## Current Status
 
-**315 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **22 passed, 0 failed** (`examples/range_check.cpp`, `range` ctest) + **13 passed, 0 failed** (`examples/class_str_test.cpp`, `class_str` ctest) + **17 passed, 0 failed** (`examples/class_static_test.cpp`, `class_static` ctest) = **427 total** (`test_gen_simple` driver compiles and runs; its 5-case script from an earlier round was ephemeral). Re-verified 2026-10-28 (Round 23) against the current lib; all suites green.
+**319 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **22 passed, 0 failed** (`examples/range_check.cpp`, `range` ctest) + **13 passed, 0 failed** (`examples/class_str_test.cpp`, `class_str` ctest) + **17 passed, 0 failed** (`examples/class_static_test.cpp`, `class_static` ctest) = **431 total** (`test_gen_simple` driver compiles and runs; its 5-case script from an earlier round was ephemeral). Re-verified 2026-10-28 (Round 24) against the current lib; all suites green.
 
-Line numbers below are against the CURRENT SPEC.md (43928 bytes, 1543 lines, SHA256: 3f1afe5b0556230e6349f8eb7ed37eb2920a2802ac4f2713bd3c839a004855d5). **Round 23 (uncommitted):** `long` (`int64_t`, 8 bytes) implemented as a full value type — `Type::Long` appended **last** in the `QLangValue::Type` enum so fixed `.qlc` serialization tags stay stable (tag 17, `i64` payload); lexer `long` → `TokenType::TypeLong`; parser decl/cast tables; VM `isNumeric`/`valueToString`/`lenOf` (8)/`convert`/`strict_convert`; modules min/max/sum; context level/steps; objects numeric check; `.qlc` writer. `type(l:long)` → `"long"`, `len` → 8, casts and 64-bit literals work. **Round 22 SPEC.md edits (uncommitted):**
+Line numbers below are against the CURRENT SPEC.md (43989 bytes, 1544 lines, SHA256: 46cd4668dd2a745f8c5a9220652772c6e2148a10cc602e9105e5aa274628c825). **Round 24 (uncommitted):** f-string/format + cast fixes from the `examples/scripts/cast.ql` bug report — (1) `format()` Float arg with a `%s` placeholder was UB (`snprintf("%s", double)` → empty/garbled) → now renders `%.15g` like `valueToString`; (2) numeric args passed `long long` to a `%d` placeholder (32-bit read → `cast<dword>(-1)` printed `-1`) → conversion now `lld`; (3) new Qword branch in `format()` (`%llu`) so qword values up to 2⁶⁴−1 print (previously `toInt64` threw "Qword value exceeds int64_t range"); (4) `strict_convert` Float target went through `toInt64` (truncated `cast<float>(1.24)` → 1.0) → now `toDouble`; (5) four VM debug-trace sites evaluated `toInt64()` unconditionally (args are evaluated before `trace()` short-circuits) and threw on a qword > INT64_MAX even with tracing off — the implicit main-frame `RETURN` hit this at end of program → trace args now use non-throwing `valueToString`. 4 new `spec_check2` cases (f-string float/unsigned/qword, `cast<float>` identity). `cast.ql` now runs clean end-to-end, qword block uncommented, stale `# bug:` lines removed. **Round 23 (uncommitted):** `long` (`int64_t`, 8 bytes) implemented as a full value type — `Type::Long` appended **last** in the `QLangValue::Type` enum so fixed `.qlc` serialization tags stay stable (tag 17, `i64` payload); lexer `long` → `TokenType::TypeLong`; parser decl/cast tables; VM `isNumeric`/`valueToString`/`lenOf` (8)/`convert`/`strict_convert`; modules min/max/sum; context level/steps; objects numeric check; `.qlc` writer. `type(l:long)` → `"long"`, `len` → 8, casts and 64-bit literals work. **Round 22 SPEC.md edits (uncommitted):**
 
 One section committed after the prior audit remains **not yet conforming**: `## operator $$` (fully specified, no implementation). The expanded `## user defined classes` section is now **fully conforming** — all 9 implementation phases landed (`6a4c559`, `8c013a1`, `b242645`, `0d7115b`, `0c63f4b`; see "user defined classes — spec conformance" below). The `# block scope` section is now **fully conforming** (implemented 2026-10-26, committed `5f458b2`; 6 harness cases). The 2026-10-27 `static` additions are **implemented** (Round 12, 2026-10-27; `class_static` suite, 17 cases); they are marked in the spec as a **new extension beyond v1** (v1 is fully implemented and stands as specified; the `## v1 restrictions` "no static / class methods" line is unchanged and no longer contradictory). Open gaps: the duplicate-declaration **warning** check (spec examples in `9cc0a3f`; requirement softened to a compile warning in the 2026-10-26 spec edits, `dde51e4`) is **not implemented** (re-verified 2026-10-26), and the new `# error reporting` section (uncommitted 2026-10-27) is **not implemented** — see Open Items.
 
 ## SPEC.md Changes Since Last Audit
 
-SHA256: `3f1afe5b0556230e6349f8eb7ed37eb2920a2802ac4f2713bd3c839a004855d5` (1543 lines, 43928 bytes). Prior audit: `6a0856c581ad415e0e1df8139f55ddbd8accd67f95260e05b6f71f45fd5b1fc7` (1539 lines, 43636 bytes).
+SHA256: `46cd4668dd2a745f8c5a9220652772c6e2148a10cc602e9105e5aa274628c825` (1544 lines, 43989 bytes). Prior audit: `3f1afe5b0556230e6349f8eb7ed37eb2920a2802ac4f2713bd3c839a004855d5` (1543 lines, 43928 bytes).
 
 | Commit | Change |
 |--------|--------|
+| (uncommitted, 2026-10-28, Round 24) | SPEC.md: one-line tweak (1543→1544 lines, 43928→43989 bytes) on top of the Round 20–23 wave; no new behavior — the `## operator cast` table (L550–L562) and `## data types` table match the implemented semantics (Round 24 format/cast fixes bring `cast.ql` output in line with the table). |
 | (uncommitted, 2026-10-28) | SPEC.md: `## variable types` → `## data types` table (new rows `long` int64_t, `qword` uint64_t, `set`; `float`/`bool` marked `???`); `## strings` (f-strings) section moved up from after generators; reserved words gain `set` + `long`; `## declarations and assignments` gains type-inference intro + 3-line example block; **`len(var)` behavior change** (numbers → storage byte size; structures → storage sizes); **`delete var` behavior change** (error on external variables/structures or nil); math `sum` note "coerce non-float to float"; removed "i would favor a variation on prototype 2." note; **`dword` → `qword` errata applied** (data types table, reserved words, `$` operator rows, C++ API `qval_qword`, implementation notes); **Round 22: `dword` redefined as a 4-byte `uint32_t` alias of `unsigned`** (new `|dword|4bytes| uint32_t` row + NOTES paragraph; the 8-byte `dword` was a documentation error). **Implemented (Round 21):** `dword`→`qword` rename (lexer keyword, `type()` string, `qval_qword`, `isNumericType`, spec/README/tests), `len()` storage byte size + nil error + class-instance→1, `delete` nil/external guards. **Implemented (Round 22):** `dword` alias → `TokenType::TypeUnsigned` (1 lexer line + 4 tests). **Still NOT implemented:** `set` reserved word; `set` type. See Open Items. |
 | `b564302` | Round 19 commit: lexer `number()` suffix handling (`f` → Float, `u` → new `TokenType::UInt` → `QLangValue::Unsigned`), 4 `spec_check2` cases, **plus the SPEC.md changes staged at the prior audit** — the two numeric-literal examples (`1.0f` / `44u`) and the `range` reserved-word list cleanup. `examples/scripts/hello.ql` `printl`→`println` typo fixes. |
 | `b1e6743` | Round 17 code fix (Bool-typed boolean operators + unknown-function compile error) **plus the SPEC.md changes staged at the prior audit**: `## operators < and >` table refined — `array|array` (comparison of each value at their relative indexes) added; `table|table` reworded to "comparison of each key value"; `table|array` → invalid comparison; `class|class` generalized to `class|any` ("bytecode cannot be compared"); plus a `\|\|\|` row whitespace fix in the operator table. All rows **implemented** (Round 16). |
@@ -380,6 +381,43 @@ Numeric literal suffixes `1.0f` / `44u` implemented (SPEC §declarations and ass
 - 4 new `spec_check2` cases (291 → 295): `type(1.0f)` → `"float"`, `type(44u)` → `"unsigned"`, `44u` value 44, float-suffix arithmetic.
 - Harness re-run: **295/295** (`spec_check2`), **33** (`spec_check`), **20** (`spec_cast_test`), **7** (`test_module`), **5** (`gen_test`), **22** (`range`), **13** (`class_str`), **17** (`class_static`), all green = **412 total**.
 - `# error reporting` remains **not implemented**.
+
+## Round 24 (2026-10-28)
+
+SPEC.md one-line tweak (hash `3f1afe5b…` → `46cd4668…`, 1544 lines). Fixed the
+`examples/scripts/cast.ql` bug report — four root causes in `src/QLangVM.cpp`:
+
+1. `format()` (f-string interpolation) passed a `double` to a `%s` placeholder
+   (`snprintf` UB) → Float args rendered empty/garbled. Now renders `%.15g`
+   (same as `valueToString`) when the placeholder is `%s`.
+2. `format()` numeric branch passed a `long long` to a `%d` placeholder —
+   `%d` reads only 32 bits, so `cast<dword>(-1)` (4294967295) printed `-1`.
+   Conversion is now `lld` (and explicit `:d`/`:i` specs are widened too).
+3. `format()` had no Qword path — qword args went through `toInt64()`, which
+   throws for values > INT64_MAX. New Qword branch uses `%llu`;
+   `cast<qword>(-1)` now prints `18446744073709551615`.
+4. `strict_convert` Float target went through `toInt64` → `cast<float>(1.24)`
+   truncated to 1.0. Now `toDouble(v)` (float→float is identity).
+
+Latent crash fixed: four VM debug-trace sites (`[DBG-RET]`, `[DBG-RES]`,
+`[DBG-MAIN]` map dump, `[DBG-YIELD]` ×2) evaluated `toInt64()` in their
+arguments — evaluated **before** `trace()` short-circuits — so any qword >
+INT64_MAX in a traced register threw even with tracing **off**. The implicit
+main-frame `RETURN` (retVal = regs[0]) hit this at end of every program whose
+first variable held a big qword. Trace args now use non-throwing
+`valueToString`.
+
+`examples/scripts/cast.ql`: all 13 lines print the expected values; the
+previously-commented qword block is uncommented and the stale `# bug:` lines
+removed. 4 new `spec_check2` cases (f-string float, f-string unsigned > int32
+max, f-string qword max, `cast<float>` identity).
+
+- Harness re-run: **319/319** (`spec_check2`), **33** (`spec_check`), **20**
+  (`spec_cast_test`), **7** (`test_module`), **22** (`range`), **13**
+  (`class_str`), **17** (`class_static`), all green = **431 total**. ctest 4/4.
+- Pre-existing, out of scope: a 2⁶⁴−1 **literal** (`18446744073709551615`)
+  aborts in the lexer (`std::stoll` out_of_range) — only reachable via a
+  literal, since `cast<qword>` now covers the value range.
 
 ## Round 23 (2026-10-28)
 
