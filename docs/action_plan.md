@@ -18,7 +18,7 @@ generators, classes (closed fields, const, `__str__`, refcount, `__destroy__`,
 `qword`, `dword` alias, `1.0f`/`44u` suffixes), import/from (flat, v1),
 verbose levels.
 
-Remaining gaps (this plan): `enum` type, `# error reporting`. (`set` ✓ done, Round 26+27.)
+Remaining gaps (this plan): `# error reporting`. (`set` ✓ done, Round 26+27; `enum` ✓ done, Round 28.)
 Deferred: duplicate-declaration warning (see Deferred).
 
 ## Phase 1 — small fixes — DONE (Round 25, 2026-10-28)
@@ -47,7 +47,13 @@ Deferred: duplicate-declaration warning (see Deferred).
 - ✅ 22 `spec_check2` cases (325 → 347)
 - **No set gaps remain** — SPEC §sets is fully covered.
 
-## Phase 3 — `enum` type (SPEC §enum, 2026-10-28)
+## Phase 3 — `enum` type (SPEC §enum, 2026-10-28) — ✅ DONE (Round 28)
+
+Done as specified below; 16 `spec_check2` cases (347 → 363), all suites
+green. Notes: `len(enum)` works via the existing table `lenOf` path (no new
+case); member access folds to a compile-time constant in both `::` and `.`
+notations; global enums are captured into function bodies via the
+free-variable mechanism (hidden var, like global consts).
 
 - Lexer: `enum` keyword.
 - Parser: `enum Name[:type] { A, B, C = 100, D }` — implied values 0,1,2…;

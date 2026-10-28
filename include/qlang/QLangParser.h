@@ -119,7 +119,8 @@ enum class StmtKind {
   Yield,     // yield expression (generator)
   Global,    // global a, b (import top-level vars into function scope)
   Import,    // import math / import math.min
-  Class      // class Name { fields + methods end }
+  Class,     // class Name { fields + methods end }
+  Enum       // enum Name[:type] { A, B, C = 100, D }
 };
 
 // Base statement node. Forward-declared so StmtPtr can be used inside Stmt.
@@ -231,6 +232,17 @@ struct Stmt {
   std::unordered_set<std::string> staticFields;
   // Static methods: `static name(params)[] { ... }` in the class body.
   std::unordered_set<std::string> staticMethods;
+
+  // Enum: enum Name[:type] { A, B, C = 100, D }. `name` holds the enum name.
+  // isLocalEnum is true when the declaration is prefixed with `local`/`let`
+  // (block scope); a bare `enum` binds to the current (function/global) scope.
+  bool isLocalEnum = false;
+  std::optional<QLangValue::Type> enumType; // numeric member type (default Int)
+  struct EnumMember {
+    std::string name;
+    ExprPtr value; // explicit `= N` (null = implied sequential value)
+  };
+  std::vector<EnumMember> enumMembers;
 };
 
 using StmtPtr = std::shared_ptr<Stmt>;
@@ -262,6 +274,7 @@ private:
   StmtPtr parseGlobal();
   StmtPtr parseImport();
   StmtPtr parseClass();
+  StmtPtr parseEnum();
   StmtPtr parseFunction();
   StmtPtr parseArrowClosure(const std::string &varName);
   bool looksLikeArrow() const;

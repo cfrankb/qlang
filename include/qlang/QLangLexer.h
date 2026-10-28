@@ -75,6 +75,7 @@ enum class TokenType {
   As,          // as (module alias)
   Class,       // class (user-defined class)
   Static,      // static (class-level member, new extension beyond v1)
+  Enum,        // enum (immutable value collection)
   True,        // true
   False,       // false
   Nil,         // nil (undefined/sentinel value)

@@ -185,6 +185,13 @@ private:
     std::unordered_map<std::string, int> staticMethodArities;
   };
   std::unordered_map<std::string, ClassRecord> m_classes;
+  // User-defined enums: name -> member values in declaration order. The enum
+  // itself is stored at runtime in a hidden variable `__enum_<Name>` holding
+  // an immutable table (name -> value); member access folds to the constant.
+  std::unordered_map<std::string, std::vector<std::pair<std::string, QLangValue>>> m_enums;
+  // Names of enums declared at top level (visible everywhere, like global
+  // consts). Used to keep global enums visible when entering a function body.
+  std::unordered_set<std::string> m_globalEnums;
   // Variable names that currently hold an arrow-closure value.
   std::unordered_set<std::string> m_closureVars;
   // Active closure capture table: captured variable name -> refId (index into

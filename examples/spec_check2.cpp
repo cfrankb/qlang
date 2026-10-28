@@ -787,6 +787,24 @@ int main() {
   expectVal("cast<array>(set)", "local a = cast<array>(set(1,2,3)); local n = len(a);", "n", 3);
   expectThrow("cast<int>(set) rejected", "local n = cast<int>(set(1,2));");
 
+  // -- Phase 3: enum type (SPEC §enum) --
+  expectVal("enum implied values", "enum Animal { Dog, Cat, Horse } local d = Animal::Dog; local c = Animal::Cat; local h = Animal::Horse; local s = d + c + h;", "s", 3);
+  expectVal("enum = N resumes sequence", "enum Language { Cpp = 100, Python = 101, Pascal } local p = Language::Pascal;", "p", 102);
+  expectVal("enum dot notation", "enum Animal { Dog, Cat, Horse } local d = Animal.Dog;", "d", 0);
+  expectVal("enum typed :byte", "enum SoftDrink:byte { CocaCola, Pepsi, SevenUp } local s = SoftDrink::Pepsi;", "s", 1);
+  expectStr("enum typed :byte type", "enum SoftDrink:byte { CocaCola, Pepsi } local t = type(SoftDrink::CocaCola);", "t", "byte");
+  expectVal("enum len = member count", "enum Language { Cpp = 100, Python = 101, Pascal } local n = len(Language);", "n", 3);
+  expectVal("enum value arithmetic", "enum Language { Cpp = 100, Python = 101 } local r = Language::Python - Language::Cpp;", "r", 1);
+  expectThrow("enum redeclare -> error", "enum Animal { Dog } enum Animal { Cat }");
+  expectThrow("enum unknown reference -> error", "local x = NoSuchEnum::A;");
+  expectThrow("enum unknown member -> error", "enum Animal { Dog } local x = Animal::Cat;");
+  expectThrow("enum valueless -> error", "enum Empty { }");
+  expectThrow("enum non-integer value -> error", "enum E { A = 1.5 }");
+  expectRun("enum block scope (local)", "if true { local enum E { A, B } local x = E::B; }");
+  expectThrow("enum block scope not visible outside", "if true { local enum E { A } } local x = E::A;");
+  expectVal("enum global visible in function", "enum Color { Red, Green, Blue } def pick() return Color::Blue; end local r = pick();", "r", 2);
+  expectThrow("enum member not assignable", "enum Animal { Dog } Animal.Dog = 5;");
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

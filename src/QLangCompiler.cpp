@@ -245,6 +245,8 @@ static void collectIds(const ExprPtr &e, std::unordered_set<std::string> &ids,
   } else if (e->kind == ExprKind::Index) {
     collectIds(e->indexBase, ids, skip);
     if (e->indexExpr) collectIds(e->indexExpr, ids, skip);
+  } else if (e->kind == ExprKind::Member) {
+    collectIds(e->memberBase, ids, skip);
   } else if (e->kind == ExprKind::Array) {
     for (auto &el : e->elements) collectIds(el, ids, skip);
   } else if (e->kind == ExprKind::Table) {
@@ -314,6 +316,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   // Save caller's register mapping for global keyword use.
   m_savedRegs = m_regs;
   auto savedConstVars = m_constVars;
+  auto savedEnums = m_enums;
   auto savedVarTypes = m_varTypes;
   auto savedUserFuncs = m_userFuncs;
   auto savedClosureVars = m_closureVars;
@@ -360,6 +363,17 @@ int QLangCompiler::buildFunction(const std::string &name,
         updatedCaptures.push_back(id);
       continue;
     }
+    // Enum names resolve to hidden table variables: capture the hidden
+    // variable (live binding to the declaring scope), not the enum name.
+    if (m_enums.count(id)) {
+      const std::string hvar = "__enum_" + id;
+      if (std::find(updatedCaptures.begin(), updatedCaptures.end(), hvar) ==
+          updatedCaptures.end())
+        updatedCaptures.push_back(hvar);
+      continue;
+    }
+    // Class names (e.g. C::staticMember bases) are compile-time, not values.
+    if (m_classes.count(id)) continue;
     // Skip top-level globals: they are invisible in function scope unless
     // explicitly imported via `global`.
     if (m_globalVars.count(id)) continue;
@@ -432,6 +446,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_code = std::move(savedCode);
   m_regs = std::move(savedRegs);
   m_constVars = std::move(savedConstVars);
+  m_enums = std::move(savedEnums);
   m_varTypes = std::move(savedVarTypes);
   m_userFuncs = std::move(savedUserFuncs);
   m_closureVars = std::move(savedClosureVars);
@@ -1626,6 +1641,55 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     emit(Opcode::CALLFN, protoVar, prototypeFuncIdx, 0);
     break;
   }
+  case StmtKind::Enum: {
+    // enum Name[:type] { A, B, C = 100, D } — immutable name -> value table
+    // stored in a hidden variable (like a class prototype). Implied values
+    // are sequential from 0; an explicit `= N` resumes the sequence at N+1.
+    QLangValue::Type baseType = s->enumType.value_or(QLangValue::Type::Int);
+    auto makeValue = [baseType](int64_t v) -> QLangValue {
+      switch (baseType) {
+      case QLangValue::Type::Char: return QLangValue::Char(static_cast<int8_t>(v));
+      case QLangValue::Type::Byte: return QLangValue::Byte(static_cast<uint8_t>(v));
+      case QLangValue::Type::Word: return QLangValue::Word(static_cast<uint16_t>(v));
+      case QLangValue::Type::Short: return QLangValue::Short(static_cast<int16_t>(v));
+      case QLangValue::Type::Unsigned: return QLangValue::Unsigned(static_cast<uint32_t>(v));
+      case QLangValue::Type::Qword: return QLangValue::Qword(static_cast<uint64_t>(v));
+      case QLangValue::Type::Long: return QLangValue::Long(v);
+      default: return QLangValue::Int(static_cast<int32_t>(v));
+      }
+    };
+    std::vector<std::pair<std::string, QLangValue>> members;
+    int64_t nextVal = 0;
+    for (const auto &m : s->enumMembers) {
+      int64_t v = nextVal++;
+      if (m.value) {
+        QLangValue cv = evalConstExpr(m.value);
+        if (cv.type() != QLangValue::Type::Int)
+          throw QLangError(QLangErrorKind::Parse, 0, 0,
+                           "enum member '" + m.name +
+                           "' value must be an integer literal");
+        v = cv.asInt();
+        nextVal = v + 1; // explicit value resumes the implied sequence
+      }
+      members.push_back({m.name, makeValue(v)});
+    }
+    // Redeclaration: a visible same-name enum (any enclosing scope, or a
+    // global enum inside a function) is an error — enums cannot be redefined.
+    const std::string hvar = "__enum_" + s->name;
+    if (regOf(hvar) >= 0 ||
+        (!s->isLocalEnum && m_globalEnums.count(s->name)))
+      throw QLangError(QLangErrorKind::Parse, 0, 0,
+                       "cannot redeclare enum '" + s->name + "'");
+    int r = declareVar(hvar, s->isLocalEnum);
+    TableValue kv = std::make_shared<std::map<std::string, QLangValue>>();
+    for (const auto &m : members)
+      (*kv)[m.first] = m.second;
+    emit(Opcode::CONST, r, emitConst(QLangValue::Table(kv)));
+    m_enums[s->name] = std::move(members);
+    if (!m_inFunction)
+      m_globalEnums.insert(s->name);
+    break;
+  }
   case StmtKind::Global: {
     if (!m_inFunction)
       throw QLangError(QLangErrorKind::Parse, 0, 0,
@@ -1805,6 +1869,17 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     int r = regOf(e->name);
     if (r >= 0) {
       emit(Opcode::MOV, dest, r);
+      break;
+    }
+    // Enum name: resolves to the hidden table variable holding its values
+    // (captured across function boundaries like a free variable).
+    if (m_enums.count(e->name)) {
+      const std::string hvar = "__enum_" + e->name;
+      auto cit = m_captureRegs.find(hvar);
+      if (cit != m_captureRegs.end())
+        emit(Opcode::REFLOAD, dest, cit->second, 0);
+      else
+        emit(Opcode::MOV, dest, regOf(hvar));
       break;
     }
     // Global const: emit a CONST instruction to load its value.
@@ -2248,6 +2323,31 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     break;
   }
   case ExprKind::Member: {
+    // Enum member access (both notations): Enum::name and Enum.name fold to
+    // the immutable value at compile time. Unknown enum or member is a
+    // compile error (SPEC §enum).
+    if (e->memberBase->kind == ExprKind::Variable) {
+      auto eit = m_enums.find(e->memberBase->name);
+      if (eit != m_enums.end()) {
+        const std::string hvar = "__enum_" + e->memberBase->name;
+        if (regOf(hvar) < 0 && !m_captureRegs.count(hvar))
+          throw QLangError(QLangErrorKind::Parse, 0, 0,
+                           "unknown enum '" + e->memberBase->name + "'");
+        bool found = false;
+        for (const auto &m : eit->second) {
+          if (m.first == e->memberName) {
+            emit(Opcode::CONST, dest, emitConst(m.second));
+            found = true;
+            break;
+          }
+        }
+        if (!found)
+          throw QLangError(QLangErrorKind::Parse, 0, 0,
+                           "enum '" + e->memberBase->name +
+                           "' has no member '" + e->memberName + "'");
+        break; // value folded — skip class/table member paths
+      }
+    }
     if (e->scopeStatic) {
       // C::name -> TABGET staticsR, C, "__statics__"; TABGET dest, staticsR,
       // name. The base must be a known class and the name one of its static

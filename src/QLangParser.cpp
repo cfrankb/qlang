@@ -94,7 +94,11 @@ std::vector<StmtPtr> QLangParser::parseProgram() {
 }
 
 StmtPtr QLangParser::parseStatement() {
-  if (check(TokenType::Local) || check(TokenType::Let)) return parseDeclaration();
+  if (check(TokenType::Local) || check(TokenType::Let)) {
+    if (peek(1).type == TokenType::Enum) return parseEnum();
+    return parseDeclaration();
+  }
+  if (check(TokenType::Enum)) return parseEnum();
   if (check(TokenType::Const)) return parseConst();
   if (check(TokenType::Delete)) return parseDelete();
   if (check(TokenType::For)) return parseFor();
@@ -831,6 +835,66 @@ StmtPtr QLangParser::parseClass() {
     stmt->classBody.push_back(std::move(bodyStmt));
   }
   consume(TokenType::RBrace, "'}' to close class body");
+  match(TokenType::Semicolon);
+  return stmt;
+}
+
+StmtPtr QLangParser::parseEnum() {
+  int line = current().line, col = current().col;
+  bool isLocal = false;
+  if (check(TokenType::Local) || check(TokenType::Let)) {
+    isLocal = true;
+    m_pos++;
+  }
+  consume(TokenType::Enum, "'enum'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Enum;
+  stmt->isLocalEnum = isLocal;
+  stmt->name = consume(TokenType::Ident, "enum name").value;
+
+  // Optional numeric member type: enum Name:byte { ... }
+  if (match(TokenType::Colon)) {
+    TokenType tt = current().type;
+    static const std::pair<int, QLangValue::Type> tmap[] = {
+        {static_cast<int>(TokenType::TypeChar),     QLangValue::Type::Char},
+        {static_cast<int>(TokenType::TypeByte),     QLangValue::Type::Byte},
+        {static_cast<int>(TokenType::TypeWord),     QLangValue::Type::Word},
+        {static_cast<int>(TokenType::TypeShort),    QLangValue::Type::Short},
+        {static_cast<int>(TokenType::TypeInt),      QLangValue::Type::Int},
+        {static_cast<int>(TokenType::TypeUnsigned), QLangValue::Type::Unsigned},
+        {static_cast<int>(TokenType::TypeQword),    QLangValue::Type::Qword},
+        {static_cast<int>(TokenType::TypeLong),     QLangValue::Type::Long},
+    };
+    bool ok = false;
+    for (auto [t, v] : tmap)
+      if (t == static_cast<int>(tt)) { stmt->enumType = v; ok = true; break; }
+    if (!ok)
+      throw QLangError(QLangErrorKind::Parse, current().line, current().col,
+                       "enum type must be a numeric type (char, byte, word, "
+                       "short, int, unsigned, qword, long)");
+    m_pos++;
+  }
+
+  consume(TokenType::LBrace, "'{' to open enum body");
+  while (!check(TokenType::RBrace) && !atEnd()) {
+    Stmt::EnumMember member;
+    member.name = consume(TokenType::Ident, "enum member name").value;
+    if (match(TokenType::Assign)) {
+      if (check(TokenType::Integer) || check(TokenType::UInt)) {
+        member.value = parseExpression();
+      } else {
+        throw QLangError(QLangErrorKind::Parse, current().line, current().col,
+                         "enum member value must be an integer literal");
+      }
+    }
+    stmt->enumMembers.push_back(std::move(member));
+    if (!match(TokenType::Comma))
+      break;
+  }
+  consume(TokenType::RBrace, "'}' to close enum body");
+  if (stmt->enumMembers.empty())
+    throw QLangError(QLangErrorKind::Parse, line, col,
+                     "enum '" + stmt->name + "' must have at least one member");
   match(TokenType::Semicolon);
   return stmt;
 }

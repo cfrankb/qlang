@@ -9,7 +9,7 @@ spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 
 ## Current Status
 
-**347 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **22 passed, 0 failed** (`examples/range_check.cpp`, `range` ctest) + **13 passed, 0 failed** (`examples/class_str_test.cpp`, `class_str` ctest) + **17 passed, 0 failed** (`examples/class_static_test.cpp`, `class_static` ctest) = **459 total** (`test_gen_simple` driver compiles and runs; its 5-case script from an earlier round was ephemeral). Re-verified 2026-10-28 (Round 27) against the current lib; all suites green.
+**363 passed, 0 failed** (harness `examples/spec_check2.cpp`, built against `libqlang.a`) + **33 passed, 0 failed** (`spec_check`) + **20 passed, 0 failed** (`spec_cast_test`) + **7 passed, 0 failed** (`test_module`) + **22 passed, 0 failed** (`examples/range_check.cpp`, `range` ctest) + **13 passed, 0 failed** (`examples/class_str_test.cpp`, `class_str` ctest) + **17 passed, 0 failed** (`examples/class_static_test.cpp`, `class_static` ctest) = **475 total** (`test_gen_simple` driver compiles and runs; its 5-case script from an earlier round was ephemeral). Re-verified 2026-10-28 (Round 28) against the current lib; all suites green.
 
 Line numbers below are against the CURRENT SPEC.md (47151 bytes, 1659 lines, SHA256: a350a25ca898eb43e5c7d81a502262761febcf704acb6e45e7616f2fd6657c20). **Round 24 (uncommitted):** f-string/format + cast fixes from the `examples/scripts/cast.ql` bug report — (1) `format()` Float arg with a `%s` placeholder was UB (`snprintf("%s", double)` → empty/garbled) → now renders `%.15g` like `valueToString`; (2) numeric args passed `long long` to a `%d` placeholder (32-bit read → `cast<dword>(-1)` printed `-1`) → conversion now `lld`; (3) new Qword branch in `format()` (`%llu`) so qword values up to 2⁶⁴−1 print (previously `toInt64` threw "Qword value exceeds int64_t range"); (4) `strict_convert` Float target went through `toInt64` (truncated `cast<float>(1.24)` → 1.0) → now `toDouble`; (5) four VM debug-trace sites evaluated `toInt64()` unconditionally (args are evaluated before `trace()` short-circuits) and threw on a qword > INT64_MAX even with tracing off — the implicit main-frame `RETURN` hit this at end of program → trace args now use non-throwing `valueToString`. 4 new `spec_check2` cases (f-string float/unsigned/qword, `cast<float>` identity). `cast.ql` now runs clean end-to-end, qword block uncommented, stale `# bug:` lines removed. **Round 23 (uncommitted):** `long` (`int64_t`, 8 bytes) implemented as a full value type — `Type::Long` appended **last** in the `QLangValue::Type` enum so fixed `.qlc` serialization tags stay stable (tag 17, `i64` payload); lexer `long` → `TokenType::TypeLong`; parser decl/cast tables; VM `isNumeric`/`valueToString`/`lenOf` (8)/`convert`/`strict_convert`; modules min/max/sum; context level/steps; objects numeric check; `.qlc` writer. `type(l:long)` → `"long"`, `len` → 8, casts and 64-bit literals work. **Round 22 SPEC.md edits (uncommitted):**
 
@@ -253,7 +253,7 @@ All items below are implemented and verified. Table retained for traceability.
 | `cast` | `Cast` | ✓ | Reserved word; blocks identifier use. `cast<int>(1.12)` works as expression via `parsePrimary()` special case |
 | `class` | `Class` | ✓ | **Fully implemented** (conforms to expanded spec section `c83ebc8`). Closed field set (`__fields__`/`__const_fields__` descriptors in `QLangObjects.cpp`), `const` fields, unique method/dunder names (compile error), fixed arity, `__str__`, reference counting, `__destroy__`, `type(x)` = class name, **`static` members + `::`** (Round 12, new extension beyond v1). 42 tests at spec_check2 L449–L615 + 17 in `class_static_test`. See "user defined classes — spec conformance". |
 | `fetch` | `Fetch` | ✓ | ★ **Implemented** (Round 25). `TokenType::Fetch` in `keywordType()` — `local fetch = 1` → parse error (reserved word). Behavior unspecified in SPEC; reserving is all the spec asks.
-| `enum` | — | — | **Not a keyword.** Not implemented; no `TokenType::Enum` in lexer/parser. New `## enum` section (2026-10-28): immutable value collections, default int / typed `:byte`, implied sequential values, `::` access, `len()` = member count, no redefinition, scope-bound. See Open Items.
+| `enum` | `Enum` | ✓ | ★ **Implemented** (Round 28). `TokenType::Enum` in `keywordType()` — `local enum = 1` → parse error (reserved word). `## enum` (2026-10-28 spec): immutable name→value collections, default int / typed `enum Name:byte`; implied sequential values, explicit `= N` resumes the sequence at N+1; member access via `::` **and** `.` (both fold to the compile-time constant); `len(Enum)` = member count (enum is an immutable table); redeclaration → compile error; unknown enum/member → compile error; valueless body → parse error; block-scoped with `local`/`let`, global enums visible everywhere (captured into function bodies like global consts). 16 tests at spec_check2 L791–L806. |
 | `step` | `Step` | ✓ | ★ **Implemented** (`e955a8d`). Reserved word: `local step = 1` → parse error. `for x = a to b step N` and `for i in range(a,b) step N`: direction from start/end; user step in the wrong direction → body runs exactly once; `step 0` → infinite loop, bounded by the VM step-limit guard (satisfies the spec's required "timeout guard that results in a runtime exception" — throws `runtime error: ... infinite loop (step limit)`); `for x in [..] step n` → `type error: step is not supported over array literals in for-in loops`. Constant + variable step; continue/break/next intact. 19 tests in `spec_check2`. |
 | `$` | `Dollar` | ✓ | ★ **Implemented** (`0c63f4b`). SPEC §The $ Operator: `$age` → `"33"` (scalar-to-string evaluator), table-literal dynamic keys `{ $property = "male" }`, `OP_EVALKEY` opcode dispatched in all 4 exec loops. Rejects array/table/class instances (runtime type error; instances are typed `Table` at compile time, so the check is runtime — documented deviation, Phase 9.2 in `class_action_plan.md`). 6 tests at spec_check2 L617–L626. |
 | `$$` | — | — | ★ **Not implemented** — now **fully specified** (SPEC §operator $$, committed `c83ebc8`): indirect access operator, runtime name resolution from a string. No `DollarDollar` token, no `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE` opcodes. Spec: six-stage check pipeline, local-only writes, reads locals + `global`-exposed (global const visible everywhere), no variable creation, functions/lambdas never targetable, const read-only, sequential declaration state. See Not Yet Implemented + Open Items. |
@@ -388,6 +388,33 @@ Numeric literal suffixes `1.0f` / `44u` implemented (SPEC §declarations and ass
 - 4 new `spec_check2` cases (291 → 295): `type(1.0f)` → `"float"`, `type(44u)` → `"unsigned"`, `44u` value 44, float-suffix arithmetic.
 - Harness re-run: **295/295** (`spec_check2`), **33** (`spec_check`), **20** (`spec_cast_test`), **7** (`test_module`), **5** (`gen_test`), **22** (`range`), **13** (`class_str`), **17** (`class_static`), all green = **412 total**.
 - `# error reporting` remains **not implemented**.
+
+## Round 28 (2026-10-28)
+
+Phase 3 of `docs/action_plan.md`: the `enum` type (SPEC §enum). SPEC.md at
+`a350a25c` (unchanged this round — the `## enum` section was staged earlier).
+- **Lexer**: `TokenType::Enum` + `enum` in `keywordType()` (reserved word).
+- **Parser**: `parseEnum()` — `enum Name[:numeric-type] { A, B, C = 100, D }`;
+  optional `:type` restricted to the 8 numeric types; member values must be
+  integer literals; empty body → parse error; `local`/`let` prefix supported.
+- **Compiler**: enum members are compile-time constants. Values computed at
+  codegen (implied sequential from 0; `= N` resumes at N+1) and typed per the
+  enum's base type. Storage: an immutable table (`name → value`) in a hidden
+  variable `__enum_<Name>` (class-prototype pattern) — so `len(Enum)` works
+  via the table path and `type(Enum::M)` reports the member's type. Member
+  access `E::M` and `E.M` folds to `CONST <value>`; unknown enum/member →
+  compile error. Redeclaration (visible same-name enum, or a global enum
+  inside a function) → compile error. `local`/`let` → block scope (hidden var
+  in the block register map); global enums captured into function bodies via
+  the free-variable mechanism (hidden var captured, like global consts).
+- 16 new `spec_check2` cases (347 → 363): implied values, `= N` resume,
+  `::` + `.` notation, typed `:byte` (value + `type()`), `len`, arithmetic,
+  redeclaration / unknown enum / unknown member / valueless / non-integer
+  value errors, block scope (visible inside, not outside), global-in-function,
+  member-not-assignable. Harness: **363/363**; full tally **475**.
+  ctest 4/4. Remaining spec gaps (not in this phase): the C++ enum-injection
+  API is stated as "needed" but undefined; `$$` and external-data injection
+  are Phase 4.
 
 ## Round 27 (2026-10-28)
 
@@ -739,7 +766,7 @@ required test set.
 
 ## Open Items
 
-- **`enum` type (SPEC §enum, 2026-10-28):** ✗ **NOT implemented.** New `## enum` section: immutable value collections; default type int, typed `enum Name:byte`; implied values 0,1,2… with explicit `= N` resuming the sequence; redeclaration → error; member access via `::` (`Language::Cpp`); `len(enum)` = member count; bound to declaring scope (`local`/`let` → block scope; global enums visible everywhere); unknown-enum reference → error; `enum` reserved word. No `enum` keyword in the lexer, no parser/compiler/VM support. Spec gaps to resolve when implementing: the C++ injection API is stated as "needed" but undefined; enum-value arithmetic/coercion rules unspecified.
+- **`enum` type (SPEC §enum, 2026-10-28):** ✓ **implemented** (Round 28, 2026-10-28). `TokenType::Enum` reserved word; `parseEnum()` (`enum Name[:numeric-type] { A, B, C = 100, D }`, empty body → parse error); members are compile-time constants typed per the enum's base type (default int); implied sequential values, `= N` resumes at N+1; `E::M` and `E.M` fold to the constant; enum stored as an immutable table in hidden var `__enum_<Name>` so `len(E)` = member count; redeclaration + unknown enum/member → compile error; `local`/`let` → block scope, global enums visible everywhere (captured into functions). 16 `spec_check2` cases (347 → 363). **Remaining gap:** the C++ injection API ("needed" per spec) is undefined — deferred with Phase 4 (`$$` + external data).
 - **Valueless `local` default value (SPEC §declarations and assignments, 2026-10-28 spec review):** ✓ **implemented** (Round 25, 2026-10-28). `QLangCompiler` Declaration case emits `CONST Int(0)` for a valueless `local` (was nil); a typed valueless decl (`local b:byte`) gets zero of that type via the existing CONV. 3 new `spec_check2` cases; the 4 nil-equality cases updated to declare `nil` explicitly (they had encoded the old nil default).
 - **`len()` storage byte size (SPEC §build-in functions, staged 2026-10-28):** ✓ **implemented** (Round 21, 2026-10-28). `QLangVM::lenOf` — char/byte 1, word/short 2, int/unsigned 4, qword/float 8, bool 1, class instance (table with `__class__`) 1, nil → throws `len: undefined/nil has no length`; string/array/blob element counts and plain-table size unchanged. 9 `spec_check2` cases.
 - **Reserved word `set` (SPEC §reserved words, staged 2026-10-28):** ✗ **NOT implemented.** `local set = 1` compiles without the reserved-word error; no entry in `keywordType()`. (`long` ✓ implemented, Round 23.)
