@@ -98,6 +98,8 @@ named native function groups to `import`.
 | `int` | `int32_t` | |
 | `unsigned` | `uint32_t` | |
 | `qword` | `uint64_t` | |
+| `dword` | `uint32_t` | alias for `unsigned` |
+| `long` | `int64_t` | |
 | `string` | null-terminated text | |
 | `blob` | binary data | |
 | `array` | list of mixed values | |

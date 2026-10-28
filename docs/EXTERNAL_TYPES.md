@@ -160,7 +160,8 @@ Applied at every field get/set and method argument/return:
 | bool | Bool |
 | char | Char |
 | int8 / uint16 / int16 / int32 / uint32 | Byte / Word / Short / Int / Unsigned |
-| int64 / uint64 | Qword |
+| int64 | Long |
+| uint64 | Qword |
 | float / double | Float |
 | std::string | String |
 | enum | Int |

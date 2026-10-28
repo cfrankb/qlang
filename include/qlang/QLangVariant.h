@@ -66,6 +66,7 @@ struct ObjectDescriptor {
 using QLangVariant = std::variant<std::monostate, uint8_t, uint16_t, int16_t,
                                   int32_t, uint32_t, uint64_t, double,
                                   std::string, std::vector<uint8_t>, ArrayValue,
-                                  TableValue, ClosurePtr, GeneratorValuePtr, ObjectValue>;
+                                  TableValue, ClosurePtr, GeneratorValuePtr,
+                                  ObjectValue, int64_t>;
 
 } // namespace qlang

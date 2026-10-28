@@ -18,6 +18,7 @@ namespace {
     switch (v.type()) {
       case QLangValue::Type::Int:   return static_cast<int>(v.asInt());
       case QLangValue::Type::Qword: return static_cast<int>(static_cast<long long>(v.asQword()));
+      case QLangValue::Type::Long:  return static_cast<int>(static_cast<long long>(v.asLong()));
       case QLangValue::Type::Float: return static_cast<int>(v.asFloat());
       default:                      return 0;
     }
@@ -42,6 +43,7 @@ namespace {
       switch (v.type()) {
         case QLangValue::Type::Int:   n = static_cast<std::size_t>(v.asInt());   break;
         case QLangValue::Type::Qword: n = static_cast<std::size_t>(v.asQword()); break;
+        case QLangValue::Type::Long:  n = static_cast<std::size_t>(v.asLong());  break;
         case QLangValue::Type::Float: n = static_cast<std::size_t>(v.asFloat()); break;
         default:                      n = 0; break;
       }

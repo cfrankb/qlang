@@ -38,7 +38,8 @@ public:
     Function, // user-defined function (arrow closure)
     Generator, // lazy generator (yield-based function)
     Object,   // class instance (uses ObjectOps dispatch)
-    Eof         // end-of-file sentinel value
+    Eof,      // end-of-file sentinel value
+    Long      // int64_t (kept last so fixed serialization tags stay stable)
   };
 
   QLangValue() : m_type(Type::Nil) {}
@@ -82,6 +83,11 @@ public:
   }
   static QLangValue Qword(uint64_t v) {
     QLangValue q(Type::Qword);
+    q.m_storage = v;
+    return q;
+  }
+  static QLangValue Long(int64_t v) {
+    QLangValue q(Type::Long);
     q.m_storage = v;
     return q;
   }
@@ -153,6 +159,8 @@ public:
   uint32_t &asUnsigned();
   const uint64_t &asQword() const;
   uint64_t &asQword();
+  const int64_t &asLong() const;
+  int64_t &asLong();
   const std::string &asString() const;
   std::string &asString();
   const std::vector<uint8_t> &asBlob() const;

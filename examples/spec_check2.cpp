@@ -223,6 +223,18 @@ int main() {
   expectRun("qword const", "const big:qword = 10000000000");
   expectVal("qword arithmetic", "local a:qword = 100\nlocal b:qword = 200\nlocal r = a + b;", "r", 300);
 
+  // -- NEW: dword is an alias for unsigned (spec errata: 4 bytes, uint32_t) --
+  expectStr("dword alias typed", "local d:dword = 4294967295\nlocal s = toStr(d);", "s", "4294967295");
+  expectStr("dword alias type is unsigned", "local d:dword = 1\nlocal s = type(d);", "s", "unsigned");
+  expectVal("dword alias len 4", "local d:dword = 1\nlocal r = len(d);", "r", 4);
+  expectRun("dword alias const", "const dw:dword = 100");
+  // -- NEW: long type (spec §24; int64_t, 8 bytes) --
+  expectStr("long typed", "local l:long = 9007199254740993\nlocal s = toStr(l);", "s", "9007199254740993");
+  expectStr("long type", "local l:long = 5\nlocal s = type(l);", "s", "long");
+  expectVal("long len 8", "local l:long = 5\nlocal r = len(l);", "r", 8);
+  expectRun("long const", "const ll:long = 42");
+  expectStr("long cast", "local l:long = cast<long>(9007199254740993)\nlocal s = toStr(l);", "s", "9007199254740993");
+
   // -- NEW: switch/case/default (spec §208-221) --
   expectVal("switch basic int", "local x = 2\nswitch (x) {\n  case 1: x = 10\n  case 2: x = 20\n  case 3: x = 30\n  default: x = 99\n}\nlocal r = x;", "r", 20);
   expectVal("switch basic string", "local x = \"hello\"\nswitch (x) {\n  case \"world\": x = 1\n  case \"hello\": x = 2\n  default: x = 3\n}\nlocal r = x;", "r", 2);

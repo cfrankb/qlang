@@ -23,6 +23,10 @@ static bool isUnsignedInt(QLangValue::Type t) {
 }
 
 // Return true if the value is a Qword (unsigned 64-bit, but treat as unsigned).
+// Return true if the value is a Long (signed 64-bit).
+static bool isLong(QLangValue::Type t) {
+  return t == QLangValue::Type::Long;
+}
 static bool isQword(QLangValue::Type t) {
   return t == QLangValue::Type::Qword;
 }
@@ -49,7 +53,7 @@ static void checkMinMixFloat(const std::vector<QLangValue>& elems) {
   bool hasInt = false;
   for (auto& e : elems) {
     if (e.type() == QLangValue::Type::Float) hasFloat = true;
-    else if (isSignedInt(e.type()) || isUnsignedInt(e.type()) || isQword(e.type()))
+    else if (isSignedInt(e.type()) || isUnsignedInt(e.type()) || isQword(e.type()) || isLong(e.type()))
       hasInt = true;
   }
   if (hasFloat && hasInt)

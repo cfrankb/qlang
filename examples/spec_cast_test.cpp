@@ -25,6 +25,7 @@ static void expectVal(const std::string &name, const std::string &src,
     case QLangValue::Type::Int: got = v.asInt(); break;
     case QLangValue::Type::Unsigned: got = static_cast<int64_t>(v.asUnsigned()); break;
     case QLangValue::Type::Qword: got = static_cast<int64_t>(v.asQword()); break;
+    case QLangValue::Type::Long: got = v.asLong(); break;
     case QLangValue::Type::Float: got = static_cast<int64_t>(v.asFloat()); break;
     default: break;
     }

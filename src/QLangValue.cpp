@@ -15,6 +15,7 @@ const char *QLangValue::typeName() const {
   case Type::Int: return "int";
   case Type::Unsigned: return "unsigned";
   case Type::Qword: return "qword";
+  case Type::Long: return "long";
   case Type::String: return "string";
   case Type::Blob: return "blob";
   case Type::Array: return "array";
@@ -63,6 +64,8 @@ const uint64_t &QLangValue::asQword() const {
                      std::string("expected Qword but value is ") + typeName());
   return std::get<uint64_t>(m_storage);
 }
+// asLong reads from the int64_t storage.
+QL_ACCESSOR_GETTER(int64_t, Long, int64_t)
 QL_ACCESSOR_GETTER(std::string, String, std::string)
 QL_ACCESSOR_GETTER(std::vector<uint8_t>, Blob, std::vector<uint8_t>)
 QL_ACCESSOR_GETTER(ArrayValue, Array, ArrayValue)
@@ -106,6 +109,8 @@ uint64_t &QLangValue::asQword() {
                      std::string("expected Qword but value is ") + typeName());
   return std::get<uint64_t>(m_storage);
 }
+// asLong mut reads from the int64_t storage.
+QL_ACCESSOR_MUT(int64_t, Long, int64_t)
 QL_ACCESSOR_MUT(std::string, String, std::string)
 QL_ACCESSOR_MUT(std::vector<uint8_t>, Blob, std::vector<uint8_t>)
 QL_ACCESSOR_MUT(ArrayValue, Array, ArrayValue)
@@ -172,6 +177,7 @@ int64_t toInt64(const QLangValue &v) {
                        "Qword value exceeds int64_t range");
     return static_cast<int64_t>(u);
   }
+  case QLangValue::Type::Long: return v.asLong();
   case QLangValue::Type::Float: return static_cast<int64_t>(v.asFloat());
   default: return 0;
   }

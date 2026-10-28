@@ -25,6 +25,7 @@ bool isNumeric(const QLangValue &v) {
          t == QLangValue::Type::Byte || t == QLangValue::Type::Word ||
          t == QLangValue::Type::Short || t == QLangValue::Type::Int ||
          t == QLangValue::Type::Unsigned || t == QLangValue::Type::Qword ||
+         t == QLangValue::Type::Long ||
          t == QLangValue::Type::Float;
 }
 
@@ -47,7 +48,8 @@ std::string valueToString(const QLangValue &v) {
   case QLangValue::Type::Short: return std::to_string(v.asShort());
   case QLangValue::Type::Int: return std::to_string(v.asInt());
   case QLangValue::Type::Unsigned: return std::to_string(v.asUnsigned());
-  case QLangValue::Type::Qword: return std::to_string(v.asQword());
+    case QLangValue::Type::Qword: return std::to_string(v.asQword());
+  case QLangValue::Type::Long: return std::to_string(v.asLong());
   case QLangValue::Type::Float: {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%.15g", v.asFloat());
@@ -240,7 +242,8 @@ int64_t lenOf(const QLangValue &v) {
   case QLangValue::Type::Short: return 2;
   case QLangValue::Type::Int:
   case QLangValue::Type::Unsigned: return 4;
-  case QLangValue::Type::Qword:
+    case QLangValue::Type::Qword:
+  case QLangValue::Type::Long:
   case QLangValue::Type::Float: return 8;
   default: return 1; // bool, function, generator, ...
   }
@@ -848,8 +851,10 @@ QLangValue convert(const QLangValue &v, QLangValue::Type type) {
     return QLangValue::Int(static_cast<int32_t>((long long)toInt64(v)));
   case QLangValue::Type::Unsigned:
     return QLangValue::Unsigned(static_cast<uint32_t>((long long)toInt64(v)));
-  case QLangValue::Type::Qword:
+    case QLangValue::Type::Qword:
     return QLangValue::Qword(static_cast<uint64_t>((long long)toInt64(v)));
+  case QLangValue::Type::Long:
+    return QLangValue::Long(static_cast<int64_t>((long long)toInt64(v)));
   default: return v;
   }
 }
@@ -862,7 +867,8 @@ QLangValue strict_convert(const QLangValue &v, QLangValue::Type type) {
   if (type == QLangValue::Type::Bool || type == QLangValue::Type::Char ||
       type == QLangValue::Type::Byte || type == QLangValue::Type::Word ||
       type == QLangValue::Type::Short || type == QLangValue::Type::Int ||
-      type == QLangValue::Type::Unsigned || type == QLangValue::Type::Qword ||
+            type == QLangValue::Type::Unsigned || type == QLangValue::Type::Qword ||
+      type == QLangValue::Type::Long ||
       type == QLangValue::Type::Float) {
     if (v.type() == QLangValue::Type::Array || v.type() == QLangValue::Type::Table ||
         v.type() == QLangValue::Type::Blob) {
@@ -886,8 +892,10 @@ QLangValue strict_convert(const QLangValue &v, QLangValue::Type type) {
       return QLangValue::Int(static_cast<int32_t>(n));
     case QLangValue::Type::Unsigned:
       return QLangValue::Unsigned(static_cast<uint32_t>(n));
-    case QLangValue::Type::Qword:
+        case QLangValue::Type::Qword:
       return QLangValue::Qword(static_cast<uint64_t>(n));
+    case QLangValue::Type::Long:
+      return QLangValue::Long(static_cast<int64_t>(n));
     case QLangValue::Type::Float:
       return QLangValue::Float(static_cast<double>(n));
     default:

@@ -15,16 +15,17 @@ SPEC.md is a living document.
 
 ## data types
 
-|type|size|notes|
-|-|-|-|
-|string/str|varying| zero terminated
+|type|size|notes|status|
+|-|-|-|-|
+|string|varying| zero terminated | deprecated
+|str|varying| zero terminated| alias string
 |blob|varying|  binary data
 |char|1 byte| int8_t
 |byte|1 byte| uint8_t
 |word|2 bytes| uint16_t
 |short|2 bytes| int16_t
 |int|4 bytes| int32_t
-|unsigned|4bytes| uint32_t (equivant to dword)
+|unsigned|4bytes| uint32_t |equivant to dword
 |dword|4bytes| uint32_t
 |long|8 bytes| int64_t
 |qword|8 bytes| uint64_t

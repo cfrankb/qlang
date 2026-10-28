@@ -14,6 +14,7 @@ static int64_t toInt64_(const QLangValue &v) {
   case QLangValue::Type::Int:     return static_cast<int64_t>(v.asInt());
   case QLangValue::Type::Unsigned:return static_cast<int64_t>(v.asUnsigned());
   case QLangValue::Type::Qword:   return static_cast<int64_t>(v.asQword());
+  case QLangValue::Type::Long:    return v.asLong();
   case QLangValue::Type::Float:   return static_cast<int64_t>(v.asFloat());
   default: return 0;
   }

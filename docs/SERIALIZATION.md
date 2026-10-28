@@ -52,6 +52,7 @@ Every `QLangValue` serializes as `u8 tag` + payload. Tags are the
 | 14  | Function| `i32 funcIndex` + `u32 capCount` + `capCount` × `i32 reg` |
 | 15  | Generator| **not durable** — writer MUST emit tag 0 (Nil) |
 | 16  | Eof     | — |
+| 17  | Long    | `i64` |
 
 Rules:
 

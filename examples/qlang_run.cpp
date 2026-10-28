@@ -154,6 +154,9 @@ struct QlcWriter
     case T::Qword:
       u64(v.asQword());
       break;
+    case T::Long:
+      u64(static_cast<uint64_t>(v.asLong()));
+      break;
     case T::Float:
       f64(v.asFloat());
       break;

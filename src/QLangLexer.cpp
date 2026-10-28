@@ -40,6 +40,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "short") return TokenType::TypeShort;
   if (text == "int") return TokenType::TypeInt;
   if (text == "unsigned") return TokenType::TypeUnsigned;
+  if (text == "dword") return TokenType::TypeUnsigned;  // alias for unsigned (uint32_t, 4 bytes)
   if (text == "string") return TokenType::TypeString;
   if (text == "str") return TokenType::StrType;
   if (text == "blob") return TokenType::TypeBlob;
@@ -47,6 +48,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "float") return TokenType::TypeFloat;
   if (text == "table") return TokenType::TypeTable;
   if (text == "qword") return TokenType::TypeQword;
+  if (text == "long") return TokenType::TypeLong;
   if (text == "type") return TokenType::Type;
   if (text == "global") return TokenType::Global;
   if (text == "assert") return TokenType::Assert;
