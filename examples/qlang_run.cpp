@@ -2,7 +2,7 @@
 // diagnostic trace level, optional stage timing, and bytecode output.
 //
 //   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>]
-//             [--asm <file.qla>] file.ql
+//             [--asm <file.qla>] [--asm-level <0-4>] file.ql
 //
 // The app drives the pipeline directly (parse -> compile -> execute) so it
 // can time each stage and hand the compiled program to the .qlc writer.
@@ -17,6 +17,7 @@
 //   4  bytecode file could not be written
 //   5  disassembly file could not be written
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <fstream>
@@ -36,349 +37,755 @@ using namespace qlang;
 namespace
 {
 
-const char *kAppName = "qlang_run";
+  const char *kAppName = "qlang_run";
 
-using Clock = std::chrono::steady_clock;
+  using Clock = std::chrono::steady_clock;
 
-double msBetween(Clock::time_point a, Clock::time_point b)
-{
-  return std::chrono::duration<double, std::milli>(b - a).count();
-}
-
-void printHelp(const char *prog)
-{
-  std::cout << "Run a QLang (.ql) script.\n"
-            << "\n"
-            << "usage: " << prog << " [options] <file.ql>\n"
-            << "\n"
-            << "options:\n"
-            << "  --trace-level <n>   diagnostic verbosity (stderr):\n"
-            << "                        0 = off (default)\n"
-            << "                        1 = frame/call events\n"
-            << "                        2 = VM loop + opcodes + returns\n"
-            << "                        3 = full detail (generators, table ops, compile)\n"
-            << "  --profile           report parse / compile / execute times in ms (stderr)\n"
-            << "  --output <file.qlc> write the compiled bytecode to <file.qlc>\n"
-            << "  --asm <file.qla>    write a disassembly listing to <file.qla>\n"
-            << "  -h, --help          show this help and exit\n"
-            << "\n"
-            << "exit codes:\n"
-            << "  0  script ran to completion\n"
-            << "  1  usage error\n"
-            << "  2  script file could not be read\n"
-            << "  3  QLang error (lex/parse/type/runtime)\n"
-            << "  4  bytecode file could not be written\n"
-            << "  5  disassembly file could not be written\n";
-}
-
-// Accept exactly "0".."3". Returns false on failure.
-bool parseTraceLevel(const std::string &s, int &out)
-{
-  if (s.size() != 1 || s[0] < '0' || s[0] > '3')
-    return false;
-  out = s[0] - '0';
-  return true;
-}
-
-// ---------------------------------------------------------------------------
-// .qlc binary writer.
-//
-// Format (little-endian), version 1:
-//   magic "QLC1", u32 version
-//   u32 funcCount, then per function:
-//     u32 nameLen + name bytes
-//     i32 paramCount, i32 registerCount, u8 isGenerator
-//     u32 captureCount, then i32 reg each
-//     u32 instrCount, then per instruction: u8 op, i32 a, i32 b, i32 c,
-//                                            i32 line, i32 col
-//     u32 constCount, then serialized QLangValue each
-//   u32 varCount, then per var: u32 nameLen + name, i32 register
-//   u32 constVarCount, then per name: u32 nameLen + name
-//   i32 registerCount
-//
-// QLangValue serialization:
-//   u8 type, then payload:
-//     Nil / Eof: none
-//     Bool / Int: i32
-//     Char / Short: i32
-//     Byte: u8    Word: u32    Unsigned: u32
-//     Qword: u64  Float: f64
-//     String / Blob: u32 len + bytes
-//     Array: u32 count + values
-//     Table: u32 count + (u32 keyLen + key + value)
-//     Function: i32 funcIndex + u32 captureCount + i32 reg each
-//               (capture frame pointers are runtime-only, not persisted)
-//     Generator: stored as Nil (not durable)
-//
-// Native (C++) function bindings are NOT part of the file; a loader re-binds
-// them from its own context.
-// ---------------------------------------------------------------------------
-struct QlcWriter
-{
-  std::string buf;
-
-  void u8(uint8_t v) { buf += static_cast<char>(v); }
-  void u32(uint32_t v) { bytes(&v, sizeof v); }
-  void i32(int32_t v) { bytes(&v, sizeof v); }
-  void u64(uint64_t v) { bytes(&v, sizeof v); }
-  void f64(double v) { bytes(&v, sizeof v); }
-  void bytes(const void *p, size_t n) { buf.append(static_cast<const char *>(p), n); }
-  void str(const std::string &s) { u32(static_cast<uint32_t>(s.size())); bytes(s.data(), s.size()); }
-
-  void value(const QLangValue &v)
+  double msBetween(Clock::time_point a, Clock::time_point b)
   {
-    using T = QLangValue::Type;
-    T t = v.type();
-    if (t == T::Generator)
-      t = T::Nil; // not durable
-    u8(static_cast<uint8_t>(t));
-    switch (t)
+    return std::chrono::duration<double, std::milli>(b - a).count();
+  }
+
+  void printHelp(const char *prog)
+  {
+    std::cout << "Run a QLang (.ql) script.\n"
+              << "\n"
+              << "usage: " << prog << " [options] <file.ql>\n"
+              << "\n"
+              << "options:\n"
+              << "  --trace-level <n>   diagnostic verbosity (stderr):\n"
+              << "                        0 = off (default)\n"
+              << "                        1 = frame/call events\n"
+              << "                        2 = VM loop + opcodes + returns\n"
+              << "                        3 = full detail (generators, table ops, compile)\n"
+              << "  --profile           report parse / compile / execute times in ms (stderr)\n"
+              << "  --output <file.qlc> write the compiled bytecode to <file.qlc>\n"
+              << "  --asm <file.qla>    write a disassembly listing to <file.qla>\n"
+              << "  --asm-level <n>     disassembly detail (default 1):\n"
+              << "                        0 = instructions only\n"
+              << "                        1 = instructions + constants + function info\n"
+              << "                        2 = level 1 + interleaved source lines\n"
+              << "                        3 = level 2 + const values inlined next to instructions\n"
+              << "                        4 = level 3 + register map, operand names, pseudo-mnemonics\n"
+              << "  -h, --help          show this help and exit\n"
+              << "\n"
+              << "exit codes:\n"
+              << "  0  script ran to completion\n"
+              << "  1  usage error\n"
+              << "  2  script file could not be read\n"
+              << "  3  QLang error (lex/parse/type/runtime)\n"
+              << "  4  bytecode file could not be written\n"
+              << "  5  disassembly file could not be written\n";
+  }
+
+  // Accept exactly "0".."3". Returns false on failure.
+  bool parseTraceLevel(const std::string &s, int &out)
+  {
+    if (s.size() != 1 || s[0] < '0' || s[0] > '3')
+      return false;
+    out = s[0] - '0';
+    return true;
+  }
+
+  // Accept exactly "0".."4". Returns false on failure.
+  bool parseAsmLevel(const std::string &s, int &out)
+  {
+    if (s.size() != 1 || s[0] < '0' || s[0] > '4')
+      return false;
+    out = s[0] - '0';
+    return true;
+  }
+
+  // ---------------------------------------------------------------------------
+  // .qlc binary writer.
+  //
+  // Format (little-endian), version 1:
+  //   magic "QLC1", u32 version
+  //   u32 funcCount, then per function:
+  //     u32 nameLen + name bytes
+  //     i32 paramCount, i32 registerCount, u8 isGenerator
+  //     u32 captureCount, then i32 reg each
+  //     u32 instrCount, then per instruction: u8 op, i32 a, i32 b, i32 c,
+  //                                            i32 line, i32 col
+  //     u32 constCount, then serialized QLangValue each
+  //   u32 varCount, then per var: u32 nameLen + name, i32 register
+  //   u32 constVarCount, then per name: u32 nameLen + name
+  //   i32 registerCount
+  //
+  // QLangValue serialization:
+  //   u8 type, then payload:
+  //     Nil / Eof: none
+  //     Bool / Int: i32
+  //     Char / Short: i32
+  //     Byte: u8    Word: u32    Unsigned: u32
+  //     Qword: u64  Float: f64
+  //     String / Blob: u32 len + bytes
+  //     Array: u32 count + values
+  //     Table: u32 count + (u32 keyLen + key + value)
+  //     Function: i32 funcIndex + u32 captureCount + i32 reg each
+  //               (capture frame pointers are runtime-only, not persisted)
+  //     Generator: stored as Nil (not durable)
+  //
+  // Native (C++) function bindings are NOT part of the file; a loader re-binds
+  // them from its own context.
+  // ---------------------------------------------------------------------------
+  struct QlcWriter
+  {
+    std::string buf;
+
+    void u8(uint8_t v) { buf += static_cast<char>(v); }
+    void u32(uint32_t v) { bytes(&v, sizeof v); }
+    void i32(int32_t v) { bytes(&v, sizeof v); }
+    void u64(uint64_t v) { bytes(&v, sizeof v); }
+    void f64(double v) { bytes(&v, sizeof v); }
+    void bytes(const void *p, size_t n) { buf.append(static_cast<const char *>(p), n); }
+    void str(const std::string &s)
     {
-    case T::Nil:
-    case T::Eof:
-      break;
-    case T::Bool:
-    case T::Int:
-      i32(v.asInt());
-      break;
-    case T::Char:
-      i32(v.asChar());
-      break;
-    case T::Short:
-      i32(v.asShort());
-      break;
-    case T::Byte:
-      u8(v.asByte());
-      break;
-    case T::Word:
-      u32(v.asWord());
-      break;
-    case T::Unsigned:
-      u32(v.asUnsigned());
-      break;
-    case T::Qword:
-      u64(v.asQword());
-      break;
-    case T::Long:
-      u64(static_cast<uint64_t>(v.asLong()));
-      break;
-    case T::Float:
-      f64(v.asFloat());
-      break;
-    case T::String:
-      str(v.asString());
-      break;
-    case T::Blob:
+      u32(static_cast<uint32_t>(s.size()));
+      bytes(s.data(), s.size());
+    }
+
+    void value(const QLangValue &v)
     {
-      const auto &b = v.asBlob();
-      u32(static_cast<uint32_t>(b.size()));
-      bytes(b.data(), b.size());
+      using T = QLangValue::Type;
+      T t = v.type();
+      if (t == T::Generator)
+        t = T::Nil; // not durable
+      u8(static_cast<uint8_t>(t));
+      switch (t)
+      {
+      case T::Nil:
+      case T::Eof:
+        break;
+      case T::Bool:
+      case T::Int:
+        i32(v.asInt());
+        break;
+      case T::Char:
+        i32(v.asChar());
+        break;
+      case T::Short:
+        i32(v.asShort());
+        break;
+      case T::Byte:
+        u8(v.asByte());
+        break;
+      case T::Word:
+        u32(v.asWord());
+        break;
+      case T::Unsigned:
+        u32(v.asUnsigned());
+        break;
+      case T::Qword:
+        u64(v.asQword());
+        break;
+      case T::Long:
+        u64(static_cast<uint64_t>(v.asLong()));
+        break;
+      case T::Float:
+        f64(v.asFloat());
+        break;
+      case T::String:
+        str(v.asString());
+        break;
+      case T::Blob:
+      {
+        const auto &b = v.asBlob();
+        u32(static_cast<uint32_t>(b.size()));
+        bytes(b.data(), b.size());
+        break;
+      }
+      case T::Array:
+      {
+        const auto &a = v.asArray();
+        u32(static_cast<uint32_t>(a.size()));
+        for (const auto &e : a)
+          value(e);
+        break;
+      }
+      case T::Table:
+      {
+        const auto &t = v.asTable();
+        u32(static_cast<uint32_t>(t->size()));
+        for (const auto &[k, val] : *t)
+        {
+          str(k);
+          value(val);
+        }
+        break;
+      }
+      case T::Function:
+      {
+        const auto &c = v.asFunction();
+        i32(static_cast<int32_t>(c.funcIndex));
+        u32(static_cast<uint32_t>(c.captures.size()));
+        for (const auto &cap : c.captures)
+          i32(cap.reg);
+        break;
+      }
+      }
+    }
+
+    size_t write(const CompiledProgram &prog)
+    {
+      bytes("QLC1", 4);
+      u32(1); // format version
+
+      const auto &fns = prog.functions;
+      u32(static_cast<uint32_t>(fns.size()));
+      for (const auto &f : fns)
+      {
+        str(f.name);
+        i32(f.paramCount);
+        i32(f.registerCount);
+        u8(f.isGenerator ? 1 : 0);
+        u32(static_cast<uint32_t>(f.captures.size()));
+        for (const auto &cap : f.captures)
+          i32(cap.reg);
+        u32(static_cast<uint32_t>(f.instructions.size()));
+        for (const auto &ins : f.instructions)
+        {
+          u8(static_cast<uint8_t>(ins.op));
+          i32(ins.a);
+          i32(ins.b);
+          i32(ins.c);
+          i32(ins.line);
+          i32(ins.col);
+        }
+        u32(static_cast<uint32_t>(f.constants.size()));
+        for (const auto &c : f.constants)
+          value(c);
+      }
+
+      u32(static_cast<uint32_t>(prog.vars.size()));
+      for (const auto &[name, reg] : prog.vars)
+      {
+        str(name);
+        i32(reg);
+      }
+      u32(static_cast<uint32_t>(prog.constVars.size()));
+      for (const auto &name : prog.constVars)
+        str(name);
+      i32(prog.registerCount);
+      return buf.size();
+    }
+  };
+
+  bool writeBytecode(const CompiledProgram &prog, const std::string &path, size_t &written)
+  {
+    QlcWriter w;
+    written = w.write(prog);
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out)
+      return false;
+    out.write(w.buf.data(), static_cast<std::streamsize>(w.buf.size()));
+    return static_cast<bool>(out);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Disassembly listing (.qla). Detail levels:
+  //   0 = instruction stream only (mnemonic from Bytecode::name plus raw
+  //       operands a/b/c and the stamped source line:col)
+  //   1 = level 0 + function metadata (params/registers/captures) and the
+  //       human-readable constant pool
+  //   2 = level 1 + the original source line interleaved before each run of
+  //       instructions that share a line
+  //   3 = level 2 + the referenced constant's value inlined next to the
+  //       instruction (CONST / MAKEFUNC / MAKEGEN, whose operand b is a pool
+  //       index)
+  //   4 = level 3 + the variable->register map (main function), operand names
+  //       for CALL (builtin/native), CALLFN (function name), CONV/CAST (target
+  //       type), and a pseudo-mnemonic: the register-level meaning of each
+  //       instruction (e.g. `const 1 0 0` -> `r1 = pool[0]`)
+  // ---------------------------------------------------------------------------
+
+  // Builtin id (CALL operand b, >= 0) -> name. Order mirrors the Builtin enum
+  // in QLangBytecode.h.
+  const char *builtinName(int id)
+  {
+    switch (id)
+    {
+    case 0:
+      return "tostr";
+    case 1:
+      return "toint";
+    case 2:
+      return "type";
+    case 3:
+      return "print";
+    case 4:
+      return "println";
+    case 5:
+      return "printf";
+    case 6:
+      return "len";
+    case 7:
+      return "blob";
+    case 8:
+      return "substr";
+    case 9:
+      return "slice";
+    case 10:
+      return "range";
+    case 11:
+      return "join";
+    case 12:
+      return "isset";
+    case 13:
+      return "sprintf";
+    case 14:
+      return "format";
+    case 15:
+      return "assert";
+    case 16:
+      return "next";
+    case 17:
+      return "set_max_steps";
+    case 18:
+      return "get_max_steps";
+    case 19:
+      return "set";
+    default:
+      return nullptr;
+    }
+  }
+
+  // Pseudo-mnemonic: the register-level meaning of one instruction (level 4),
+  // e.g. "r1 = pool[0]" for `const 1 0 0`.
+  std::string pseudoText(const CompiledProgram &prog, const Instruction &ins)
+  {
+    std::ostringstream ss;
+    auto rn = [](int r)
+    { return std::string("r") + std::to_string(r); };
+    auto args = [&ins](int a, int c)
+    {
+      std::string s;
+      for (int i = 1; i <= c; i++)
+      {
+        if (i > 1)
+          s += ", ";
+        s += "r" + std::to_string(a + i);
+      }
+      return s;
+    };
+    auto type = [](int t)
+    {
+      return std::string(QLangValue(static_cast<QLangValue::Type>(t)).typeName());
+    };
+    auto bin = [&ss, &rn, &ins](const char *op)
+    {
+      ss << rn(ins.a) << " = " << rn(ins.b) << " " << op << " " << rn(ins.c);
+    };
+    auto cmp = [&ss, &rn, &ins](const char *op)
+    {
+      ss << rn(ins.a) << " = (" << rn(ins.b) << " " << op << " " << rn(ins.c) << ")";
+    };
+    switch (ins.op)
+    {
+    case Opcode::CONST:
+      ss << rn(ins.a) << " = pool[" << ins.b << "]";
+      break;
+    case Opcode::MOV:
+      ss << rn(ins.a) << " = " << rn(ins.b);
+      break;
+    case Opcode::CONV:
+      ss << rn(ins.a) << " = convert(" << rn(ins.b) << ", " << type(ins.c) << ")";
+      break;
+    case Opcode::CAST:
+      ss << rn(ins.a) << " = cast(" << rn(ins.b) << ", " << type(ins.c) << ")";
+      break;
+    case Opcode::NEG:
+      ss << rn(ins.a) << " = -" << rn(ins.b);
+      break;
+    case Opcode::INC:
+      ss << rn(ins.a) << " += 1";
+      break;
+    case Opcode::DEC:
+      ss << rn(ins.a) << " -= 1";
+      break;
+    case Opcode::ADD:
+      bin("+");
+      break;
+    case Opcode::SUB:
+      bin("-");
+      break;
+    case Opcode::MUL:
+      bin("*");
+      break;
+    case Opcode::DIV:
+      bin("/");
+      break;
+    case Opcode::MOD:
+      bin("%");
+      break;
+    case Opcode::AND:
+      bin("&");
+      break;
+    case Opcode::OR:
+      bin("|");
+      break;
+    case Opcode::XOR:
+      bin("^");
+      break;
+    case Opcode::SHL:
+      bin("<<");
+      break;
+    case Opcode::SHR:
+      bin(">>");
+      break;
+    case Opcode::POW:
+      bin("**");
+      break;
+    case Opcode::LAND:
+      ss << rn(ins.a) << " = truth(" << rn(ins.b) << ") && truth(" << rn(ins.c) << ")";
+      break;
+    case Opcode::LOR:
+      ss << rn(ins.a) << " = truth(" << rn(ins.b) << ") || truth(" << rn(ins.c) << ")";
+      break;
+    case Opcode::NOT:
+      ss << rn(ins.a) << " = !truth(" << rn(ins.b) << ")";
+      break;
+    case Opcode::EQ:
+      cmp("==");
+      break;
+    case Opcode::NE:
+      cmp("!=");
+      break;
+    case Opcode::LT:
+      cmp("<");
+      break;
+    case Opcode::GT:
+      cmp(">");
+      break;
+    case Opcode::LE:
+      cmp("<=");
+      break;
+    case Opcode::GE:
+      cmp(">=");
+      break;
+    case Opcode::IN:
+      ss << rn(ins.a) << " = (" << rn(ins.b) << " in " << rn(ins.c) << ")";
+      break;
+    case Opcode::CALL:
+      if (ins.b >= 0)
+      {
+        const char *bn = builtinName(ins.b);
+        ss << rn(ins.a) << " = " << (bn ? bn : "builtin?") << "(" << args(ins.a, ins.c) << ")";
+      }
+      else
+        ss << rn(ins.a) << " = native" << (-1 - ins.b) << "(" << args(ins.a, ins.c) << ")";
+      break;
+    case Opcode::DELETE:
+      ss << "delete " << rn(ins.a);
+      break;
+    case Opcode::ARRGET:
+    case Opcode::SEQGET:
+    case Opcode::TABGET:
+    case Opcode::INDGET:
+      ss << rn(ins.a) << " = " << rn(ins.b) << "[" << rn(ins.c) << "]";
+      break;
+    case Opcode::ARRPUT:
+    case Opcode::TABPUT:
+    case Opcode::INDPUT:
+      ss << rn(ins.a) << "[" << rn(ins.b) << "] = " << rn(ins.c);
+      break;
+    case Opcode::ARRAPP:
+      ss << rn(ins.a) << " += " << rn(ins.c);
+      break;
+    case Opcode::ARRAPPV:
+      ss << rn(ins.a) << " += " << rn(ins.b);
+      break;
+    case Opcode::ARRLEN:
+    case Opcode::LEN:
+      ss << rn(ins.a) << " = len(" << rn(ins.b) << ")";
+      break;
+    case Opcode::TABCREATE:
+      ss << rn(ins.a) << " = {}";
+      break;
+    case Opcode::TABFINALIZE:
+      ss << "finalize(" << rn(ins.a) << ")";
+      break;
+    case Opcode::EVALKEY:
+      ss << rn(ins.a) << " = str(" << rn(ins.b) << ")";
+      break;
+    case Opcode::JMP:
+    case Opcode::CONTINUE:
+    case Opcode::BREAK:
+      ss << "pc = " << ins.a;
+      break;
+    case Opcode::JMPIFFALSE:
+      ss << "if !truth(" << rn(ins.a) << ") pc = " << ins.b;
+      break;
+    case Opcode::JMPIFTRUE:
+      ss << "if truth(" << rn(ins.a) << ") pc = " << ins.b;
+      break;
+    case Opcode::CALLFN:
+    {
+      std::string fn = "fn" + std::to_string(ins.b);
+      if (ins.b >= 0 && static_cast<size_t>(ins.b) < prog.functions.size())
+        fn = prog.functions[static_cast<size_t>(ins.b)].name;
+      ss << rn(ins.a) << " = " << fn << "(" << args(ins.a, ins.c) << ")";
       break;
     }
-    case T::Array:
-    {
-      const auto &a = v.asArray();
-      u32(static_cast<uint32_t>(a.size()));
-      for (const auto &e : a)
-        value(e);
+    case Opcode::CALLCLOS:
+      ss << rn(ins.a) << " = " << rn(ins.a) << "(" << args(ins.a, ins.c) << ")";
       break;
+    case Opcode::RETURN:
+      ss << "return " << rn(ins.a);
+      break;
+    case Opcode::MAKEFUNC:
+      ss << rn(ins.a) << " = closure(pool[" << ins.b << "])";
+      break;
+    case Opcode::MAKEGEN:
+      ss << rn(ins.a) << " = generator(pool[" << ins.b << "])";
+      break;
+    case Opcode::REFLOAD:
+      ss << rn(ins.a) << " = cap[" << ins.b << "]";
+      break;
+    case Opcode::REFSTORE:
+      ss << "cap[" << ins.b << "] = " << rn(ins.a);
+      break;
+    case Opcode::YIELD:
+      ss << "yield " << rn(ins.b);
+      break;
+    }
+    return ss.str();
+  }
+
+  // Render a string with escapes (\n, \r, \t, \", \\, \xNN for other
+  // non-printables) so it stays on one line in the listing.
+  std::string quoteString(const std::string &s)
+  {
+    std::string out = "\"";
+    for (char ch : s)
+    {
+      switch (ch)
+      {
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      default:
+      {
+        const unsigned char uc = static_cast<unsigned char>(ch);
+        if (uc < 0x20 || uc == 0x7f)
+        {
+          char buf[8];
+          std::snprintf(buf, sizeof buf, "\\x%02x", uc);
+          out += buf;
+        }
+        else
+          out += ch;
+      }
+      }
+    }
+    out += "\"";
+    return out;
+  }
+  std::string valueText(const QLangValue &v, int depth = 0)
+  {
+    using T = QLangValue::Type;
+    switch (v.type())
+    {
+    case T::Nil:
+      return "nil";
+    case T::Eof:
+      return "eof";
+    case T::Bool:
+      return v.asInt() ? "true" : "false";
+    case T::Char:
+      return std::to_string(v.asChar());
+    case T::Byte:
+      return std::to_string(v.asByte());
+    case T::Word:
+      return std::to_string(v.asWord());
+    case T::Short:
+      return std::to_string(v.asShort());
+    case T::Int:
+      return std::to_string(v.asInt());
+    case T::Unsigned:
+      return std::to_string(v.asUnsigned());
+    case T::Qword:
+      return std::to_string(v.asQword());
+    case T::Long:
+      return std::to_string(v.asLong());
+    case T::Float:
+    {
+      char buf[32];
+      std::snprintf(buf, sizeof buf, "%.17g", v.asFloat());
+      return buf;
+    }
+    case T::String:
+      return quoteString(v.asString());
+    case T::Blob:
+      return "<" + std::to_string(v.asBlob().size()) + " bytes>";
+    case T::Array:
+    case T::Set:
+    {
+      if (depth)
+        return "[...]";
+      std::string s = "[";
+      const auto &a = v.asArray();
+      for (size_t i = 0; i < a.size(); i++)
+      {
+        if (i)
+          s += ", ";
+        s += valueText(a[i], depth + 1);
+      }
+      return s + "]";
     }
     case T::Table:
     {
+      if (depth)
+        return "{...}";
+      std::string s = "{";
       const auto &t = v.asTable();
-      u32(static_cast<uint32_t>(t->size()));
+      bool first = true;
       for (const auto &[k, val] : *t)
       {
-        str(k);
-        value(val);
+        if (!first)
+          s += ", ";
+        first = false;
+        s += k + ": " + valueText(val, depth + 1);
       }
-      break;
+      return s + "}";
     }
     case T::Function:
-    {
-      const auto &c = v.asFunction();
-      i32(static_cast<int32_t>(c.funcIndex));
-      u32(static_cast<uint32_t>(c.captures.size()));
-      for (const auto &cap : c.captures)
-        i32(cap.reg);
-      break;
+      return "function<" + std::to_string(v.asFunction().funcIndex) + ">";
+    case T::Generator:
+      return "generator";
+    case T::Object:
+      return "object";
     }
-    }
+    return "?";
   }
 
-  size_t write(const CompiledProgram &prog)
+  std::string disassemble(const CompiledProgram &prog, const std::vector<std::string> &srcLines,
+                          int level)
   {
-    bytes("QLC1", 4);
-    u32(1); // format version
-
-    const auto &fns = prog.functions;
-    u32(static_cast<uint32_t>(fns.size()));
-    for (const auto &f : fns)
+    std::ostringstream ss;
+    if (level >= 1)
     {
-      str(f.name);
-      i32(f.paramCount);
-      i32(f.registerCount);
-      u8(f.isGenerator ? 1 : 0);
-      u32(static_cast<uint32_t>(f.captures.size()));
-      for (const auto &cap : f.captures)
-        i32(cap.reg);
-      u32(static_cast<uint32_t>(f.instructions.size()));
-      for (const auto &ins : f.instructions)
+      ss << "QLang disassembly (v1)\n";
+      ss << "registers: " << prog.registerCount << "\n\n";
+    }
+    for (size_t i = 0; i < prog.functions.size(); i++)
+    {
+      const auto &f = prog.functions[i];
+      if (level >= 1)
       {
-        u8(static_cast<uint8_t>(ins.op));
-        i32(ins.a);
-        i32(ins.b);
-        i32(ins.c);
-        i32(ins.line);
-        i32(ins.col);
+        ss << "function #" << i << " '" << f.name << "'\n";
+        ss << "  params: " << f.paramCount
+           << "  registers: " << f.registerCount
+           << (f.isGenerator ? "  generator" : "") << "\n";
+        if (!f.captures.empty())
+        {
+          ss << "  captures:";
+          for (const auto &cap : f.captures)
+            ss << " r" << cap.reg;
+          ss << "\n";
+        }
+        // Level 4: variable -> home-register map (main only; function locals
+        // and params have no name->register table in the CompiledProgram).
+        if (level >= 4 && i == 0 && !prog.vars.empty())
+        {
+          std::vector<std::pair<int, std::string>> regs;
+          for (const auto &[name, reg] : prog.vars)
+            regs.emplace_back(reg, name);
+          std::sort(regs.begin(), regs.end());
+          ss << "  vars:\n";
+          for (const auto &[reg, name] : regs)
+            ss << "    r" << std::setw(3) << reg << "  " << name << "\n";
+        }
+        ss << "  constants:\n";
+        for (size_t j = 0; j < f.constants.size(); j++)
+          ss << "    [" << j << "] " << valueText(f.constants[j]) << "\n";
+        ss << "  code:\n";
       }
-      u32(static_cast<uint32_t>(f.constants.size()));
-      for (const auto &c : f.constants)
-        value(c);
-    }
+      else
+        ss << "function #" << i << " '" << f.name << "':\n";
 
-    u32(static_cast<uint32_t>(prog.vars.size()));
-    for (const auto &[name, reg] : prog.vars)
-    {
-      str(name);
-      i32(reg);
-    }
-    u32(static_cast<uint32_t>(prog.constVars.size()));
-    for (const auto &name : prog.constVars)
-      str(name);
-    i32(prog.registerCount);
-    return buf.size();
-  }
-};
-
-bool writeBytecode(const CompiledProgram &prog, const std::string &path, size_t &written)
-{
-  QlcWriter w;
-  written = w.write(prog);
-  std::ofstream out(path, std::ios::binary | std::ios::trunc);
-  if (!out)
-    return false;
-  out.write(w.buf.data(), static_cast<std::streamsize>(w.buf.size()));
-  return static_cast<bool>(out);
-}
-
-// ---------------------------------------------------------------------------
-// Disassembly listing (.qla): one section per function with its metadata,
-// constant pool (human-readable), and instruction stream (mnemonic from
-// Bytecode::name plus raw operands a/b/c and the stamped source line:col).
-// ---------------------------------------------------------------------------
-std::string valueText(const QLangValue &v, int depth = 0)
-{
-  using T = QLangValue::Type;
-  switch (v.type())
-  {
-  case T::Nil:
-    return "nil";
-  case T::Eof:
-    return "eof";
-  case T::Bool:
-    return v.asInt() ? "true" : "false";
-  case T::Char:
-    return std::to_string(v.asChar());
-  case T::Byte:
-    return std::to_string(v.asByte());
-  case T::Word:
-    return std::to_string(v.asWord());
-  case T::Short:
-    return std::to_string(v.asShort());
-  case T::Int:
-    return std::to_string(v.asInt());
-  case T::Unsigned:
-    return std::to_string(v.asUnsigned());
-  case T::Qword:
-    return std::to_string(v.asQword());
-  case T::Long:
-    return std::to_string(v.asLong());
-  case T::Float:
-  {
-    char buf[32];
-    std::snprintf(buf, sizeof buf, "%.17g", v.asFloat());
-    return buf;
-  }
-  case T::String:
-    return "\"" + v.asString() + "\"";
-  case T::Blob:
-    return "<" + std::to_string(v.asBlob().size()) + " bytes>";
-  case T::Array:
-  case T::Set:
-  {
-    if (depth)
-      return "[...]";
-    std::string s = "[";
-    const auto &a = v.asArray();
-    for (size_t i = 0; i < a.size(); i++)
-    {
-      if (i)
-        s += ", ";
-      s += valueText(a[i], depth + 1);
-    }
-    return s + "]";
-  }
-  case T::Table:
-  {
-    if (depth)
-      return "{...}";
-    std::string s = "{";
-    const auto &t = v.asTable();
-    bool first = true;
-    for (const auto &[k, val] : *t)
-    {
-      if (!first)
-        s += ", ";
-      first = false;
-      s += k + ": " + valueText(val, depth + 1);
-    }
-    return s + "}";
-  }
-  case T::Function:
-    return "function<" + std::to_string(v.asFunction().funcIndex) + ">";
-  case T::Generator:
-    return "generator";
-  case T::Object:
-    return "object";
-  }
-  return "?";
-}
-
-std::string disassemble(const CompiledProgram &prog)
-{
-  std::ostringstream ss;
-  ss << "QLang disassembly (v1)\n";
-  ss << "registers: " << prog.registerCount << "\n\n";
-  for (size_t i = 0; i < prog.functions.size(); i++)
-  {
-    const auto &f = prog.functions[i];
-    ss << "function #" << i << " '" << f.name << "'\n";
-    ss << "  params: " << f.paramCount
-       << "  registers: " << f.registerCount
-       << (f.isGenerator ? "  generator" : "") << "\n";
-    if (!f.captures.empty())
-    {
-      ss << "  captures:";
-      for (const auto &cap : f.captures)
-        ss << " r" << cap.reg;
+      int lastLine = -1;
+      for (size_t j = 0; j < f.instructions.size(); j++)
+      {
+        const auto &ins = f.instructions[j];
+        if (level >= 2 && ins.line != lastLine && ins.line >= 1 &&
+            static_cast<size_t>(ins.line) <= srcLines.size())
+          ss << "  " << std::setw(2) << ins.line << ":  "
+             << srcLines[static_cast<size_t>(ins.line) - 1] << "\n";
+        lastLine = ins.line;
+        // Level 3: append a copy of the referenced constant (operand b is the
+        // pool index for CONST / MAKEFUNC / MAKEGEN).
+        std::string constNote;
+        if (level >= 3)
+        {
+          switch (ins.op)
+          {
+          case Opcode::CONST:
+          case Opcode::MAKEFUNC:
+          case Opcode::MAKEGEN:
+            if (ins.b >= 0 && static_cast<size_t>(ins.b) < f.constants.size())
+              constNote = "   # " + valueText(f.constants[static_cast<size_t>(ins.b)]);
+            break;
+          default:
+            break;
+          }
+        }
+        // Level 4: name the operands of CALL / CALLFN / CONV / CAST.
+        if (level >= 4)
+        {
+          switch (ins.op)
+          {
+          case Opcode::CALL:
+            if (ins.b >= 0)
+            {
+              const char *bn = builtinName(ins.b);
+              constNote = std::string("   # builtin:") + (bn ? bn : "unknown");
+            }
+            else
+              constNote = "   # native:" + std::to_string(-1 - ins.b);
+            break;
+          case Opcode::CALLFN:
+            if (ins.b >= 0 && static_cast<size_t>(ins.b) < prog.functions.size())
+              constNote = "   # fn:" + prog.functions[static_cast<size_t>(ins.b)].name;
+            break;
+          case Opcode::CONV:
+          case Opcode::CAST:
+            constNote = "   # type:" +
+                        std::string(QLangValue(static_cast<QLangValue::Type>(ins.c)).typeName());
+            break;
+          default:
+            break;
+          }
+        }
+        // Level 4: pseudo-mnemonic (register-level meaning) after the note.
+        std::string pseudo;
+        char tmp[128];
+        // b is negative for native calls (-1 - nativeIndex); keep it decimal.
+        snprintf(tmp, sizeof(tmp), ins.b < 0 ? "%.2x %d %.2x" : "%.2x %.2x %.2x",
+                 ins.a, ins.b, ins.c);
+        if (level >= 4)
+          pseudo = "   ; " + pseudoText(prog, ins);
+        ss << "  " << std::setw(4) << j << "  " << ins.line << ":" << ins.col
+           << "  " << std::left << std::setw(10) << Bytecode::name(ins.op) << std::right
+           << "  " << tmp << pseudo << constNote << "\n";
+        //<< "  " << ins.a << " " << ins.b << " " << ins.c << pseudo << constNote << "\n";
+      }
       ss << "\n";
     }
-    ss << "  constants:\n";
-    for (size_t j = 0; j < f.constants.size(); j++)
-      ss << "    [" << j << "] " << valueText(f.constants[j]) << "\n";
-    ss << "  code:\n";
-    for (size_t j = 0; j < f.instructions.size(); j++)
-    {
-      const auto &ins = f.instructions[j];
-      ss << "  " << std::setw(4) << j << "  " << ins.line << ":" << ins.col
-         << "  " << std::left << std::setw(10) << Bytecode::name(ins.op) << std::right
-         << "  " << ins.a << " " << ins.b << " " << ins.c << "\n";
-    }
-    ss << "\n";
+    return ss.str();
   }
-  return ss.str();
-}
 
 } // namespace
 
@@ -386,6 +793,7 @@ int main(int argc, char **argv)
 {
   int traceLevel = TRACE_OFF;
   bool profile = false;
+  int asmLevel = 1;
   std::string file;
   std::string output;
   std::string asmOut;
@@ -464,6 +872,33 @@ int main(int argc, char **argv)
     if (arg.rfind("--asm=", 0) == 0)
     {
       asmOut = arg.substr(6);
+      continue;
+    }
+
+    if (arg == "--asm-level")
+    {
+      if (i + 1 >= argc)
+      {
+        std::fprintf(stderr, "%s: --asm-level requires a value (0-3)\n", kAppName);
+        return 1;
+      }
+      if (!parseAsmLevel(argv[++i], asmLevel))
+      {
+        std::fprintf(stderr, "%s: invalid --asm-level '%s' (expected 0, 1, 2, or 3)\n",
+                     kAppName, argv[i]);
+        return 1;
+      }
+      continue;
+    }
+
+    if (arg.rfind("--asm-level=", 0) == 0)
+    {
+      if (!parseAsmLevel(arg.substr(12), asmLevel))
+      {
+        std::fprintf(stderr, "%s: invalid --asm-level '%s' (expected 0, 1, 2, or 3)\n",
+                     kAppName, arg.c_str());
+        return 1;
+      }
       continue;
     }
 
@@ -575,7 +1010,14 @@ int main(int argc, char **argv)
   // --- Disassembly output ---
   if (!asmOut.empty())
   {
-    const std::string text = disassemble(compiled);
+    std::vector<std::string> srcLines;
+    {
+      std::istringstream ls(source);
+      std::string line;
+      while (std::getline(ls, line))
+        srcLines.push_back(line);
+    }
+    const std::string text = disassemble(compiled, srcLines, asmLevel);
     std::ofstream out(asmOut, std::ios::trunc);
     if (!out)
     {
@@ -594,8 +1036,8 @@ int main(int argc, char **argv)
 
   // --- Execute ---
   const size_t instrCount = compiled.functions.empty()
-                               ? 0
-                               : compiled.functions[0].instructions.size();
+                                ? 0
+                                : compiled.functions[0].instructions.size();
   QLangVM vm(compiled, ctx);
   const auto t3 = Clock::now();
   try
