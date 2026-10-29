@@ -3,7 +3,8 @@
 **Date:** 2026-10-27 (supersedes `2026-10-26_163424-external-cpp-types.md` v4; see "What changed vs v4")
 **Repo:** `/home/cfrankb/toolkit/gcc/qlang-sandbox` (QLang: language → register-VM bytecode, C++17, GCC)
 **Design baseline:** `docs/EXTERNAL_TYPES.md` (draft)
-**Spec side:** `SPEC.md` "conformance with external (C++) types" table (L1376)
+**Spec side:** `docs/spec/11-external-types.md` ("conformance with external (C++) types"; SPEC.md L1642–1683 pre-migration)
+**Validated:** 2026-10-29 against the current tree (post `long`/`set`/class-`static`/error-reporting rounds). Line numbers and the Type/variant layout are corrected in place; summary in "Validation delta (2026-10-29)" at the end.
 
 ## Goal
 
@@ -34,16 +35,16 @@ Also fixed from the review: missing `prop` overload for bare const getters (Task
 
 ## The value model (what the VM actually dispatches)
 
-Three new `QLangValue::Type` values, inserted **before `Eof`** (Eof stays last, parser sentinel, never serialized):
+Three new `QLangValue::Type` values, appended **after `Set`** (the enum's true tail — `Long=18`/`Set=19` postdate this plan and sit *after* `Eof=17`):
 
 | Type | Payload | Meaning | Durable |
 |---|---|---|---|
-| `External` (17) | `ExternalRef {const TypeDescriptor* type; shared_ptr<void> owned; weak_ptr<void> borrowed}` | a **view** over exactly one C++ object (owned = script-constructed; borrowed = engine handoff) | no — emit tag 0 |
-| `BoundMethod` (18) | `BoundMethodRef {const Member* member; ExternalRef target}` | a **callable** method of an `External` object; what `TABGET` returns for a kind-2 member | no — emit tag 0 |
-| `TypeRef` (19) | `TypeRefRef {const TypeDescriptor* type}` | the **type itself** as a value: enum constants + construction; seeded as a script variable at import | no — emit tag 0 |
-| `Eof` (20) | — | unchanged | — |
+| `External` (20) | `ExternalRef {const TypeDescriptor* type; shared_ptr<void> owned; weak_ptr<void> borrowed}` | a **view** over exactly one C++ object (owned = script-constructed; borrowed = engine handoff) | no — emit tag 0 |
+| `BoundMethod` (21) | `BoundMethodRef {const Member* member; ExternalRef target}` | a **callable** method of an `External` object; what `TABGET` returns for a kind-2 member | no — emit tag 0 |
+| `TypeRef` (22) | `TypeRefRef {const TypeDescriptor* type}` | the **type itself** as a value: enum constants + construction; seeded as a script variable at import | no — emit tag 0 |
+| `Eof` (17) | — | unchanged (parser sentinel; no longer the enum tail) | — |
 
-`QLangVariant` gains the three new alternatives **at the end** (indices 15, 16, 17). The `asX()` accessors use type-based `std::get<StorageType>` (not fixed indices), so appending is safe.
+`QLangVariant` gains the three new alternatives **at the end** (indices 16, 17, 18 — today's last of 16 alternatives is `int64_t` (Long), *not* `ObjectValue`). The `asX()` accessors use type-based `std::get<StorageType>` (not fixed indices), so appending is safe.
 
 Dispatch table (`getObjectOps()`):
 
@@ -237,13 +238,13 @@ Skipped for v1 (one line each): `Q_SIGNALS`/signals, method overloading (one nam
   g++ -std=c++17 -Iinclude examples/<file>.cpp build/libqlang.a -o /tmp/<name>
   stdbuf -oL -eL /tmp/<name> 2>/dev/null   # stderr=debug logging; stdout block-buffered
   ```
-- **Value model:** `QLangValue` (alias `QValue`, `include/qlang/QLangValue.h`) — a `Type m_type` tag + `QLangVariant m_storage` (`std::variant`, 15 alternatives today, `ObjectValue` last). `Type` enum `Nil=0 … Function=14, Generator=15, Object=16, Eof=17`. New types go **before `Eof`**; new variant alternatives go **at the end**. `asX()` uses type-based `std::get<StorageType>`, so appending is index-safe.
-- **Object dispatch (built, and its real shape):** `struct ObjectOps { kindName, getField, setField, callMethod, toStr, base }` in `include/qlang/QLangObjects.h`; `getObjectOps()` (`src/QLangObjects.cpp` L196) routes `Type::Table` and `Type::Object`. **The VM routes member get/set through `getObjectOps()`** (`TABGET`/`TABPUT`). **Method calls do NOT** — they compile to `TABGET` + `CALLCLOS`, and `CALLCLOS` accepts only `Function`/`Generator`. **String conversion does NOT** — `str()`/f-strings go through the file-local `valueToString()` type switch (`src/QLangVM.cpp` L39-65); `ops->toStr` has zero call sites. Both gaps are closed by Tasks 4.4/4.5.
+- **Value model (re-verified 2026-10-29):** `QLangValue` (alias `QValue`, `include/qlang/QLangValue.h`) — a `Type m_type` tag + `QLangVariant m_storage` (`std::variant`, **16** alternatives today, `int64_t` (Long) last). `Type` enum `Nil=0 … Function=14, Generator=15, Object=16, Eof=17, Long=18, Set=19`. New types go **after `Set`** (enum tail); new variant alternatives go **at the end**. `asX()` uses type-based `std::get<StorageType>`, so appending is index-safe.
+- **Object dispatch (built, and its real shape; re-verified 2026-10-29):** `struct ObjectOps { kindName, getField, setField, callMethod, toStr, base }` in `include/qlang/QLangObjects.h`; `getObjectOps()` (`src/QLangObjects.cpp` L249) routes `Type::Table` and `Type::Object`. **The VM routes member get/set through `getObjectOps()`** (`TABGET`/`TABPUT`, 8 sites). **Method calls do NOT** — they compile to `TABGET` + `CALLCLOS`, and `CALLCLOS` accepts only `Function`/`Generator` — **in four separate dispatch-loop handlers** (`src/QLangVM.cpp` L1512, L1832, L2204, L2540; the L1832 variant is Function-only). **String conversion does NOT** — `str()`/f-strings go through the file-local `valueToString()` type switch (`src/QLangVM.cpp` L54-82; now also renders `Long`/`Set`/`Object`); `ops->toStr` has zero call sites. Both gaps are closed by Tasks 4.4/4.5.
 - **Native functions:** `QLangContext::setFunc(const std::string&, NativeFunc)`, `NativeFunc = std::function<QLangValue(QLangContext&, const std::vector<QLangValue>&)>`. A registered type's name joins this table for **construction** via `setFunc` — zero compiler changes, no trampoline. (Reading the name as a *value* is a different compiler path — that is what `TypeRef` seeding solves.)
-- **Context API (the real one):** `void run(const std::string&)` — **throws** `QLangError` on lex/parse/compile/run failure, writes final variable state back into the context scope; there is **no** `bool run(src, QLangValue&)` out-param form. Values come back via `get(name)`. `set(name, value, isConst=false)` seeds variables visible to later `run()` compiles. `clear()` wipes `m_vars`, `m_nativeFuncs`, `m_modules`, compiled programs — v2 extends it to `m_types` (see Task 3.4).
+- **Context API (the real one):** `void run(const std::string&)` — **throws** `QLangError` on lex/parse/compile/run failure, writes final variable state back into the context scope; there is **no** `bool run(src, QLangValue&)` out-param form. Values come back via `get(name)`. `set(name, value, isConst=false)` seeds variables visible to later `run()` compiles. `clear()` wipes `m_vars`, `m_injectedConsts`, `m_nativeFuncs`, `m_modules`, `livePrograms` (Phase 7 `__destroy__` finalizer state), compiled programs — v2 extends it to `m_types` (see Task 3.4).
 - **Errors:** `QLangError : std::runtime_error` (kinds `Lex, Parse, Type, Runtime, Syntax, Io`); throw from bindings, VM catches at top level, `run()` rethrows.
 - **Serialization:** `.qlc` codec declared but not implemented — `docs/SERIALIZATION.md` tag table is stale (shows `16=Eof`, missing `Object`; the real enum already has `Object=16`).
-- Green baseline to preserve (re-verified 2026-10-27): `spec_check2` 252/252, `spec_check` 33/33, `spec_cast_test` 20/20, `gen_test` 5/5, `test_module`, ctest 2/2 (`smoke`, `range`), plus `test_inject`/`test_events`/`test_arr`/`test_call`/`test_dollar_operator` (manual `g++` builds — **not** CMake targets).
+- Green baseline to preserve (re-verified 2026-10-29): `spec_check2` **369/369**, `spec_check` 33/33, `spec_cast_test` 20/20, `gen_test` 5/5, `test_module`, ctest **4/4** (`smoke`, `range`, `class_str`, `class_static`), plus `test_inject`/`test_events`/`test_arr`/`test_call`/`test_dollar_operator` (manual `g++` builds — **not** CMake targets).
 
 ## Architecture
 
@@ -287,12 +288,12 @@ struct TypeRefRef {
   const TypeDescriptor* type = nullptr;
 };
 ```
-3. Add `External`, `BoundMethod`, `TypeRef` to the `Type` enum **between `Object` and `Eof`**; add `ExternalRef`, `BoundMethodRef`, `TypeRefRef` as the **last three** `QLangVariant` alternatives (in `QLangVariant.h`).
+3. Add `External`, `BoundMethod`, `TypeRef` to the `Type` enum **after `Set`** (the enum tail — `Eof=17` is no longer last; `Long=18`/`Set=19` follow it); add `ExternalRef`, `BoundMethodRef`, `TypeRefRef` as the **last three** `QLangVariant` alternatives, after `int64_t` (in `QLangVariant.h`).
 4. Accessors/factories (mirror the `Object` pattern): `static QValue External(const TypeDescriptor*, const std::shared_ptr<void>&)`, `static QValue External(const TypeDescriptor*, const std::weak_ptr<void>&)`, `static QValue BoundMethod(const Member*, const ExternalRef&)`, `static QValue TypeRef(const TypeDescriptor*)`; `asExternal()`, `asBoundMethod()`, `asTypeRef()` (+ non-const where the `Object` pattern has them).
 5. In `src/QLangValue.cpp`: implement both `External` factories, `BoundMethod`, `TypeRef`, the accessors (`std::get<ExternalRef>` etc.), `ExternalRef::self()`/`selfMut()` (`owned.get()` else `borrowed.lock()`, throw `Runtime` on expiry), and add the three names to `typeName()` (`"external"`, `"bound method"`, `"type"`). (There is no `toString` method on `QLangValue` — stringification is the ops/`valueToString` story, Task 4.4.)
 6. In `include/qlang/QValue.h`: `qval_external(const TypeDescriptor*, const std::shared_ptr<void>&)` + `weak_ptr` overload, `qval_bound_method(const Member*, const ExternalRef&)`, `qval_type_ref(const TypeDescriptor*)`.
 
-**Verify:** `cmake --build build -j` exit 0; `stdbuf -oL -eL /tmp/sc 2>/dev/null | tail -1` → `252 passed, 0 failed`; `ctest --test-dir build` → 100%. **Commit:** `git commit -am "Add External/BoundMethod/TypeRef value types (handles to one C++ object, its methods, and the type)"`
+**Verify:** `cmake --build build -j` exit 0; `stdbuf -oL -eL /tmp/sc 2>/dev/null | tail -1` → `369 passed, 0 failed`; `ctest --test-dir build` → 100%. **Commit:** `git commit -am "Add External/BoundMethod/TypeRef value types (handles to one C++ object, its methods, and the type)"`
 
 ### Task 2 — Boundary conversions
 
@@ -357,7 +358,7 @@ setFunc(meta.name, [d = desc.get()](QLangContext& c, const std::vector<QLangValu
 });
 ```
 (the v4 snippet returned the bare `shared_ptr<void>` — a type error; `d->construct` yields the `shared_ptr`, `External` wraps it). Then **seeds the type-level value**: `set(meta.name, QValue::TypeRef(desc.get()))` — this is what makes `Point.A` compile (the name becomes a seeded variable; the native table keeps `Point(3,4)` working). Finally `m_types.push_back(std::move(desc)); return m_types.back().get();` (push_back moves the `unique_ptr`, not the pointee — the captures stay valid).
-5. In `src/QLangContext.cpp` `clear()`: add `m_types.clear();` — descriptors, constructor natives, and the `TypeRef` variable all die together; host code must re-run `import<T>()` after `clear()`. Document this in the `registerType` comment.
+5. In `src/QLangContext.cpp` `clear()` (L176): add `m_types.clear();` alongside the existing `m_vars`/`m_injectedConsts`/`m_nativeFuncs`/`m_modules`/`livePrograms`/`compiled` clears — descriptors, constructor natives, and the `TypeRef` variable all die together; host code must re-run `import<T>()` after `clear()`. Document this in the `registerType` comment.
 
 **Verify:** build exit 0; suites green. **Commit:** `git commit -am "Add QL_OBJECT/QL_PROPERTY/QL_ENUM declarative meta (member-pointer deduction) + import<T>() with validation and TypeRef seeding"`
 
@@ -378,18 +379,18 @@ setFunc(meta.name, [d = desc.get()](QLangContext& c, const std::vector<QLangValu
      - `setField` — always `Type` error "type 'T' is not settable".
      - `callMethod` — `descriptor->construct` if set → `QValue::External(desc, …)` (owned); else `Type` error "type 'T' is not constructible".
      - `toStr` — `"<type T>"`.
-2. In `getObjectOps()` (L196): `if (obj.type() == QLangValue::Type::External) return &kExternalOps;` and `if (obj.type() == QLangValue::Type::TypeRef) return &kTypeRefOps;` (`BoundMethod` → `nullptr` — it is callable, not an object).
-3. In `src/QLangVM.cpp` `Builtin::Type` (L261), after the `Object` branch: `if (args[0].type()==Type::External || args[0].type()==Type::TypeRef) return QValue::String(<desc>.name);` (both name the same type — `type(Point)` and `type(p)` → `"Point"`).
-4. **`valueToString` → `toStr` wiring** (closes the v4 str gap): change the file-local `std::string valueToString(const QLangValue&)` to `std::string valueToString(const QLangValue&, QLangContext&)`; at the top: `const ObjectOps* ops = getObjectOps(v); if (ops && (v.type() == Type::External || v.type() == Type::TypeRef)) return ops->toStr(v, ctx).asString();` — the type switch stays as the fallback (and gains the three new static cases: `External` → `"<external: " + type->name + ">"`, `BoundMethod` → `"<bound method>"`, `TypeRef` → `"<type " + name + ">"`, so `print()` is sane even without a `QL_STR`). Update all ~20 call sites in `QLangVM.cpp` — every one has `m_scope` in hand (builtins at L247/L282/L286, `printf`/`sprintf` at L318/L386, f-string `Format` at L471, cast at L735, `$`/`EVALKEY` at L772, concat at L787, table-key stringify at L895, `TABGET`/`TABPUT` key paths at L1078/L1101/L1410/L1433/L1787/L1807/L2129/L2151). This also fixes the pre-existing gap where `str(instance)` of a QLang class returns `"<table>"` only for tables — external and type values now stringify through their bindings.
+2. In `getObjectOps()` (L249): `if (obj.type() == QLangValue::Type::External) return &kExternalOps;` and `if (obj.type() == QLangValue::Type::TypeRef) return &kTypeRefOps;` (`BoundMethod` → `nullptr` — it is callable, not an object).
+3. In `src/QLangVM.cpp` `Builtin::Type` (L422), after the `Object` branch: `if (args[0].type()==Type::External || args[0].type()==Type::TypeRef) return QValue::String(<desc>.name);` (both name the same type — `type(Point)` and `type(p)` → `"Point"`).
+4. **`valueToString` → `toStr` wiring** (closes the v4 str gap): change the file-local `std::string valueToString(const QLangValue&)` (L54-82) to `std::string valueToString(const QLangValue&, QLangContext&)`; at the top: `const ObjectOps* ops = getObjectOps(v); if (ops && (v.type() == Type::External || v.type() == Type::TypeRef)) return ops->toStr(v, ctx).asString();` — the type switch stays as the fallback (it already renders `Long`/`Set`/`Object`=`"<object>"`, and gains the three new static cases: `External` → `"<external: " + type->name + ">"`, `BoundMethod` → `"<bound method>"`, `TypeRef` → `"<type " + name + ">"`, so `print()` is sane even without a `QL_STR`). Update all ~19 call sites in `QLangVM.cpp` (2026-10-29: L913, L950, L1091, L1136, L1153, L1261, L1361, L1444, L1467, L1590, L1646, L1771, L1794, L2143, L2163, L2268, L2270, L2480, L2502) — every one has `m_scope`/context in hand (builtins, `printf`/`sprintf`, f-string `Format`, cast, `$`/`EVALKEY`, concat, table-key stringify, `TABGET`/`TABPUT` key paths, trace calls). This also fixes the pre-existing gap where `str(instance)` of a QLang class returns `"<object>"` — external and type values now stringify through their bindings.
 5. Update the dispatch comment table in `include/qlang/QLangObjects.h` to list the external and typeref kinds (and note `callMethod`/`toStr` are the event-contract / `valueToString` consumers).
 
-**Verify:** build exit 0 (watch for `-Wswitch` — the `valueToString` switch now handles all enum values); `stdbuf -oL -eL /tmp/sc 2>/dev/null | tail -1` → `252 passed, 0 failed`. **Commit:** `git commit -am "Add kExternalOps/kTypeRefOps dispatch (data-member setters, read-only computed props, BoundMethod reads, enum constants) + toStr wiring in valueToString"`
+**Verify:** build exit 0 (watch for `-Wswitch` — the `valueToString` switch now handles all enum values); `stdbuf -oL -eL /tmp/sc 2>/dev/null | tail -1` → `369 passed, 0 failed`. **Commit:** `git commit -am "Add kExternalOps/kTypeRefOps dispatch (data-member setters, read-only computed props, BoundMethod reads, enum constants) + toStr wiring in valueToString"`
 
 ### Task 4.5 — `CALLCLOS` dispatch for `BoundMethod` (closes the v4 method-call gap)
 
 **Files:** `src/QLangVM.cpp`
 
-In the `CALLCLOS` handler (L2189), **before** the `Generator`/`Function` checks:
+The VM has **four** `CALLCLOS` handlers (one per dispatch loop): L1512, L1832 (Function-only), L2204, L2540. In **each** of the three `Function`+`Generator` handlers (L1512, L2204, L2540), **before** the `Generator`/`Function` checks — and in the L1832 handler before its Function check:
 ```cpp
 if (cv.type() == QLangValue::Type::BoundMethod) {
   frame.pc += 1;
@@ -402,9 +403,9 @@ if (cv.type() == QLangValue::Type::BoundMethod) {
   break;
 }
 ```
-Notes: `Member::invoke` is `std::function<QLangValue(void*, QLangContext&, const std::vector<QLangValue>&)>` — pass `const_cast`-free: `self()` returns `const void*`; for methods that mutate, the binding's `invoke` takes `void*` — store `invoke` as `std::function<QLangValue(void*, QLangContext&, const std::vector<QLangValue>&)>` and use `bm.target.selfMut()` here (the method binding was compiled from a non-const member pointer for mutable methods; const methods go through the const `method` overload and only need `const void*` — `selfMut()` is the uniform choice and throws on expiry like `self()`). No new opcode: `CALLCLOS` already carries the callee value, and the compiler's non-class method path (`QLangCompiler.cpp` L1748-1753) already emits exactly `MOV dest, funcReg; CALLCLOS dest, n, n`.
+Notes: `Member::invoke` is `std::function<QLangValue(void*, QLangContext&, const std::vector<QLangValue>&)>` — pass `const_cast`-free: `self()` returns `const void*`; for methods that mutate, the binding's `invoke` takes `void*` — store `invoke` as `std::function<QLangValue(void*, QLangContext&, const std::vector<QLangValue>&)>` and use `bm.target.selfMut()` here (the method binding was compiled from a non-const member pointer for mutable methods; const methods go through the const `method` overload and only need `const void*` — `selfMut()` is the uniform choice and throws on expiry like `self()`). No new opcode: `CALLCLOS` already carries the callee value, and the compiler's non-class method path (`QLangCompiler.cpp` ~L2049-2052, 2026-10-29) already emits exactly `MOV dest, funcReg; CALLCLOS dest, n, n` (the `argCount+1` variants at ~L2004/L2047 are the class-method/static paths, which prepend `self`/anchor into `argBase`).
 
-**Verify:** build exit 0; suites green. **Commit:** `git commit -am "Dispatch BoundMethod values in CALLCLOS (external method calls, no new opcode)"`
+**Verify:** build exit 0; suites green (all four handlers must be patched — a `BoundMethod` reaching an unpatched handler is a `Type` error, so the full suite is the net). **Commit:** `git commit -am "Dispatch BoundMethod values in all CALLCLOS handlers (external method calls, no new opcode)"`
 
 ### Task 5 — Tests (TDD: the failing tests for Tasks 3–4.5)
 
@@ -544,11 +545,11 @@ add_test(NAME external COMMAND test_external)
 
 ### Task 7 — Docs
 
-**Files:** `docs/SERIALIZATION.md`, `docs/EXTERNAL_TYPES.md`, `SPEC_COMPLIANCE.md`
+**Files:** `docs/SERIALIZATION.md`, `docs/EXTERNAL_TYPES.md`, `docs/compliance/status.md`
 
-1. `docs/SERIALIZATION.md` §3 tag table: `16=Object`, `17=External`, `18=BoundMethod`, `19=TypeRef` (all **not durable** → emit tag 0), `20=Eof`; extend R2 to "MUST NOT emit tags 15, 16, 17, 18, 19".
+1. `docs/SERIALIZATION.md` §3 tag table (currently stale: shows `16=Eof`, `17=Long`; missing `Object` and `Set`): `16=Object`, `17=Eof`, `18=Long`, `19=Set`, `20=External`, `21=BoundMethod`, `22=TypeRef` (the three new ones **not durable** → emit tag 0); extend R2 to "MUST NOT emit tags 15, 16, 17, 18, 19, 20, 21, 22".
 2. `docs/EXTERNAL_TYPES.md`: status `draft`→`implemented (2026-10-27)`; rewrite §2/§6 to the **Qt-style `QL_` macro model** (no MOC; individual `QL_PROPERTY`/`QL_INVOKABLE`/`QL_ENUM`/`QL_FLAGS` lines; `QL_OBJECT` assembly; member-pointer deduction; public data member = read-write, const getter = read-only, function = method; whole-group `QL_ENUM` with `__PRETTY_FUNCTION__` name recovery; `QL_` prefix avoids collisions when compiled alongside Qt); §3 ownership = read view over one object (unchanged); §4 dispatch table updated with the **real** v1 paths (method call = `TABGET`→`BoundMethod`→`CALLCLOS`, not `callMethod`; string = `valueToString`→`toStr`); §5 methods: `BoundMethod` value type replaces the `NativeMethod` pointer proposal; §6 construction: native-table path **plus** `TypeRef` seeding for `Type.Constant` reads; §11 status + deviations: (a) compile-time integrity via member pointers, (b) registration-time validation, (c) `Object` landed at tag 16 before external, (d) **no `__destroy__`/`destroy` hook in v1** (plain shared/weak view; resource-teardown hook deferred), (e) **`type(x)` returns the declared name string, not `type_info::name`** (no RTTI).
-3. `SPEC_COMPLIANCE.md`: external C++ types implemented (`<commit>`); update the conformance-table status per deviations (a)–(e); open: `hasMethod`/`callMethod` context wrappers (event contract), RTTI validation on handoff, inheritance (`ObjectOps::base` reserved), signals, enum-name string form. Per AGENTS.md: rebuild + re-run the affected suites **first**, then flip Open Items and update the SHA256/tally/checkpoint rows.
+3. `docs/compliance/status.md`: external C++ types implemented (`<commit>`); update the conformance-table status per deviations (a)–(e); open: `hasMethod`/`callMethod` context wrappers (event contract), RTTI validation on handoff, inheritance (`ObjectOps::base` reserved), signals, enum-name string form. Per AGENTS.md: rebuild + re-run the affected suites **first**, then flip Open Items and update the spec-module SHA256 rows in `docs/spec/README.md` / `docs/compliance/README.md` (never before testing).
 
 **Verify:** `git diff --stat` shows only the three docs. **Commit:** `git commit -am "Docs: external types implemented (QL_ declarative meta, BoundMethod/TypeRef dispatch); SERIALIZATION tag table corrected"`
 
@@ -562,7 +563,7 @@ for t in spec_check spec_cast_test gen_test test_module test_inject test_events 
   g++ -std=c++17 -Iinclude examples/$t.cpp build/libqlang.a -o /tmp/$t && stdbuf -oL -eL /tmp/$t 2>/dev/null | tail -1
 done
 ```
-Expected: every line ends `passed, 0 failed` / `ALL PASS` / equivalent (spec_check2: 252, spec_check: 33, spec_cast_test: 20, gen_test: 5).
+Expected: every line ends `passed, 0 failed` / `ALL PASS` / equivalent (spec_check2: 369, spec_check: 33, spec_cast_test: 20, gen_test: 5).
 
 ## Risks, tradeoffs, open questions
 
@@ -571,11 +572,25 @@ Expected: every line ends `passed, 0 failed` / `ALL PASS` / equivalent (spec_che
 - **`__PRETTY_FUNCTION__` parse for enumerator names is GCC-format-specific.** Shortcut: if GCC ever reformats it, switch call sites to the explicit-pair overload `QL_ENUM(E, ("Name", E::Name), ...)` — the overload already exists, no header change.
 - **`QL_PROPERTY(x)` needs the member named `x` to exist and be accessible** — inside the class all members are reachable, so publicity is *by listing*: a listed data member is exposed read-write (public member = automatic setter; private member listed = the class explicitly opts it in). A private member with only `QL_PROPERTY(name, READ g)` = read-only. Bare non-const getters deliberately match no overload — list via `QL_INVOKABLE`, make `const`, or use `READ`.
 - **`BoundMethod` lifetime:** `BoundMethodRef::member` points into the context-owned `TypeDescriptor` — stable exactly as long as the `TypeDescriptor*` in the `ExternalRef` (both die in `clear()`). A `BoundMethod` value outliving its context is a host bug, same class as a dangling `ExternalRef`.
-- **`CALLCLOS` arg convention:** the `BoundMethod` branch reads `regs[i.a+1 .. i.a+i.c]` — must stay in lockstep with the `CALL` opcode's `dest+1..dest+argCount` convention and the compiler's emission (`QLangCompiler.cpp` L1748-1753). Pinned by test checks 3 and 10.
+- **`CALLCLOS` arg convention:** the `BoundMethod` branch reads `regs[i.a+1 .. i.a+i.c]` — must stay in lockstep with the `CALL` opcode's `dest+1..dest+argCount` convention and the compiler's emission (`QLangCompiler.cpp` ~L2049-2052). Pinned by test checks 3 and 10.
 - **`TypeRef` as a script variable:** importing a type binds its name in the script scope (shadowing is the user's choice; `delete Point` breaks `Point.A` until re-import — acceptable). `registerType` rejects a name already taken by a *native function* only when `construct` is set; a same-name script variable is silently overwritten at import (documented).
-- **`valueToString` signature change:** file-local to `QLangVM.cpp`, all ~20 sites have `m_scope`; the full suite (252 + 33 + 20 + 5) exercises print/printf/f-string/concat/table-key paths — the existing corpus is the regression net.
-- **`Type` enum ↔ variant index coupling:** `asX()` uses type-based `std::get<StorageType>`; appending three alternatives and three enum values before `Eof` is safe because Eof is a parser sentinel (no codec writes it).
+- **`valueToString` signature change:** file-local to `QLangVM.cpp`, all ~19 sites have `m_scope`/context; the full suite (369 + 33 + 20 + 5) exercises print/printf/f-string/concat/table-key paths — the existing corpus is the regression net.
+- **`Type` enum ↔ variant index coupling:** `asX()` uses type-based `std::get<StorageType>`; appending three alternatives (after `int64_t`) and three enum values (after `Set`) is safe — `Eof` is a parser sentinel no codec writes, and nothing indexes the enum/variant by position.
 - **`as<T>()` coverage (v1):** `bool, int32_t, int64_t, double, float, std::string` (+ `as<double>` accepts `Int`). Other member types (`unsigned`, `uint64_t`, …) are a compile error at the `QL_OBJECT` line until a specialization is added — a diagnostic, not a crash.
 - **Single-instance semantics are structural:** the wrapper is a pointer to one C++ object; no copy path exists in the API. Test check 1 (engine sees the script's setter write) pins it.
 - **No `dynamic_cast` on handoff:** a wrong `weak_ptr` is UB; accepted for v1 (the meta is built from the type's own pointers, so it's hard to get wrong). RTTI validation stays open.
 - **Skipped (named):** `Q_SIGNALS`/`emit`/`connect` (no event system — revisit with `docs/EVENT_HANDLERS.md`), method overloading, inheritance, `qt_metacall`, `__destroy__` resource teardown, enum-name string form for enum-valued properties.
+
+## Validation delta (2026-10-29)
+
+Re-validated against the tree after the `long`/`set`/class-`static`/`__destroy__`/error-reporting rounds. Corrected in place above; the load-bearing changes:
+
+1. **Type enum tail moved.** `Long=18` and `Set=19` were appended *after* `Eof=17` (Set's comment pins the tail for serialization-tag stability). The plan's "insert before `Eof`" is **invalid** — new types append after `Set`: `External=20, BoundMethod=21, TypeRef=22`.
+2. **Variant tail moved.** 16 alternatives; last is `int64_t` (Long), not `ObjectValue`. New alternatives at indices 16–18. Append-safety claim still holds (type-based `std::get`).
+3. **`CALLCLOS` is four handlers, not one** (L1512, L1832 Function-only, L2204, L2540). Task 4.5 must patch all four.
+4. **`valueToString`** at L54-82, ~19 call sites (list in Task 4.4); already renders `Long`/`Set`/`Object`.
+5. **Baselines moved:** `spec_check2` 252 → **369**; ctest 2/2 → **4/4** (`class_str`, `class_static` added). `spec_check` 33, `spec_cast_test` 20, `gen_test` 5 unchanged. All green as of this validation (built + run 2026-10-29).
+6. **Class machinery grew** (`__proto_`/`__statics__` tables, fixed arity Phase 4.2, `prependSelf`) — all inside the *known-class* call path; the non-class path External types rely on is shape-unchanged (`MOV` + `CALLCLOS dest, n, n`).
+7. **`clear()`** now also wipes `m_injectedConsts` and `livePrograms` (Phase 7 `__destroy__` finalizers for QLang classes/tables). Task 3.5's `m_types.clear()` is unaffected. Note: the plan's "no `__destroy__` hook" skip applies to *external* types only — QLang classes now have one.
+8. **Line-number drift** (claims unchanged, sites moved): `getObjectOps` L196→L249; `Builtin::Type` L261→L422; undeclared-variable throw L1621-1649→L1165/L1900; non-class method emission L1748-1753→~L2049-2052. The "What changed vs v4" section keeps its 2026-10-27 line refs as history.
+9. **Still true (re-verified):** `ObjectOps` shape; `getObjectOps` routing Table+Object; **zero** `ops->callMethod`/`ops->toStr` VM call sites (the two dispatch gaps the plan closes are real); `valueToString` is a plain type switch; Context API (`run` throws, `get`, `set(name,val,isConst=false)`, `setFunc`+`NativeFunc`); `QLangError : std::runtime_error` with kinds `Lex/Parse/Type/Runtime/Syntax/Io`; `table_ops` as reference implementation; `docs/SERIALIZATION.md` tag table stale (shows `16=Eof`, `17=Long`; missing `Object`, `Set`).

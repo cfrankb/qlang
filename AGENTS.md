@@ -6,6 +6,12 @@ Documentation is modular under `docs/` (migrated 2026-10-29 from the monolithic 
 - **Compliance:** `docs/compliance/` — modular validation sets; `docs/compliance/README.md` is the entry point.
 - **Instruction:** Do not append large blocks to the legacy root stubs. Create targeted `.md` files in `docs/` subdirectories. Consult directory `README.md` files as your entry points.
 
+## Error reporting in code
+
+Please refer to this file for exact requirements
+
+`docs/spec/12-errors-trace.md`
+
 ## Session start
 - Reload `docs/spec/README.md` (and the modules it indexes) and compare against `docs/compliance/README.md` (and its modules).
 
