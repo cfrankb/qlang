@@ -1,7 +1,8 @@
 // qlang_run — small driver that runs a .ql (QLang) script with a selectable
 // diagnostic trace level, optional stage timing, and bytecode output.
 //
-//   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>] file.ql
+//   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>]
+//             [--asm <file.qla>] file.ql
 //
 // The app drives the pipeline directly (parse -> compile -> execute) so it
 // can time each stage and hand the compiled program to the .qlc writer.
@@ -14,10 +15,12 @@
 //   2  script file could not be read
 //   3  QLang error (lex/parse/type/runtime)
 //   4  bytecode file could not be written
+//   5  disassembly file could not be written
 
 #include <chrono>
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 #include <string>
@@ -56,6 +59,7 @@ void printHelp(const char *prog)
             << "                        3 = full detail (generators, table ops, compile)\n"
             << "  --profile           report parse / compile / execute times in ms (stderr)\n"
             << "  --output <file.qlc> write the compiled bytecode to <file.qlc>\n"
+            << "  --asm <file.qla>    write a disassembly listing to <file.qla>\n"
             << "  -h, --help          show this help and exit\n"
             << "\n"
             << "exit codes:\n"
@@ -63,7 +67,8 @@ void printHelp(const char *prog)
             << "  1  usage error\n"
             << "  2  script file could not be read\n"
             << "  3  QLang error (lex/parse/type/runtime)\n"
-            << "  4  bytecode file could not be written\n";
+            << "  4  bytecode file could not be written\n"
+            << "  5  disassembly file could not be written\n";
 }
 
 // Accept exactly "0".."3". Returns false on failure.
@@ -257,6 +262,124 @@ bool writeBytecode(const CompiledProgram &prog, const std::string &path, size_t 
   return static_cast<bool>(out);
 }
 
+// ---------------------------------------------------------------------------
+// Disassembly listing (.qla): one section per function with its metadata,
+// constant pool (human-readable), and instruction stream (mnemonic from
+// Bytecode::name plus raw operands a/b/c and the stamped source line:col).
+// ---------------------------------------------------------------------------
+std::string valueText(const QLangValue &v, int depth = 0)
+{
+  using T = QLangValue::Type;
+  switch (v.type())
+  {
+  case T::Nil:
+    return "nil";
+  case T::Eof:
+    return "eof";
+  case T::Bool:
+    return v.asInt() ? "true" : "false";
+  case T::Char:
+    return std::to_string(v.asChar());
+  case T::Byte:
+    return std::to_string(v.asByte());
+  case T::Word:
+    return std::to_string(v.asWord());
+  case T::Short:
+    return std::to_string(v.asShort());
+  case T::Int:
+    return std::to_string(v.asInt());
+  case T::Unsigned:
+    return std::to_string(v.asUnsigned());
+  case T::Qword:
+    return std::to_string(v.asQword());
+  case T::Long:
+    return std::to_string(v.asLong());
+  case T::Float:
+  {
+    char buf[32];
+    std::snprintf(buf, sizeof buf, "%.17g", v.asFloat());
+    return buf;
+  }
+  case T::String:
+    return "\"" + v.asString() + "\"";
+  case T::Blob:
+    return "<" + std::to_string(v.asBlob().size()) + " bytes>";
+  case T::Array:
+  case T::Set:
+  {
+    if (depth)
+      return "[...]";
+    std::string s = "[";
+    const auto &a = v.asArray();
+    for (size_t i = 0; i < a.size(); i++)
+    {
+      if (i)
+        s += ", ";
+      s += valueText(a[i], depth + 1);
+    }
+    return s + "]";
+  }
+  case T::Table:
+  {
+    if (depth)
+      return "{...}";
+    std::string s = "{";
+    const auto &t = v.asTable();
+    bool first = true;
+    for (const auto &[k, val] : *t)
+    {
+      if (!first)
+        s += ", ";
+      first = false;
+      s += k + ": " + valueText(val, depth + 1);
+    }
+    return s + "}";
+  }
+  case T::Function:
+    return "function<" + std::to_string(v.asFunction().funcIndex) + ">";
+  case T::Generator:
+    return "generator";
+  case T::Object:
+    return "object";
+  }
+  return "?";
+}
+
+std::string disassemble(const CompiledProgram &prog)
+{
+  std::ostringstream ss;
+  ss << "QLang disassembly (v1)\n";
+  ss << "registers: " << prog.registerCount << "\n\n";
+  for (size_t i = 0; i < prog.functions.size(); i++)
+  {
+    const auto &f = prog.functions[i];
+    ss << "function #" << i << " '" << f.name << "'\n";
+    ss << "  params: " << f.paramCount
+       << "  registers: " << f.registerCount
+       << (f.isGenerator ? "  generator" : "") << "\n";
+    if (!f.captures.empty())
+    {
+      ss << "  captures:";
+      for (const auto &cap : f.captures)
+        ss << " r" << cap.reg;
+      ss << "\n";
+    }
+    ss << "  constants:\n";
+    for (size_t j = 0; j < f.constants.size(); j++)
+      ss << "    [" << j << "] " << valueText(f.constants[j]) << "\n";
+    ss << "  code:\n";
+    for (size_t j = 0; j < f.instructions.size(); j++)
+    {
+      const auto &ins = f.instructions[j];
+      ss << "  " << std::setw(4) << j << "  " << ins.line << ":" << ins.col
+         << "  " << std::left << std::setw(10) << Bytecode::name(ins.op) << std::right
+         << "  " << ins.a << " " << ins.b << " " << ins.c << "\n";
+    }
+    ss << "\n";
+  }
+  return ss.str();
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -265,6 +388,7 @@ int main(int argc, char **argv)
   bool profile = false;
   std::string file;
   std::string output;
+  std::string asmOut;
 
   for (int i = 1; i < argc; i++)
   {
@@ -323,6 +447,23 @@ int main(int argc, char **argv)
     if (arg.rfind("--output=", 0) == 0)
     {
       output = arg.substr(9);
+      continue;
+    }
+
+    if (arg == "--asm")
+    {
+      if (i + 1 >= argc)
+      {
+        std::fprintf(stderr, "%s: --asm requires a file name\n", kAppName);
+        return 1;
+      }
+      asmOut = argv[++i];
+      continue;
+    }
+
+    if (arg.rfind("--asm=", 0) == 0)
+    {
+      asmOut = arg.substr(6);
       continue;
     }
 
@@ -429,6 +570,26 @@ int main(int argc, char **argv)
     }
     std::fprintf(stderr, "bytecode written: %s (%zu bytes, %zu functions)\n",
                  output.c_str(), written, compiled.functions.size());
+  }
+
+  // --- Disassembly output ---
+  if (!asmOut.empty())
+  {
+    const std::string text = disassemble(compiled);
+    std::ofstream out(asmOut, std::ios::trunc);
+    if (!out)
+    {
+      std::fprintf(stderr, "%s: cannot write disassembly file '%s'\n", kAppName, asmOut.c_str());
+      return 5;
+    }
+    out.write(text.data(), static_cast<std::streamsize>(text.size()));
+    if (!out)
+    {
+      std::fprintf(stderr, "%s: cannot write disassembly file '%s'\n", kAppName, asmOut.c_str());
+      return 5;
+    }
+    std::fprintf(stderr, "disassembly written: %s (%zu functions)\n",
+                 asmOut.c_str(), compiled.functions.size());
   }
 
   // --- Execute ---
