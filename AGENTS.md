@@ -15,6 +15,16 @@ Please refer to this file for exact requirements
 ## Session start
 - Reload `docs/spec/README.md` (and the modules it indexes) and compare against `docs/compliance/README.md` (and its modules).
 
+
+## Code formatting guideline
+To ensure codebase consistency and minimize unnecessary version control diffs, all code generated or modified by AI agents must strictly comply with the project's formatting guidelines.
+
+* **Formatting Standard:** All written, refactored, or edited C++ code must strictly conform to **Google-style `clang-format`** or the local project `.clang-format` configuration.
+* **VS Code Integration:** Code output must match the exact formatting rules enforced by the local Visual Studio Code environment to prevent automatic format-on-save actions from creating noisy commits and making change tracking difficult.
+* **Line Breakers & Indentation:** Always use standard indentation (2 or 4 spaces depending on configuration), exact brace placement rules, and specified column limits before generating code block segments.
+* **Verification Loop:** Agents should internalize the styling constraints prior to outputting block syntax, matching the target repository's mechanical style.
+
+
 ## Keep Compliance Documentation Current
 - Track the SHA256 of the specific specification file/module being described.
 - On any change to a specification or implementation:

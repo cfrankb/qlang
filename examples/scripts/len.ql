@@ -25,3 +25,6 @@ println(f"{type(a)} is {len(a)} byte")
 local a:long = true
 println(f"{type(a)} is {len(a)} byte")
 
+local a = 1.24
+println(f"{type(a)} is {len(a)} byte")
+

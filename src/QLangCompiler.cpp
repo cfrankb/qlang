@@ -116,7 +116,196 @@ void QLangCompiler::addModules(const std::vector<QLangContext::Module> &modules)
 }
 
 int QLangCompiler::newRegister() { return m_nextReg++; }
-int QLangCompiler::tmpRegister() { return newRegister(); }
+int QLangCompiler::maxLiveTmp() const
+{
+  int m = -1;
+  for (int t : m_liveTmps)
+    if (t > m)
+      m = t;
+  return m;
+}
+// Move deferred temps that are now above the highest live temp into the
+// pool (they became reusable once the high temp died).
+void QLangCompiler::promoteDeferred()
+{
+  int hi = maxLiveTmp();
+  auto it = m_deferred.begin();
+  while (it != m_deferred.end())
+  {
+    if (*it > hi)
+    {
+      m_freeRegs.push_back(*it);
+      it = m_deferred.erase(it);
+    }
+    else
+      ++it;
+  }
+}
+// Pool entry point: keep the pool strictly above the highest live temp.
+void QLangCompiler::returnToPool(int r)
+{
+  if (r > maxLiveTmp())
+    m_freeRegs.push_back(r);
+  else
+    m_deferred.insert(r);
+}
+int QLangCompiler::tmpRegister()
+{
+  // Reuse dead temps first so registerCount is the high-water mark of
+  // simultaneously-live temps, not the total number of statements. The pool
+  // must stay above every live temp (a call's arg slots dest+1.. must never
+  // alias one), so entries at or below the highest live temp are demoted to
+  // the deferred set. Take the SMALLEST eligible temp: an LIFO top would
+  // hand out the largest pooled register first, forcing the rest of the
+  // statement's temps onto fresh registers and ratcheting m_nextReg up every
+  // statement. Ascending consumption packs a statement's temps into the
+  // lowest free block, so the block is stable and gets reused by later
+  // statements.
+  promoteDeferred();
+  int hi = maxLiveTmp();
+  int r = -1;
+  for (int c : m_freeRegs)
+    if (c > hi && (r < 0 || c < r))
+      r = c;
+  if (r >= 0)
+    m_freeRegs.erase(std::find(m_freeRegs.begin(), m_freeRegs.end(), r));
+  else
+  {
+    // Demote the sub-high entries so the next allocation re-checks them
+    // (they become eligible once the high temp dies).
+    for (auto it = m_freeRegs.begin(); it != m_freeRegs.end();)
+      if (*it <= hi)
+      {
+        m_deferred.insert(*it);
+        it = m_freeRegs.erase(it);
+      }
+      else
+        ++it;
+    r = newRegister();
+  }
+  m_liveTmps.push_back(r);
+  return r;
+}
+// Idempotent: a temp is only freed while live (endOfStatement and explicit
+// frees can both target the same temp). A freed register inside an active
+// call-arg slot range goes to the quarantine, not the pool: handing it back
+// out would let a later argReg alias a slot the slot-MOVs are about to
+// clobber.
+void QLangCompiler::freeRegister(int r)
+{
+  auto it = std::find(m_liveTmps.begin(), m_liveTmps.end(), r);
+  if (it == m_liveTmps.end())
+    return;
+  m_liveTmps.erase(it);
+  m_protectedTmps.erase(r);
+  for (auto &slot : m_slotRanges)
+    if (r >= slot.first && r < slot.second)
+    {
+      m_quarantined.insert(r);
+      return;
+    }
+  returnToPool(r);
+}
+// Statement boundary: free every live temp that wasn't allocated before this
+// statement (those are protected), then restore the protection set to its
+// pre-statement state. Restoring (not clearing) matters: loop-header temps
+// were protected by the enclosing loop's statement and must stay protected
+// for the remaining body statements.
+void QLangCompiler::endOfStatement()
+{
+  // Free against THIS statement's entry snapshot, not the current set
+  // (nested statements restore their own, larger sets).
+  auto pre = m_protectStack.back();
+  m_protectStack.pop_back();
+  auto live = m_liveTmps; // copy: freeRegister erases from m_liveTmps
+  for (int r : live)
+    if (!pre.count(r))
+      freeRegister(r);
+  m_protectedTmps = pre;
+  // All call-arg slot ranges are stale now: restore their quarantined
+  // registers to the pool (innermost first; a register still inside an
+  // enclosing active range stays quarantined).
+  while (!m_slotRanges.empty())
+    endArgSlots();
+}
+// Release a statement-level temp: clear it (so it can't keep a reference
+// alive past the statement — Phase 7 finalizers need the true final
+// release) and return it to the pool.
+void QLangCompiler::releaseTemp(int r)
+{
+  emit(Opcode::CONST, r, emitConst(QLangValue()), 0);
+  freeRegister(r);
+}
+// Drop freed registers in [lo, hi): those slots are about to be reserved for
+// call-arg/template slots, so tmpRegister() must not hand one back out.
+// Covers the deferred set too: a deferred register below a named register
+// would clobber it via call arg slots once promoted.
+void QLangCompiler::dropFreeRegs(int lo, int hi)
+{
+  m_freeRegs.erase(
+      std::remove_if(m_freeRegs.begin(), m_freeRegs.end(),
+                     [lo, hi](int r) { return r >= lo && r < hi; }),
+      m_freeRegs.end());
+  auto it = m_deferred.begin();
+  while (it != m_deferred.end())
+    if (*it >= lo && *it < hi)
+      it = m_deferred.erase(it);
+    else
+      ++it;
+}
+// Reserve dest+1 .. dest+argCount as live call-arg slots: grow m_nextReg
+// past them (the frame must cover the slots) and keep freed registers out
+// of the range so tmpRegister() can't hand a slot back out as a temp (the
+// slot MOVs would then alias live values, and slots beyond the old
+// high-water mark would read past the frame).
+void QLangCompiler::reserveArgSlots(int dest, int nSlots)
+{
+  beginArgSlots(dest, nSlots);
+}
+// Grow the frame past the slot region and quarantine pool registers in it
+// for the duration of the call (see endArgSlots / endOfStatement).
+void QLangCompiler::beginArgSlots(int dest, int nSlots)
+{
+  int lo = dest + 1, hi = dest + 1 + nSlots;
+  while (m_nextReg < hi)
+    m_nextReg++;
+  m_slotRanges.push_back({lo, hi});
+  auto it = m_freeRegs.begin();
+  while (it != m_freeRegs.end())
+  {
+    if (*it >= lo && *it < hi)
+    {
+      m_quarantined.insert(*it);
+      it = m_freeRegs.erase(it);
+    }
+    else
+      ++it;
+  }
+}
+void QLangCompiler::endArgSlots()
+{
+  auto rng = m_slotRanges.back();
+  m_slotRanges.pop_back();
+  auto it = m_quarantined.begin();
+  while (it != m_quarantined.end())
+  {
+    int r = *it;
+    bool inEnclosing = false;
+    for (auto &slot : m_slotRanges)
+      if (r >= slot.first && r < slot.second)
+      {
+        inEnclosing = true;
+        break;
+      }
+    if (r >= rng.first && r < rng.second && !inEnclosing)
+    {
+      returnToPool(r);
+      it = m_quarantined.erase(it);
+    }
+    else
+      ++it;
+  }
+}
 
 int QLangCompiler::declareVar(const std::string &name, bool blockScoped) {
   if (blockScoped && !m_blockScopes.empty()) {
@@ -124,16 +313,76 @@ int QLangCompiler::declareVar(const std::string &name, bool blockScoped) {
     auto it = top.find(name);
     if (it != top.end())
       return it->second;
-    int r = newRegister();
+    int r;
+    // Reuse a register freed by a dead block scope first (keeps
+    // registerCount from growing with the number of loop bodies); fall back
+    // to the dense counter.
+    if (!m_freeNamedRegs.empty())
+    {
+      r = m_freeNamedRegs.back();
+      m_freeNamedRegs.pop_back();
+    }
+    else
+      r = m_nextNamedReg++;
+    // Skip live temps (e.g. an enclosing loop's header temps, protected
+    // across statements) and already-allocated named registers: a named
+    // register must never alias either.
+    while (std::find(m_liveTmps.begin(), m_liveTmps.end(), r) !=
+             m_liveTmps.end() ||
+           m_namedRegs.count(r))
+      r++;
+    // Temps must stay ABOVE named registers: a call's arg slots are
+    // dest+1..dest+argCount, and dest is a temp — a low temp would put the
+    // slots on top of live named variables. Push the temp counter past the
+    // new named register and drop pool registers below it; pool registers
+    // above it (the common case) are kept for reuse.
+    while (m_nextReg <= r)
+      m_nextReg++;
+    dropFreeRegs(0, r + 1);
+    m_namedRegs.insert(r);
     top[name] = r;
+    fprintf(stderr, "[DECL-B] line=%d '%s' -> r=%d\n", m_curLine, name.c_str(), r);
     return r;
   }
   auto it = m_regs.find(name);
   if (it != m_regs.end())
     return it->second;
-  int r = newRegister();
+  int r;
+  // Same free-list reuse and constraints as the block-scoped path above.
+  if (!m_freeNamedRegs.empty())
+  {
+    r = m_freeNamedRegs.back();
+    m_freeNamedRegs.pop_back();
+  }
+  else
+    r = m_nextNamedReg++;
+  while (std::find(m_liveTmps.begin(), m_liveTmps.end(), r) !=
+           m_liveTmps.end() ||
+         m_namedRegs.count(r))
+    r++;
+  while (m_nextReg <= r)
+    m_nextReg++;
+  dropFreeRegs(0, r + 1);
+  m_namedRegs.insert(r);
   m_regs[name] = r;
+  fprintf(stderr, "[DECL-G] line=%d '%s' -> r=%d\n", m_curLine, name.c_str(), r);
   return r;
+}
+
+void QLangCompiler::popBlockScope()
+{
+  if (m_blockScopes.empty())
+    return;
+  auto &top = m_blockScopes.back();
+  for (auto &kv : top)
+  {
+    fprintf(stderr, "[POP] line=%d '%s' r=%d\n", m_curLine, kv.first.c_str(), kv.second);
+    // The scope is dead: its named registers return to the free list so a
+    // later declaration can reuse them.
+    m_namedRegs.erase(kv.second);
+    m_freeNamedRegs.push_back(kv.second);
+  }
+  m_blockScopes.pop_back();
 }
 
 int QLangCompiler::regOf(const std::string &name) const {
@@ -330,6 +579,25 @@ int QLangCompiler::buildFunction(const std::string &name,
   auto savedCapturedVars = m_capturedVars;
   auto savedGeneratorVars = m_generatorVars;
   int savedNextReg = m_nextReg;
+  auto savedFreeRegs = std::move(m_freeRegs);
+  m_freeRegs.clear(); // fresh register space: no outer-frame temps in here
+  auto savedLiveTmps = std::move(m_liveTmps);
+  m_liveTmps.clear();
+  auto savedProtectedTmps = std::move(m_protectedTmps);
+  m_protectedTmps.clear();
+  auto savedProtectStack = std::move(m_protectStack);
+  m_protectStack.clear();
+  auto savedSlotRanges = std::move(m_slotRanges);
+  m_slotRanges.clear();
+  auto savedQuarantined = std::move(m_quarantined);
+  m_quarantined.clear();
+  auto savedDeferred = std::move(m_deferred);
+  m_deferred.clear();
+  auto savedNamedRegs = std::move(m_namedRegs);
+  m_namedRegs.clear();
+  auto savedFreeNamedRegs = std::move(m_freeNamedRegs);
+  m_freeNamedRegs.clear();
+  int savedNamedReg = m_nextNamedReg;
   bool savedInFunction = m_inFunction;
 
   // Fresh function context: params occupy registers 0..paramCount-1 and must
@@ -346,10 +614,12 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_generatorVars.clear();
   m_labels.clear();
   m_nextReg = 0;
+  m_nextNamedReg = static_cast<int>(params.size());
   m_inFunction = true;
   for (size_t i = 0; i < params.size(); i++) {
     int r = static_cast<int>(i);
     m_regs[params[i]] = r;
+    m_namedRegs.insert(r);
     if (r >= m_nextReg)
       m_nextReg = r + 1;
   }
@@ -462,6 +732,16 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_capturedVars = std::move(savedCapturedVars);
   m_generatorVars = std::move(savedGeneratorVars);
   m_nextReg = savedNextReg;
+  m_nextNamedReg = savedNamedReg;
+  m_namedRegs = std::move(savedNamedRegs);
+  m_freeNamedRegs = std::move(savedFreeNamedRegs);
+  m_freeRegs = std::move(savedFreeRegs);
+  m_liveTmps = std::move(savedLiveTmps);
+  m_protectedTmps = std::move(savedProtectedTmps);
+  m_slotRanges = std::move(savedSlotRanges);
+  m_quarantined = std::move(savedQuarantined);
+  m_deferred = std::move(savedDeferred);
+  m_protectStack = std::move(savedProtectStack);
   m_inFunction = savedInFunction;
 
   // Emit generator closure constant into the MAIN bytecode (not the temporary
@@ -499,6 +779,17 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
   // error reporting).
   m_curLine = s->line;
   m_curCol = s->col;
+  // Protect temps live before this statement (e.g. loop-header temps): only
+  // temps allocated within this statement are freed at its end. The entry
+  // snapshot goes on the protect stack; endOfStatement pops it and frees
+  // against it (nested statements restore their own, larger sets). The
+  // snapshot is taken AFTER adding the currently-live temps: temps allocated
+  // outside any statement (a ForIn range setup) are live but unrecorded, and
+  // a snapshot taken before the add would let the first body statement free
+  // them, aliasing their values.
+  for (int r : m_liveTmps)
+    m_protectedTmps.insert(r);
+  m_protectStack.push_back(m_protectedTmps);
   switch (s->kind) {
   case StmtKind::Declaration: {
     int r = declareVar(s->name, true);
@@ -511,10 +802,10 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       // the CONV emitted below.
       emit(Opcode::CONST, t, emitConst(QLangValue::Int(0)));
     emit(Opcode::MOV, r, t);
-    // Clear the RHS temp so it doesn't hold an extra reference past the
-    // declaration (matters for tables with finalizers: a lingering temp
-    // reference keeps the instance alive until frame end).
-    emit(Opcode::CONST, t, emitConst(QLangValue()));
+    // RHS temp is dead: clear + return to the pool (the clear matters for
+    // tables with finalizers: a lingering temp reference keeps the instance
+    // alive past its true final release).
+    releaseTemp(t);
     updateVarType(s->name, s->value);
     // Track generator variables: if RHS calls a generator function, mark LHS.
     if (s->value && s->value->kind == ExprKind::Call) {
@@ -545,9 +836,9 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     else
       emit(Opcode::CONST, t, emitConst(QLangValue()));
     emit(Opcode::MOV, r, t);
-    // Clear the RHS temp (extra reference would keep finalized tables alive
-    // until frame end).
-    emit(Opcode::CONST, t, emitConst(QLangValue()));
+    // RHS temp is dead: clear + return to the pool (keeps finalized tables
+    // from surviving their true final release).
+    releaseTemp(t);
     updateVarType(s->name, s->value);
     // Enforce a typed declaration (e.g. local b:byte = 32).
     if (s->declaredType)
@@ -623,15 +914,16 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       compileExpr(s->assignValue, t);
       emit(isArrayExpr(s->assignValue) ? Opcode::ARRAPPV : Opcode::ARRAPP,
            r, t, 0);
+      releaseTemp(t); // dead after the append
       break;
     }
     if (op == "=") {
       int t = tmpRegister();
       compileExpr(s->assignValue, t);
       emit(Opcode::MOV, r, t);
-      // Clear the RHS temp (extra reference would keep finalized tables
-      // alive until frame end).
-      emit(Opcode::CONST, t, emitConst(QLangValue()));
+      // RHS temp is dead: clear + return to the pool (keeps finalized tables
+      // from surviving their true final release).
+      releaseTemp(t);
       updateVarType(s->name, s->assignValue);
     } else {
       int t = tmpRegister();
@@ -640,6 +932,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
                                   : (op == "--") ? Opcode::DEC
                                                  : binOp(op.substr(0, op.size() - 1));
       emit(opCode, r, r, t);
+      releaseTemp(t); // dead after the compound op
     }
     break;
   }
@@ -856,7 +1149,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       m_code.instructions()[guardLabel].b = guardLoopStart;  // sameSign -> guard loop
       m_loops.pop_back();
     }
-    m_blockScopes.pop_back();
+    popBlockScope();
     break;
   }
   case StmtKind::ForIn: {
@@ -1041,7 +1334,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         }
         m_loops.pop_back();
       }
-      m_blockScopes.pop_back();
+      popBlockScope();
       break;
     }
     // `step` is only meaningful for numeric ranges, not array/table
@@ -1085,7 +1378,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       else if (ci.op == Opcode::BREAK) ci.a = exitLabel;
     }
     m_loops.pop_back();
-    m_blockScopes.pop_back();
+    popBlockScope();
     break;
   }
   case StmtKind::While: {
@@ -1102,7 +1395,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     m_blockScopes.emplace_back(); // body is a block scope (SPEC # block scope)
     for (auto &body : s->whileBody)
       compileStmt(body);
-    m_blockScopes.pop_back();
+    popBlockScope();
     int bodyEnd = static_cast<int>(m_code.instructions().size());
 
     emit(Opcode::JMP, testLabel);
@@ -1123,7 +1416,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     m_blockScopes.emplace_back(); // if body is a block scope (SPEC # block scope)
     for (auto &body : s->ifBody)
       compileStmt(body);
-    m_blockScopes.pop_back();
+    popBlockScope();
 
     if (!s->elseBody.empty()) {
       // Emit JMP after if body to skip else body; patch target after else body compiles.
@@ -1133,7 +1426,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       m_blockScopes.emplace_back(); // else body is a separate block scope
       for (auto &body : s->elseBody)
         compileStmt(body);
-      m_blockScopes.pop_back();
+      popBlockScope();
       m_code.instructions()[jumpPastIdx].a = static_cast<int>(m_code.size());
       m_code.instructions()[jumpFalseIdx].b = elseBodyStart;
     } else {
@@ -1364,6 +1657,25 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     auto savedCapturedVars = m_capturedVars;
     auto savedGeneratorVars = m_generatorVars;
     int savedNextReg = m_nextReg;
+    auto savedFreeRegs = std::move(m_freeRegs);
+    m_freeRegs.clear(); // fresh register space for the prototype function
+    auto savedLiveTmps = std::move(m_liveTmps);
+    m_liveTmps.clear();
+    auto savedProtectedTmps = std::move(m_protectedTmps);
+    m_protectedTmps.clear();
+    auto savedProtectStack = std::move(m_protectStack);
+    m_protectStack.clear();
+    auto savedSlotRanges = std::move(m_slotRanges);
+    m_slotRanges.clear();
+    auto savedQuarantined = std::move(m_quarantined);
+    m_quarantined.clear();
+    auto savedDeferred = std::move(m_deferred);
+    m_deferred.clear();
+    auto savedNamedRegs = std::move(m_namedRegs);
+    m_namedRegs.clear();
+    auto savedFreeNamedRegs = std::move(m_freeNamedRegs);
+    m_freeNamedRegs.clear();
+    int savedNamedReg = m_nextNamedReg;
     bool savedInFunction = m_inFunction;
 
     m_code = Bytecode();
@@ -1383,6 +1695,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     // Emit: TABCREATE proto, then compile body, then RETURN proto.
     emit(Opcode::TABCREATE, 0);
     m_nextReg = 1; // temporaries must not collide with prototype at reg 0
+    m_nextNamedReg = 1;
 
     std::vector<std::string> methodNames;
     std::unordered_map<std::string, int> methodFuncIndices;
@@ -1437,6 +1750,8 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
                                                      : st->value,
                     valR);
         emit(Opcode::TABPUT, 0, keyR, valR);
+        freeRegister(keyR);
+        freeRegister(valR);
         // Record the declared field (name -> index) for the closed field set.
         fieldIndices[st->name] = static_cast<int>(fieldNames.size());
         fieldNames.push_back(st->name);
@@ -1476,6 +1791,8 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         int funcR = tmpRegister();
         emit(Opcode::MAKEFUNC, funcR, constIdx);
         emit(Opcode::TABPUT, 0, keyR, funcR);
+        freeRegister(keyR);
+        freeRegister(funcR);
         methodNames.push_back(st->name);
         methodFuncIndices[st->name] = funcIndex;
         // Fixed arity (Phase 4): record the declared parameter count
@@ -1499,6 +1816,8 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         int valR = tmpRegister();
         compileExpr(sf.second, valR);
         emit(Opcode::TABPUT, staticsReg, keyR, valR);
+        freeRegister(keyR);
+        freeRegister(valR);
       }
       for (auto &sm : staticMethodDecls) {
         // Hidden anchor parameter (the `__statics__` table) as param 0, so a
@@ -1520,6 +1839,8 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         int funcR = tmpRegister();
         emit(Opcode::MAKEFUNC, funcR, constIdx);
         emit(Opcode::TABPUT, staticsReg, keyR, funcR);
+        freeRegister(keyR);
+        freeRegister(funcR);
       }
       // `__static_const__` set (name -> 1) for static const fields, so
       // SETFIELD can reject assignment to them.
@@ -1532,15 +1853,21 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
           int valR = tmpRegister();
           emit(Opcode::CONST, valR, emitConst(QLangValue::Int(1)));
           emit(Opcode::TABPUT, sconstReg, keyR, valR);
+          freeRegister(keyR);
+          freeRegister(valR);
         }
         int sckeyR = tmpRegister();
         emit(Opcode::CONST, sckeyR,
              emitConst(QLangValue::String("__static_const__")));
         emit(Opcode::TABPUT, staticsReg, sckeyR, sconstReg);
+        freeRegister(sckeyR);
+        freeRegister(sconstReg);
       }
       int skeyR = tmpRegister();
       emit(Opcode::CONST, skeyR, emitConst(QLangValue::String("__statics__")));
       emit(Opcode::TABPUT, 0, skeyR, staticsReg);
+      freeRegister(skeyR);
+      freeRegister(staticsReg);
     }
 
     // Const fields (Phase 2): emit `__const_fields__` metadata (name -> 1) into
@@ -1556,11 +1883,15 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         int valR = tmpRegister();
         emit(Opcode::CONST, valR, emitConst(QLangValue::Int(1)));
         emit(Opcode::TABPUT, cfieldsReg, keyR, valR);
+        freeRegister(keyR);
+        freeRegister(valR);
       }
       int cfkeyR = tmpRegister();
       emit(Opcode::CONST, cfkeyR,
            emitConst(QLangValue::String(kConstFieldMetaKey)));
       emit(Opcode::TABPUT, 0, cfkeyR, cfieldsReg);
+      freeRegister(cfkeyR);
+      freeRegister(cfieldsReg);
     }
 
     // Field types (Phase 5): emit `__field_types__` metadata (name ->
@@ -1576,11 +1907,15 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         QLangValue tv(ft.second);
         emit(Opcode::CONST, valR, emitConst(QLangValue::String(tv.typeName())));
         emit(Opcode::TABPUT, ftypesReg, keyR, valR);
+        freeRegister(keyR);
+        freeRegister(valR);
       }
       int ftkeyR = tmpRegister();
       emit(Opcode::CONST, ftkeyR,
            emitConst(QLangValue::String(kFieldTypeMetaKey)));
       emit(Opcode::TABPUT, 0, ftkeyR, ftypesReg);
+      freeRegister(ftkeyR);
+      freeRegister(ftypesReg);
     }
 
     // Closed field set (Phase 1): emit `__fields__` metadata (name -> index)
@@ -1597,10 +1932,14 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         emit(Opcode::CONST, valR,
              emitConst(QLangValue::Int(static_cast<int32_t>(i))));
         emit(Opcode::TABPUT, fieldsReg, keyR, valR);
+        freeRegister(keyR);
+        freeRegister(valR);
       }
       int fkeyR = tmpRegister();
       emit(Opcode::CONST, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));
       emit(Opcode::TABPUT, 0, fkeyR, fieldsReg);
+      freeRegister(fkeyR);
+      freeRegister(fieldsReg);
     }
 
     emit(Opcode::RETURN, 0);
@@ -1620,6 +1959,16 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     m_capturedVars = std::move(savedCapturedVars);
     m_generatorVars = std::move(savedGeneratorVars);
     m_nextReg = savedNextReg;
+    m_nextNamedReg = savedNamedReg;
+    m_namedRegs = std::move(savedNamedRegs);
+    m_freeNamedRegs = std::move(savedFreeNamedRegs);
+    m_freeRegs = std::move(savedFreeRegs);
+    m_liveTmps = std::move(savedLiveTmps);
+    m_protectedTmps = std::move(savedProtectedTmps);
+    m_slotRanges = std::move(savedSlotRanges);
+    m_quarantined = std::move(savedQuarantined);
+    m_deferred = std::move(savedDeferred);
+    m_protectStack = std::move(savedProtectStack);
     m_inFunction = savedInFunction;
 
     ClassRecord rec;
@@ -1784,7 +2133,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         }
         compileStmt(body);
       }
-      m_blockScopes.pop_back();
+      popBlockScope();
       emit(Opcode::JMP, 0); // implicit exit: patched after default compiles
       caseExitJmpIdx.push_back(static_cast<int>(m_code.size()) - 1);
     }
@@ -1794,7 +2143,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     m_blockScopes.emplace_back(); // default body is a block scope
     for (auto &db : s->defaultBody)
       compileStmt(db);
-    m_blockScopes.pop_back();
+    popBlockScope();
     int defaultBodyEnd = static_cast<int>(m_code.size());
 
     // Now we know where switchEnd is (after all cases and default).
@@ -1843,6 +2192,8 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     break;
   }
   }
+  // Statement boundary: free temps allocated within this statement.
+  endOfStatement();
 }
 
 void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
@@ -1922,6 +2273,11 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
           int leReg = tmpRegister();
           emit(Opcode::LE, leReg, l, bReg);
           emit(Opcode::LAND, dest, geReg, leReg);
+          freeRegister(l);
+          freeRegister(aReg);
+          freeRegister(geReg);
+          freeRegister(bReg);
+          freeRegister(leReg);
           break;
         }
       }
@@ -1930,10 +2286,13 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       int rr = tmpRegister();
       compileExpr(e->right, rr);
       emit(binOp(e->op.text), dest, l, rr);
+      freeRegister(l);
+      freeRegister(rr);
     } else {
       int o = tmpRegister();
       compileExpr(e->operand, o);
       emit(unOp(e->uop.text), dest, o);
+      freeRegister(o);
     }
     break;
   }
@@ -1944,6 +2303,10 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     // Allocate the result slot first, then compile each arg into a temp
     // register. After all args are in place, move them to the VM's expected
     // arg slots (dest+1 .. dest+argCount) and emit CALL.
+    // Reserve one extra slot: method/constructor calls shift args up by one
+    // (self/anchor), so their live slots reach dest+argCount+1. Must happen
+    // BEFORE argRegs are allocated, or they would take the slot registers.
+    reserveArgSlots(dest, argCount + 1);
     int argBase = dest + 1;
     std::vector<int> argRegs(argCount);
     for (int i = 0; i < argCount; i++)
@@ -1997,8 +2360,6 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         // Shift user args down by one to make room for the anchor at argBase.
         for (int i = argCount - 1; i >= 0; i--)
           emit(Opcode::MOV, argBase + i + 1, argRegs[i], 0);
-        int minReg = argBase + argCount + 1;
-        if (m_nextReg < minReg) m_nextReg = minReg;
         emit(Opcode::MOV, argBase, staticsR, 0); // anchor = statics table
         emit(Opcode::MOV, dest, funcReg);
         emit(Opcode::CALLCLOS, dest, argCount + 1, argCount + 1);
@@ -2034,10 +2395,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         // that might collide with the shifted slots.
         for (int i = argCount - 1; i >= 0; i--)
           emit(Opcode::MOV, argBase + i + 1, argRegs[i], 0);
-        // Advance past shifted slots so selfReg won't collide.
-        int minReg = argBase + argCount + 1;
-        if (m_nextReg < minReg) m_nextReg = minReg;
-        // Now argBase is free. Compile base into a fresh temp.
+        // argBase slot is free (reserved at the top of the Call case).
+        // Compile base into a fresh temp.
         int selfReg = tmpRegister();
         compileExpr(e->calleeMember->memberBase, selfReg);
         emit(Opcode::MOV, argBase, selfReg, 0);
@@ -2072,6 +2431,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         int valR = tmpRegister();
         emit(Opcode::TABGET, valR, protoReg, keyR);
         emit(Opcode::TABPUT, instanceReg, keyR, valR);
+        freeRegister(keyR);
+        freeRegister(valR);
       }
       // Copy field defaults from prototype to instance (Phase 6): a
       // `v = 7` in the class body is an initial value applied at
@@ -2083,6 +2444,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         int valR = tmpRegister();
         emit(Opcode::TABGET, valR, protoReg, keyR);
         emit(Opcode::TABPUT, instanceReg, keyR, valR);
+        freeRegister(keyR);
+        freeRegister(valR);
       }
       // Static members (new extension): copy the shared `__statics__` table
       // from the prototype BY REFERENCE (it is a table value), so the instance
@@ -2093,6 +2456,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         int svalR = tmpRegister();
         emit(Opcode::TABGET, svalR, protoReg, skeyR);
         emit(Opcode::TABPUT, instanceReg, skeyR, svalR);
+        freeRegister(skeyR);
+        freeRegister(svalR);
       }
       // Closed field set (Phase 1.3): stamp the class name onto the instance
       // BEFORE installing the `__fields__` schema, so the instance is not yet
@@ -2103,6 +2468,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         int cvalR = tmpRegister();
         emit(Opcode::CONST, cvalR, emitConst(QLangValue::String(e->callee)));
         emit(Opcode::TABPUT, instanceReg, ckeyR, cvalR);
+        freeRegister(ckeyR);
+        freeRegister(cvalR);
       }
       // Const fields (Phase 2): copy the `__const_fields__` set from the
       // prototype BEFORE installing `__fields__`, so the instance is not yet a
@@ -2115,6 +2482,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         int cfvalR = tmpRegister();
         emit(Opcode::TABGET, cfvalR, protoReg, cfkeyR);
         emit(Opcode::TABPUT, instanceReg, cfkeyR, cfvalR);
+        freeRegister(cfkeyR);
+        freeRegister(cfvalR);
       }
       // Field types (Phase 5): copy the `__field_types__` table from the
       // prototype BEFORE installing `__fields__` (same ordering constraint as
@@ -2126,6 +2495,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         int ftvalR = tmpRegister();
         emit(Opcode::TABGET, ftvalR, protoReg, ftkeyR);
         emit(Opcode::TABPUT, instanceReg, ftkeyR, ftvalR);
+        freeRegister(ftkeyR);
+        freeRegister(ftvalR);
       }
       // Closed field set (Phase 1): copy the `__fields__` schema from the
       // prototype onto the instance LAST so GETFIELD/SETFIELD can enforce the
@@ -2137,16 +2508,14 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         int fvalR = tmpRegister();
         emit(Opcode::TABGET, fvalR, protoReg, fkeyR);
         emit(Opcode::TABPUT, instanceReg, fkeyR, fvalR);
+        freeRegister(fkeyR);
+        freeRegister(fvalR);
       }
       // Save instance to dest before overwriting instanceReg with args.
       emit(Opcode::MOV, dest, instanceReg);
-      // Clear the temp so it does not keep a second reference to the
-      // instance alive (Phase 7: the finalizer must fire when the user's
-      // last reference goes away, not at frame end).
-      {
-        int nilC = m_code.addConstant(QLangValue());
-        emit(Opcode::CONST, instanceReg, nilC, 0);
-      }
+      // Instance temp is dead: clear + return to the pool (the second
+      // reference must go for Phase 7 finalizer timing).
+      releaseTemp(instanceReg);
       // Phase 7: attach the `__destroy__` finalizer (no-op if the class has
       // none). The deleter keeps the closure and owning program alive so the
       // method can run at final release, even after this run()'s VM is gone.
@@ -2536,11 +2905,10 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     if (static_cast<int>(e->strParts.size()) > exprCount)
       fmt += e->strParts.back();
 
-    // Ensure enough registers: CALL reads dest+1..dest+argCount.
+    // Ensure enough registers: CALL reads dest+1..dest+argCount. Quarantine
+    // the slot region (template + expr args) for the duration of the call.
     int totalArgs = exprCount + 1;
-    int maxReg = dest + totalArgs;
-    while (m_nextReg <= maxReg)
-      tmpRegister();
+    beginArgSlots(dest, totalArgs);
 
     // Compile each expression into temp registers.
     std::vector<int> argRegs(exprCount);
@@ -2720,7 +3088,7 @@ Opcode QLangCompiler::binOp(const std::string &text) const {
   if (text == "<<") return Opcode::SHL;
   if (text == ">>") return Opcode::SHR;
   if (text == "&&") return Opcode::LAND;
-  if (text == "|||" || text == "||") return Opcode::LOR;
+  if (text == "||") return Opcode::LOR;
   if (text == "**") return Opcode::POW;
   if (text == "%") return Opcode::MOD;
   if (text == "in") return Opcode::IN;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -84,6 +85,33 @@ private:
 
  int newRegister();
   int tmpRegister();
+  // A temp register is dead: return it to the pool so a later tmpRegister()
+  // reuses it (keeps registerCount flat as the program grows). The old value
+  // is released when the register is next written; if never rewritten, frame
+  // teardown releases it.
+  void freeRegister(int r);
+  // Clear a dead statement-level temp (releases its reference) and return
+  // it to the pool. Sub-expression temps use freeRegister() (never cleared,
+  // as before).
+  void releaseTemp(int r);
+  // Drop freed registers in [lo, hi) — those slots are reserved for call
+  // args/template, so tmpRegister() must not hand one back out.
+  void dropFreeRegs(int lo, int hi);
+  // Reserve dest+1 .. dest+argCount as live call-arg slots (frame covers
+  // them; freed registers can't be handed out into the range).
+  void reserveArgSlots(int dest, int argCount);
+  // Call-arg slot quarantine: while a call's slots (dest+1 .. dest+nSlots)
+  // are live, registers in that range are kept out of the free pool so
+  // tmpRegister() can't alias a slot with a live temp. Ranges nest (f(g(x)))
+  // and are all restored at the statement boundary (endOfStatement).
+  void beginArgSlots(int dest, int nSlots);
+  void endArgSlots();
+  // Highest live temp, or -1. The free pool must stay strictly above this:
+  // a call's arg slots (dest+1..dest+n, dest = temp) must never alias a
+  // live temp (loop-header temps survive across statements).
+  int maxLiveTmp() const;
+  void promoteDeferred();
+  void returnToPool(int r);
   int declareVar(const std::string &name, bool blockScoped = false);
   int regOf(const std::string &name) const;
   int emitConst(const QLangValue &value);
@@ -225,6 +253,53 @@ private:
   std::vector<int> m_breakJmps; // instruction indices of unpatched break JMPs
   std::unordered_map<std::string, int> m_labels; // label name -> instruction index (per-scope)
   int m_nextReg = 0;
+  // Dense allocation for named registers (params, locals, globals): they
+  // occupy the low end of the frame, temporaries stay above them so a
+  // call's arg slots (dest+1..dest+argCount, dest = temp) can't clobber a
+  // live named variable. Sharing m_nextReg with temps made every `local` in
+  // a recompiled loop body land above all prior temps, purging the pool.
+  int m_nextNamedReg = 0;
+  // Allocated named registers (params, locals, globals): the dense
+  // allocator's skip loop must avoid these too, not just live temps —
+  // without it, declarations after a live-temp run all land on the same
+  // register.
+  std::set<int> m_namedRegs;
+  // Named registers freed by dead block scopes (loop/if bodies): reused by
+  // later dense allocations so registerCount doesn't grow with the number of
+  // loop bodies in the program.
+  std::vector<int> m_freeNamedRegs;
+  // Pop the innermost block scope, returning its named registers to
+  // m_freeNamedRegs. Replaces raw m_blockScopes.pop_back() sites.
+  void popBlockScope();
+  // Pool of dead temp registers, reused by tmpRegister() before allocating a
+  // new one. Scoped per function body (saved/cleared/restored in
+  // buildFunction and class compilation) because register indices are
+  // per-frame.
+  std::vector<int> m_freeRegs;
+  // All currently-live temp registers. Temps allocated during a statement are
+  // freed at the statement boundary (endOfStatement) so registerCount is the
+  // high-water mark of simultaneously-live temps. Temps that must survive
+  // across statement boundaries (loop-header temps, re-read on the back
+  // edge) are protected: at each statement start every live temp is marked
+  // protected, so only temps allocated *within* the statement get freed.
+  std::vector<int> m_liveTmps;
+  std::set<int> m_protectedTmps;
+  // Per-statement entry snapshot of m_protectedTmps. endOfStatement must
+  // free against the set as of ITS OWN entry, not the current one — nested
+  // statements restore their own (larger) sets, and using the current set
+  // would keep loop-header temps alive forever.
+  std::vector<std::set<int>> m_protectStack;
+  // Active call-arg slot ranges (nested) and the registers quarantined from
+  // the free pool on their behalf. Restored to the pool at the statement
+  // boundary, skipping registers still inside an enclosing active range.
+  std::vector<std::pair<int, int>> m_slotRanges;
+  std::set<int> m_quarantined;
+  // Freed temps BELOW the highest live temp (e.g. loop-header temps): kept
+  // out of the pool so tmpRegister() stays above every live temp — a call's
+  // arg slots (dest+1..) must never alias a live temp. Promoted to the pool
+  // once the high temp dies (tmpRegister).
+  std::set<int> m_deferred;
+  void endOfStatement();
   // Source position of the statement currently being compiled; stamped into
   // every instruction by emit() so runtime errors report line/col (SPEC #
   // error reporting).

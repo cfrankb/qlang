@@ -552,6 +552,73 @@ namespace
     return ss.str();
   }
 
+  // Which operands (a/b/c) are meaningful per opcode; the rest are omitted
+  // from the listing. Default: all three. (Matches the operand semantics in
+  // QLangBytecode.h, e.g. ARRAPP/CALLCLOS skip b.)
+  int operandMask(Opcode op)
+  {
+    switch (op)
+    {
+    case Opcode::INC:
+    case Opcode::DEC:
+    case Opcode::DELETE:
+    case Opcode::TABCREATE:
+    case Opcode::TABFINALIZE:
+    case Opcode::JMP:
+    case Opcode::CONTINUE:
+    case Opcode::BREAK:
+    case Opcode::RETURN:
+      return 1;
+    case Opcode::CONST:
+    case Opcode::MOV:
+    case Opcode::NEG:
+    case Opcode::NOT:
+    case Opcode::ARRAPPV:
+    case Opcode::ARRLEN:
+    case Opcode::LEN:
+    case Opcode::EVALKEY:
+    case Opcode::JMPIFFALSE:
+    case Opcode::JMPIFTRUE:
+    case Opcode::MAKEFUNC:
+    case Opcode::MAKEGEN:
+    case Opcode::REFLOAD:
+    case Opcode::REFSTORE:
+      return 3;
+    case Opcode::ARRAPP:
+    case Opcode::CALLCLOS:
+      return 5; // a and c only
+    default:
+      return 7;
+    }
+  }
+
+  // Comma-separated operands, skipping unused ones; b is decimal when
+  // negative (native-call index, -1 - id).
+  std::string operandText(const Instruction &ins)
+  {
+    auto fmt = [](int v)
+    {
+      char b[8];
+      std::snprintf(b, sizeof b, v < 0 ? "%d" : "%.2x", v);
+      return std::string(b);
+    };
+    std::string s;
+    auto add = [&s, &fmt](int v)
+    {
+      if (!s.empty())
+        s += ", ";
+      s += fmt(v);
+    };
+    const int m = operandMask(ins.op);
+    if (m & 1)
+      add(ins.a);
+    if (m & 2)
+      add(ins.b);
+    if (m & 4)
+      add(ins.c);
+    return s;
+  }
+
   // Render a string with escapes (\n, \r, \t, \", \\, \xNN for other
   // non-printables) so it stays on one line in the listing.
   std::string quoteString(const std::string &s)
@@ -680,6 +747,13 @@ namespace
       ss << "QLang disassembly (v1)\n";
       ss << "registers: " << prog.registerCount << "\n\n";
     }
+    // Level 4: widest pseudo-mnemonic in the whole listing, so the "; ..."
+    // and "# ..." columns align on every line.
+    size_t maxPseudo = 0;
+    if (level >= 4)
+      for (const auto &fn : prog.functions)
+        for (const auto &k : fn.instructions)
+          maxPseudo = std::max(maxPseudo, pseudoText(prog, k).size());
     for (size_t i = 0; i < prog.functions.size(); i++)
     {
       const auto &f = prog.functions[i];
@@ -722,7 +796,7 @@ namespace
         const auto &ins = f.instructions[j];
         if (level >= 2 && ins.line != lastLine && ins.line >= 1 &&
             static_cast<size_t>(ins.line) <= srcLines.size())
-          ss << "  " << std::setw(2) << ins.line << ":  "
+          ss << "  L" << std::right << std::setw(2) << ins.line << ":  "
              << srcLines[static_cast<size_t>(ins.line) - 1] << "\n";
         lastLine = ins.line;
         // Level 3: append a copy of the referenced constant (operand b is the
@@ -736,7 +810,7 @@ namespace
           case Opcode::MAKEFUNC:
           case Opcode::MAKEGEN:
             if (ins.b >= 0 && static_cast<size_t>(ins.b) < f.constants.size())
-              constNote = "   # " + valueText(f.constants[static_cast<size_t>(ins.b)]);
+              constNote = valueText(f.constants[static_cast<size_t>(ins.b)]);
             break;
           default:
             break;
@@ -751,36 +825,41 @@ namespace
             if (ins.b >= 0)
             {
               const char *bn = builtinName(ins.b);
-              constNote = std::string("   # builtin:") + (bn ? bn : "unknown");
+              constNote = std::string("builtin:") + (bn ? bn : "unknown");
             }
             else
-              constNote = "   # native:" + std::to_string(-1 - ins.b);
+              constNote = "native:" + std::to_string(-1 - ins.b);
             break;
           case Opcode::CALLFN:
             if (ins.b >= 0 && static_cast<size_t>(ins.b) < prog.functions.size())
-              constNote = "   # fn:" + prog.functions[static_cast<size_t>(ins.b)].name;
+              constNote = "fn:" + prog.functions[static_cast<size_t>(ins.b)].name;
             break;
           case Opcode::CONV:
           case Opcode::CAST:
-            constNote = "   # type:" +
+            constNote = "type:" +
                         std::string(QLangValue(static_cast<QLangValue::Type>(ins.c)).typeName());
             break;
           default:
             break;
           }
         }
-        // Level 4: pseudo-mnemonic (register-level meaning) after the note.
+        char addr[32];
+        snprintf(addr, sizeof(addr), "%.4x", j);
+
+        // Level 4: pseudo-mnemonic (register-level meaning), padded so the
+        // trailing "#" note starts in the same column on every line.
         std::string pseudo;
-        char tmp[128];
-        // b is negative for native calls (-1 - nativeIndex); keep it decimal.
-        snprintf(tmp, sizeof(tmp), ins.b < 0 ? "%.2x %d %.2x" : "%.2x %.2x %.2x",
-                 ins.a, ins.b, ins.c);
         if (level >= 4)
-          pseudo = "   ; " + pseudoText(prog, ins);
-        ss << "  " << std::setw(4) << j << "  " << ins.line << ":" << ins.col
-           << "  " << std::left << std::setw(10) << Bytecode::name(ins.op) << std::right
-           << "  " << tmp << pseudo << constNote << "\n";
-        //<< "  " << ins.a << " " << ins.b << " " << ins.c << pseudo << constNote << "\n";
+        {
+          pseudo = " ; " + pseudoText(prog, ins);
+          if (pseudo.size() < maxPseudo + 3)
+            pseudo.append(maxPseudo + 3 - pseudo.size(), ' ');
+        }
+        const std::string note = constNote.empty() ? std::string() : "  # " + constNote;
+        ss << "  " << std::setw(4) << addr
+           << "  " << std::left << std::setw(11) << Bytecode::name(ins.op)
+           << "  " << std::setw(10) << operandText(ins)
+           << pseudo << note << "\n";
       }
       ss << "\n";
     }
