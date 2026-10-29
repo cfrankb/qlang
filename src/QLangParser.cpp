@@ -54,6 +54,56 @@ const Token &QLangParser::consume(TokenType t, const char *what) {
 // Precedence
 // ---------------------------------------------------------------------------
 
+// An f-string's interpolated expressions are parsed by a fresh lexer that
+// starts at line 1; shift every line number in the subtree so positions are
+// relative to the f-string token's own line.
+static void shiftExprLines(Expr &e, int delta) {
+  if (delta == 0) return;
+  switch (e.kind) {
+  case ExprKind::Binary:
+    e.op.line += delta;
+    shiftExprLines(*e.left, delta);
+    shiftExprLines(*e.right, delta);
+    break;
+  case ExprKind::Unary:
+    e.uop.line += delta;
+    shiftExprLines(*e.operand, delta);
+    break;
+  case ExprKind::Call:
+    e.callLine += delta;
+    if (e.calleeMember) shiftExprLines(*e.calleeMember, delta);
+    for (auto &a : e.args) shiftExprLines(*a, delta);
+    break;
+  case ExprKind::Array:
+    for (auto &el : e.elements) shiftExprLines(*el, delta);
+    break;
+  case ExprKind::Table:
+    for (auto &item : e.items) {
+      shiftExprLines(*item.first, delta);
+      shiftExprLines(*item.second, delta);
+    }
+    break;
+  case ExprKind::Index:
+    shiftExprLines(*e.indexBase, delta);
+    shiftExprLines(*e.indexExpr, delta);
+    break;
+  case ExprKind::Member:
+    shiftExprLines(*e.memberBase, delta);
+    break;
+  case ExprKind::Cast:
+    if (e.castOperand) shiftExprLines(*e.castOperand, delta);
+    break;
+  case ExprKind::FString:
+    for (auto &part : e.exprParts) shiftExprLines(*part, delta);
+    break;
+  case ExprKind::Closure:
+    for (auto &s : e.body) s->line += delta;
+    break;
+  default:
+    break;
+  }
+}
+
 static int precedence(TokenType t) {
   switch (t) {
   case TokenType::LogicalOr:
@@ -1320,6 +1370,8 @@ return node;
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Call;
       node->callee = "type";
+      node->callLine = tok.line;
+      node->callCol = tok.col;
       if (!check(TokenType::RParen)) {
         do {
           node->args.push_back(parseExpression());
@@ -1545,6 +1597,9 @@ return node;
       auto innerTokens = innerLexer.tokenize();
       QLangParser innerParser(std::move(innerTokens));
       auto innerExpr = innerParser.parseExpression();
+      // The inner lexer restarts at line 1; rebase positions onto the
+      // f-string token's line so line info stays source-accurate.
+      shiftExprLines(*innerExpr, tok.line - 1);
       match(TokenType::Semicolon);
       node->exprParts.push_back(innerExpr);
       node->formatSpecs.push_back(formatSpec);
