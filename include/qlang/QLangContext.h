@@ -124,6 +124,10 @@ namespace qlang
     // clear() if you need the built-in modules again.
     void loadBuiltinModules();
 
+    // Name of the module this context runs. The context parses source into
+    // the `main` module (SPEC # modules); error reports reference it.
+    const char *moduleName() const { return "main"; }
+
   private:
     // Pimpl: holds the compiled program without creating a circular include.
     struct Pimpl;

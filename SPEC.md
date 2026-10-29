@@ -384,7 +384,6 @@ if true return false
 if true {
 
 }
-
 ```
 
 ## range
@@ -592,6 +591,44 @@ type coersion between numbers is always guided by the left operand.
 |$| dynamic key resolution operator
 |$$| indirect access operator
 |::| scope resolution operator
+|?|short-hand if operator
+
+
+## operator ?
+
+short-hand if (pseudo-code)
+
+```
+boolean-expr ? value-if-true : value-if-false
+```
+
+expanded short-hand (pseudo-code)
+
+```
+boolean-expr ? {
+      return value-if-true
+   } : {
+     return value-if-false
+   }
+```
+
+examples
+```
+local a = 3
+
+let b = a == 3 ? "This is Three" : "This is NOT Three";
+# expected: b to equal "This is Three"
+
+
+let c = a == 5 ? {
+   return "this is 5"
+} : {
+   return "this is not 5"
+}
+# expected: c to equal "this is not 5"
+
+
+```
 
 ## operators < and >
 
@@ -1658,3 +1695,19 @@ Clear and concise error reporting is important to track down bugs.
 
 provide the stack frame and execution chain when available.
 each node to provide line number, module/class/function/table if applicable.
+
+## format
+
+the top-level catch formats one report (innermost frame first):
+
+```
+module 'main' line 12, col 5 in function 'foo': <kind>: <message>
+at line 12 in foo
+at line 3 in main
+```
+
+- line/col come from the pc -> line/col table stamped by the compiler into
+  every emitted instruction; missing pieces are omitted.
+- the trace has one `at line N in <function>` per frame, innermost first.
+- parse/lex errors carry the token position; runtime errors carry the
+  failing instruction's position and the full frame chain.

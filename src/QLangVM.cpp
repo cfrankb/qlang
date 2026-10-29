@@ -19,6 +19,20 @@ namespace qlang {
 
 namespace {
 
+// Throw shim for the free helper functions below: when a VM is reachable it
+// attaches the pc-resolved line/col, the owning module name and the frame
+// chain to the error (SPEC # error reporting); without one it falls back to
+// a plain 0,0 error.
+[[noreturn]] static void vThrow(QLangVM *vm, QLangErrorKind kind,
+                                const std::string &msg, int line = 0,
+                                int col = 0) {
+  if (vm) {
+    if (line > 0) vm->vmThrowAt(kind, line, col, msg);
+    vm->vmThrow(kind, msg);
+  }
+  throw QLangError(kind, line, col, msg);
+}
+
 bool isNumeric(const QLangValue &v) {
   auto t = v.type();
   return t == QLangValue::Type::Bool || t == QLangValue::Type::Char ||
@@ -99,11 +113,11 @@ static void attachFinalizer(QLangValue &v, QLangContext &scope) {
 }
 
 // Numeric operand with a clear error if the type is wrong.
-int64_t num(const QLangValue &v, const char *op) {
+int64_t num(const QLangValue &v, const char *op, QLangVM *vm = nullptr) {
   if (!isNumeric(v))
-    throw QLangError(QLangErrorKind::Type, 0, 0,
-                     std::string("operator '") + op +
-                         "' operand must be numeric, got " + v.typeName());
+    vThrow(vm, QLangErrorKind::Type,
+           std::string("operator '") + op +
+               "' operand must be numeric, got " + v.typeName());
   return (long long)toInt64(v);
 }
 
@@ -171,10 +185,10 @@ int cmp(const QLangValue &a, const QLangValue &b, const char *op,
       return ta.size() < tb.size() ? -1 : ta.size() > tb.size() ? 1 : 0;
     }
   }
-  throw QLangError(QLangErrorKind::Type, 0, 0,
-                   std::string("operator '") + op +
-                       "' cannot compare " + a.typeName() + " and " +
-                       b.typeName());
+  vThrow(vm, QLangErrorKind::Type,
+         std::string("operator '") + op +
+             "' cannot compare " + a.typeName() + " and " +
+             b.typeName());
 }
 
 // Forward decl: set membership test (defined below with the other set helpers);
@@ -264,13 +278,14 @@ static bool setContains(const ArrayValue &elems, const QLangValue &v) {
 
 // Build set storage from source values: numbers and strings only, duplicates
 // dropped, first-seen order kept. Throws (Type) on any other element type.
-static ArrayValue toSetElements(const std::vector<QLangValue> &src) {
+static ArrayValue toSetElements(const std::vector<QLangValue> &src,
+                                QLangVM *vm = nullptr) {
   ArrayValue out;
   for (const auto &v : src) {
     if (v.type() != QLangValue::Type::String && !isNumeric(v))
-      throw QLangError(QLangErrorKind::Type, 0, 0,
-                       std::string("set element must be a number or string, got ") +
-                           v.typeName());
+      vThrow(vm, QLangErrorKind::Type,
+             std::string("set element must be a number or string, got ") +
+                 v.typeName());
     if (!setContains(out, v))
       out.push_back(v);
   }
@@ -279,32 +294,31 @@ static ArrayValue toSetElements(const std::vector<QLangValue> &src) {
 
 // ARRAPP: append one value to a collection. Arrays append unconditionally;
 // sets take numbers/strings only and dedup (SPEC §sets: `s[] = v`).
-static void appendValue(QLangValue &base, const QLangValue &val) {
+static void appendValue(QLangValue &base, const QLangValue &val,
+                        QLangVM *vm = nullptr) {
   if (base.type() == QLangValue::Type::Array) {
     base.asArray().push_back(val);
     return;
   }
   if (base.type() == QLangValue::Type::Set) {
     if (val.type() != QLangValue::Type::String && !isNumeric(val))
-      throw QLangError(QLangErrorKind::Type, 0, 0,
-                       std::string("set element must be a number or string, got ") +
-                           val.typeName());
+      vThrow(vm, QLangErrorKind::Type,
+             std::string("set element must be a number or string, got ") +
+                 val.typeName());
     if (!setContains(base.asSet(), val))
       base.asSet().push_back(val);
     return;
   }
-  throw QLangError(QLangErrorKind::Type, 0, 0,
-                   "cannot append to non-array value");
+  vThrow(vm, QLangErrorKind::Type, "cannot append to non-array value");
 }
 
 // Length for len() (SPEC §build-in functions): string/array/table/blob
 // element counts; numbers return storage byte size; class instances and
 // any other type return 1; nil/undefined is an error.
-int64_t lenOf(const QLangValue &v) {
+int64_t lenOf(const QLangValue &v, QLangVM *vm = nullptr) {
   switch (v.type()) {
   case QLangValue::Type::Nil:
-    throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                     "len: undefined/nil has no length");
+    vThrow(vm, QLangErrorKind::Runtime, "len: undefined/nil has no length");
   case QLangValue::Type::String: return v.asString().size();
   case QLangValue::Type::Array: return v.asArray().size();
   case QLangValue::Type::Set: return static_cast<int64_t>(v.asSet().size());
@@ -330,34 +344,34 @@ int64_t lenOf(const QLangValue &v) {
 // Sequential access for `for i in <collection>`: returns the idx-th element of
 // an array, the idx-th table value in insertion (std::map) order, or the
 // idx-th character of a string (returned as a byte value).
-QLangValue seqGet(const QLangValue &col, int64_t idx) {
+QLangValue seqGet(const QLangValue &col, int64_t idx, QLangVM *vm = nullptr) {
   if (col.type() == QLangValue::Type::String) {
     const auto &s = col.asString();
     if (idx < 0 || idx >= static_cast<int64_t>(s.size()))
-      throw QLangError(QLangErrorKind::Runtime, 0, 0, "string index out of range");
+      vThrow(vm, QLangErrorKind::Runtime, "string index out of range");
     return QLangValue::Byte(static_cast<uint8_t>(s[static_cast<size_t>(idx)]));
   }
   if (col.type() == QLangValue::Type::Array) {
     const auto &elems = col.asArray();
     if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
-      throw QLangError(QLangErrorKind::Runtime, 0, 0, "array index out of range");
+      vThrow(vm, QLangErrorKind::Runtime, "array index out of range");
     return elems[static_cast<size_t>(idx)];
   }
   if (col.type() == QLangValue::Type::Set) {
     const auto &elems = col.asSet();
     if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
-      throw QLangError(QLangErrorKind::Runtime, 0, 0, "set index out of range");
+      vThrow(vm, QLangErrorKind::Runtime, "set index out of range");
     return elems[static_cast<size_t>(idx)];
   }
   if (col.type() == QLangValue::Type::Table) {
     const auto &kv = *col.asTable();
     if (idx < 0 || idx >= static_cast<int64_t>(kv.size()))
-      throw QLangError(QLangErrorKind::Runtime, 0, 0, "index out of range");
+      vThrow(vm, QLangErrorKind::Runtime, "index out of range");
     auto it = kv.begin();
     std::advance(it, static_cast<std::ptrdiff_t>(idx));
     return it->second;
   }
-  throw QLangError(QLangErrorKind::Type, 0, 0,
+  vThrow(vm, QLangErrorKind::Type,
                    std::string("cannot iterate non-collection of type ") +
                        col.typeName());
 }
@@ -375,9 +389,15 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
                        QLangVM *vm = nullptr) {
   auto need = [&](size_t n, const char *fn) {
     if (args.size() != static_cast<size_t>(n))
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                       std::string(fn) + " expects " + std::to_string(n) +
-                           " arg(s), got " + std::to_string(args.size()));
+      vThrow(vm, QLangErrorKind::Runtime,
+             std::string(fn) + " expects " + std::to_string(n) +
+             " arguments, got " + std::to_string(args.size()),
+             line, col);
+  };
+  // Throw with the caller's line/col and the VM frame context (SPEC #
+  // error reporting).
+  auto thr = [&](QLangErrorKind k, const std::string &m) {
+    vThrow(vm, k, m, line, col);
   };
 
   switch (id) {
@@ -428,10 +448,10 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     return QLangValue();
   case Builtin::Printf: {
     if (args.empty())
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+      thr(QLangErrorKind::Runtime,
                        "printf expects at least a format string");
     if (args[0].type() != QLangValue::Type::String)
-      throw QLangError(QLangErrorKind::Type, 0, 0,
+      thr(QLangErrorKind::Type,
                        "printf: format string must be a string");
     std::string fmt = args[0].asString();
     std::string out;
@@ -445,7 +465,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
           continue;
         }
         if (ai >= args.size())
-          throw QLangError(QLangErrorKind::Runtime, 0, 0,
+          thr(QLangErrorKind::Runtime,
                            "printf: not enough arguments for format spec");
         const QLangValue &av = args[ai++];
         switch (spec) {
@@ -471,10 +491,10 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
   case Builtin::Sprintf: {
     // sprintf(fmt, ...) — same format as printf but returns the formatted string.
     if (args.empty())
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+      thr(QLangErrorKind::Runtime,
                        "sprintf expects at least a format string");
     if (args[0].type() != QLangValue::Type::String)
-      throw QLangError(QLangErrorKind::Type, 0, 0,
+      thr(QLangErrorKind::Type,
                        "sprintf: format string must be a string");
     std::string fmt = args[0].asString();
     std::string out;
@@ -498,7 +518,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
           continue;
         }
         if (ai >= args.size())
-          throw QLangError(QLangErrorKind::Runtime, 0, 0,
+          thr(QLangErrorKind::Runtime,
                            "sprintf: not enough arguments for format spec");
         const QLangValue &av = args[ai++];
         switch (spec) {
@@ -539,10 +559,10 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     // format(template, arg1, arg2, ...) — f-string interpolation.
     // Supports full printf-style format specifiers: %s, %d, %f, %.*f, %5d, etc.
     if (args.empty())
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+      thr(QLangErrorKind::Runtime,
                        "format expects at least a template string");
     if (args[0].type() != QLangValue::Type::String)
-      throw QLangError(QLangErrorKind::Type, 0, 0,
+      thr(QLangErrorKind::Type,
                        "format: template must be a string");
     std::string fmt = args[0].asString();
     std::string out;
@@ -576,7 +596,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
           continue;
         }
         if (ai >= args.size())
-          throw QLangError(QLangErrorKind::Runtime, 0, 0,
+          thr(QLangErrorKind::Runtime,
                            "format: not enough arguments for template placeholder");
         const QLangValue &av = args[ai++];
         // Use the original format substring (including flags/width/precision)
@@ -645,7 +665,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
   }
   case Builtin::Len: {
     need(1, "len");
-    return QLangValue::Int(static_cast<int32_t>(lenOf(args[0])));
+    return QLangValue::Int(static_cast<int32_t>(lenOf(args[0], vm)));
   }
   case Builtin::Blob: {
     need(0, "blob");
@@ -659,16 +679,16 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
       src = args[0].asArray();
     else
       src = args;
-    return QLangValue::Set(toSetElements(src));
+    return QLangValue::Set(toSetElements(src, vm));
   }
   case Builtin::Substr: {
     // substr(str, start, [length]) — 0-based start (consistent with array
     // indexing, spec §100); length optional (defaults to end of string).
     if (args.size() < 2 || args.size() > 3)
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+      thr(QLangErrorKind::Runtime,
                        "substr expects 2 or 3 args (str, start, [length])");
     if (args[0].type() != QLangValue::Type::String)
-      throw QLangError(QLangErrorKind::Type, 0, 0,
+      thr(QLangErrorKind::Type,
                        "substr: first argument must be a string");
     const std::string &s = args[0].asString();
     int64_t start = (long long)toInt64(args[1]);
@@ -688,10 +708,10 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     // slice(array, start, [length]) — 0-based start; length optional (defaults
     // to rest of array). Returns a new array.
     if (args.size() < 2 || args.size() > 3)
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+      thr(QLangErrorKind::Runtime,
                        "slice expects 2 or 3 args (array, start, [length])");
     if (args[0].type() != QLangValue::Type::Array)
-      throw QLangError(QLangErrorKind::Type, 0, 0,
+      thr(QLangErrorKind::Type,
                        "slice: first argument must be an array");
     const std::vector<QLangValue> &arr = args[0].asArray();
     int64_t start = (long long)toInt64(args[1]);
@@ -714,7 +734,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     // range(start, end) — inclusive on both ends; returns [start, start+1, ...,
     // end]. For start > end returns empty array.
     if (args.size() != 2)
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+      thr(QLangErrorKind::Runtime,
                        "range expects 2 args (start, end)");
     int64_t start = (long long)toInt64(args[0]);
     int64_t end = (long long)toInt64(args[1]);
@@ -730,10 +750,10 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     // join(separator, array) — concatenates array elements with separator.
     // Non-string elements are converted via valueToString.
     if (args.size() != 2)
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+      thr(QLangErrorKind::Runtime,
                        "join expects 2 args (separator, array)");
     if (args[1].type() != QLangValue::Type::Array)
-      throw QLangError(QLangErrorKind::Type, 0, 0,
+      thr(QLangErrorKind::Type,
                        "join: second argument must be an array");
     const std::string &sep = args[0].asString();
     const auto &elems = args[1].asArray();
@@ -749,7 +769,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     // scope (or current frame registers during execution), false (0) otherwise.
     need(1, "isset");
     if (args[0].type() != QLangValue::Type::String)
-      throw QLangError(QLangErrorKind::Type, 0, 0,
+      thr(QLangErrorKind::Type,
                        "isset: argument must be a string (variable name)");
     const std::string &name = args[0].asString();
     // Check scope first (for pre-seeded vars set before run()).
@@ -767,8 +787,8 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     need(2, "assert");
     // Validate args regardless of condition.
     if (args[1].type() != QLangValue::Type::String)
-      throw QLangError(QLangErrorKind::Type, line, col,
-                       "assert: second argument must be a string (error message)");
+      thr(QLangErrorKind::Type,
+          "assert: second argument must be a string (error message)");
     // Truthiness check (same logic as QLangVM::isTrue).
     bool truthy = false;
     const auto &arg0 = args[0];
@@ -781,13 +801,13 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     else
       truthy = true;
     if (!truthy)
-      throw QLangError(QLangErrorKind::Runtime, line, col, args[1].asString());
+      thr(QLangErrorKind::Runtime, args[1].asString());
     return QLangValue();
   }
   case Builtin::Next: {
     need(1, "next");
     if (args[0].type() != QLangValue::Type::Generator)
-      throw QLangError(QLangErrorKind::Type, 0, 0, "next expects a generator");
+      thr(QLangErrorKind::Type, "next expects a generator");
     auto &gen = const_cast<GeneratorValue &>(args[0].asGenerator());
     vm->trace(TRACE_FULL, "[DBG-NEXT] calling generator, about to invoke gen()\n");
     auto opt = gen();
@@ -810,7 +830,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
   case Builtin::GetMaxSteps:
     return QLangValue::Int(static_cast<int32_t>(scope.maxSteps()));
   }
-  throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown builtin");
+  thr(QLangErrorKind::Runtime, "unknown builtin");
 }
 
 } // namespace
@@ -818,6 +838,40 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
 QLangVM::QLangVM(const CompiledProgram &program, QLangContext &scope)
     : m_prog(program), m_scope(scope),
       m_registers(program.registerCount, QLangValue()) {}
+
+// Build the execution trace (innermost frame first) from the current frame
+// stack and throw a QLangError carrying it plus the resolved line/col and
+// the owning module name (SPEC # error reporting).
+void QLangVM::vmThrowAt(QLangErrorKind kind, int line, int col,
+                        const std::string &msg) const {
+  std::vector<QLangFrameRef> frames;
+  int l = line, c = col;
+  if (m_cur >= 0) {
+    for (int f = m_cur; f >= 0; f--) {
+      const Frame &fr = m_frames[static_cast<size_t>(f)];
+      const Function &fn =
+          m_prog.functions[static_cast<size_t>(fr.funcIndex)];
+      int fl = 0;
+      if (fr.pc < static_cast<int>(fn.instructions.size()))
+        fl = fn.instructions[static_cast<size_t>(fr.pc)].line;
+      frames.push_back(QLangFrameRef{fn.name, fl});
+    }
+    // Default to the innermost frame's resolved position (the failing
+    // instruction).
+    if (l == 0) {
+      l = frames.front().line;
+      const Function &fn =
+          m_prog.functions[static_cast<size_t>(m_frames[static_cast<size_t>(m_cur)].funcIndex)];
+      size_t pc = m_frames[static_cast<size_t>(m_cur)].pc;
+      if (pc < fn.instructions.size()) c = fn.instructions[pc].col;
+    }
+  }
+  throw QLangError(kind, l, c, msg, m_scope.moduleName(), std::move(frames));
+}
+
+void QLangVM::vmThrow(QLangErrorKind kind, const std::string &msg) const {
+  vmThrowAt(kind, 0, 0, msg);
+}
 
 bool QLangVM::isTrue(const QLangValue &v) {
   switch (v.type()) {
@@ -837,7 +891,7 @@ QLangValue QLangVM::callClosure(const QLangValue &closure, const std::vector<QLa
     return opt.value_or(QLangValue());
   }
   if (closure.type() != QLangValue::Type::Function)
-    throw QLangError(QLangErrorKind::Type, 0, 0, "attempt to call a non-function value");
+    vmThrow(QLangErrorKind::Type, "attempt to call a non-function value");
   return callFunction(closure.asFunction().funcIndex, args);
 }
 
@@ -951,7 +1005,7 @@ QLangValue QLangVM::doBinaryVm(Opcode op, const QLangValue &a, const QLangValue 
     default:         return QLangValue::Bool(c >= 0 ? 1 : 0);
     }
   }
-  return doBinary(op, a, b);
+  return doBinary(op, a, b, this);
 }
 
 // Convert a value to the target declared type. Numeric types truncate/wrap
@@ -991,7 +1045,8 @@ QLangValue convert(const QLangValue &v, QLangValue::Type type) {
 // Strict runtime cast: throws on invalid source→target combinations.
 // Used by OP_CAST for `cast<Type>(expr)` — distinct from OP_CONV which is
 // lenient for typed declarations.
-QLangValue strict_convert(const QLangValue &v, QLangValue::Type type) {
+QLangValue strict_convert(const QLangValue &v, QLangValue::Type type,
+                          QLangVM *vm = nullptr) {
   // Numeric targets: must be numeric source.
   if (type == QLangValue::Type::Bool || type == QLangValue::Type::Char ||
       type == QLangValue::Type::Byte || type == QLangValue::Type::Word ||
@@ -1001,9 +1056,9 @@ QLangValue strict_convert(const QLangValue &v, QLangValue::Type type) {
       type == QLangValue::Type::Float) {
     if (v.type() == QLangValue::Type::Array || v.type() == QLangValue::Type::Table ||
         v.type() == QLangValue::Type::Set || v.type() == QLangValue::Type::Blob) {
-      throw QLangError(QLangErrorKind::Type, 0, 0,
-                       std::string("cannot cast ") + v.typeName() + " to " +
-                       QLangValue(type).typeName());
+      vThrow(vm, QLangErrorKind::Type,
+             std::string("cannot cast ") + v.typeName() + " to " +
+             QLangValue(type).typeName());
     }
     int64_t n = (long long)toInt64(v);
     switch (type) {
@@ -1042,28 +1097,29 @@ QLangValue strict_convert(const QLangValue &v, QLangValue::Type type) {
     if (type == QLangValue::Type::Array && v.type() == QLangValue::Type::Set)
       return QLangValue::Array(v.asSet()); // cast<array>(set)
     if (type == QLangValue::Type::Set && v.type() == QLangValue::Type::Array)
-      return QLangValue::Set(toSetElements(v.asArray())); // cast<set>(array)
+      return QLangValue::Set(toSetElements(v.asArray(), vm)); // cast<set>(array)
     if (v.type() != QLangValue::Type::Array && v.type() != QLangValue::Type::Table &&
         v.type() != QLangValue::Type::Set) {
-      throw QLangError(QLangErrorKind::Type, 0, 0,
-                       std::string("cannot cast ") + v.typeName() + " to " +
-                       QLangValue(type).typeName());
+      vThrow(vm, QLangErrorKind::Type,
+             std::string("cannot cast ") + v.typeName() + " to " +
+             QLangValue(type).typeName());
     }
     return v;
   }
   return v;
 }
 
-QLangValue QLangVM::doUnary(Opcode op, const QLangValue &a) {
+QLangValue QLangVM::doUnary(Opcode op, const QLangValue &a, QLangVM *vm) {
+  auto thr = [&](QLangErrorKind k, const std::string &m) { vThrow(vm, k, m); };
   switch (op) {
   case Opcode::NEG:
-    return QLangValue::Int(static_cast<int32_t>(-num(a, "-")));
+    return QLangValue::Int(static_cast<int32_t>(-num(a, "-", vm)));
   case Opcode::NOT:
     return QLangValue::Bool(isTrue(a) ? 0 : 1);
   case Opcode::INC:
-    return QLangValue::Int(static_cast<int32_t>(num(a, "+") + 1));
+    return QLangValue::Int(static_cast<int32_t>(num(a, "+", vm) + 1));
   case Opcode::DEC:
-    return QLangValue::Int(static_cast<int32_t>(num(a, "-") - 1));
+    return QLangValue::Int(static_cast<int32_t>(num(a, "-", vm) - 1));
   case Opcode::EVALKEY: {
     // $ operator: evaluate identifier and stringify (scalar-to-string)
     // Per spec: reject arrays, tables, and classes (objects)
@@ -1073,7 +1129,7 @@ QLangValue QLangVM::doUnary(Opcode op, const QLangValue &a) {
     case QLangValue::Type::Object:
     case QLangValue::Type::Function:
     case QLangValue::Type::Generator:
-      throw QLangError(QLangErrorKind::Type, 0, 0,
+      thr(QLangErrorKind::Type,
                        std::string("operator '$' cannot stringify ") +
                          a.typeName() + " (collections and functions not supported)");
     default:
@@ -1081,20 +1137,22 @@ QLangValue QLangVM::doUnary(Opcode op, const QLangValue &a) {
     }
   }
   default:
-    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+    thr(QLangErrorKind::Runtime,
                      std::string("unary operation not implemented: ") +
                      Bytecode::name(op));
   }
 }
 
-QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b) {
+QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b,
+                             QLangVM *vm) {
+  auto thr = [&](QLangErrorKind k, const std::string &m) { vThrow(vm, k, m); };
   switch (op) {
   case Opcode::ADD:
     // Left-is-string rule: if the left operand is a string, concat both sides.
     if (a.type() == QLangValue::Type::String)
       return QLangValue::String(a.asString() + valueToString(b));
     if (b.type() == QLangValue::Type::String)
-      throw QLangError(QLangErrorKind::Type, 0, 0,
+      thr(QLangErrorKind::Type,
                        "operator '+' cannot mix numeric and string operands");
     if (a.type() == QLangValue::Type::Array &&
         b.type() == QLangValue::Type::Array) {
@@ -1107,42 +1165,42 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
     if (a.type() == QLangValue::Type::Float ||
         b.type() == QLangValue::Type::Float)
       return QLangValue::Float(toDouble(a) + toDouble(b));
-    return QLangValue::Int(static_cast<int32_t>(num(a, "+") + num(b, "+")));
+    return QLangValue::Int(static_cast<int32_t>(num(a, "+", vm) + num(b, "+", vm)));
   case Opcode::SUB:
     if (a.type() == QLangValue::Type::Float ||
         b.type() == QLangValue::Type::Float)
       return QLangValue::Float(toDouble(a) - toDouble(b));
-    return QLangValue::Int(static_cast<int32_t>(num(a, "-") - num(b, "-")));
+    return QLangValue::Int(static_cast<int32_t>(num(a, "-", vm) - num(b, "-", vm)));
   case Opcode::MUL:
     if (a.type() == QLangValue::Type::Float ||
         b.type() == QLangValue::Type::Float)
       return QLangValue::Float(toDouble(a) * toDouble(b));
-    return QLangValue::Int(static_cast<int32_t>(num(a, "*") * num(b, "*")));
+    return QLangValue::Int(static_cast<int32_t>(num(a, "*", vm) * num(b, "*", vm)));
   case Opcode::DIV: {
     if (a.type() == QLangValue::Type::Float ||
         b.type() == QLangValue::Type::Float) {
       double d = toDouble(b);
       if (d == 0.0)
-        throw QLangError(QLangErrorKind::Type, 0, 0, "division by zero");
+        thr(QLangErrorKind::Type, "division by zero");
       return QLangValue::Float(toDouble(a) / d);
     }
-    int64_t d = num(b, "/");
+    int64_t d = num(b, "/", vm);
     if (d == 0)
-      throw QLangError(QLangErrorKind::Type, 0, 0, "division by zero");
-    return QLangValue::Int(static_cast<int32_t>(num(a, "/") / d));
+      thr(QLangErrorKind::Type, "division by zero");
+    return QLangValue::Int(static_cast<int32_t>(num(a, "/", vm) / d));
   }
   case Opcode::MOD: {
     if (a.type() == QLangValue::Type::Float ||
         b.type() == QLangValue::Type::Float) {
       double d = toDouble(b);
       if (d == 0.0)
-        throw QLangError(QLangErrorKind::Type, 0, 0, "modulo by zero");
+        thr(QLangErrorKind::Type, "modulo by zero");
       return QLangValue::Float(std::fmod(toDouble(a), d));
     }
-    int64_t d = num(b, "%");
+    int64_t d = num(b, "%", vm);
     if (d == 0)
-      throw QLangError(QLangErrorKind::Type, 0, 0, "modulo by zero");
-    return QLangValue::Int(static_cast<int32_t>(num(a, "%") % d));
+      thr(QLangErrorKind::Type, "modulo by zero");
+    return QLangValue::Int(static_cast<int32_t>(num(a, "%", vm) % d));
   }
   case Opcode::POW: {
     // Exponential: pow(base, exp)
@@ -1150,8 +1208,8 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
         b.type() == QLangValue::Type::Float) {
       return QLangValue::Float(std::pow(toDouble(a), toDouble(b)));
     }
-    int64_t base = num(a, "**");
-    int64_t exp = num(b, "**");
+    int64_t base = num(a, "**", vm);
+    int64_t exp = num(b, "**", vm);
     if (exp < 0) {
       // Negative exponent with integer operands: return 0 (integer arithmetic)
       if (base == 1) return QLangValue::Int(1);
@@ -1164,15 +1222,15 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
     return QLangValue::Int(static_cast<int32_t>(result));
   }
   case Opcode::AND:
-    return QLangValue::Int(static_cast<int32_t>(num(a, "&") & num(b, "&")));
+    return QLangValue::Int(static_cast<int32_t>(num(a, "&", vm) & num(b, "&", vm)));
   case Opcode::OR:
-    return QLangValue::Int(static_cast<int32_t>(num(a, "|") | num(b, "|")));
+    return QLangValue::Int(static_cast<int32_t>(num(a, "|", vm) | num(b, "|", vm)));
   case Opcode::XOR:
-    return QLangValue::Int(static_cast<int32_t>(num(a, "^") ^ num(b, "^")));
+    return QLangValue::Int(static_cast<int32_t>(num(a, "^", vm) ^ num(b, "^", vm)));
   case Opcode::SHL:
-    return QLangValue::Int(static_cast<int32_t>(num(a, "<<") << num(b, "<<")));
+    return QLangValue::Int(static_cast<int32_t>(num(a, "<<", vm) << num(b, "<<", vm)));
   case Opcode::SHR:
-    return QLangValue::Int(static_cast<int32_t>(num(a, ">>") >> num(b, ">>")));
+    return QLangValue::Int(static_cast<int32_t>(num(a, ">>", vm) >> num(b, ">>", vm)));
   case Opcode::LAND:
     return QLangValue::Bool(isTrue(a) && isTrue(b) ? 1 : 0);
   case Opcode::LOR:
@@ -1208,12 +1266,12 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
       // same exact-match rule set dedup uses.
       return QLangValue::Bool(setContains(col.asSet(), a) ? 1 : 0);
     }
-    throw QLangError(QLangErrorKind::Type, 0, 0,
+    thr(QLangErrorKind::Type,
                      std::string("operator 'in' requires an array, table or set, got ") +
                          col.typeName());
   }
   default:
-    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+    thr(QLangErrorKind::Runtime,
                      std::string("binary operation not implemented: ") +
                      Bytecode::name(op));
   }
@@ -1288,7 +1346,7 @@ void QLangVM::run() {
     }
 
     if (++m_steps > m_scope.maxSteps())
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+      vmThrow(QLangErrorKind::Runtime,
                        "infinite loop (step limit)");
 
     const Instruction &i = instrs[frame.pc];
@@ -1312,18 +1370,18 @@ void QLangVM::run() {
     switch (op) {
     case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
     case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
-    case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::EVALKEY: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::EVALKEY: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
     case Opcode::CONV:
       frame.regs[i.a] = convert(frame.regs[i.b],
                                 static_cast<QLangValue::Type>(i.c));
       break;
     case Opcode::CAST:
       frame.regs[i.a] = strict_convert(frame.regs[i.b],
-                                       static_cast<QLangValue::Type>(i.c));
+                                       static_cast<QLangValue::Type>(i.c), this);
       break;
     case Opcode::DELETE:
       m_deleted.insert(i.a);
@@ -1331,12 +1389,12 @@ void QLangVM::run() {
     case Opcode::ARRGET: {
       QLangValue &base = frame.regs[i.b];
       if (base.type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot subscript non-array value");
       int64_t idx = (long long)toInt64(frame.regs[i.c]);
       const auto &elems = base.asArray();
       if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "array index out of range");
       frame.regs[i.a] = elems[static_cast<size_t>(idx)];
       break;
@@ -1344,26 +1402,26 @@ void QLangVM::run() {
     case Opcode::ARRPUT: {
       QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot subscript non-array value");
       int64_t idx = (long long)toInt64(frame.regs[i.b]);
       auto &elems = base.asArray();
       if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "array index out of range");
       elems[static_cast<size_t>(idx)] = frame.regs[i.c];
       break;
     }
     case Opcode::ARRAPP:
-      appendValue(frame.regs[i.a], frame.regs[i.b]);
+      appendValue(frame.regs[i.a], frame.regs[i.b], this);
       break;
     case Opcode::ARRAPPV: {
       QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot append to non-array value");
       if (frame.regs[i.b].type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot append non-array to array");
       auto &elems = base.asArray();
       const auto &extra = frame.regs[i.b].asArray();
@@ -1372,14 +1430,14 @@ void QLangVM::run() {
     }
     case Opcode::ARRLEN:
       frame.regs[i.a] =
-          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b], this)));
       break;
     case Opcode::LEN:
       frame.regs[i.a] =
-          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b], this)));
       break;
     case Opcode::SEQGET:
-      frame.regs[i.a] = seqGet(frame.regs[i.b], (long long)toInt64(frame.regs[i.c]));
+      frame.regs[i.a] = seqGet(frame.regs[i.b], (long long)toInt64(frame.regs[i.c]), this);
       break;
     case Opcode::TABGET: {
       QLangValue &base = frame.regs[i.b];
@@ -1390,7 +1448,7 @@ void QLangVM::run() {
         frame.regs[i.a] = ops->getField(base, key, m_scope);
       } else {
         // Fallback for types without ObjectOps (should not happen for tables/objects)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot access member of non-object value");
       }
       break;
@@ -1413,7 +1471,7 @@ void QLangVM::run() {
         ops->setField(base, key, frame.regs[i.c], m_scope);
       } else {
         // Fallback for types without ObjectOps (should not happen for tables/objects)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot assign member of non-object value");
       }
       break;
@@ -1429,7 +1487,7 @@ void QLangVM::run() {
         // Native (C++) function: index into compiledProgram.nativeFuncs.
         int idx = -1 - i.b;
         if (idx < 0 || idx >= static_cast<int>(m_prog.nativeFuncs.size()))
-          throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown native function");
+          vmThrow(QLangErrorKind::Runtime, "unknown native function");
         frame.regs[dest] = m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, args);
       } else {
         frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), args, m_scope, m_prog, m_deleted, i.line, i.col, this);
@@ -1469,7 +1527,7 @@ void QLangVM::run() {
         m_frames[m_cur].captures = cv.asFunction().captures;
         continue; // m_cur now points at the new frame; skip the trailing increment
       } else {
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "attempt to call a non-function value");
       }
       break;
@@ -1477,7 +1535,7 @@ void QLangVM::run() {
     case Opcode::MAKEFUNC: {
       const QLangValue &cv = consts[i.b];
       if (cv.type() != QLangValue::Type::Function)
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "invalid function constant");
       const Closure &spec = cv.asFunction();
       auto closure = std::make_shared<Closure>();
@@ -1495,7 +1553,7 @@ void QLangVM::run() {
     case Opcode::MAKEGEN: {
       const QLangValue &cv = consts[i.b];
       if (cv.type() != QLangValue::Type::Function)
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "invalid function constant for generator");
       const Closure &spec = cv.asFunction();
       auto gen = std::make_shared<GeneratorValue>();
@@ -1630,7 +1688,7 @@ void QLangVM::runFrames(int startFrame)
     }
 
     if (++m_steps > m_scope.maxSteps())
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+      vmThrow(QLangErrorKind::Runtime,
                        "infinite loop (step limit)");
 
     const Instruction &i = instrs[frame.pc];
@@ -1639,18 +1697,18 @@ void QLangVM::runFrames(int startFrame)
     switch (op) {
     case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
     case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
-    case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::EVALKEY: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::EVALKEY: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
     case Opcode::CONV:
       frame.regs[i.a] = convert(frame.regs[i.b],
                                 static_cast<QLangValue::Type>(i.c));
       break;
     case Opcode::CAST:
       frame.regs[i.a] = strict_convert(frame.regs[i.b],
-                                       static_cast<QLangValue::Type>(i.c));
+                                       static_cast<QLangValue::Type>(i.c), this);
       break;
     case Opcode::DELETE:
       m_deleted.insert(i.a);
@@ -1658,12 +1716,12 @@ void QLangVM::runFrames(int startFrame)
     case Opcode::ARRGET: {
       QLangValue &base = frame.regs[i.b];
       if (base.type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot subscript non-array value");
       int64_t idx = (long long)toInt64(frame.regs[i.c]);
       const auto &elems = base.asArray();
       if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "array index out of range");
       frame.regs[i.a] = elems[static_cast<size_t>(idx)];
       break;
@@ -1671,26 +1729,26 @@ void QLangVM::runFrames(int startFrame)
     case Opcode::ARRPUT: {
       QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot subscript non-array value");
       int64_t idx = (long long)toInt64(frame.regs[i.b]);
       auto &elems = base.asArray();
       if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "array index out of range");
       elems[static_cast<size_t>(idx)] = frame.regs[i.c];
       break;
     }
     case Opcode::ARRAPP:
-      appendValue(frame.regs[i.a], frame.regs[i.b]);
+      appendValue(frame.regs[i.a], frame.regs[i.b], this);
       break;
     case Opcode::ARRAPPV: {
       QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot append non-array to array");
       if (frame.regs[i.b].type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot append non-array to array");
       auto &elems = base.asArray();
       const auto &extra = frame.regs[i.b].asArray();
@@ -1699,14 +1757,14 @@ void QLangVM::runFrames(int startFrame)
     }
     case Opcode::ARRLEN:
       frame.regs[i.a] =
-          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b], this)));
       break;
     case Opcode::LEN:
       frame.regs[i.a] =
-          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b], this)));
       break;
     case Opcode::SEQGET:
-      frame.regs[i.a] = seqGet(frame.regs[i.b], (long long)toInt64(frame.regs[i.c]));
+      frame.regs[i.a] = seqGet(frame.regs[i.b], (long long)toInt64(frame.regs[i.c]), this);
       break;
     case Opcode::TABGET: {
       QLangValue &base = frame.regs[i.b];
@@ -1717,7 +1775,7 @@ void QLangVM::runFrames(int startFrame)
         frame.regs[i.a] = ops->getField(base, key, m_scope);
       } else {
         // Fallback for types without ObjectOps (should not happen for tables/objects)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot access member of non-object value");
       }
       break;
@@ -1740,7 +1798,7 @@ void QLangVM::runFrames(int startFrame)
         ops->setField(base, key, frame.regs[i.c], m_scope);
       } else {
         // Fallback for types without ObjectOps (should not happen for tables/objects)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot assign member of non-object value");
       }
       break;
@@ -1755,7 +1813,7 @@ void QLangVM::runFrames(int startFrame)
       if (i.b < 0) {
         int idx = -1 - i.b;
         if (idx < 0 || idx >= static_cast<int>(m_prog.nativeFuncs.size()))
-          throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown native function");
+          vmThrow(QLangErrorKind::Runtime, "unknown native function");
         frame.regs[dest] = m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, callArgs);
       } else {
         frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), callArgs, m_scope, m_prog, m_deleted, i.line, i.col, this);
@@ -1774,7 +1832,7 @@ void QLangVM::runFrames(int startFrame)
     case Opcode::CALLCLOS: {
       const QLangValue &cv = frame.regs[i.a];
       if (cv.type() != QLangValue::Type::Function)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "attempt to call a non-function value");
       frame.pc += 1;
       pushCall(cv.asFunction().funcIndex, frame.regs, i.a, i.c);
@@ -1784,7 +1842,7 @@ void QLangVM::runFrames(int startFrame)
     case Opcode::MAKEFUNC: {
       const QLangValue &cv = consts[i.b];
       if (cv.type() != QLangValue::Type::Function)
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "invalid function constant");
       const Closure &spec = cv.asFunction();
       auto closure = std::make_shared<Closure>();
@@ -1801,7 +1859,7 @@ void QLangVM::runFrames(int startFrame)
     case Opcode::MAKEGEN: {
       const QLangValue &cv = consts[i.b];
       if (cv.type() != QLangValue::Type::Function)
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "invalid function constant for generator");
       const Closure &spec = cv.asFunction();
       auto gen = std::make_shared<GeneratorValue>();
@@ -1914,7 +1972,7 @@ void QLangVM::runFrames(int startFrame)
 QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &args)
 {
   if (funcIndex < 0 || funcIndex >= static_cast<int>(m_prog.functions.size()))
-    throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown function");
+    vmThrow(QLangErrorKind::Runtime, "unknown function");
 
   const Function &fn = m_prog.functions[funcIndex];
 
@@ -2000,7 +2058,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       }
 
       if (++m_steps > m_scope.maxSteps())
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "infinite loop (step limit)");
 
       const Instruction &i = instrs[frame.pc];
@@ -2011,18 +2069,18 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       switch (op) {
       case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
       case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
-      case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-      case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-      case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-      case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::EVALKEY: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+      case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+      case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+      case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+      case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::EVALKEY: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
       case Opcode::CONV:
         frame.regs[i.a] = convert(frame.regs[i.b],
                                   static_cast<QLangValue::Type>(i.c));
         break;
       case Opcode::CAST:
         frame.regs[i.a] = strict_convert(frame.regs[i.b],
-                                         static_cast<QLangValue::Type>(i.c));
+                                       static_cast<QLangValue::Type>(i.c), this);
         break;
       case Opcode::DELETE:
         m_deleted.insert(i.a);
@@ -2030,12 +2088,12 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       case Opcode::ARRGET: {
         QLangValue &base = frame.regs[i.b];
         if (base.type() != QLangValue::Type::Array)
-          throw QLangError(QLangErrorKind::Type, 0, 0,
+          vmThrow(QLangErrorKind::Type,
                            "cannot subscript non-array value");
         int64_t idx = (long long)toInt64(frame.regs[i.c]);
         const auto &elems = base.asArray();
         if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
-          throw QLangError(QLangErrorKind::Runtime, 0, 0,
+          vmThrow(QLangErrorKind::Runtime,
                            "array index out of range");
         frame.regs[i.a] = elems[static_cast<size_t>(idx)];
         break;
@@ -2043,26 +2101,26 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       case Opcode::ARRPUT: {
         QLangValue &base = frame.regs[i.a];
         if (base.type() != QLangValue::Type::Array)
-          throw QLangError(QLangErrorKind::Type, 0, 0,
+          vmThrow(QLangErrorKind::Type,
                            "cannot subscript non-array value");
         int64_t idx = (long long)toInt64(frame.regs[i.b]);
         auto &elems = base.asArray();
         if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
-          throw QLangError(QLangErrorKind::Runtime, 0, 0,
+          vmThrow(QLangErrorKind::Runtime,
                            "array index out of range");
         elems[static_cast<size_t>(idx)] = frame.regs[i.c];
         break;
       }
       case Opcode::ARRAPP:
-        appendValue(frame.regs[i.a], frame.regs[i.b]);
+        appendValue(frame.regs[i.a], frame.regs[i.b], this);
         break;
       case Opcode::ARRAPPV: {
         QLangValue &base = frame.regs[i.a];
         if (base.type() != QLangValue::Type::Array)
-          throw QLangError(QLangErrorKind::Type, 0, 0,
+          vmThrow(QLangErrorKind::Type,
                            "cannot append non-array to array");
         if (frame.regs[i.b].type() != QLangValue::Type::Array)
-          throw QLangError(QLangErrorKind::Type, 0, 0,
+          vmThrow(QLangErrorKind::Type,
                            "cannot append non-array to array");
         auto &elems = base.asArray();
         const auto &extra = frame.regs[i.b].asArray();
@@ -2071,14 +2129,14 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       }
       case Opcode::ARRLEN:
         frame.regs[i.a] =
-            QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+            QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b], this)));
         break;
       case Opcode::LEN:
         frame.regs[i.a] =
-            QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+            QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b], this)));
         break;
       case Opcode::SEQGET:
-        frame.regs[i.a] = seqGet(frame.regs[i.b], (long long)toInt64(frame.regs[i.c]));
+        frame.regs[i.a] = seqGet(frame.regs[i.b], (long long)toInt64(frame.regs[i.c]), this);
         break;
       case Opcode::TABGET: {
         QLangValue &base = frame.regs[i.b];
@@ -2089,7 +2147,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
           frame.regs[i.a] = ops->getField(base, key, m_scope);
         } else {
           // Fallback for types without ObjectOps (should not happen for tables/objects)
-          throw QLangError(QLangErrorKind::Type, 0, 0,
+          vmThrow(QLangErrorKind::Type,
                            "cannot access member of non-object value");
         }
         break;
@@ -2109,7 +2167,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
           ops->setField(base, key, frame.regs[i.c], m_scope);
         } else {
           // Fallback for types without ObjectOps (should not happen for tables/objects)
-          throw QLangError(QLangErrorKind::Type, 0, 0,
+          vmThrow(QLangErrorKind::Type,
                            "cannot assign member of non-object value");
         }
         break;
@@ -2124,7 +2182,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         if (i.b < 0) {
           int idx = -1 - i.b;
           if (idx < 0 || idx >= static_cast<int>(m_prog.nativeFuncs.size()))
-            throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown native function");
+            vmThrow(QLangErrorKind::Runtime, "unknown native function");
           frame.regs[dest] = m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, callArgs);
         } else {
           QLangValue result = callBuiltin(static_cast<Builtin>(i.b), callArgs, m_scope, m_prog, m_deleted, i.line, i.col, this);
@@ -2157,7 +2215,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
           m_frames[m_cur].captures = cv.asFunction().captures;
           continue;
         } else {
-          throw QLangError(QLangErrorKind::Type, 0, 0,
+          vmThrow(QLangErrorKind::Type,
                            "attempt to call a non-function value");
         }
         break;
@@ -2165,7 +2223,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       case Opcode::MAKEFUNC: {
         const QLangValue &cv = consts[i.b];
         if (cv.type() != QLangValue::Type::Function)
-          throw QLangError(QLangErrorKind::Runtime, 0, 0,
+          vmThrow(QLangErrorKind::Runtime,
                            "invalid function constant");
         const Closure &spec = cv.asFunction();
         auto closure = std::make_shared<Closure>();
@@ -2339,7 +2397,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     }
 
     if (++m_steps > m_scope.maxSteps())
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+      vmThrow(QLangErrorKind::Runtime,
                        "infinite loop (step limit)");
 
     const Instruction &i = instrs[frame.pc];
@@ -2348,18 +2406,18 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     switch (op) {
     case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
     case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
-    case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
-    case Opcode::EVALKEY: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b]); break;
+    case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::INC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::DEC: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
+    case Opcode::EVALKEY: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
     case Opcode::CONV:
       frame.regs[i.a] = convert(frame.regs[i.b],
                                 static_cast<QLangValue::Type>(i.c));
       break;
     case Opcode::CAST:
       frame.regs[i.a] = strict_convert(frame.regs[i.b],
-                                       static_cast<QLangValue::Type>(i.c));
+                                       static_cast<QLangValue::Type>(i.c), this);
       break;
     case Opcode::DELETE:
       m_deleted.insert(i.a);
@@ -2367,12 +2425,12 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     case Opcode::ARRGET: {
       QLangValue &base = frame.regs[i.b];
       if (base.type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot subscript non-array value");
       int64_t idx = (long long)toInt64(frame.regs[i.c]);
       const auto &elems = base.asArray();
       if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "array index out of range");
       frame.regs[i.a] = elems[static_cast<size_t>(idx)];
       break;
@@ -2380,26 +2438,26 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     case Opcode::ARRPUT: {
       QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot subscript non-array value");
       int64_t idx = (long long)toInt64(frame.regs[i.b]);
       auto &elems = base.asArray();
       if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "array index out of range");
       elems[static_cast<size_t>(idx)] = frame.regs[i.c];
       break;
     }
     case Opcode::ARRAPP:
-      appendValue(frame.regs[i.a], frame.regs[i.b]);
+      appendValue(frame.regs[i.a], frame.regs[i.b], this);
       break;
     case Opcode::ARRAPPV: {
       QLangValue &base = frame.regs[i.a];
       if (base.type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot append non-array to array");
       if (frame.regs[i.b].type() != QLangValue::Type::Array)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot append non-array to array");
       auto &elems = base.asArray();
       const auto &extra = frame.regs[i.b].asArray();
@@ -2408,14 +2466,14 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     }
     case Opcode::ARRLEN:
       frame.regs[i.a] =
-          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b], this)));
       break;
     case Opcode::LEN:
       frame.regs[i.a] =
-          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b])));
+          QLangValue::Int(static_cast<int32_t>(lenOf(frame.regs[i.b], this)));
       break;
     case Opcode::SEQGET:
-      frame.regs[i.a] = seqGet(frame.regs[i.b], (long long)toInt64(frame.regs[i.c]));
+      frame.regs[i.a] = seqGet(frame.regs[i.b], (long long)toInt64(frame.regs[i.c]), this);
       break;
     case Opcode::TABGET: {
       QLangValue &base = frame.regs[i.b];
@@ -2426,7 +2484,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         frame.regs[i.a] = ops->getField(base, key, m_scope);
       } else {
         // Fallback for types without ObjectOps (should not happen for tables/objects)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot access member of non-object value");
       }
       break;
@@ -2448,7 +2506,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         ops->setField(base, key, frame.regs[i.c], m_scope);
       } else {
         // Fallback for types without ObjectOps (should not happen for tables/objects)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "cannot assign member of non-object value");
       }
       break;
@@ -2463,7 +2521,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       if (i.b < 0) {
         int idx = -1 - i.b;
         if (idx < 0 || idx >= static_cast<int>(m_prog.nativeFuncs.size()))
-          throw QLangError(QLangErrorKind::Runtime, 0, 0, "unknown native function");
+          vmThrow(QLangErrorKind::Runtime, "unknown native function");
         frame.regs[dest] = m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, callArgs);
       } else {
         frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), callArgs, m_scope, m_prog, m_deleted, i.line, i.col, this);
@@ -2492,7 +2550,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         m_frames[m_cur].captures = cv.asFunction().captures;
         continue;
       } else {
-        throw QLangError(QLangErrorKind::Type, 0, 0,
+        vmThrow(QLangErrorKind::Type,
                          "attempt to call a non-function value");
       }
       break;
@@ -2500,7 +2558,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     case Opcode::MAKEFUNC: {
       const QLangValue &cv = consts[i.b];
       if (cv.type() != QLangValue::Type::Function)
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "invalid function constant");
       const Closure &spec = cv.asFunction();
       auto closure = std::make_shared<Closure>();
@@ -2517,7 +2575,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     case Opcode::MAKEGEN: {
       const QLangValue &cv = consts[i.b];
       if (cv.type() != QLangValue::Type::Function)
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+        vmThrow(QLangErrorKind::Runtime,
                          "invalid function constant for generator");
       const Closure &spec = cv.asFunction();
       auto gen = std::make_shared<GeneratorValue>();

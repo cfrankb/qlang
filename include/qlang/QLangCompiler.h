@@ -225,6 +225,11 @@ private:
   std::vector<int> m_breakJmps; // instruction indices of unpatched break JMPs
   std::unordered_map<std::string, int> m_labels; // label name -> instruction index (per-scope)
   int m_nextReg = 0;
+  // Source position of the statement currently being compiled; stamped into
+  // every instruction by emit() so runtime errors report line/col (SPEC #
+  // error reporting).
+  int m_curLine = 0;
+  int m_curCol = 0;
   // True when compiling inside a function body (global keyword is only valid there).
   bool m_inFunction = false;
   // Static-member compile context: static field + method names of the class

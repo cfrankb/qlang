@@ -162,6 +162,11 @@ int QLangCompiler::emitConst(const QLangValue &value) {
 
 void QLangCompiler::emit(Opcode op, int a, int b, int c) {
   m_code.add(op, a, b, c);
+  // Stamp the current source position into the instruction so the VM can
+  // resolve pc -> line/col at throw time (SPEC # error reporting).
+  Instruction &inst = m_code.at(m_code.size() - 1);
+  inst.line = m_curLine;
+  inst.col = m_curCol;
 }
 
 CompiledProgram QLangCompiler::compile() {
@@ -490,6 +495,10 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
                                 std::vector<std::string> *captures) {
   if (!s)
     return;
+  // Track the statement's source position for emit() stamping (SPEC #
+  // error reporting).
+  m_curLine = s->line;
+  m_curCol = s->col;
   switch (s->kind) {
   case StmtKind::Declaration: {
     int r = declareVar(s->name, true);

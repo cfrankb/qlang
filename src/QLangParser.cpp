@@ -94,6 +94,16 @@ std::vector<StmtPtr> QLangParser::parseProgram() {
 }
 
 StmtPtr QLangParser::parseStatement() {
+  // Stamp the statement's first-token position so the compiler can carry it
+  // into the emitted instructions (SPEC # error reporting).
+  const Token &t = current();
+  StmtPtr s = parseStatementImpl();
+  s->line = t.line;
+  s->col = t.col;
+  return s;
+}
+
+StmtPtr QLangParser::parseStatementImpl() {
   if (check(TokenType::Local) || check(TokenType::Let)) {
     if (peek(1).type == TokenType::Enum) return parseEnum();
     return parseDeclaration();

@@ -130,6 +130,12 @@ using StmtPtr = std::shared_ptr<Stmt>;
 // Base statement node.
 struct Stmt {
   StmtKind kind;
+  // Source position of the statement's first token (1-based), stamped by
+  // the parser. The compiler carries it into every instruction it emits for
+  // the statement, so runtime errors can report line/col (SPEC # error
+  // reporting).
+  int line = 0;
+  int col = 0;
 
   // Declaration: local name[:type] = value
   std::string name;
@@ -259,6 +265,7 @@ public:
 
 private:
   StmtPtr parseStatement();
+  StmtPtr parseStatementImpl();
   StmtPtr parseDeclaration();
   StmtPtr parseConst();
   StmtPtr parseDelete();

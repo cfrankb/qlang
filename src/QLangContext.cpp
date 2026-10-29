@@ -89,6 +89,7 @@ namespace {
 
   void QLangContext::run(const std::string &source)
   {
+    try {
     // Pipeline: source -> AST -> bytecode -> execute.
     std::vector<StmtPtr> program = parse(source);
     QLangCompiler compiler(std::move(program), this);
@@ -130,6 +131,12 @@ namespace {
     m_pimpl->livePrograms.push_back(std::move(live));
     QLangVM vm(m_pimpl->compiled.value(), *this);
     vm.run();
+    } catch (const QLangError &e) {
+      // Attach the full report (module + line/col + innermost function +
+      // frame chain) so callers see one formatted message (SPEC # error
+      // reporting).
+      throw QLangError::report(e);
+    }
   }
 
   bool QLangContext::has(const std::string &name) const

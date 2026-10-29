@@ -1,4 +1,5 @@
 // Extended empirical spec-coverage check: gaps + changed-status items.
+#include <initializer_list>
 #include <iostream>
 #include <string>
 #include "qlang/QLangContext.h"
@@ -38,11 +39,36 @@ static void expectStrImpl(const std::string &name, const std::string &src,
     else { std::cout << "[FAIL] str:  [L" << line << "] " << name << " (" << var << "=\""<< got << "\" exp \""<< expect << ")\n"; fails++; }
   } catch (const QLangError &e) { std::cout << "[FAIL] str:  [L" << line << "] " << name << " -> " << e.what() << "\n"; fails++; }
 }
+// Assert that running `src` throws a QLangError whose what() contains every
+// given substring (SPEC # error reporting: line numbers, function names,
+// module, frame chain).
+static void expectMsgImpl(const std::string &name, const std::string &src,
+                          std::initializer_list<const char *> substrs, int line) {
+  QLangContext ctx;
+  std::string msg;
+  try { ctx.run(src); }
+  catch (const QLangError &e) { msg = e.what(); }
+  if (msg.empty()) {
+    std::cout << "[FAIL] msg:  [L" << line << "] " << name << " (no error)\n";
+    fails++;
+    return;
+  }
+  for (const char *s : substrs)
+    if (msg.find(s) == std::string::npos) {
+      std::cout << "[FAIL] msg:  [L" << line << "] " << name << " missing '" << s
+                << "' in: " << msg << "\n";
+      fails++;
+      return;
+    }
+  std::cout << "[PASS] msg:  [L" << line << "] " << name << "\n";
+  passes++;
+}
 // Macros so __LINE__ expands at the CALL site (a default arg would expand at the definition).
 #define expectRun(name, src)        expectRunImpl(name, src, __LINE__)
 #define expectThrow(name, src)      expectThrowImpl(name, src, __LINE__)
 #define expectVal(name, src, var, expect)  expectValImpl(name, src, var, expect, __LINE__)
 #define expectStr(name, src, var, expect)  expectStrImpl(name, src, var, expect, __LINE__)
+#define expectMsg(name, src, ...)   expectMsgImpl(name, src, {__VA_ARGS__}, __LINE__)
 
 int main() {
   // -- const (spec 53-58, 119-120) --
@@ -804,6 +830,40 @@ int main() {
   expectThrow("enum block scope not visible outside", "if true { local enum E { A } } local x = E::A;");
   expectVal("enum global visible in function", "enum Color { Red, Green, Blue } def pick() return Color::Blue; end local r = pick();", "r", 2);
   expectThrow("enum member not assignable", "enum Animal { Dog } Animal.Dog = 5;");
+
+  // -- error reporting (SPEC # error reporting) --
+  // Lex error carries the offending line/col.
+  expectMsg("lex error has line",
+            "local a = \"unterminated",
+            "lex error", "line 1");
+  // Parse error points at the offending line.
+  expectMsg("parse error has line",
+            "local a = 1\nlocal b = 2\nlocal c = (1 + 2",
+            "parse error", "line 3");
+  // Runtime type error: module + line + kind + message.
+  expectMsg("type error has module and line",
+            "local a = 1\nlocal b = 2\nlocal c = a + \"x\"",
+            "module 'main'", "line 3", "type error", "operator '+'");
+  // Builtin argument-count error: line/col of the call + main frame.
+  expectMsg("builtin arity error has line and frame",
+            "local a = 1\nlocal n = len()",
+            "module 'main'", "line 2", "in function 'main'", "at line 2 in main");
+  // Function name in the header and in the trace.
+  expectMsg("error in named function",
+            "def foo()\n  local x = 1 + \"a\"\nend\nfoo()",
+            "in function 'foo'", "at line 2 in foo", "at line 4 in main");
+  // Deep call chain: one trace line per frame, innermost first.
+  // (defs in dependency order — QLang does not hoist functions)
+  expectMsg("deep call chain trace",
+            "def c()\n  local x = 1 / 0\nend\n" 
+            "def b()\n  c()\nend\n" 
+            "def a()\n  b()\nend\n" 
+            "a()",
+            "in function 'c'",
+            "at line 2 in c",
+            "at line 5 in b",
+            "at line 8 in a",
+            "at line 10 in main");
 
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;

@@ -8,6 +8,7 @@
 
 #include "QLangBytecode.h"
 #include "QLangCompiler.h"
+#include "QLangErrors.h"
 #include "QLangValue.h"
 
 namespace qlang {
@@ -35,6 +36,13 @@ public:
   // Number of registers allocated (for debugging / assertions).
   int registerCount() const { return static_cast<int>(m_registers.size()); }
 
+  // Throw a QLangError carrying the current pc's line/col, the owning module
+  // name, and the full frame chain (innermost first) — SPEC # error
+  // reporting. Every VM throw site goes through one of these two.
+  [[noreturn]] void vmThrow(QLangErrorKind kind, const std::string &msg) const;
+  [[noreturn]] void vmThrowAt(QLangErrorKind kind, int line, int col,
+                              const std::string &msg) const;
+
 private:
   // One activation frame. `regs` is the frame's register file; `captures` is
   // this function's explicit capture table (pointers into enclosing frames);
@@ -54,8 +62,12 @@ private:
   };
 
   static bool isTrue(const QLangValue &v);
-  static QLangValue doBinary(Opcode op, const QLangValue &a, const QLangValue &b);
-  static QLangValue doUnary(Opcode op, const QLangValue &a);
+  // `vm` (optional) lets the operand checks attach pc -> line/col + the frame
+  // chain to the thrown error (SPEC # error reporting); null falls back to a
+  // plain 0,0 error.
+  static QLangValue doBinary(Opcode op, const QLangValue &a, const QLangValue &b,
+                             QLangVM *vm = nullptr);
+  static QLangValue doUnary(Opcode op, const QLangValue &a, QLangVM *vm = nullptr);
 
   // Call a closure value (Function type) with the given arguments.
   // Extracts the funcIndex from the closure and invokes callFunction.
