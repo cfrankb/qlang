@@ -227,6 +227,9 @@ namespace
     case Opcode::MOV:
       ss << rn(ins.a) << " = " << rn(ins.b);
       break;
+    case Opcode::MOVI:
+      ss << rn(ins.a) << " = " << ins.i32;
+      break;
     case Opcode::CONV:
       ss << rn(ins.a) << " = convert(" << rn(ins.b) << ", " << type(ins.c) << ")";
       break;
@@ -453,6 +456,14 @@ namespace
     const int m = operandMask(ins.op);
     if (m & 1)
       add(ins.a);
+    if (ins.op == Opcode::MOVI)
+    {
+      // 32-bit literal: decimal + 'i' (the b/c halves are its raw encoding).
+      if (!s.empty())
+        s += ", ";
+      s += std::to_string(ins.i32) + "i";
+      return s;
+    }
     if (m & 2)
       add(ins.b);
     if (m & 4)

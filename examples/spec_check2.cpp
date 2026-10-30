@@ -865,6 +865,36 @@ int main() {
             "at line 8 in a",
             "at line 10 in main");
 
+  // -- MOVI (SPEC §bytecodes: new opcode MOVI) --
+  // Int literals load via MOVI (no pool slot); values must run correctly.
+  expectVal("movi: zero", "local x = 0;", "x", 0);
+  expectVal("movi: one", "local x = 1;", "x", 1);
+  expectVal("movi: negative one", "local x = -1;", "x", -1);
+  expectVal("movi: int32 max", "local x = 2147483647;", "x", 2147483647);
+  expectVal("movi: int32 min (unary neg)", "local x = -2147483648;", "x",
+            -2147483648);
+  // Type-fidelity guard: `true` is Bool (not Int) and must stay in the pool.
+  expectStr("movi: bool literal stays bool", "local b = true; local t = type(b);",
+            "t", "bool");
+  // 64-bit literals are Qword (not Int) and stay in the pool.
+  expectStr("movi: 64-bit literal stays qword",
+            "local q = 9223372036854775807; local t = type(q);", "t", "qword");
+  // Int literal inside a loop (VM dispatch in the loop paths).
+  expectVal("movi: literal in loop",
+            "local s = 0\nfor x = 1 to 10 { s = s + 3 }",
+            "s", 30);
+  // Int literal inside a generator (generator dispatch path).
+  expectVal("movi: literal in generator",
+            "def g() { yield 5; yield 7 }\n"
+            "local gen = g()\nlocal a = gen()\nlocal b = gen()\n"
+            "local s = a + b;",
+            "s", 12);
+  // Typed declaration: MOVI into the target register + in-place CONV.
+  expectVal("movi: typed byte decl", "local a:byte = 0;", "a", 0);
+  expectVal("movi: typed short decl", "local a:short = -5;", "a", -5);
+  // Plain assignment of an Int literal (not just declarations).
+  expectVal("movi: plain assignment", "local a = 9\na = 42;", "a", 42);
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

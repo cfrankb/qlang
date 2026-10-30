@@ -27,7 +27,8 @@ would alias the same storage).
 12 bytes, alignment 4, no padding. Rule: any opcode that needs a 32-bit
 parameter uses `i32`; all others use `a`/`b`/`c` as `int16_t`. The single
 source of truth is `usesI32(Opcode)` in `QLangBytecode.h`. Current `i32`
-users: `JMP`, `JMPIFFALSE`, `JMPIFTRUE`, `CONTINUE`, `BREAK` (pc targets).
+users: `JMP`, `JMPIFFALSE`, `JMPIFTRUE`, `CONTINUE`, `BREAK` (pc targets),
+and `MOVI` (32-bit integer literal; destination register in `a`).
 
 Conventions:
 
@@ -77,12 +78,16 @@ Conventions:
 | REFLOAD | dest reg | capture table index | — | | |
 | REFSTORE | value reg | capture table index | — | | |
 | YIELD | generator value reg | yield value reg | generator reg | | |
+| MOVI | dest reg | — | — | int32 literal | `r[a] = Int(i32)`; Type::Int only |
 
 ## new opcode: MOVI
 
-**this information preliminary and subject to changes**
-
-DO NOT IMPLEMENT YET
+**Implemented (Round 30, 2026-10-29):** `Opcode::MOVI` appended last in the
+enum (existing `.qlc` opcode numbers unchanged), `usesI32()` covers it, the
+VM dispatches it in all four exec loops, the compiler emits it for `Type::Int
+` literals (expressions, `local` declarations, plain assignments — the
+latter two inlined into the target register, saving the temp + `mov`), and
+the `.qlc` writer emits format version 2 (readers accept ≤ 2).
 
 if the constant fits in a 4 bytes (32bits) integer, it should be encoded as `movi` (immediate) thus not requiring extra storage in the constant pool.  otherwise,  the opcode will be `movc` (CONST), the  constant is stored in the constant pool and the index is stored in the bytecode (current behavior)
 

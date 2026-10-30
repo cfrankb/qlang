@@ -117,6 +117,10 @@ private:
   int emitConst(const QLangValue &value);
 
   void emit(Opcode op, int a, int b = 0, int c = 0);
+  // Emit an instruction with a 32-bit immediate in the i32 slot (MOVI).
+  // Separate from emit(): a 3-arg emit() overload would be ambiguous with
+  // the defaulted b/c parameters.
+  void emitImm(Opcode op, int a, int32_t imm);
   void compileStmt(const StmtPtr &s,
                    std::vector<std::string> *captures = nullptr);
   void compileExpr(const ExprPtr &e, int dest);

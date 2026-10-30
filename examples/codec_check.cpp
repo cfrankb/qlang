@@ -239,6 +239,94 @@ static void testProgram() {
 }
 
 // ---------------------------------------------------------------------------
+// MOVI: Int literals must compile to MOVI (immediate in i32, no pool slot);
+// everything else stays in the pool. The v2 format round-trips MOVI
+// instruction-for-instruction (testProgram's memcmp covers the encoding).
+// ---------------------------------------------------------------------------
+static CompiledProgram compileSrc(const char *src) {
+  QLangContext ctx;
+  auto program = ctx.parse(src);
+  QLangCompiler compiler(std::move(program), &ctx);
+  return compiler.compile();
+}
+
+static bool hasMovi(const Function &fn, int32_t imm) {
+  for (const auto &i : fn.instructions)
+    if (i.op == Opcode::MOVI && i.i32 == imm)
+      return true;
+  return false;
+}
+
+static bool poolHasInt(const Function &fn, int32_t v) {
+  for (const auto &c : fn.constants)
+    if (c.type() == QLangValue::Type::Int && c.asInt() == v)
+      return true;
+  return false;
+}
+
+static void testMovi() {
+  try {
+    // Int literal -> MOVI, no Int(42) pool slot (the pool shrinks).
+    CompiledProgram p = compileSrc("local x = 42\n");
+    check(hasMovi(p.functions[0], 42), "movi: int literal emits MOVI");
+    check(!poolHasInt(p.functions[0], 42), "movi: no Int pool slot");
+
+    // Bool literal -> stays in the pool as Bool, no MOVI.
+    CompiledProgram pb = compileSrc("local b = true\n");
+    bool noMovi = true;
+    bool poolHasBool = false;
+    for (const auto &i : pb.functions[0].instructions)
+      if (i.op == Opcode::MOVI)
+        noMovi = false;
+    for (const auto &c : pb.functions[0].constants)
+      if (c.type() == QLangValue::Type::Bool && c.asInt() == 1)
+        poolHasBool = true;
+    check(noMovi, "movi: bool literal not MOVI");
+    check(poolHasBool, "movi: bool literal in pool");
+
+    // Typed decl: MOVI into the target register + in-place CONV.
+    CompiledProgram pt = compileSrc("local a:byte = 0\n");
+    check(hasMovi(pt.functions[0], 0), "movi: typed decl emits MOVI");
+
+    // 64-bit literal (Qword) -> pool, no MOVI.
+    CompiledProgram pq = compileSrc("local q = 9223372036854775807\n");
+    bool qNoMovi = true;
+    for (const auto &i : pq.functions[0].instructions)
+      if (i.op == Opcode::MOVI)
+        qNoMovi = false;
+    check(qNoMovi, "movi: 64-bit literal not MOVI");
+
+    // .qlc written at format version 2; a v1 reader (version <= 1 check)
+    // would reject it, a v2 reader accepts it.
+    std::ostringstream os(std::ios::binary);
+    check(writeQlc(os, p, {}), "movi: writeQlc (v2)");
+    std::string bytes = os.str();
+    uint32_t version = 0;
+    std::memcpy(&version, bytes.data() + 4, 4);
+    check(version == 2, "movi: format version 2");
+    CompiledProgram back;
+    std::vector<std::pair<int, std::string>> slots;
+    std::string err;
+    std::istringstream is(bytes, std::ios::binary);
+    check(readQlc(is, back, slots, err), std::string("movi: readQlc v2 (") + err + ")");
+    if (err.empty()) {
+      bool same = back.functions.size() == p.functions.size();
+      if (same) {
+        const auto &a = p.functions[0];
+        const auto &b = back.functions[0];
+        same = a.instructions.size() == b.instructions.size();
+        for (size_t j = 0; same && j < a.instructions.size(); j++)
+          same = std::memcmp(&a.instructions[j], &b.instructions[j],
+                             sizeof(Instruction)) == 0;
+      }
+      check(same, "movi: round-trip instruction equality");
+    }
+  } catch (const QLangError &e) {
+    check(false, std::string("movi: " ) + e.what());
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Malformed-input suite: each case must fail cleanly, leave the out-params
 // untouched, and say why.
 // ---------------------------------------------------------------------------
@@ -318,7 +406,7 @@ static void testMalformed() {
   rejects("malformed: bad magic", badMagic);
 
   std::string badVersion = minimalFile();
-  badVersion[4] = 2;
+  badVersion[4] = 3; // v2 is the current format; v3 must be rejected
   rejects("malformed: unsupported version", badVersion);
 
   rejects("malformed: truncated", minimalFile().substr(0, 10));
@@ -441,6 +529,7 @@ static void testMalformed() {
 int main() {
   testValues();
   testProgram();
+  testMovi();
   testMalformed();
   std::cout << (fails == 0 ? "all codec checks passed\n"
                            : "codec checks FAILED\n");

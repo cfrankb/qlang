@@ -429,6 +429,25 @@ void QLangCompiler::emit(Opcode op, int a, int b, int c) {
   inst.col = m_curCol;
 }
 
+void QLangCompiler::emitImm(Opcode op, int a, int32_t imm) {
+  Instruction inst;
+  inst.op = op;
+  inst.a = static_cast<int16_t>(a);
+  inst.i32 = imm; // 32-bit literal (MOVI); b/c are don't-cares
+  m_code.add(inst);
+  Instruction &last = m_code.at(m_code.size() - 1);
+  last.line = m_curLine;
+  last.col = m_curCol;
+}
+
+// True when e is a Type::Int literal: the only literals eligible for MOVI
+// (the value tag must match the constant-pool path — a `true` literal is
+// Bool, not Int, and 64-bit literals are Qword/Long, not Int).
+static bool isIntLiteral(const ExprPtr &e) {
+  return e && e->kind == ExprKind::Literal &&
+         e->literal.type() == QLangValue::Type::Int;
+}
+
 CompiledProgram QLangCompiler::compile() {
   // Compile the top-level program into the main (scratch) function context.
   for (auto &s : m_program)
@@ -804,19 +823,24 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
   switch (s->kind) {
   case StmtKind::Declaration: {
     int r = declareVar(s->name, true);
-    int t = tmpRegister();
-    if (s->value)
-      compileExpr(s->value, t);
-    else
+    if (isIntLiteral(s->value)) {
+      // `local a = 0` -> one MOVI into the target register (SPEC
+      // §bytecodes: MOVI) instead of MOV tmp + MOV.
+      emitImm(Opcode::MOVI, r, s->value->literal.asInt());
+    } else if (!s->value) {
       // `local z` -> implicit int, default 0 (SPEC §declarations).
       // A typed valueless decl (`local b:byte`) gets zero of that type via
       // the CONV emitted below.
-      emit(Opcode::CONST, t, emitConst(QLangValue::Int(0)));
-    emit(Opcode::MOV, r, t);
-    // RHS temp is dead: clear + return to the pool (the clear matters for
-    // tables with finalizers: a lingering temp reference keeps the instance
-    // alive past its true final release).
-    releaseTemp(t);
+      emitImm(Opcode::MOVI, r, 0);
+    } else {
+      int t = tmpRegister();
+      compileExpr(s->value, t);
+      emit(Opcode::MOV, r, t);
+      // RHS temp is dead: clear + return to the pool (the clear matters for
+      // tables with finalizers: a lingering temp reference keeps the instance
+      // alive past its true final release).
+      releaseTemp(t);
+    }
     updateVarType(s->name, s->value);
     // Track generator variables: if RHS calls a generator function, mark LHS.
     if (s->value && s->value->kind == ExprKind::Call) {
@@ -929,12 +953,17 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       break;
     }
     if (op == "=") {
-      int t = tmpRegister();
-      compileExpr(s->assignValue, t);
-      emit(Opcode::MOV, r, t);
-      // RHS temp is dead: clear + return to the pool (keeps finalized tables
-      // from surviving their true final release).
-      releaseTemp(t);
+      if (isIntLiteral(s->assignValue)) {
+        // `a = 0` -> one MOVI into the target register (SPEC §bytecodes: MOVI).
+        emitImm(Opcode::MOVI, r, s->assignValue->literal.asInt());
+      } else {
+        int t = tmpRegister();
+        compileExpr(s->assignValue, t);
+        emit(Opcode::MOV, r, t);
+        // RHS temp is dead: clear + return to the pool (keeps finalized
+        // tables from surviving their true final release).
+        releaseTemp(t);
+      }
       updateVarType(s->name, s->assignValue);
     } else {
       int t = tmpRegister();
@@ -2213,7 +2242,10 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
 
   switch (e->kind) {
   case ExprKind::Literal:
-    emit(Opcode::CONST, dest, emitConst(e->literal));
+    if (isIntLiteral(e))
+      emitImm(Opcode::MOVI, dest, e->literal.asInt()); // no pool slot needed
+    else
+      emit(Opcode::CONST, dest, emitConst(e->literal));
     break;
   case ExprKind::Variable: {
     // Bare static member name inside a method body of a class with statics:

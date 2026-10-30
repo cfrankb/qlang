@@ -1369,6 +1369,7 @@ void QLangVM::run() {
 
     switch (op) {
     case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
+    case Opcode::MOVI: frame.regs[i.a] = QLangValue::Int(i.i32); break;
     case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
     case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
     case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
@@ -1696,6 +1697,7 @@ void QLangVM::runFrames(int startFrame)
 
     switch (op) {
     case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
+    case Opcode::MOVI: frame.regs[i.a] = QLangValue::Int(i.i32); break;
     case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
     case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
     case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
@@ -2068,6 +2070,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
 
       switch (op) {
       case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
+      case Opcode::MOVI: frame.regs[i.a] = QLangValue::Int(i.i32); break;
       case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
       case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
       case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
@@ -2405,6 +2408,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
 
     switch (op) {
     case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
+    case Opcode::MOVI: frame.regs[i.a] = QLangValue::Int(i.i32); break;
     case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
     case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
     case Opcode::NOT: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;

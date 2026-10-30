@@ -312,7 +312,9 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
               const std::map<std::string, int> &nativeIds) {
   // Header.
   putBytes(os, "QLC1", 4);
-  putU32(os, 1); // format version
+  // Format version 2: MOVI opcode (raw 12-byte layout, no new fields). v1
+  // files (no MOVI) still load in a v2 reader.
+  putU32(os, 2); // format version
 
   // Functions (functions[0] is the implicit "main"; the compiler emits it
   // first, so the §4.1 invariant holds by construction).
@@ -381,7 +383,7 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       r.fail("bad magic");
     r.pos = 4;
     uint32_t version = r.u32();
-    if (version > 1)
+    if (version > 2)
       r.fail("unsupported version");
 
     // 2. Functions.

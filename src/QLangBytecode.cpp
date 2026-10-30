@@ -242,6 +242,7 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::MAKEGEN: return "makegen";
   case Opcode::REFLOAD: return "refload";
   case Opcode::REFSTORE: return "refstore";
+  case Opcode::MOVI: return "movi"; // 32-bit int literal -> register (no pool)
   }
   return "?";
 }
