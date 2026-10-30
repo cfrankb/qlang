@@ -1,6 +1,8 @@
+#include <climits>
 #include <cstring>
 
 #include "qlang/QLangBytecode.h"
+#include "qlang/QLangErrors.h"
 
 namespace qlang {
 
@@ -123,10 +125,30 @@ void Bytecode::add(const Instruction &inst) { m_instr.push_back(inst); }
 void Bytecode::add(Opcode op, int a, int b, int c) {
   Instruction inst;
   inst.op = op;
-  inst.a = a;
-  inst.b = b;
-  inst.c = c;
-  m_instr.push_back(inst);
+  if (usesI32(op)) {
+    // 32-bit pc target: JMP/CONTINUE/BREAK carry it in `a`,
+    // JMPIFFALSE/JMPIFTRUE in `b` (condition register stays in `a`).
+    if (op == Opcode::JMPIFFALSE || op == Opcode::JMPIFTRUE) {
+      if (a < INT16_MIN || a > INT16_MAX)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "internal compiler error: instruction operand out of "
+                         "int16 range (op " +
+                         std::to_string(static_cast<int>(op)) + ")");
+      inst.a = static_cast<int16_t>(a);
+    }
+    inst.i32 = (op == Opcode::JMPIFFALSE || op == Opcode::JMPIFTRUE) ? b : a;
+  } else {
+    if (a < INT16_MIN || a > INT16_MAX || b < INT16_MIN || b > INT16_MAX ||
+        c < INT16_MIN || c > INT16_MAX)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "internal compiler error: instruction operand out of "
+                       "int16 range (op " +
+                       std::to_string(static_cast<int>(op)) + ")");
+    inst.a = static_cast<int16_t>(a);
+    inst.b = static_cast<int16_t>(b);
+    inst.c = static_cast<int16_t>(c);
+  }
+  m_instr.push_back(std::move(inst));
 }
 
 int Bytecode::addConstant(QLangValue value) {

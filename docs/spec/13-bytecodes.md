@@ -1,20 +1,28 @@
 # bytecodes
 
-## Instruction operand map (proposed 12-byte layout)
+## Instruction operand map (12-byte layout)
 
-**Proposed — not yet implemented.** See [../plans/qlc-codec-plan.md](../plans/qlc-codec-plan.md).
+Implemented in `include/qlang/QLangBytecode.h` (see
+[../plans/qlc-codec-plan.md](../plans/qlc-codec-plan.md)).
 
 ```cpp
 struct Instruction {
   Opcode op = Opcode::CONST; // uint16_t
   int16_t a;
   union {
-    int16_t b, c;
-    int32_t i32;  // combined b/c for opcodes with a 32-bit parameter
+    struct {
+      int16_t b;
+      int16_t c;
+    };
+    int32_t i32 = 0; // combined b/c for opcodes with a 32-bit parameter
   };
   uint16_t line, col;
 };
 ```
+
+Note: `b`/`c` are the two 16-bit halves of `i32`; they are declared as an
+anonymous struct inside the union (bare `int16_t b, c` members of a union
+would alias the same storage).
 
 12 bytes, alignment 4, no padding. Rule: any opcode that needs a 32-bit
 parameter uses `i32`; all others use `a`/`b`/`c` as `int16_t`. The single

@@ -15,6 +15,7 @@ add_library(qlang
   src/QLangLexer.cpp
   src/QLangParser.cpp
   src/QLangBytecode.cpp
+  src/QLangBytecodeIO.cpp
   src/QLangCompiler.cpp
   src/QLangVM.cpp
   src/QLangContext.cpp
@@ -66,3 +67,8 @@ add_test(NAME class_str COMMAND class_str_test)
 add_executable(class_static_test examples/class_static_test.cpp)
 target_link_libraries(class_static_test PRIVATE qlang)
 add_test(NAME class_static COMMAND class_static_test)
+
+# .qlc codec round-trip + malformed-input robustness (docs/SERIALIZATION.md §9).
+add_executable(codec_check examples/codec_check.cpp)
+target_link_libraries(codec_check PRIVATE qlang)
+add_test(NAME codec COMMAND codec_check)

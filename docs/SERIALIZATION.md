@@ -1,8 +1,9 @@
 # QLang Serialization / Deserialization Spec
 
-Status: **draft** — POC stage
+Status: **implemented** — `.qlc` program image (v1)
 Covers: `.qlc` program image (v1) and state snapshot (v2, future)
-Reference implementation: `examples/qlang_run.cpp` (`QlcWriter`, partial)
+Reference implementation: `src/QLangBytecodeIO.cpp` (library codec)
+Architecture assessment of this change: [qlc-codec-assessment.md](qlc-codec-assessment.md)
 
 ## 1. Purpose
 
@@ -51,15 +52,18 @@ Every `QLangValue` serializes as `u8 tag` + payload. Tags are the
 | 13  | Table   | `u32 count` + `count` × (String key, Value) |
 | 14  | Function| `i32 funcIndex` + `u32 capCount` + `capCount` × `i32 reg` |
 | 15  | Generator| **not durable** — writer MUST emit tag 0 (Nil) |
-| 16  | Eof     | — |
-| 17  | Long    | `i64` |
+| 16  | Object  | **not durable** — writer MUST emit tag 0 (Nil) |
+| 17  | Eof     | — |
+| 18  | Long    | `i64` |
+| 19  | Set     | `u32 count` + `count` × Value |
 
 Rules:
 
 - **R1** New `QLangValue::Type` values are appended at the end of the enum and
   table; existing tags never change meaning.
-- **R2** A value of a non-durable type (Generator) is lossy by design: it
-  round-trips as Nil. The writer MUST NOT emit tag 15.
+- **R2** A value of a non-durable type (Generator, Object) is lossy by
+  design: it round-trips as Nil. The writer MUST NOT emit tags 15/16; a
+  reader MUST reject a file carrying them.
 - **R3** Table keys are stored in `std::map` (lexicographic) order. Readers
   MUST NOT depend on entry order.
 - **R4** For tag 14, `funcIndex` is an index into the program's function
@@ -94,8 +98,21 @@ i32   registerCount
 u8    isGenerator          (0/1)
 u32   capCount, capCount × i32 reg
 u32   instrCount
-      instrCount × (u8 op, i32 a, i32 b, i32 c, i32 line, i32 col)
+      instrCount × Instruction      // raw 12-byte records
 u32   constCount, constCount × Value
+```
+
+`Instruction` is written as its raw 12 bytes (little-endian, no padding —
+`static_assert(sizeof(Instruction) == 12)`):
+
+```
+u16   op
+i16   a
+i32   i32               // combined b/c; jump-family opcodes carry the
+                        // 32-bit pc target here (JMP/CONTINUE/BREAK;
+                        // JMPIFFALSE/JMPIFTRUE keep the condition in `a`)
+u16   line
+u16   col
 ```
 
 - `functions[0]` is the implicit `main`. The writer MUST emit it first; the
@@ -279,16 +296,18 @@ A codec is not "done" until all of these pass:
 5. **(v2) Snapshot/resume**: run a script to a checkpoint, snapshot, restore
    in a fresh context, continue → final stdout equals uninterrupted run.
 
-## 10. Implementation status (POC)
+## 10. Implementation status
 
 | Item | Status |
 |---|---|
-| Value writer (app `QlcWriter::value`) | done — matches §3 |
-| Program writer (app) | done — **missing §4.2 native table** (update required) |
-| `QLangErrorKind::Io` | not added |
-| Reader / `QLangBytecodeIO.h` | not started |
-| `QLangContext::loadProgram` / `execute` | not started |
+| Value codec (`serializeValue`/`deserializeValue`) | done — matches §3 |
+| Program writer (`writeQlc`, §4 incl. native-slot table) | done |
+| `QLangErrorKind::Io` | done |
+| Reader (`readQlc`, §5.1 invariants) | done |
+| App writer (POC `QlcWriter` in `qlang_run.cpp`) | deleted — replaced by `writeQlc` |
+| Tests (`codec_check`: §9 items 1, 3) | done |
+| `QLangContext::loadProgram` / `execute` (§5.2, §9 item 2/4) | not started |
 | Snapshot (v2) | not started |
 
-The app writer is the POC reference for §3/§4 and will be deleted when the
-library codec lands.
+§9 item 2 (execute-from-image parity) and item 4 (native-mismatch report)
+require `loadProgram`/`execute` and are pending with them.

@@ -1647,23 +1647,23 @@ void QLangVM::run() {
       break;
     }
     case Opcode::JMP:
-      frame.pc = static_cast<size_t>(i.a);
+      frame.pc = static_cast<size_t>(i.i32);
       continue;
     case Opcode::JMPIFTRUE:
       if (isTrue(frame.regs[i.a]))
-        frame.pc = static_cast<size_t>(i.b);
+        frame.pc = static_cast<size_t>(i.i32);
       else
         frame.pc = frame.pc + 1;
       continue;
     case Opcode::CONTINUE:
-      frame.pc = static_cast<size_t>(i.a);
+      frame.pc = static_cast<size_t>(i.i32);
       continue;
     case Opcode::BREAK:
-      frame.pc = static_cast<size_t>(i.a);
+      frame.pc = static_cast<size_t>(i.i32);
       continue;
     case Opcode::JMPIFFALSE:
       if (!isTrue(frame.regs[i.a]))
-        frame.pc = static_cast<size_t>(i.b);
+        frame.pc = static_cast<size_t>(i.i32);
       else
         frame.pc = frame.pc + 1;
       continue;
@@ -1944,23 +1944,23 @@ void QLangVM::runFrames(int startFrame)
       frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       break;
     case Opcode::JMP:
-      frame.pc = static_cast<size_t>(i.a);
+      frame.pc = static_cast<size_t>(i.i32);
       continue;
     case Opcode::JMPIFTRUE:
       if (isTrue(frame.regs[i.a]))
-        frame.pc = static_cast<size_t>(i.b);
+        frame.pc = static_cast<size_t>(i.i32);
       else
         frame.pc = frame.pc + 1;
       continue;
     case Opcode::CONTINUE:
-      frame.pc = static_cast<size_t>(i.a);
+      frame.pc = static_cast<size_t>(i.i32);
       continue;
     case Opcode::BREAK:
-      frame.pc = static_cast<size_t>(i.a);
+      frame.pc = static_cast<size_t>(i.i32);
       continue;
     case Opcode::JMPIFFALSE:
       if (!isTrue(frame.regs[i.a]))
-        frame.pc = static_cast<size_t>(i.b);
+        frame.pc = static_cast<size_t>(i.i32);
       else
         frame.pc = frame.pc + 1;
       continue;
@@ -2328,23 +2328,23 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
         break;
       case Opcode::JMP:
-        frame.pc = static_cast<size_t>(i.a);
+        frame.pc = static_cast<size_t>(i.i32);
         continue;
       case Opcode::JMPIFTRUE:
         if (isTrue(frame.regs[i.a]))
-          frame.pc = static_cast<size_t>(i.b);
+          frame.pc = static_cast<size_t>(i.i32);
         else
           frame.pc = frame.pc + 1;
         continue;
       case Opcode::CONTINUE:
-        frame.pc = static_cast<size_t>(i.a);
+        frame.pc = static_cast<size_t>(i.i32);
         continue;
       case Opcode::BREAK:
-        frame.pc = static_cast<size_t>(i.a);
+        frame.pc = static_cast<size_t>(i.i32);
         continue;
       case Opcode::JMPIFFALSE:
         if (!isTrue(frame.regs[i.a]))
-          frame.pc = static_cast<size_t>(i.b);
+          frame.pc = static_cast<size_t>(i.i32);
         else
           frame.pc = frame.pc + 1;
         continue;
@@ -2636,23 +2636,23 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       break;
     case Opcode::JMP:
-      frame.pc = static_cast<size_t>(i.a);
+      frame.pc = static_cast<size_t>(i.i32);
       continue;
     case Opcode::JMPIFTRUE:
       if (isTrue(frame.regs[i.a]))
-        frame.pc = static_cast<size_t>(i.b);
+        frame.pc = static_cast<size_t>(i.i32);
       else
         frame.pc = frame.pc + 1;
       continue;
     case Opcode::CONTINUE:
-      frame.pc = static_cast<size_t>(i.a);
+      frame.pc = static_cast<size_t>(i.i32);
       continue;
     case Opcode::BREAK:
-      frame.pc = static_cast<size_t>(i.a);
+      frame.pc = static_cast<size_t>(i.i32);
       continue;
     case Opcode::JMPIFFALSE:
       if (!isTrue(frame.regs[i.a]))
-        frame.pc = static_cast<size_t>(i.b);
+        frame.pc = static_cast<size_t>(i.i32);
       else
         frame.pc = frame.pc + 1;
       continue;

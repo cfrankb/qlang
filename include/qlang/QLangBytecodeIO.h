@@ -13,7 +13,7 @@
 
 namespace qlang {
 
-// QLS1 v1 .qlc codec (docs/SERIALIZATION.md).
+// QLC1 v1 .qlc codec (docs/SERIALIZATION.md).
 //
 // Values are serialized with a 1-byte tag (QLangValue::Type in declaration
 // order, fixed) plus a little-endian payload. Non-durable types (Generator,
@@ -28,7 +28,7 @@ namespace qlang {
 void serializeValue(std::ostream &os, const QLangValue &v);
 
 // Deserialize one value. Throws QLangError(Io) on truncation, an invalid
-// tag, or nesting deeper than 128 levels.
+// tag, or nesting deeper than 64 levels (docs/SERIALIZATION.md §8).
 QLangValue deserializeValue(std::istream &is);
 
 // Write a full program as QLS1 v1. `nativeIds` maps native function name ->

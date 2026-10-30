@@ -48,7 +48,7 @@ enum class Builtin : int {
 // Register-machine opcodes. This is a small register VM: each script variable
 // maps to a register, and arithmetic/comparison results are written to a
 // register. Constants live in a separate pool and are loaded with CONST.
-enum class Opcode {
+enum class Opcode : uint16_t {
   // Data movement
   CONST, // r[a] = constants[b]
   MOV,   // r[a] = r[b]
@@ -160,33 +160,48 @@ enum class Opcode {
 
   // Generator yield. Returns the value in r[b] to the caller; pauses
   // execution. r[c] is the generator register (used for self-reference).
-  YIELD // r[a] = generator(r[b]); r[c] = generator register
+  YIELD, // r[a] = generator(r[b]); r[c] = generator register
+
+  kOpcodeCount // sentinel: not a real opcode; valid ops are < kOpcodeCount
 };
 
-// A single instruction. Operands are plain ints interpreted per-opcode:
-//   register indices for MOV/ADD/.../JMPIFFALSE's first operand,
-//   a constant-pool index for CONST's second operand,
-//   a program index for JMP/JMPIFFALSE's second operand.
-struct Instruction {
-  Opcode op = Opcode::CONST;
-  int a = 0;
-  int b = 0;
-  int c = 0;
-  int line = 0;
-  int col = 0;
-};
+// True when the opcode carries a 32-bit parameter in the combined b/c slot
+// (Instruction::i32) instead of int16_t a/b/c. Single source of truth shared
+// by the compiler (emit/backpatch), the VM (decode), the disassembler, and
+// the .qlc codec. Currently: the jump family (pc can exceed 32,767).
+inline bool usesI32(Opcode op) {
+  switch (op) {
+  case Opcode::JMP:
+  case Opcode::JMPIFFALSE:
+  case Opcode::JMPIFTRUE:
+  case Opcode::CONTINUE:
+  case Opcode::BREAK:
+    return true;
+  default:
+    return false;
+  }
+}
 
-/*
+// A single instruction: 12 bytes, alignment 4, no padding (the union sits at
+// offset 4, so the raw little-endian bytes are the .qlc encoding). Operands
+// are interpreted per-opcode (docs/spec/13-bytecodes.md "Instruction operand
+// map"): register indices, constant-pool indices, type ids, and for the
+// jump family a 32-bit pc target in the combined i32 slot (JMP/CONTINUE/
+// BREAK; JMPIFFALSE/JMPIFTRUE keep the condition register in a).
 struct Instruction {
   Opcode op = Opcode::CONST; // uint16_t
-  int16_t a;
+  int16_t a = 0;
   union {
-    int16_t b,c;
-    int32_t i32;
-  }
-  uint16_t line, col;
+    struct {
+      int16_t b;
+      int16_t c;
+    };
+    int32_t i32 = 0; // combined b/c for opcodes with 32-bit operands
+  };
+  uint16_t line = 0, col = 0;
 };
-*/
+
+static_assert(sizeof(Instruction) == 12, "Instruction must be 12 bytes");
 
 // A compiled user-defined function: its instruction stream, constant pool, and
 // calling metadata. Index 0 of Bytecode::functions is the implicit "main"

@@ -27,6 +27,7 @@
 #include <string>
 #include <unordered_set>
 
+#include <qlang/QLangBytecodeIO.h>
 #include <qlang/QLangCompiler.h>
 #include <qlang/QLangContext.h>
 #include <qlang/QLangErrors.h>
@@ -97,189 +98,27 @@ namespace
   }
 
   // ---------------------------------------------------------------------------
-  // .qlc binary writer.
-  //
-  // Format (little-endian), version 1:
-  //   magic "QLC1", u32 version
-  //   u32 funcCount, then per function:
-  //     u32 nameLen + name bytes
-  //     i32 paramCount, i32 registerCount, u8 isGenerator
-  //     u32 captureCount, then i32 reg each
-  //     u32 instrCount, then per instruction: u8 op, i32 a, i32 b, i32 c,
-  //                                            i32 line, i32 col
-  //     u32 constCount, then serialized QLangValue each
-  //   u32 varCount, then per var: u32 nameLen + name, i32 register
-  //   u32 constVarCount, then per name: u32 nameLen + name
-  //   i32 registerCount
-  //
-  // QLangValue serialization:
-  //   u8 type, then payload:
-  //     Nil / Eof: none
-  //     Bool / Int: i32
-  //     Char / Short: i32
-  //     Byte: u8    Word: u32    Unsigned: u32
-  //     Qword: u64  Float: f64
-  //     String / Blob: u32 len + bytes
-  //     Array: u32 count + values
-  //     Table: u32 count + (u32 keyLen + key + value)
-  //     Function: i32 funcIndex + u32 captureCount + i32 reg each
-  //               (capture frame pointers are runtime-only, not persisted)
-  //     Generator: stored as Nil (not durable)
-  //
-  // Native (C++) function bindings are NOT part of the file; a loader re-binds
-  // them from its own context.
-  // ---------------------------------------------------------------------------
-  struct QlcWriter
+  // .qlc binary output: the library codec (src/QLangBytecodeIO.cpp,
+  // docs/SERIALIZATION.md). nativeIds maps native name -> negative opcode id
+  // (compiler.nativeFuncIds()); the slot table is written in ascending slot
+  // order and lets a loader re-bind natives by name.
+  bool writeBytecode(const CompiledProgram &prog,
+                     const std::map<std::string, int> &nativeIds,
+                     const std::string &path, size_t &written)
   {
     std::string buf;
-
-    void u8(uint8_t v) { buf += static_cast<char>(v); }
-    void u32(uint32_t v) { bytes(&v, sizeof v); }
-    void i32(int32_t v) { bytes(&v, sizeof v); }
-    void u64(uint64_t v) { bytes(&v, sizeof v); }
-    void f64(double v) { bytes(&v, sizeof v); }
-    void bytes(const void *p, size_t n) { buf.append(static_cast<const char *>(p), n); }
-    void str(const std::string &s)
-    {
-      u32(static_cast<uint32_t>(s.size()));
-      bytes(s.data(), s.size());
-    }
-
-    void value(const QLangValue &v)
-    {
-      using T = QLangValue::Type;
-      T t = v.type();
-      if (t == T::Generator)
-        t = T::Nil; // not durable
-      u8(static_cast<uint8_t>(t));
-      switch (t)
-      {
-      case T::Nil:
-      case T::Eof:
-        break;
-      case T::Bool:
-      case T::Int:
-        i32(v.asInt());
-        break;
-      case T::Char:
-        i32(v.asChar());
-        break;
-      case T::Short:
-        i32(v.asShort());
-        break;
-      case T::Byte:
-        u8(v.asByte());
-        break;
-      case T::Word:
-        u32(v.asWord());
-        break;
-      case T::Unsigned:
-        u32(v.asUnsigned());
-        break;
-      case T::Qword:
-        u64(v.asQword());
-        break;
-      case T::Long:
-        u64(static_cast<uint64_t>(v.asLong()));
-        break;
-      case T::Float:
-        f64(v.asFloat());
-        break;
-      case T::String:
-        str(v.asString());
-        break;
-      case T::Blob:
-      {
-        const auto &b = v.asBlob();
-        u32(static_cast<uint32_t>(b.size()));
-        bytes(b.data(), b.size());
-        break;
-      }
-      case T::Array:
-      {
-        const auto &a = v.asArray();
-        u32(static_cast<uint32_t>(a.size()));
-        for (const auto &e : a)
-          value(e);
-        break;
-      }
-      case T::Table:
-      {
-        const auto &t = v.asTable();
-        u32(static_cast<uint32_t>(t->size()));
-        for (const auto &[k, val] : *t)
-        {
-          str(k);
-          value(val);
-        }
-        break;
-      }
-      case T::Function:
-      {
-        const auto &c = v.asFunction();
-        i32(static_cast<int32_t>(c.funcIndex));
-        u32(static_cast<uint32_t>(c.captures.size()));
-        for (const auto &cap : c.captures)
-          i32(cap.reg);
-        break;
-      }
-      }
-    }
-
-    size_t write(const CompiledProgram &prog)
-    {
-      bytes("QLC1", 4);
-      u32(1); // format version
-
-      const auto &fns = prog.functions;
-      u32(static_cast<uint32_t>(fns.size()));
-      for (const auto &f : fns)
-      {
-        str(f.name);
-        i32(f.paramCount);
-        i32(f.registerCount);
-        u8(f.isGenerator ? 1 : 0);
-        u32(static_cast<uint32_t>(f.captures.size()));
-        for (const auto &cap : f.captures)
-          i32(cap.reg);
-        u32(static_cast<uint32_t>(f.instructions.size()));
-        for (const auto &ins : f.instructions)
-        {
-          u8(static_cast<uint8_t>(ins.op));
-          i32(ins.a);
-          i32(ins.b);
-          i32(ins.c);
-          i32(ins.line);
-          i32(ins.col);
-        }
-        u32(static_cast<uint32_t>(f.constants.size()));
-        for (const auto &c : f.constants)
-          value(c);
-      }
-
-      u32(static_cast<uint32_t>(prog.vars.size()));
-      for (const auto &[name, reg] : prog.vars)
-      {
-        str(name);
-        i32(reg);
-      }
-      u32(static_cast<uint32_t>(prog.constVars.size()));
-      for (const auto &name : prog.constVars)
-        str(name);
-      i32(prog.registerCount);
-      return buf.size();
-    }
-  };
-
-  bool writeBytecode(const CompiledProgram &prog, const std::string &path, size_t &written)
-  {
-    QlcWriter w;
-    written = w.write(prog);
+    std::ostringstream ss(std::ios::binary);
+    if (!writeQlc(ss, prog, nativeIds))
+      return false;
+    buf = ss.str();
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out)
       return false;
-    out.write(w.buf.data(), static_cast<std::streamsize>(w.buf.size()));
-    return static_cast<bool>(out);
+    out.write(buf.data(), static_cast<std::streamsize>(buf.size()));
+    if (!out)
+      return false;
+    written = buf.size();
+    return true;
   }
 
   // ---------------------------------------------------------------------------
@@ -511,13 +350,13 @@ namespace
     case Opcode::JMP:
     case Opcode::CONTINUE:
     case Opcode::BREAK:
-      ss << "pc = " << ins.a;
+      ss << "pc = " << ins.i32;
       break;
     case Opcode::JMPIFFALSE:
-      ss << "if !truth(" << rn(ins.a) << ") pc = " << ins.b;
+      ss << "if !truth(" << rn(ins.a) << ") pc = " << ins.i32;
       break;
     case Opcode::JMPIFTRUE:
-      ss << "if truth(" << rn(ins.a) << ") pc = " << ins.b;
+      ss << "if truth(" << rn(ins.a) << ") pc = " << ins.i32;
       break;
     case Opcode::CALLFN:
     {
@@ -552,9 +391,10 @@ namespace
     return ss.str();
   }
 
-  // Which operands (a/b/c) are meaningful per opcode; the rest are omitted
-  // from the listing. Default: all three. (Matches the operand semantics in
-  // QLangBytecode.h, e.g. ARRAPP/CALLCLOS skip b.)
+  // Which operands are meaningful per opcode; the rest are omitted from the
+  // listing. Bits: 1=a, 2=b, 4=c, 8=combined i32 (jump targets). Default:
+  // a/b/c. (Matches the operand semantics in QLangBytecode.h, e.g.
+  // ARRAPP/CALLCLOS skip b.)
   int operandMask(Opcode op)
   {
     switch (op)
@@ -564,11 +404,14 @@ namespace
     case Opcode::DELETE:
     case Opcode::TABCREATE:
     case Opcode::TABFINALIZE:
-    case Opcode::JMP:
+    case Opcode::RETURN:
+    case Opcode::JMPIFFALSE: // condition in a; target is the i32 slot
+    case Opcode::JMPIFTRUE:  // condition in a; target is the i32 slot
+      return 1;
+    case Opcode::JMP: // 32-bit pc target in the combined i32 slot
     case Opcode::CONTINUE:
     case Opcode::BREAK:
-    case Opcode::RETURN:
-      return 1;
+      return 8;
     case Opcode::CONST:
     case Opcode::MOV:
     case Opcode::NEG:
@@ -577,8 +420,6 @@ namespace
     case Opcode::ARRLEN:
     case Opcode::LEN:
     case Opcode::EVALKEY:
-    case Opcode::JMPIFFALSE:
-    case Opcode::JMPIFTRUE:
     case Opcode::MAKEFUNC:
     case Opcode::MAKEGEN:
     case Opcode::REFLOAD:
@@ -616,6 +457,8 @@ namespace
       add(ins.b);
     if (m & 4)
       add(ins.c);
+    if (m & 8)
+      add(ins.i32);
     return s;
   }
 
@@ -1076,8 +919,10 @@ int main(int argc, char **argv)
   // --- Bytecode output ---
   if (!output.empty())
   {
+    std::map<std::string, int> nativeIds(compiler.nativeFuncIds().begin(),
+                                          compiler.nativeFuncIds().end());
     size_t written = 0;
-    if (!writeBytecode(compiled, output, written))
+    if (!writeBytecode(compiled, nativeIds, output, written))
     {
       std::fprintf(stderr, "%s: cannot write bytecode file '%s'\n", kAppName, output.c_str());
       return 4;
