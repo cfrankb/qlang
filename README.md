@@ -13,6 +13,9 @@ loader, external-type dispatch) are spec'd but not yet built.
 
 ![Alt text](docs/images/Screenshot_2026-10-27_13-44-43.png)
 
+byte code encoding
+
+![alt text](docs/images/Screenshot_2026-10-30_06-57-09.png)
 
 ## Layout
 
