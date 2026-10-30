@@ -127,6 +127,25 @@ proposal
 net saving. -1 constant in pool. -2 Instructions.
 
 
+## new OpCode addi
+
+OpCode `addi` adds the value of `i32` to register indexed by `a`
+
+original bytecodes
+```
+L 9:  a += 12                      # compound assignment -> 44
+  000e  movi         06, 12i    ; r6 = 12                          
+  000f  add          00, 00, 06 ; r0 = r0 + r6                     
+  0010  movc         06, 01     ; r6 = pool[1]          # nil
+```
+
+proposed encoding
+```
+  000e  addi         00, 12i    ; r0 =  r0 + 12                          
+```
+
+net savings: -2 instructions
+
 
 ## decompiler mnemonics 
 
@@ -184,4 +203,4 @@ std::vector<Instruction> instructions;
 std::vector<SourcePos> positions;   // parallel, same size
 ```
 
-another upside. is that line number can be scaled from uint16_t to uint32_t at no cost
+another upside. is that line number can be scaled from uint16_t to uint32_t at no runtime cost
