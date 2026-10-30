@@ -176,6 +176,18 @@ struct Instruction {
   int col = 0;
 };
 
+/*
+struct Instruction {
+  Opcode op = Opcode::CONST; // uint16_t
+  int16_t a;
+  union {
+    int16_t b,c;
+    int32_t i32;
+  }
+  uint16_t line, col;
+};
+*/
+
 // A compiled user-defined function: its instruction stream, constant pool, and
 // calling metadata. Index 0 of Bytecode::functions is the implicit "main"
 // function (the top-level program). `registerCount` is the number of registers

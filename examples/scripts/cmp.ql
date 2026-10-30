@@ -15,7 +15,7 @@ println(f"{a} < {b} = {c} type={type(c)}")
 c = a > b
 println(f"{a} > {b} = {c} type={type(c)}")
 
-c = a == b # BUG: should return bool, it returned it
+c = a == b # BUG: should return bool, it returned int
 println(f"{a} == {b} = {c} type={type(c)}")
 
 a = [1,2,56,7]
