@@ -1622,6 +1622,9 @@ void QLangVM::run() {
         m_frames[m_cur].regs[m_frames[m_cur].callDest] = yielded;
       continue;
     }
+    case Opcode::ADDI:
+      frame.regs[i.a] = doBinary(Opcode::ADD, frame.regs[i.a], QLangValue::Int(i.i32), this);
+      break;
     case Opcode::ADD:
     case Opcode::SUB:
     case Opcode::MUL:
@@ -1923,6 +1926,9 @@ void QLangVM::runFrames(int startFrame)
       }
       continue;
     }
+    case Opcode::ADDI:
+      frame.regs[i.a] = doBinary(Opcode::ADD, frame.regs[i.a], QLangValue::Int(i.i32), this);
+      break;
     case Opcode::ADD:
     case Opcode::SUB:
     case Opcode::MUL:
@@ -2308,6 +2314,9 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         }
         return yielded;
       }
+      case Opcode::ADDI:
+        frame.regs[i.a] = doBinary(Opcode::ADD, frame.regs[i.a], QLangValue::Int(i.i32), this);
+        break;
       case Opcode::ADD:
       case Opcode::SUB:
       case Opcode::MUL:
@@ -2617,6 +2626,9 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       m_cur = savedCur;
       return retVal;
     }
+    case Opcode::ADDI:
+      frame.regs[i.a] = doBinary(Opcode::ADD, frame.regs[i.a], QLangValue::Int(i.i32), this);
+      break;
     case Opcode::ADD:
     case Opcode::SUB:
     case Opcode::MUL:

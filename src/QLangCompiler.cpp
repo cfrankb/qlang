@@ -918,10 +918,17 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       } else {
         int cur = tmpRegister();
         emit(Opcode::REFLOAD, cur, cit->second, 0);
-        int t = tmpRegister();
-        compileExpr(s->assignValue, t);
-        Opcode opCode = (op == "++") ? Opcode::INC : Opcode::DEC;
-        emit(opCode, cur, cur, t);
+        Opcode opCode = (op == "++") ? Opcode::INC
+                                     : (op == "--") ? Opcode::DEC
+                                                    : binOp(op.substr(0, op.size() - 1));
+        if (opCode == Opcode::ADD && isIntLiteral(s->assignValue)) {
+          // `cap += 12` -> ADDI in-place (SPEC §bytecodes: new OpCode addi).
+          emitImm(Opcode::ADDI, cur, s->assignValue->literal.asInt());
+        } else {
+          int t = tmpRegister();
+          compileExpr(s->assignValue, t);
+          emit(opCode, cur, cur, t);
+        }
         emit(Opcode::REFSTORE, cur, cit->second, 0);
       }
       break;
@@ -966,13 +973,18 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       }
       updateVarType(s->name, s->assignValue);
     } else {
-      int t = tmpRegister();
-      compileExpr(s->assignValue, t);
       Opcode opCode = (op == "++") ? Opcode::INC
-                                  : (op == "--") ? Opcode::DEC
-                                                 : binOp(op.substr(0, op.size() - 1));
-      emit(opCode, r, r, t);
-      releaseTemp(t); // dead after the compound op
+                                   : (op == "--") ? Opcode::DEC
+                                                  : binOp(op.substr(0, op.size() - 1));
+      if (opCode == Opcode::ADD && isIntLiteral(s->assignValue)) {
+        // `a += 12` -> ADDI in-place (SPEC §bytecodes: new OpCode addi).
+        emitImm(Opcode::ADDI, r, s->assignValue->literal.asInt());
+      } else {
+        int t = tmpRegister();
+        compileExpr(s->assignValue, t);
+        emit(opCode, r, r, t);
+        releaseTemp(t); // dead after the compound op
+      }
     }
     break;
   }
@@ -3070,7 +3082,6 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
     else
       emit(Opcode::CONST, idxR, emitConst(QLangValue::Int(0))); // ab[] -> append
     int valR = tmpRegister();
-    compileExpr(value, valR);
     if (target->indexExpr) {
       // read-modify-write for compound ops (e.g. a[i] += v)
       int tmpR = tmpRegister();
@@ -3078,9 +3089,16 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
       Opcode opCode = (op.text == "++") ? Opcode::INC
                       : (op.text == "--") ? Opcode::DEC
                                           : binOp(op.text.substr(0, op.text.size() - 1));
-      emit(opCode, tmpR, tmpR, valR);
+      if (opCode == Opcode::ADD && isIntLiteral(value)) {
+        // `a[i] += 12` -> ADDI in-place (SPEC §bytecodes: new OpCode addi).
+        emitImm(Opcode::ADDI, tmpR, value->literal.asInt());
+      } else {
+        compileExpr(value, valR);
+        emit(opCode, tmpR, tmpR, valR);
+      }
       emit(Opcode::ARRPUT, baseR, idxR, tmpR);
     } else {
+      compileExpr(value, valR);
       // empty subscript ab[] = v -> append
       emit(Opcode::ARRAPP, baseR, valR, 0);
     }
@@ -3099,16 +3117,22 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
     int keyR = tmpRegister();
     emit(Opcode::CONST, keyR, emitConst(QLangValue::String(target->memberName)));
     int valR = tmpRegister();
-    compileExpr(value, valR);
     if (isCompound) {
       int tmpR = tmpRegister();
       emit(Opcode::TABGET, tmpR, baseR, keyR);
       Opcode opCode = (op.text == "++") ? Opcode::INC
                       : (op.text == "--") ? Opcode::DEC
                                           : binOp(op.text.substr(0, op.text.size() - 1));
-      emit(opCode, tmpR, tmpR, valR);
+      if (opCode == Opcode::ADD && isIntLiteral(value)) {
+        // `t.k += 12` -> ADDI in-place (SPEC §bytecodes: new OpCode addi).
+        emitImm(Opcode::ADDI, tmpR, value->literal.asInt());
+      } else {
+        compileExpr(value, valR);
+        emit(opCode, tmpR, tmpR, valR);
+      }
       emit(Opcode::TABPUT, baseR, keyR, tmpR);
     } else {
+      compileExpr(value, valR);
       emit(Opcode::TABPUT, baseR, keyR, valR);
     }
   }

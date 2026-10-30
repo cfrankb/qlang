@@ -28,7 +28,7 @@ would alias the same storage).
 parameter uses `i32`; all others use `a`/`b`/`c` as `int16_t`. The single
 source of truth is `usesI32(Opcode)` in `QLangBytecode.h`. Current `i32`
 users: `JMP`, `JMPIFFALSE`, `JMPIFTRUE`, `CONTINUE`, `BREAK` (pc targets),
-and `MOVI` (32-bit integer literal; destination register in `a`).
+and `MOVI`/`ADDI` (32-bit integer literal; destination register in `a`).
 
 Conventions:
 
@@ -79,6 +79,7 @@ Conventions:
 | REFSTORE | value reg | capture table index | — | | |
 | YIELD | generator value reg | yield value reg | generator reg | | |
 | MOVI | dest reg | — | — | int32 literal | `r[a] = Int(i32)`; Type::Int only |
+| ADDI | dest reg | — | — | int32 literal | `r[a] = r[a] + Int(i32)`; in-place; Type::Int only |
 
 ## new opcode: MOVI
 
@@ -128,6 +129,16 @@ net saving. -1 constant in pool. -2 Instructions.
 
 
 ## new OpCode addi
+
+**Implemented (Round 31, 2026-10-29):** `Opcode::ADDI` appended last in the
+enum (existing `.qlc` opcode numbers unchanged), `usesI32()` covers it, the
+VM routes it through the ADD binary path in all four exec loops
+(`frame.regs[a] = doBinary(ADD, frame.regs[a], Int(i32))`), and the compiler
+emits it for compound `+=` with a `Type::Int` literal RHS — plain
+(`a += 12`), captured variable (`cap += 12`), index (`a[i] += 12`) and
+member (`t.k += 12`) targets — saving the temp + `movi` (−1 instruction,
+−1 temp). Non-Int RHS (float/string) stays on the pool + ADD path. `.qlc`
+format version stays 2 (ADDI ships in the same uncommitted v2 as MOVI).
 
 OpCode `addi` adds the value of `i32` to register indexed by `a`
 

@@ -327,6 +327,59 @@ static void testMovi() {
 }
 
 // ---------------------------------------------------------------------------
+// ADDI: compound `+=` with an Int-literal RHS compiles to ADDI (immediate in
+// i32, no pool slot); non-Int RHS stays pooled + ADD. The v2 format
+// round-trips ADDI instruction-for-instruction (memcmp covers the encoding).
+// ---------------------------------------------------------------------------
+static bool hasAddi(const Function &fn, int32_t imm) {
+  for (const auto &i : fn.instructions)
+    if (i.op == Opcode::ADDI && i.i32 == imm)
+      return true;
+  return false;
+}
+
+static void testAddi() {
+  try {
+    // Int literal RHS -> ADDI with i32 == 12, no Int(12) pool slot.
+    CompiledProgram p = compileSrc("local a = 10\na += 12\n");
+    check(hasAddi(p.functions[0], 12), "addi: int literal emits ADDI");
+    check(!poolHasInt(p.functions[0], 12), "addi: no Int pool slot");
+
+    // Float literal RHS -> stays pooled + ADD, no ADDI.
+    CompiledProgram pf = compileSrc("local f = 1.5\nf += 1.5\n");
+    bool noAddi = true;
+    for (const auto &i : pf.functions[0].instructions)
+      if (i.op == Opcode::ADDI)
+        noAddi = false;
+    check(noAddi, "addi: float literal not ADDI");
+
+    // .qlc round-trip of an ADDI program (v2 format).
+    std::ostringstream os(std::ios::binary);
+    check(writeQlc(os, p, {}), "addi: writeQlc (v2)");
+    std::string bytes = os.str();
+    CompiledProgram back;
+    std::vector<std::pair<int, std::string>> slots;
+    std::string err;
+    std::istringstream is(bytes, std::ios::binary);
+    check(readQlc(is, back, slots, err), std::string("addi: readQlc v2 (") + err + ")");
+    if (err.empty()) {
+      bool same = back.functions.size() == p.functions.size();
+      if (same) {
+        const auto &a = p.functions[0];
+        const auto &b = back.functions[0];
+        same = a.instructions.size() == b.instructions.size();
+        for (size_t j = 0; same && j < a.instructions.size(); j++)
+          same = std::memcmp(&a.instructions[j], &b.instructions[j],
+                             sizeof(Instruction)) == 0;
+      }
+      check(same, "addi: round-trip instruction equality");
+    }
+  } catch (const QLangError &e) {
+    check(false, std::string("addi: ") + e.what());
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Malformed-input suite: each case must fail cleanly, leave the out-params
 // untouched, and say why.
 // ---------------------------------------------------------------------------
@@ -530,6 +583,7 @@ int main() {
   testValues();
   testProgram();
   testMovi();
+  testAddi();
   testMalformed();
   std::cout << (fails == 0 ? "all codec checks passed\n"
                            : "codec checks FAILED\n");

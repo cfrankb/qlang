@@ -168,14 +168,19 @@ enum class Opcode : uint16_t {
   // existing .qlc opcode numbers stay valid.
   MOVI, // r[a] = i32 immediate
 
+  // In-place addition of a 32-bit integer immediate: r[a] = r[a] + Int(i32).
+  // Same operand layout as MOVI (dest register in a, literal in i32; b/c
+  // unused). Appended last so existing .qlc opcode numbers stay valid.
+  ADDI, // r[a] = r[a] + i32 immediate
+
   kOpcodeCount // sentinel: not a real opcode; valid ops are < kOpcodeCount
 };
 
 // True when the opcode carries a 32-bit parameter in the combined b/c slot
 // (Instruction::i32) instead of int16_t a/b/c. Single source of truth shared
 // by the compiler (emit/backpatch), the VM (decode), the disassembler, and
-// the .qlc codec. Currently: the jump family (pc can exceed 32,767) and MOVI
-// (32-bit integer literal in i32, destination register in a).
+// the .qlc codec. Currently: the jump family (pc can exceed 32,767) and
+// MOVI/ADDI (32-bit integer literal in i32, destination register in a).
 inline bool usesI32(Opcode op) {
   switch (op) {
   case Opcode::JMP:
@@ -184,6 +189,7 @@ inline bool usesI32(Opcode op) {
   case Opcode::CONTINUE:
   case Opcode::BREAK:
   case Opcode::MOVI:
+  case Opcode::ADDI:
     return true;
   default:
     return false;

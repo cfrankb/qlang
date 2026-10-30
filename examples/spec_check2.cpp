@@ -895,6 +895,41 @@ int main() {
   // Plain assignment of an Int literal (not just declarations).
   expectVal("movi: plain assignment", "local a = 9\na = 42;", "a", 42);
 
+  // -- ADDI (SPEC §bytecodes: new OpCode addi) --
+  // Compound `+=` with an Int-literal RHS adds in place (no temp, no pool).
+  expectVal("addi: basic", "local a = 10\na += 12;", "a", 22);
+  expectVal("addi: negative immediate", "local a = 10\na += -5;", "a", 5);
+  // Float promotion preserved (routes through the ADD binary path).
+  expectStr("addi: float promotion",
+            "local f = 1.5\nf += 1\nlocal s = toStr(f);",
+            "s", "2.5");
+  // String RHS is not an Int literal: stays on the string concat path.
+  expectStr("addi: string += untouched", "local s = \"x\"\ns += \" y\";",
+            "s", "x y");
+  // Index target (ARRGET temp + ADDI in place).
+  expectVal("addi: index target", "local a = [10, 20]\na[1] += 5\nlocal r = a[1];",
+            "r", 25);
+  // Member target (TABGET temp + ADDI in place).
+  expectVal("addi: member target", "local t = {k=1}\nt.k += 4\nlocal r = t.k;",
+            "r", 5);
+  // Captured variable: `cap += 5` adds 5, not INC (regression for the
+  // pre-ADDI bug where any captured compound op compiled to INC/DEC).
+  expectVal("addi: closure var += n",
+            "local x = 1\nlocal f = (y)[x] { x += 5; return x }\nlocal r = f(0);\n",
+            "r", 6);
+  // Loop: ADDI dispatch in the loop paths.
+  expectVal("addi: literal in loop", "local s = 0\nfor x = 1 to 10 { s += 3 }",
+            "s", 30);
+  // Generator: ADDI across yields (generator dispatch path).
+  expectVal("addi: literal in generator",
+            "def g() { local y = 10; yield y; y += 7; yield y }\n"
+            "local gen = g()\nlocal a = gen()\nlocal b = gen()\n"
+            "local s = a + b;",
+            "s", 27);
+  // int32 wrap-around, identical to ADD.
+  expectVal("addi: int32 wrap", "local a = 2147483647\na += 1;", "a",
+            -2147483648);
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

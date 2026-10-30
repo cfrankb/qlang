@@ -1,6 +1,7 @@
 # ADDI — add 32-bit immediate to register — implementation plan
 
-Status: **proposal, not implemented**. Companion to
+Status: **implemented** (Round 31, 2026-10-29; all steps landed, suites
+green: ctest 5/5, `spec_check2` 391/0, `codec_check` all pass). Companion to
 `movi-implementation-plan.md` (MOVI is implemented, Round 30); reuses its
 exact operand layout and every part of its plumbing.
 
