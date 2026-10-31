@@ -59,6 +59,11 @@ private:
     // end), this stays true so every subsequent resume returns nil instead of
     // restarting the body from scratch.
     bool exhausted = false;
+    // Shared comparison flags set by CMP/CMPI (bitmask of CMP_GR/CMP_EQ/
+    // CMP_LT) and consumed by the JE/JNE/JG/JGE/JL/JLE jumps. Wiped on every
+    // CMP/CMPI. Lives in the frame (not the VM) so a nested call gets a clean
+    // flag state and the compiler's fused cmp+j* pair is the only writer.
+    int flags = 0;
   };
 
   static bool isTrue(const QLangValue &v);
@@ -68,6 +73,21 @@ private:
   static QLangValue doBinary(Opcode op, const QLangValue &a, const QLangValue &b,
                              QLangVM *vm = nullptr);
   static QLangValue doUnary(Opcode op, const QLangValue &a, QLangVM *vm = nullptr);
+
+  // Comparison flag bits (SPEC §bytecodes: alternate conditional jump). The
+  // three relations a>b, a==b, a<b are mutually exclusive and exhaustive, so
+  // CMP/CMPI set exactly one bit: a>b -> GR, a==b -> EQ, a<b -> LT. The JGE /
+  // JLE jumps test for "that bit or EQ" (a>=b / a<=b), never a combined
+  // pattern.
+  static constexpr int CMP_GR = 1;
+  static constexpr int CMP_EQ = 2;
+  static constexpr int CMP_LT = 4;
+  // Set the flags from two values; Int operands only (throws otherwise).
+  // The assignment at the call site is the "wipe" — only the matching bits
+  // are set here.
+  static int cmpFlags(const QLangValue &a, const QLangValue &b, QLangVM *vm);
+  // True when the flag pattern `f` satisfies the conditional jump `op`.
+  static bool flagsSatisfied(Opcode op, int f);
 
   // Call a closure value (Function type) with the given arguments.
   // Extracts the funcIndex from the closure and invokes callFunction.

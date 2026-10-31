@@ -883,6 +883,34 @@ bool QLangVM::isTrue(const QLangValue &v) {
   }
 }
 
+int QLangVM::cmpFlags(const QLangValue &a, const QLangValue &b, QLangVM *vm) {
+  // SPEC §bytecodes: cmp/cmpi can only be used if both operands are Int.
+  if (a.type() != QLangValue::Type::Int || b.type() != QLangValue::Type::Int)
+    vm->vmThrow(QLangErrorKind::Type, "cmp operand must be an int");
+  int64_t av = (int64_t)toInt64(a), bv = (int64_t)toInt64(b);
+  int f = 0;
+  if (av > bv) f |= CMP_GR;
+  if (av == bv) f |= CMP_EQ;
+  if (av < bv) f |= CMP_LT;
+  return f;
+}
+
+bool QLangVM::flagsSatisfied(Opcode op, int f) {
+  // The bits are set independently and are mutually exclusive (a>b, a==b,
+  // a<b are exhaustive), so `f` is exactly one of GR/EQ/LT. The >= / <=
+  // jumps therefore test for "that bit OR eq" — NOT for the combined
+  // (GR|EQ) pattern, which can never occur.
+  switch (op) {
+  case Opcode::JG: return f == CMP_GR;                 // a > b
+  case Opcode::JGE: return (f & (CMP_GR | CMP_EQ)) != 0; // a >= b
+  case Opcode::JL: return f == CMP_LT;                 // a < b
+  case Opcode::JLE: return (f & (CMP_LT | CMP_EQ)) != 0; // a <= b
+  case Opcode::JE: return f == CMP_EQ;                 // a == b
+  case Opcode::JNE: return (f & CMP_EQ) == 0;          // a != b
+  default: return false;
+  }
+}
+
 QLangValue QLangVM::callClosure(const QLangValue &closure, const std::vector<QLangValue> &args) {
   if (closure.type() == QLangValue::Type::Generator) {
     // Generator: resume the saved frame and run until the next yield or exhaustion.
@@ -1625,6 +1653,9 @@ void QLangVM::run() {
     case Opcode::ADDI:
       frame.regs[i.a] = doBinary(Opcode::ADD, frame.regs[i.a], QLangValue::Int(i.i32), this);
       break;
+    case Opcode::SUBI:
+      frame.regs[i.a] = doBinary(Opcode::SUB, frame.regs[i.a], QLangValue::Int(i.i32), this);
+      break;
     case Opcode::ADD:
     case Opcode::SUB:
     case Opcode::MUL:
@@ -1650,6 +1681,23 @@ void QLangVM::run() {
       trace(TRACE_VM_LOOP, "[DBG-RES] op=%d a=%d b=%d c=%d -> regs[%d]=%s (b=%s, c=%s)\n", (int)op, i.a, i.b, i.c, i.a, valueToString(result).c_str(), valueToString(frame.regs[i.b]).c_str(), valueToString(frame.regs[i.c]).c_str());
       break;
     }
+    case Opcode::CMP:
+      frame.flags = cmpFlags(frame.regs[i.a], frame.regs[i.b], this);
+      break;
+    case Opcode::CMPI:
+      frame.flags = cmpFlags(frame.regs[i.a], QLangValue::Int(i.i32), this);
+      break;
+    case Opcode::JE:
+    case Opcode::JNE:
+    case Opcode::JG:
+    case Opcode::JGE:
+    case Opcode::JL:
+    case Opcode::JLE:
+      if (flagsSatisfied(op, frame.flags))
+        frame.pc = static_cast<size_t>(i.i32);
+      else
+        frame.pc = frame.pc + 1;
+      continue;
     case Opcode::JMP:
       frame.pc = static_cast<size_t>(i.i32);
       continue;
@@ -1929,6 +1977,9 @@ void QLangVM::runFrames(int startFrame)
     case Opcode::ADDI:
       frame.regs[i.a] = doBinary(Opcode::ADD, frame.regs[i.a], QLangValue::Int(i.i32), this);
       break;
+    case Opcode::SUBI:
+      frame.regs[i.a] = doBinary(Opcode::SUB, frame.regs[i.a], QLangValue::Int(i.i32), this);
+      break;
     case Opcode::ADD:
     case Opcode::SUB:
     case Opcode::MUL:
@@ -1951,6 +2002,23 @@ void QLangVM::runFrames(int startFrame)
     case Opcode::IN:
       frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       break;
+    case Opcode::CMP:
+      frame.flags = cmpFlags(frame.regs[i.a], frame.regs[i.b], this);
+      break;
+    case Opcode::CMPI:
+      frame.flags = cmpFlags(frame.regs[i.a], QLangValue::Int(i.i32), this);
+      break;
+    case Opcode::JE:
+    case Opcode::JNE:
+    case Opcode::JG:
+    case Opcode::JGE:
+    case Opcode::JL:
+    case Opcode::JLE:
+      if (flagsSatisfied(op, frame.flags))
+        frame.pc = static_cast<size_t>(i.i32);
+      else
+        frame.pc = frame.pc + 1;
+      continue;
     case Opcode::JMP:
       frame.pc = static_cast<size_t>(i.i32);
       continue;
@@ -2317,6 +2385,9 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       case Opcode::ADDI:
         frame.regs[i.a] = doBinary(Opcode::ADD, frame.regs[i.a], QLangValue::Int(i.i32), this);
         break;
+      case Opcode::SUBI:
+        frame.regs[i.a] = doBinary(Opcode::SUB, frame.regs[i.a], QLangValue::Int(i.i32), this);
+        break;
       case Opcode::ADD:
       case Opcode::SUB:
       case Opcode::MUL:
@@ -2339,6 +2410,23 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       case Opcode::IN:
         frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
         break;
+      case Opcode::CMP:
+        frame.flags = cmpFlags(frame.regs[i.a], frame.regs[i.b], this);
+        break;
+      case Opcode::CMPI:
+        frame.flags = cmpFlags(frame.regs[i.a], QLangValue::Int(i.i32), this);
+        break;
+      case Opcode::JE:
+      case Opcode::JNE:
+      case Opcode::JG:
+      case Opcode::JGE:
+      case Opcode::JL:
+      case Opcode::JLE:
+        if (flagsSatisfied(op, frame.flags))
+          frame.pc = static_cast<size_t>(i.i32);
+        else
+          frame.pc = frame.pc + 1;
+        continue;
       case Opcode::JMP:
         frame.pc = static_cast<size_t>(i.i32);
         continue;
@@ -2629,6 +2717,9 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     case Opcode::ADDI:
       frame.regs[i.a] = doBinary(Opcode::ADD, frame.regs[i.a], QLangValue::Int(i.i32), this);
       break;
+    case Opcode::SUBI:
+      frame.regs[i.a] = doBinary(Opcode::SUB, frame.regs[i.a], QLangValue::Int(i.i32), this);
+      break;
     case Opcode::ADD:
     case Opcode::SUB:
     case Opcode::MUL:
@@ -2651,6 +2742,23 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     case Opcode::IN:
       frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       break;
+    case Opcode::CMP:
+      frame.flags = cmpFlags(frame.regs[i.a], frame.regs[i.b], this);
+      break;
+    case Opcode::CMPI:
+      frame.flags = cmpFlags(frame.regs[i.a], QLangValue::Int(i.i32), this);
+      break;
+    case Opcode::JE:
+    case Opcode::JNE:
+    case Opcode::JG:
+    case Opcode::JGE:
+    case Opcode::JL:
+    case Opcode::JLE:
+      if (flagsSatisfied(op, frame.flags))
+        frame.pc = static_cast<size_t>(i.i32);
+      else
+        frame.pc = frame.pc + 1;
+      continue;
     case Opcode::JMP:
       frame.pc = static_cast<size_t>(i.i32);
       continue;

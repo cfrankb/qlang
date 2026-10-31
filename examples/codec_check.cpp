@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <set>
@@ -380,6 +381,120 @@ static void testAddi() {
 }
 
 // ---------------------------------------------------------------------------
+// SUBI: compound `-=` with an Int-literal RHS compiles to SUBI (immediate in
+// i32, no pool slot); non-Int RHS stays pooled + SUB. The v2 format
+// round-trips SUBI instruction-for-instruction (memcmp covers the encoding).
+// ---------------------------------------------------------------------------
+static bool hasSubi(const Function &fn, int32_t imm) {
+  for (const auto &i : fn.instructions)
+    if (i.op == Opcode::SUBI && i.i32 == imm)
+      return true;
+  return false;
+}
+
+static void testSubi() {
+  try {
+    // Int literal RHS -> SUBI with i32 == 12, no Int(12) pool slot.
+    CompiledProgram p = compileSrc("local a = 10\na -= 12\n");
+    check(hasSubi(p.functions[0], 12), "subi: int literal emits SUBI");
+    check(!poolHasInt(p.functions[0], 12), "subi: no Int pool slot");
+
+    // Float literal RHS -> stays pooled + SUB, no SUBI.
+    CompiledProgram pf = compileSrc("local f = 1.5\nf -= 1.5\n");
+    bool noSubi = true;
+    for (const auto &i : pf.functions[0].instructions)
+      if (i.op == Opcode::SUBI)
+        noSubi = false;
+    check(noSubi, "subi: float literal not SUBI");
+
+    // .qlc round-trip of a SUBI program (v2 format).
+    std::ostringstream os(std::ios::binary);
+    check(writeQlc(os, p, {}), "subi: writeQlc (v2)");
+    std::string bytes = os.str();
+    CompiledProgram back;
+    std::vector<std::pair<int, std::string>> slots;
+    std::string err;
+    std::istringstream is(bytes, std::ios::binary);
+    check(readQlc(is, back, slots, err), std::string("subi: readQlc v2 (") + err + ")");
+    if (err.empty()) {
+      bool same = back.functions.size() == p.functions.size();
+      if (same) {
+        const auto &a = p.functions[0];
+        const auto &b = back.functions[0];
+        same = a.instructions.size() == b.instructions.size();
+        for (size_t j = 0; same && j < a.instructions.size(); j++)
+          same = std::memcmp(&a.instructions[j], &b.instructions[j],
+                             sizeof(Instruction)) == 0;
+      }
+      check(same, "subi: round-trip instruction equality");
+    }
+  } catch (const QLangError &e) {
+    check(false, std::string("subi: ") + e.what());
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CMP/CMPI + j*: an Int-vs-Int (literal) comparison in `if` fuses to
+// cmp/cmpi + a conditional jump (no comparison-result temp, no pool slot for
+// the boolean); non-Int comparisons stay on the legacy EQ/GT + JMPIFFALSE
+// path. The v2 format round-trips the new opcodes instruction-for-instruction.
+// ---------------------------------------------------------------------------
+static bool hasAnyOp(const Function &fn, std::initializer_list<Opcode> ops) {
+  for (const auto &i : fn.instructions)
+    for (Opcode o : ops)
+      if (i.op == o)
+        return true;
+  return false;
+}
+
+static void testCmpJump() {
+  try {
+    // Int literal comparison in `if` -> CMPI + a j* (no CMP, both literals;
+    // no JMPIFFALSE for the condition).
+    CompiledProgram p = compileSrc("local r = 0\nif (5 > 3) { r = 1 }\n");
+    check(hasAnyOp(p.functions[0], {Opcode::CMPI}),
+          "cmp: int literal if emits CMPI");
+    check(hasAnyOp(p.functions[0],
+                   {Opcode::JE, Opcode::JNE, Opcode::JG, Opcode::JGE,
+                    Opcode::JL, Opcode::JLE}),
+          "cmp: int literal if emits a j*");
+    check(!hasAnyOp(p.functions[0], {Opcode::JMPIFFALSE, Opcode::JMPIFTRUE}),
+          "cmp: int literal if not JMPIFFALSE");
+
+    // Float comparison -> legacy path (no CMP/CMPI/j* for the condition).
+    CompiledProgram pf = compileSrc("local r = 0\nif (1.5 < 2.5) { r = 1 }\n");
+    check(!hasAnyOp(pf.functions[0],
+                    {Opcode::CMP, Opcode::CMPI, Opcode::JE, Opcode::JNE,
+                     Opcode::JG, Opcode::JGE, Opcode::JL, Opcode::JLE}),
+          "cmp: float comparison not fused");
+
+    // .qlc round-trip of a fused program (v2 format).
+    std::ostringstream os(std::ios::binary);
+    check(writeQlc(os, p, {}), "cmp: writeQlc (v2)");
+    std::string bytes = os.str();
+    CompiledProgram back;
+    std::vector<std::pair<int, std::string>> slots;
+    std::string err;
+    std::istringstream is(bytes, std::ios::binary);
+    check(readQlc(is, back, slots, err), std::string("cmp: readQlc v2 (") + err + ")");
+    if (err.empty()) {
+      bool same = back.functions.size() == p.functions.size();
+      if (same) {
+        const auto &a = p.functions[0];
+        const auto &b = back.functions[0];
+        same = a.instructions.size() == b.instructions.size();
+        for (size_t j = 0; same && j < a.instructions.size(); j++)
+          same = std::memcmp(&a.instructions[j], &b.instructions[j],
+                             sizeof(Instruction)) == 0;
+      }
+      check(same, "cmp: round-trip instruction equality");
+    }
+  } catch (const QLangError &e) {
+    check(false, std::string("cmp: ") + e.what());
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Malformed-input suite: each case must fail cleanly, leave the out-params
 // untouched, and say why.
 // ---------------------------------------------------------------------------
@@ -584,6 +699,8 @@ int main() {
   testProgram();
   testMovi();
   testAddi();
+  testSubi();
+  testCmpJump();
   testMalformed();
   std::cout << (fails == 0 ? "all codec checks passed\n"
                            : "codec checks FAILED\n");

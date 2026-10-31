@@ -17,7 +17,7 @@ Entry point for the QLang language specification (migrated from root `SPEC.md`,
 | [10-classes.md](10-classes.md) | user-defined classes, `static`, `::`, restrictions | 1479–1641 | `be8d03617993264a7795d1054497d872ac1cc46c6deead3f1961e5b5509f6874` |
 | [11-external-types.md](11-external-types.md) | conformance with external (C++) types | 1642–1683 | `6c41d9b094d8924566acbbbe1d25b319e1cdd7e4fdfe09cdf65d0f861af4ef3c` |
 | [12-errors-trace.md](12-errors-trace.md) | error reporting, requirements, execution trace, format | 1684–1712 | `db3ec239276a6b51638e82be2ade9071605259aafda451b117060213e6e57f4c` |
-| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI opcodes |  | `be808ca312ad2e268f21a40e167e359886ef3ce625124b633bbea40c260b6e72` |
+| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle) |  | `42494584232ac407e8e35e8134fedf7b91a3b0359cbde2f44ae9d203a13b0a79` |
 
 
 Compliance: see [../compliance/README.md](../compliance/README.md).

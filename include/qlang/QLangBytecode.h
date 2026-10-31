@@ -173,6 +173,29 @@ enum class Opcode : uint16_t {
   // unused). Appended last so existing .qlc opcode numbers stay valid.
   ADDI, // r[a] = r[a] + i32 immediate
 
+  // In-place subtraction of a 32-bit integer immediate: r[a] = r[a] - Int(i32).
+  // Same operand layout as ADDI/MOVI (dest register in a, literal in i32; b/c
+  // unused). Appended last so existing .qlc opcode numbers stay valid.
+  SUBI, // r[a] = r[a] - i32 immediate
+
+  // Comparison: set the frame's shared flags (GR/EQ/LT) from two Int values,
+  // wiping any prior flags. CMP compares two registers (a, b); CMPI compares
+  // a register (a) against a 32-bit Int immediate (i32). Int operands only.
+  CMP,  // flags = cmp(regs[a], regs[b])   (a, b are registers)
+  CMPI, // flags = cmp(regs[a], Int(i32))  (a is a register, i32 the literal)
+
+  // Conditional jumps on the flags set by CMP/CMPI. The pc target is the
+  // 32-bit i32 slot (like JMP). Each tests a distinct flag pattern:
+  //   JG  gr             (a > b)     JGE  gr or eq (a >= b)
+  //   JL  lt             (a < b)     JLE  lt or eq (a <= b)
+  //   JE  eq             (a == b)    JNE  eq not set (a != b)
+  JE,   // if flags == EQ            pc = i32
+  JNE,  // if !(flags & EQ)          pc = i32
+  JG,   // if flags == GR            pc = i32
+  JGE,  // if flags == (GR|EQ)       pc = i32
+  JL,   // if flags == LT            pc = i32
+  JLE,  // if flags == (LT|EQ)       pc = i32
+
   kOpcodeCount // sentinel: not a real opcode; valid ops are < kOpcodeCount
 };
 
@@ -190,6 +213,14 @@ inline bool usesI32(Opcode op) {
   case Opcode::BREAK:
   case Opcode::MOVI:
   case Opcode::ADDI:
+  case Opcode::SUBI:
+  case Opcode::CMPI: // 32-bit Int literal in i32 (register in a)
+  case Opcode::JE:
+  case Opcode::JNE:
+  case Opcode::JG:
+  case Opcode::JGE:
+  case Opcode::JL:
+  case Opcode::JLE: // pc target in i32
     return true;
   default:
     return false;

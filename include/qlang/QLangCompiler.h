@@ -121,6 +121,18 @@ private:
   // Separate from emit(): a 3-arg emit() overload would be ambiguous with
   // the defaulted b/c parameters.
   void emitImm(Opcode op, int a, int32_t imm);
+  // Branch-site fusion (SPEC §bytecodes: alternate conditional jump): emit
+  // `cmp ra, rb` + the "jump if `rel` is false" conditional jump (JE/JNE/JG/
+  // JGE/JL/JLE), leaving the jump target as 0 for the caller to patch.
+  // Returns the index of the j* instruction. `rel` must be a comparison
+  // opcode (EQ/NE/LT/GT/LE/GE).
+  int emitCmpJumpFalse(Opcode rel, int ra, int rb);
+  // Expression form for if/while conditions: if `cond` is a binary
+  // comparison (==,!=,<,>,<=,>=) whose both operands are compile-time Int,
+  // emit the fused CMP/CMPI + j* and return the j* index (target 0). Returns
+  // -1 when fusion does not apply (the caller then uses the legacy EQ/GT +
+  // JMPIFFALSE path).
+  int emitCmpJumpFalseExpr(const ExprPtr &cond);
   void compileStmt(const StmtPtr &s,
                    std::vector<std::string> *captures = nullptr);
   void compileExpr(const ExprPtr &e, int dest);

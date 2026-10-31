@@ -359,6 +359,11 @@ namespace
     case Opcode::JMP:
     case Opcode::CONTINUE:
     case Opcode::BREAK:
+    case Opcode::JE:
+    case Opcode::JLE:
+    case Opcode::JGE:
+    case Opcode::JG:
+    case Opcode::JL:
       ss << "pc = " << pc; // ins.i32;
       break;
     case Opcode::JMPIFFALSE:
@@ -366,6 +371,12 @@ namespace
       break;
     case Opcode::JMPIFTRUE:
       ss << "if truth(" << rn(ins.a) << ") pc = " << pc; // ins.i32;
+      break;
+    case Opcode::CMP:
+      ss << "cmp r" << ins.a << ", r" << ins.b;
+      break;
+    case Opcode::CMPI:
+      ss << "cmpi r" << ins.a << ", r" << ins.i32;
       break;
     case Opcode::CALLFN:
     {
@@ -404,6 +415,14 @@ namespace
   // listing. Bits: 1=a, 2=b, 4=c, 8=combined i32 (jump targets). Default:
   // a/b/c. (Matches the operand semantics in QLangBytecode.h, e.g.
   // ARRAPP/CALLCLOS skip b.)
+  enum
+  {
+    A = 1,
+    B = 2,
+    C = 4,
+    I32 = 8
+  };
+
   int operandMask(Opcode op)
   {
     switch (op)
@@ -416,11 +435,18 @@ namespace
     case Opcode::RETURN:
     case Opcode::JMPIFFALSE: // condition in a; target is the i32 slot
     case Opcode::JMPIFTRUE:  // condition in a; target is the i32 slot
-      return 1 + 8;
+      return A + I32;
+    case Opcode::JE:  // condition in a; target is the i32 slot
+    case Opcode::JG:  // condition in a; target is the i32 slot
+    case Opcode::JGE: // condition in a; target is the i32 slot
+    case Opcode::JL:  // condition in a; target is the i32 slot
+    case Opcode::JLE: // condition in a; target is the i32 slot
+    case Opcode::JNE: // condition in a; target is the i32 slot
+      return I32;
     case Opcode::JMP: // 32-bit pc target in the combined i32 slot
     case Opcode::CONTINUE:
     case Opcode::BREAK:
-      return 8;
+      return I32;
     case Opcode::CONST:
     case Opcode::MOV:
     case Opcode::NEG:
@@ -433,12 +459,14 @@ namespace
     case Opcode::MAKEGEN:
     case Opcode::REFLOAD:
     case Opcode::REFSTORE:
-      return 3;
+    case Opcode::CMP:
+    case Opcode::CMPI:
+      return A + B;
     case Opcode::ARRAPP:
     case Opcode::CALLCLOS:
-      return 5; // a and c only
+      return A + C; // a and c only
     default:
-      return 7;
+      return A + B + C;
     }
   }
 
@@ -460,7 +488,7 @@ namespace
       s += fmt(v);
     };
     const int m = operandMask(ins.op);
-    if (m & 1)
+    if (m & A)
       add(ins.a);
     if (ins.op == Opcode::MOVI || ins.op == Opcode::ADDI)
     {
@@ -470,11 +498,11 @@ namespace
       s += std::to_string(ins.i32) + "i";
       return s;
     }
-    if (m & 2)
+    if (m & B)
       add(ins.b);
-    if (m & 4)
+    if (m & C)
       add(ins.c);
-    if (m & 8)
+    if (m & I32)
       add(ins.i32);
     return s;
   }
@@ -640,7 +668,7 @@ namespace
           std::sort(regs.begin(), regs.end());
           ss << "  vars:\n";
           for (const auto &[reg, name] : regs)
-            ss << "    r" << std::setw(3) << reg << "  " << name << "\n";
+            ss << "    r" << reg << "  " << name << "\n";
         }
         ss << "  constants:\n";
         for (size_t j = 0; j < f.constants.size(); j++)
@@ -656,7 +684,8 @@ namespace
         const auto &ins = f.instructions[j];
         if (level >= 2 && ins.line != lastLine && ins.line >= 1 &&
             static_cast<size_t>(ins.line) <= srcLines.size())
-          ss << "  L" << std::right << std::setw(2) << ins.line << ":  "
+          //          ss << "  L" << std::right << std::setw(2) << ins.line << ":  "
+          ss << "\n  L" << ins.line << ":  "
              << srcLines[static_cast<size_t>(ins.line) - 1] << "\n";
         lastLine = ins.line;
         // Level 3: append a copy of the referenced constant (operand b is the

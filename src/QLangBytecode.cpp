@@ -244,6 +244,15 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::REFSTORE: return "refstore";
   case Opcode::MOVI: return "movi"; // 32-bit int literal -> register (no pool)
   case Opcode::ADDI: return "addi"; // r[a] = r[a] + 32-bit int immediate (no pool)
+  case Opcode::SUBI: return "subi"; // r[a] = r[a] - 32-bit int immediate (no pool)
+  case Opcode::CMP: return "cmp"; // flags = cmp(regs[a], regs[b])
+  case Opcode::CMPI: return "cmpi"; // flags = cmp(regs[a], Int(i32))
+  case Opcode::JE: return "je"; // if eq            pc = i32
+  case Opcode::JNE: return "jne"; // if !eq          pc = i32
+  case Opcode::JG: return "jg"; // if gr            pc = i32
+  case Opcode::JGE: return "jge"; // if gr+eq        pc = i32
+  case Opcode::JL: return "jl"; // if lt            pc = i32
+  case Opcode::JLE: return "jle"; // if lt+eq        pc = i32
   }
   return "?";
 }

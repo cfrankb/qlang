@@ -448,6 +448,59 @@ static bool isIntLiteral(const ExprPtr &e) {
          e->literal.type() == QLangValue::Type::Int;
 }
 
+// Map a comparison opcode to the conditional jump that fires when that
+// comparison is FALSE (the JMPIFFALSE semantics the branch sites use).
+//   == -> jne   != -> je   < -> jge   > -> jle   <= -> jg   >= -> jl
+static Opcode cmpJumpIfFalse(Opcode rel) {
+  switch (rel) {
+  case Opcode::EQ: return Opcode::JNE;
+  case Opcode::NE: return Opcode::JE;
+  case Opcode::LT: return Opcode::JGE;
+  case Opcode::GT: return Opcode::JLE;
+  case Opcode::LE: return Opcode::JG;
+  case Opcode::GE: return Opcode::JL;
+  default: return Opcode::JMPIFFALSE; // not a comparison; caller handles
+  }
+}
+
+int QLangCompiler::emitCmpJumpFalse(Opcode rel, int ra, int rb) {
+  emit(Opcode::CMP, ra, rb);
+  emitImm(cmpJumpIfFalse(rel), 0, 0); // j* target in i32, patched by caller
+  return static_cast<int>(m_code.size()) - 1;
+}
+
+int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
+  if (!cond || cond->kind != ExprKind::Binary)
+    return -1;
+  const std::string &t = cond->op.text;
+  Opcode rel;
+  if (t == "==") rel = Opcode::EQ;
+  else if (t == "!=") rel = Opcode::NE;
+  else if (t == "<") rel = Opcode::LT;
+  else if (t == ">") rel = Opcode::GT;
+  else if (t == "<=") rel = Opcode::LE;
+  else if (t == ">=") rel = Opcode::GE;
+  else return -1;
+  // Both operands must be compile-time Int (SPEC: cmp/cmpi are Int-only).
+  if (inferType(cond->left) != QLangValue::Type::Int) return -1;
+  if (inferType(cond->right) != QLangValue::Type::Int) return -1;
+  int ra = tmpRegister();
+  compileExpr(cond->left, ra);
+  int jumpIdx;
+  if (isIntLiteral(cond->right)) {
+    emitImm(Opcode::CMPI, ra, cond->right->literal.asInt());
+    emitImm(cmpJumpIfFalse(rel), 0, 0);
+    jumpIdx = static_cast<int>(m_code.size()) - 1;
+  } else {
+    int rb = tmpRegister();
+    compileExpr(cond->right, rb);
+    jumpIdx = emitCmpJumpFalse(rel, ra, rb);
+    freeRegister(rb);
+  }
+  freeRegister(ra);
+  return jumpIdx;
+}
+
 CompiledProgram QLangCompiler::compile() {
   // Compile the top-level program into the main (scratch) function context.
   for (auto &s : m_program)
@@ -921,9 +974,12 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         Opcode opCode = (op == "++") ? Opcode::INC
                                      : (op == "--") ? Opcode::DEC
                                                     : binOp(op.substr(0, op.size() - 1));
-        if (opCode == Opcode::ADD && isIntLiteral(s->assignValue)) {
-          // `cap += 12` -> ADDI in-place (SPEC §bytecodes: new OpCode addi).
-          emitImm(Opcode::ADDI, cur, s->assignValue->literal.asInt());
+        if ((opCode == Opcode::ADD || opCode == Opcode::SUB) &&
+            isIntLiteral(s->assignValue)) {
+          // `cap += 12` / `cap -= 12` -> ADDI/SUBI in-place (SPEC §bytecodes:
+          // new OpCode addi/subi).
+          emitImm(opCode == Opcode::ADD ? Opcode::ADDI : Opcode::SUBI, cur,
+                  s->assignValue->literal.asInt());
         } else {
           int t = tmpRegister();
           compileExpr(s->assignValue, t);
@@ -976,9 +1032,12 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       Opcode opCode = (op == "++") ? Opcode::INC
                                    : (op == "--") ? Opcode::DEC
                                                   : binOp(op.substr(0, op.size() - 1));
-      if (opCode == Opcode::ADD && isIntLiteral(s->assignValue)) {
-        // `a += 12` -> ADDI in-place (SPEC §bytecodes: new OpCode addi).
-        emitImm(Opcode::ADDI, r, s->assignValue->literal.asInt());
+      if ((opCode == Opcode::ADD || opCode == Opcode::SUB) &&
+          isIntLiteral(s->assignValue)) {
+        // `a += 12` / `a -= 12` -> ADDI/SUBI in-place (SPEC §bytecodes:
+        // new OpCode addi/subi).
+        emitImm(opCode == Opcode::ADD ? Opcode::ADDI : Opcode::SUBI, r,
+                s->assignValue->literal.asInt());
       } else {
         int t = tmpRegister();
         compileExpr(s->assignValue, t);
@@ -1057,13 +1116,11 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         int stepReg = tmpRegister();
         compileExpr(s->stepExpr, stepReg);
         int guardLabel = static_cast<int>(m_code.size());
-        int cmpReg = tmpRegister();
         // QLang ranges are always inclusive: forward LE (x <= end),
-        // backward GE (x >= end).
+        // backward GE (x >= end). Int-vs-Int, so fused to cmp+j* (SPEC
+        // §bytecodes: alternate conditional jump).
         Opcode fwdCmp = (correctDir > 0) ? Opcode::LE : Opcode::GE;
-        emit(fwdCmp, cmpReg, x, endReg);
-        emit(Opcode::JMPIFFALSE, cmpReg, 0);
-        int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+        int jumpFalseIdx = emitCmpJumpFalse(fwdCmp, x, endReg);
         int bodyStart = static_cast<int>(m_code.instructions().size());
         for (auto &body : s->body)
           compileStmt(body);
@@ -1163,15 +1220,15 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       emit(Opcode::MOV, x, startReg);
       int guardOnceLabel = static_cast<int>(m_code.size());
       emit(Opcode::JMPIFTRUE, posDir, 0);          // forward -> LT guard path
-      int guardCmp = tmpRegister();
+      // Guards are Int-vs-Int: fused to cmp+j* (SPEC §bytecodes: alternate
+      // conditional jump). guardGeIdx/guardFwdIdx point at the CMP; the j* is
+      // at +1 (patched below).
       int guardGeIdx = static_cast<int>(m_code.size());
-      emit(Opcode::GE, guardCmp, x, endReg);       // backward guard (x >= end)
-      emit(Opcode::JMPIFFALSE, guardCmp, 0);       // exit when x < end
+      emitCmpJumpFalse(Opcode::GE, x, endReg);     // backward guard (x >= end)
       int guardSkipIdx = static_cast<int>(m_code.size());
       emit(Opcode::JMP, 0);                        // backward -> loop body
       int guardFwdIdx = static_cast<int>(m_code.size());
-      emit(Opcode::LE, guardCmp, x, endReg);       // forward guard (x <= end)
-      emit(Opcode::JMPIFFALSE, guardCmp, 0);       // exit when x > end
+      emitCmpJumpFalse(Opcode::LE, x, endReg);     // forward guard (x <= end)
       int guardLoopEntry = static_cast<int>(m_code.size());
       for (auto &body : s->body)
         compileStmt(body);
@@ -1261,10 +1318,10 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
           int stepReg = tmpRegister();
           compileExpr(s->stepExpr, stepReg);
           int guardLabel = static_cast<int>(m_code.size());
-          int cmpReg = tmpRegister();
-          emit(correctDir > 0 ? Opcode::LE : Opcode::GE, cmpReg, x, endReg);
-          emit(Opcode::JMPIFFALSE, cmpReg, 0);
-          int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+          // Int-vs-Int range guard: fused to cmp+j* (SPEC §bytecodes).
+          int jumpFalseIdx =
+              emitCmpJumpFalse(correctDir > 0 ? Opcode::LE : Opcode::GE, x,
+                               endReg);
           int bodyStart = static_cast<int>(m_code.instructions().size());
           for (auto &body : s->body)
             compileStmt(body);
@@ -1352,16 +1409,16 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         emit(Opcode::GT, posDir2, dirReg, zeroReg);
         int fwdGuardIdx = static_cast<int>(m_code.size());
         emit(Opcode::JMPIFTRUE, posDir2, 0);
-        int cmpReg = tmpRegister();
-        emit(Opcode::GE, cmpReg, x, endReg);
-        int backExitIdx = static_cast<int>(m_code.size());
-        emit(Opcode::JMPIFFALSE, cmpReg, 0);
+        // Int-vs-Int range guards: fused to cmp+j* (SPEC §bytecodes). The j*
+        // is the last instruction emitted, so backExitIdx/fwdExitIdx point at
+        // it (patched to guardExit below).
+        emitCmpJumpFalse(Opcode::GE, x, endReg); // backward guard (x >= end)
+        int backExitIdx = static_cast<int>(m_code.size()) - 1;
         int skipFwdIdx = static_cast<int>(m_code.size());
         emit(Opcode::JMP, 0);
         patchJump(m_code.instructions()[fwdGuardIdx], skipFwdIdx + 1);
-        emit(Opcode::LE, cmpReg, x, endReg);
-        int fwdExitIdx = static_cast<int>(m_code.size());
-        emit(Opcode::JMPIFFALSE, cmpReg, 0);
+        emitCmpJumpFalse(Opcode::LE, x, endReg); // forward guard (x <= end)
+        int fwdExitIdx = static_cast<int>(m_code.size()) - 1;
         int bodyStart = static_cast<int>(m_code.instructions().size());
         for (auto &body : s->body)
           compileStmt(body);
@@ -1406,10 +1463,8 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     emit(Opcode::LEN, lenReg, colReg, 0);
 
     int testLabel = static_cast<int>(m_code.size());
-    int cmpReg = tmpRegister();
-    emit(Opcode::LT, cmpReg, idx, lenReg); // idx < len(collection)
-    emit(Opcode::JMPIFFALSE, cmpReg, 0);
-    int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+    // idx < len(collection): Int-vs-Int, fused to cmp+j* (SPEC §bytecodes).
+    int jumpFalseIdx = emitCmpJumpFalse(Opcode::LT, idx, lenReg);
     // Assign loopVar = collection[idx] at the top of each iteration.
     emit(Opcode::SEQGET, x, colReg, idx);
 
@@ -1435,10 +1490,16 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
   }
   case StmtKind::While: {
     int testLabel = static_cast<int>(m_code.size());
-    int condReg = tmpRegister();
-    compileExpr(s->cond, condReg);
-    emit(Opcode::JMPIFFALSE, condReg, 0);
-    int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+    // Fused cmp+j* when the condition is an Int-vs-Int comparison (SPEC
+    // §bytecodes: alternate conditional jump); legacy EQ/GT + JMPIFFALSE
+    // otherwise.
+    int jumpFalseIdx = emitCmpJumpFalseExpr(s->cond);
+    if (jumpFalseIdx < 0) {
+      int condReg = tmpRegister();
+      compileExpr(s->cond, condReg);
+      emit(Opcode::JMPIFFALSE, condReg, 0);
+      jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+    }
 
     // continue -> re-evaluate the condition (testLabel is known before the body);
     // break -> exit (post-body), so patch BREAK instructions after the body.
@@ -1460,10 +1521,16 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     break;
   }
   case StmtKind::If: {
-    int condReg = tmpRegister();
-    compileExpr(s->ifCond, condReg);
-    emit(Opcode::JMPIFFALSE, condReg, 0);
-    int jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+    // Fused cmp+j* when the condition is an Int-vs-Int comparison (SPEC
+    // §bytecodes: alternate conditional jump); legacy EQ/GT + JMPIFFALSE
+    // otherwise.
+    int jumpFalseIdx = emitCmpJumpFalseExpr(s->ifCond);
+    if (jumpFalseIdx < 0) {
+      int condReg = tmpRegister();
+      compileExpr(s->ifCond, condReg);
+      emit(Opcode::JMPIFFALSE, condReg, 0);
+      jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+    }
 
     m_blockScopes.emplace_back(); // if body is a block scope (SPEC # block scope)
     for (auto &body : s->ifBody)
@@ -3089,9 +3156,11 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
       Opcode opCode = (op.text == "++") ? Opcode::INC
                       : (op.text == "--") ? Opcode::DEC
                                           : binOp(op.text.substr(0, op.text.size() - 1));
-      if (opCode == Opcode::ADD && isIntLiteral(value)) {
-        // `a[i] += 12` -> ADDI in-place (SPEC §bytecodes: new OpCode addi).
-        emitImm(Opcode::ADDI, tmpR, value->literal.asInt());
+      if ((opCode == Opcode::ADD || opCode == Opcode::SUB) && isIntLiteral(value)) {
+        // `a[i] += 12` / `a[i] -= 12` -> ADDI/SUBI in-place (SPEC §bytecodes:
+        // new OpCode addi/subi).
+        emitImm(opCode == Opcode::ADD ? Opcode::ADDI : Opcode::SUBI, tmpR,
+                value->literal.asInt());
       } else {
         compileExpr(value, valR);
         emit(opCode, tmpR, tmpR, valR);
@@ -3123,9 +3192,11 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
       Opcode opCode = (op.text == "++") ? Opcode::INC
                       : (op.text == "--") ? Opcode::DEC
                                           : binOp(op.text.substr(0, op.text.size() - 1));
-      if (opCode == Opcode::ADD && isIntLiteral(value)) {
-        // `t.k += 12` -> ADDI in-place (SPEC §bytecodes: new OpCode addi).
-        emitImm(Opcode::ADDI, tmpR, value->literal.asInt());
+      if ((opCode == Opcode::ADD || opCode == Opcode::SUB) && isIntLiteral(value)) {
+        // `t.k += 12` / `t.k -= 12` -> ADDI/SUBI in-place (SPEC §bytecodes:
+        // new OpCode addi/subi).
+        emitImm(opCode == Opcode::ADD ? Opcode::ADDI : Opcode::SUBI, tmpR,
+                value->literal.asInt());
       } else {
         compileExpr(value, valR);
         emit(opCode, tmpR, tmpR, valR);

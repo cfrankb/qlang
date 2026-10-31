@@ -188,38 +188,44 @@ proposed comparator: `cmp`, `cmpi`
 |lt|    lesser than
 
 
-cmp compares Instruction.a and Instruction.b and sets `gr`, `eq` and `lt`. Flags are wiped. 1 means the flag is set. More than one can be set simultanously.
+cmp compares Instruction.a and Instruction.b and sets `gr`, `eq` and `lt`. The
+flags are wiped first, then each bit is set independently from the actual
+relation: `gr = (a > b)`, `eq = (a == b)`, `lt = (a < b)`. The three relations
+are mutually exclusive and exhaustive, so **exactly one** bit is set after a
+cmp/cmpi. (The `a >= b`, `a <= b`, `a != b` patterns below are *jump
+conditions*, not flag states — they are how the j* opcodes read a single set
+bit.)
 
 cmp opCode can only be used if a,b are both `int`
-cmpi opCode can only be used if a,i32 are both `int`
+cmpi opCode can only be used if a is `int` (i32 is always int)
 
-|opCode|condition true|gr|eq|lt|
+see which opcode can be used with which types (applies to column). 
+
+|opCode|relation|gr|eq|lt|
 |-|-|-|-|-|
 |cmp a,b|a > b|1|-|-|
-|cmp a,b|a < b|-|-|1|
-|cmp a,b|a >= b|1|1|-|
-|cmp a,b|a <= b|-|1|1|
 |cmp a,b|a == b|-|1|-|
-|cmp a,b|a != b|-|-|-|
+|cmp a,b|a < b|-|-|1|
 
-|opCode|condition true|gr|eq|lt|
+|opCode|relation|gr|eq|lt|
 |-|-|-|-|-|
-|cmpi a,i32|a > b|1|-|-|
-|cmpi a,i32|a < b|-|-|1|
-|cmpi a,i32|a >= b|1|1|-|
-|cmpi a,i32|a <= b|-|1|1|
-|cmpi a,i32|a == b|-|1|-|
-|cmpi a,i32|a != b|-|-|-|
+|cmpi a,i32|a > i32|1|-|-|
+|cmpi a,i32|a == i32|-|1|-|
+|cmpi a,i32|a < i32|-|-|1|
 
 
-|opCode|description|flags set|
-|-|-|-|
-|jg|jump greater|gr only set
-|jge|jump greater equal|gr and eq set
-|jl|jump lesser|lt only set
-|jle|jump lesser equal|lt and eq set
-|je|jump equal|eq only set
-|jne|jump not equal| eq not set
+|opCode|description|jumps when|meaning|
+|-|-|-|-|
+|jg|jump greater|gr|a > b
+|jge|jump greater equal|gr or eq|a >= b
+|jl|jump lesser|lt|a < b
+|jle|jump lesser equal|lt or eq|a <= b
+|je|jump equal|eq|a == b
+|jne|jump not equal|eq not set|a != b
+|ja|jump greater|gr only set|byte, word, dword (not implemented)
+|jae|jump greater equal|gr or eq|byte, word, dword (not implemented)
+|jb|jump lesser|lt only set|byte, word, dword (not implemented)
+|jbe|jump lesser equal|lt or eq|byte, word, dword (not implemented)
 
 address is stored in Instruction.i32
 
@@ -229,7 +235,7 @@ address is stored in Instruction.i32
   0055  jmpfalse     09,  5c         ; if !truth(r9) pc = 005c
 ```
 
-alternate, if r12 and r13 are both int then
+alternate, if r12 and r13 
 ```
   0054  cmp          0c, 0d ;  r12 > r13   (update shared registers)
   0055  jg           005c   ; pc=005c
@@ -241,7 +247,7 @@ alternate, if r12 and r13 are both int then
   004d  jmpfalse     06. 5c         ; if !truth(r6) pc = 005c
 ```
 
-alternate, if r12 and r9 are both int then
+alternate, if r12 and r9 
 ```
   004c  cmp            09, 0c ;  r9 == r12
   004d  je     005c         ; pc = 005c
@@ -253,7 +259,7 @@ alternate, if r12 and r9 are both int then
   0068  lt           09, 0d ; r14 = (r9 < r13)
   0069  jmpfalse     5c         ; if !truth(r14) pc = 005c
 ```
-alternate, if r13 and r9 are both int then
+alternate, if r13 and r9 
 
 ```
   0068  cmp           09, 0d ; r9 < r13

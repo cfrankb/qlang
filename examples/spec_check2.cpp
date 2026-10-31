@@ -930,6 +930,85 @@ int main() {
   expectVal("addi: int32 wrap", "local a = 2147483647\na += 1;", "a",
             -2147483648);
 
+  // -- SUBI (SPEC §bytecodes: new OpCode subi) --
+  // Compound `-=` with an Int-literal RHS subtracts in place (no temp, no
+  // pool). Mirrors the ADDI block.
+  expectVal("subi: basic", "local a = 10\na -= 12;", "a", -2);
+  expectVal("subi: negative immediate", "local a = 10\na -= -5;", "a", 15);
+  // Plain `n = n - 1` form (the spec's subi example) also fuses.
+  expectVal("subi: n = n - 1", "local n = 5\nn = n - 1;", "n", 4);
+  // Float promotion preserved (routes through the SUB binary path).
+  expectStr("subi: float promotion",
+            "local f = 1.5\nf -= 1\nlocal s = toStr(f);",
+            "s", "0.5");
+  // Non-Int (float) RHS is not an Int literal: stays on the pool + SUB path.
+  expectStr("subi: float RHS pooled",
+            "local f = 5.5\nf -= 2.5\nlocal s = toStr(f);",
+            "s", "3");
+  // Index target (ARRGET temp + SUBI in place).
+  expectVal("subi: index target",
+            "local a = [10, 20]\na[1] -= 5\nlocal r = a[1];",
+            "r", 15);
+  // Member target (TABGET temp + SUBI in place).
+  expectVal("subi: member target",
+            "local t = {k=1}\nt.k -= 4\nlocal r = t.k;",
+            "r", -3);
+  // Captured variable: `cap -= 5` subtracts 5 (not DEC).
+  expectVal("subi: closure var -= n",
+            "local x = 10\nlocal f = (y)[x] { x -= 5; return x }\nlocal r = f(0);\n",
+            "r", 5);
+  // Loop: SUBI dispatch in the loop paths.
+  expectVal("subi: literal in loop", "local s = 30\nfor x = 1 to 10 { s -= 3 }",
+            "s", 0);
+  // Generator: SUBI across yields (generator dispatch path).
+  expectVal("subi: literal in generator",
+            "def g() { local y = 10; yield y; y -= 7; yield y }\n"
+            "local gen = g()\nlocal a = gen()\nlocal b = gen()\n"
+            "local s = a - b;",
+            "s", 7);
+  // int32 wrap-around, identical to SUB.
+  expectVal("subi: int32 wrap", "local a = -2147483648\na -= 1;", "a",
+            2147483647);
+
+  // -- CMP/CMPI + j* (SPEC §bytecodes: alternate conditional jump) --
+  // Int-vs-Int (literal) comparisons in `if` fuse to cmp/cmpi + a
+  // conditional jump. All six relations, both directions, and the boundary
+  // (== vs +/- 1) so every j* is exercised.
+  expectVal("cmp: if > true", "local r = 0\nif (5 > 3) { r = 1 }", "r", 1);
+  expectVal("cmp: if > false", "local r = 0\nif (3 > 5) { r = 1 }", "r", 0);
+  expectVal("cmp: if < true", "local r = 0\nif (3 < 5) { r = 1 }", "r", 1);
+  expectVal("cmp: if < false", "local r = 0\nif (5 < 3) { r = 1 }", "r", 0);
+  expectVal("cmp: if == true", "local r = 0\nif (5 == 5) { r = 1 }", "r", 1);
+  expectVal("cmp: if == false", "local r = 0\nif (5 == 6) { r = 1 }", "r", 0);
+  expectVal("cmp: if != true", "local r = 0\nif (5 != 6) { r = 1 }", "r", 1);
+  expectVal("cmp: if != false", "local r = 0\nif (5 != 5) { r = 1 }", "r", 0);
+  // Boundary: <= and >= at the equal point (exercise jg/jle with EQ flag).
+  expectVal("cmp: if <= equal", "local r = 0\nif (5 <= 5) { r = 1 }", "r", 1);
+  expectVal("cmp: if <= over", "local r = 0\nif (6 <= 5) { r = 1 }", "r", 0);
+  expectVal("cmp: if >= equal", "local r = 0\nif (5 >= 5) { r = 1 }", "r", 1);
+  expectVal("cmp: if >= under", "local r = 0\nif (4 >= 5) { r = 1 }", "r", 0);
+  // else-branch taken when the comparison is false.
+  expectVal("cmp: if/else false->else",
+            "local r = 0\nif (3 > 5) { r = 1 } else { r = 2 }", "r", 2);
+  // Negative immediates through cmpi.
+  expectVal("cmp: if negative literal", "local r = 0\nif (-5 < 3) { r = 1 }",
+            "r", 1);
+  // Non-Int (float) comparison stays on the legacy pooled path (no fusion).
+  expectVal("cmp: float comparison unchanged",
+            "local r = 0\nif (1.5 < 2.5) { r = 1 }", "r", 1);
+  // Non-Int (string) comparison stays on the legacy path.
+  expectVal("cmp: string comparison unchanged",
+            "local r = 0\nif (\"a\" == \"a\") { r = 1 }", "r", 1);
+  // for-range guard (Int vs Int) fused to cmp+j*: forward and backward.
+  expectVal("cmp: for forward guard", "local s = 0\nfor x = 1 to 5 { s = s + 1 }",
+            "s", 5);
+  expectVal("cmp: for backward guard",
+            "local s = 0\nfor x = 5 to 1 { s = s + 1 }", "s", 5);
+  // for-in (array) guard `idx < len` fused: exercises the jge path.
+  expectVal("cmp: for-in array guard",
+            "local a = [10, 20, 30]\nlocal s = 0\nfor v in a { s = s + v }",
+            "s", 60);
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }
