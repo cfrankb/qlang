@@ -9,10 +9,13 @@
 // `&SelfType::translate`) — unqualified `&x` is not a pointer-to-member in
 // C++ (it is ill-formed in a static context and yields a bound `int*`/is
 // rejected for methods in a non-static one), so a type is always required.
-// The script-visible type *name* is recovered from `__PRETTY_FUNCTION__`
-// (GCC/Clang; `__CLASS__` is MSVC-only). Everything is `QL_`-prefixed (or in
-// `namespace qlang`) so a translation unit can include this header alongside
-// Qt headers without macro collisions.
+// The script-visible type *name* is recovered from the platform "current
+// function" string (QL_PRETTY_FUNCTION: __PRETTY_FUNCTION__ on
+// GCC/Clang/MinGW/emscripten, __FUNCSIG__ on MSVC; `__CLASS__` is MSVC-only
+// and not used). The macros avoid the GNU `##__VA_ARGS__` extension so the
+// header is portable across g++/Clang/MinGW/MSVC/emscripten. Everything is
+// `QL_`-prefixed (or in `namespace qlang`) so a translation unit can include
+// this header alongside Qt headers without macro collisions.
 //
 // Usage:
 //   struct Point : qlang::QLObject<Point> {
@@ -42,6 +45,16 @@
 
 #include "qlang/QLangErrors.h"
 #include "qlang/QValue.h"
+
+// Cross-platform "current function" string. GCC/Clang/MinGW/emscripten
+// provide __PRETTY_FUNCTION__; MSVC provides __FUNCSIG__ instead. Both forms
+// contain the substring "::qlang_meta" for the meta accessor, so
+// meta_detail::className() parses either.
+#if defined(_MSC_VER)
+#define QL_PRETTY_FUNCTION __FUNCSIG__
+#else
+#define QL_PRETTY_FUNCTION __PRETTY_FUNCTION__
+#endif
 
 namespace qlang {
 
@@ -204,21 +217,6 @@ Member method(const char* n, R (T::*f)(A...) const) {
 
 // --- Whole-group enum tables (QL_ENUM / QL_FLAGS) -------------------------
 
-// GCC: "std::string qlang::meta_detail::enumName() [with E = DockOption;
-// v = DockOption::AnimatedDocks]" -> "AnimatedDocks". Unscoped enums have no
-// scope in the string; the last ':' (if any) separates it. (Single-NTTP
-// form; C++17 does not allow dependent NTTP *packs*, so the whole-group
-// table below is built from (name, value) pairs formed by the macro.)
-template <class E, E v> std::string enumName() {
-  const char* s = __PRETTY_FUNCTION__;
-  const char* p = std::strstr(s, "v = ");
-  p = p ? p + 4 : s;
-  const char* c = std::strrchr(p, ':');
-  p = c ? c + 1 : p;
-  const char* e = std::strchr(p, ']');
-  return std::string(p, e ? static_cast<size_t>(e - p) : std::strlen(p));
-}
-
 // Whole-group table from explicit (name, value) pairs; the QL_ENUM/QL_FLAGS
 // macros form the pairs from bare enumerator names (E::name + #name).
 // The pair *types* are deduced directly: a non-pack enum type cannot appear
@@ -294,8 +292,24 @@ template <class... Ts> TypeMeta assemble(std::string name, Ts... es) {
 //           QL_PROPERTY(name, READ getter, WRITE setter) -> read-write
 // Const getter listed bare -> read-only property.
 // `SelfType` is the inherited alias from `qlang::QLObject<Self>`.
-#define QL_PROPERTY(name, ...) \
-  qlang::meta_detail::prop(#name, &SelfType::name, ##__VA_ARGS__)
+// The optional READ/WRITE tail is handled by an arity dispatch. It counts the
+// TOTAL args (the name included) so the zero-tail `QL_PROPERTY(x)` case needs
+// no GNU `##__VA_ARGS__` comma-swallow — portable to MSVC. READ/WRITE expand
+// to acc(...) calls whose internal commas are not top-level, so they count as
+// single args.
+#define QL_PROPERTY(...) \
+  QL_PROPERTY_DISPATCH(QL_PROP_NARG(__VA_ARGS__), __VA_ARGS__)
+#define QL_PROP_NARG(...) QL_PROP_NARG_IMPL(__VA_ARGS__, 3, 2, 1, 0)
+#define QL_PROP_NARG_IMPL(_1, _2, _3, N, ...) N
+#define QL_PROPERTY_DISPATCH(N, ...) QL_PROPERTY_SEL(N)(__VA_ARGS__)
+#define QL_PROPERTY_SEL(N) QL_PROPERTY_SEL_IMPL(N)
+#define QL_PROPERTY_SEL_IMPL(N) QL_PROPERTY_CASE##N
+#define QL_PROPERTY_CASE1(name) \
+  qlang::meta_detail::prop(#name, &SelfType::name)
+#define QL_PROPERTY_CASE2(name, a) \
+  qlang::meta_detail::prop(#name, &SelfType::name, a)
+#define QL_PROPERTY_CASE3(name, a, b) \
+  qlang::meta_detail::prop(#name, &SelfType::name, a, b)
 #define READ(a) qlang::meta_detail::acc(&SelfType::a, qlang::meta_detail::Acc::read)
 #define WRITE(a) qlang::meta_detail::acc(&SelfType::a, qlang::meta_detail::Acc::write)
 
@@ -327,9 +341,11 @@ template <class... Ts> TypeMeta assemble(std::string name, Ts... es) {
 #define QL_FE2_14(m, e, x, ...) m(e, x), QL_FE2_13(m, e, __VA_ARGS__)
 #define QL_FE2_15(m, e, x, ...) m(e, x), QL_FE2_14(m, e, __VA_ARGS__)
 #define QL_FE2_16(m, e, x, ...) m(e, x), QL_FE2_15(m, e, __VA_ARGS__)
-// Count the enumerator list (1..16) and pick the matching fold.
+// Count the enumerator list (1..16) and pick the matching fold. No GNU
+// `##__VA_ARGS__` comma-swallow (MSVC lacks it); the degenerate 0-enumerator
+// case is the only one affected and is never used.
 #define QL_ENUM_COUNT(...) \
-  QL_ENUM_COUNT_IMPL(_, ##__VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, \
+  QL_ENUM_COUNT_IMPL(_, __VA_ARGS__, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, \
                      6, 5, 4, 3, 2, 1, 0)
 #define QL_ENUM_COUNT_IMPL(_, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, \
                            _12, _13, _14, _15, _16, N, ...) N
@@ -349,14 +365,15 @@ template <class... Ts> TypeMeta assemble(std::string name, Ts... es) {
 #define QL_CTOR(expr) qlang::meta_detail::ctor_clause(expr)
 
 // === The one assembly point (what Qt's MOC generates) ===
-// The class name is recovered from __PRETTY_FUNCTION__ (GCC/Clang);
-// __CLASS__ is an MSVC-only extension and is not available here.
+// The class name is recovered from the platform "current function" string
+// (QL_PRETTY_FUNCTION: __PRETTY_FUNCTION__ on GCC/Clang/MinGW/emscripten,
+// __FUNCSIG__ on MSVC). __CLASS__ is an MSVC-only extension and is not used.
 #define QL_OBJECT(...)                                       \
   public:                                                    \
   static const qlang::TypeMeta& qlang_meta() {               \
     static const qlang::TypeMeta m_{                          \
         qlang::meta_detail::assemble(                          \
-            qlang::meta_detail::className(__PRETTY_FUNCTION__), \
+            qlang::meta_detail::className(QL_PRETTY_FUNCTION), \
             __VA_ARGS__)};                                    \
     return m_;                                               \
   }
