@@ -219,6 +219,9 @@ namespace
     {
       ss << rn(ins.a) << " = (" << rn(ins.b) << " " << op << " " << rn(ins.c) << ")";
     };
+    char pc[32];
+    snprintf(pc, sizeof(pc), "%.4x", ins.i32);
+
     switch (ins.op)
     {
     case Opcode::CONST:
@@ -356,13 +359,13 @@ namespace
     case Opcode::JMP:
     case Opcode::CONTINUE:
     case Opcode::BREAK:
-      ss << "pc = " << ins.i32;
+      ss << "pc = " << pc; // ins.i32;
       break;
     case Opcode::JMPIFFALSE:
-      ss << "if !truth(" << rn(ins.a) << ") pc = " << ins.i32;
+      ss << "if !truth(" << rn(ins.a) << ") pc = " << pc; // ins.i32;
       break;
     case Opcode::JMPIFTRUE:
-      ss << "if truth(" << rn(ins.a) << ") pc = " << ins.i32;
+      ss << "if truth(" << rn(ins.a) << ") pc = " << pc; // ins.i32;
       break;
     case Opcode::CALLFN:
     {
@@ -413,7 +416,7 @@ namespace
     case Opcode::RETURN:
     case Opcode::JMPIFFALSE: // condition in a; target is the i32 slot
     case Opcode::JMPIFTRUE:  // condition in a; target is the i32 slot
-      return 1;
+      return 1 + 8;
     case Opcode::JMP: // 32-bit pc target in the combined i32 slot
     case Opcode::CONTINUE:
     case Opcode::BREAK:
@@ -934,7 +937,7 @@ int main(int argc, char **argv)
   if (!output.empty())
   {
     std::map<std::string, int> nativeIds(compiler.nativeFuncIds().begin(),
-                                          compiler.nativeFuncIds().end());
+                                         compiler.nativeFuncIds().end());
     size_t written = 0;
     if (!writeBytecode(compiled, nativeIds, output, written))
     {

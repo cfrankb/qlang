@@ -106,7 +106,7 @@ constants:
   code:
   L 1:  local a:byte = 0
   0000  movc         01, 00     ; r1 = pool[0]                # 0
-  0001  mov          00, 01     ; r0 = r1                   
+  0001  mov          00, 01     ; r0 = r1
   0002  movc         01, 01     ; r1 = pool[1]                # nil
   0003  conv         00, 00, 03 ; r0 = convert(r0, byte)      # type:byte
 ```
@@ -117,7 +117,7 @@ proposal
   old encoding
 
   0000  movc         01, 00     ; r1 = pool[0]                # 0
-  0001  mov          00, 01     ; r0 = r1                   
+  0001  mov          00, 01     ; r0 = r1
   0002  movc         01, 01     ; r1 = pool[1]                # nil
 
   new encoding
@@ -152,11 +152,117 @@ L 9:  a += 12                      # compound assignment -> 44
 
 proposed encoding
 ```
-  000e  addi         00, 12i    ; r0 =  r0 + 12                          
+  000e  addi         00, 12i    ; r0 =  r0 + 12
 ```
 
 net savings: -2 instructions
 
+## new OpCode: subi
+
+new opcode `subi`
+
+```
+  L26:    n = n - 1
+  0056  mov          0d, 06     ; r13 = r6
+  0057  movi         0e, 1i     ; r14 = 1
+  0058  sub          0c, 0d, 0e ; r12 = r13 - r14
+  0059  mov          06, 0c     ; r6 = r12
+```
+
+```
+  L26:    n = n - 1
+  0056  subi         06, 1i     ; r6 = r6 - 1
+```
+
+net savings: -3 instructions
+
+## alternate conditional jump OpCode
+
+proposed jump OpCode: `je`, `jl`, `jle`, `jg`, `jge`
+proposed comparator: `cmp`, `cmpi`
+
+|shared registers||
+|-|-|
+|gr|    greater than
+|eq|    equal
+|lt|    lesser than
+
+
+cmp compares Instruction.a and Instruction.b and sets `gr`, `eq` and `lt`. Flags are wiped. 1 means the flag is set. More than one can be set simultanously.
+
+cmp opCode can only be used if a,b are both `int`
+cmpi opCode can only be used if a,i32 are both `int`
+
+|opCode|condition true|gr|eq|lt|
+|-|-|-|-|-|
+|cmp a,b|a > b|1|-|-|
+|cmp a,b|a < b|-|-|1|
+|cmp a,b|a >= b|1|1|-|
+|cmp a,b|a <= b|-|1|1|
+|cmp a,b|a == b|-|1|-|
+|cmp a,b|a != b|-|-|-|
+
+|opCode|condition true|gr|eq|lt|
+|-|-|-|-|-|
+|cmpi a,i32|a > b|1|-|-|
+|cmpi a,i32|a < b|-|-|1|
+|cmpi a,i32|a >= b|1|1|-|
+|cmpi a,i32|a <= b|-|1|1|
+|cmpi a,i32|a == b|-|1|-|
+|cmpi a,i32|a != b|-|-|-|
+
+
+|opCode|description|flags set|
+|-|-|-|
+|jg|jump greater|gr only set
+|jge|jump greater equal|gr and eq set
+|jl|jump lesser|lt only set
+|jle|jump lesser equal|lt and eq set
+|je|jump equal|eq only set
+|jne|jump not equal| eq not set
+
+address is stored in Instruction.i32
+
+### OpCode jg
+```
+  0054  gt           09, 0c, 0d ; r9 = (r12 > r13)
+  0055  jmpfalse     09,  5c         ; if !truth(r9) pc = 005c
+```
+
+alternate, if r12 and r13 are both int then
+```
+  0054  cmp          0c, 0d ;  r12 > r13   (update shared registers)
+  0055  jg           005c   ; pc=005c
+```
+
+### OpCode je
+```
+  004c  eq           06, 09, 0c ; r6 = (r9 == r12)
+  004d  jmpfalse     06. 5c         ; if !truth(r6) pc = 005c
+```
+
+alternate, if r12 and r9 are both int then
+```
+  004c  cmp            09, 0c ;  r9 == r12
+  004d  je     005c         ; pc = 005c
+```
+
+
+### OpCode jl
+```
+  0068  lt           09, 0d ; r14 = (r9 < r13)
+  0069  jmpfalse     5c         ; if !truth(r14) pc = 005c
+```
+alternate, if r13 and r9 are both int then
+
+```
+  0068  cmp           09, 0d ; r9 < r13
+  0069  jl     005c         ; pc = 005c
+```
+
+
+OpCode `jge` and `jle` work exactly like `jg` and `jl`.
+`jne` is the opposite of `je`.
 
 ## decompiler mnemonics 
 
