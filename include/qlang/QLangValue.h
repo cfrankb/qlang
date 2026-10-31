@@ -40,8 +40,13 @@ public:
     Object,   // class instance (uses ObjectOps dispatch)
     Eof,      // end-of-file sentinel value
     Long,     // int64_t
-    Set       // set of unique values (ArrayValue storage; kept last so fixed
-              // serialization tags stay stable)
+    Set,      // set of unique values (ArrayValue storage)
+    // External C++ types (docs/EXTERNAL_TYPES.md). Appended after Set so the
+    // durable serialization tags (0-19) stay stable; the three are
+    // non-durable and the codec emits tag 0 (Nil) for them.
+    External,    // a view over exactly one C++ object (ExternalRef)
+    BoundMethod, // a callable method of an External object (BoundMethodRef)
+    TypeRef      // the type itself as a value (TypeRefRef)
   };
 
   QLangValue() : m_type(Type::Nil) {}
@@ -144,6 +149,31 @@ public:
     q.m_storage = std::move(v);
     return q;
   }
+  // External C++ types (docs/EXTERNAL_TYPES.md). `owned` is set when the
+  // script constructed the object; `borrowed` when the engine handed it over.
+  static QLangValue External(const TypeDescriptor *type,
+                             const std::shared_ptr<void> &owned) {
+    QLangValue q(Type::External);
+    q.m_storage = ExternalRef{type, owned, {}};
+    return q;
+  }
+  static QLangValue External(const TypeDescriptor *type,
+                             const std::weak_ptr<void> &borrowed) {
+    QLangValue q(Type::External);
+    q.m_storage = ExternalRef{type, {}, borrowed};
+    return q;
+  }
+  static QLangValue BoundMethod(const Member *member,
+                                const ExternalRef &target) {
+    QLangValue q(Type::BoundMethod);
+    q.m_storage = BoundMethodRef{member, target};
+    return q;
+  }
+  static QLangValue TypeRef(const TypeDescriptor *type) {
+    QLangValue q(Type::TypeRef);
+    q.m_storage = TypeRefRef{type};
+    return q;
+  }
 
   Type type() const { return m_type; }
   bool isNil() const { return m_type == Type::Nil; }
@@ -186,6 +216,17 @@ public:
   GeneratorValue &asGenerator();
   const ObjectValue &asObject() const;
   ObjectValue &asObject();
+  const ExternalRef &asExternal() const;
+  ExternalRef &asExternal();
+  const BoundMethodRef &asBoundMethod() const;
+  BoundMethodRef &asBoundMethod();
+  const TypeRefRef &asTypeRef() const;
+  TypeRefRef &asTypeRef();
+
+  // Convert a script value to a C++ type T (bool, int32_t, int64_t, double,
+  // float, std::string). Throws QLangError (Type kind) on a mismatch.
+  // Specializations are in QLangValue.cpp (Task 2).
+  template <class T> T as() const;
 
 private:
   Type m_type;

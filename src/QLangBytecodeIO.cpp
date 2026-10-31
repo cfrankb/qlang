@@ -203,6 +203,9 @@ QLangValue decodeValue(Reader &r, int depth, size_t &valueCount) {
   }
   case T::Generator: // non-durable: a file carrying tag 15 is malformed
   case T::Object:    // non-durable: a file carrying tag 16 is malformed
+  case T::External:  // non-durable: a file carrying tag 20 is malformed
+  case T::BoundMethod: // non-durable: a file carrying tag 21 is malformed
+  case T::TypeRef:  // non-durable: a file carrying tag 22 is malformed
     r.fail("invalid value tag");
   case T::Eof:
     return QLangValue(T::Eof);
@@ -225,7 +228,8 @@ QLangValue decodeValue(Reader &r, int depth, size_t &valueCount) {
 void serializeValue(std::ostream &os, const QLangValue &v) {
   using T = QLangValue::Type;
   T t = v.type();
-  if (t == T::Generator || t == T::Object)
+  if (t == T::Generator || t == T::Object || t == T::External ||
+      t == T::BoundMethod || t == T::TypeRef)
     t = T::Nil; // not durable (R2)
   putU8(os, static_cast<uint8_t>(t));
   switch (t) {
@@ -296,6 +300,9 @@ void serializeValue(std::ostream &os, const QLangValue &v) {
   }
   case T::Generator:
   case T::Object:
+  case T::External:
+  case T::BoundMethod:
+  case T::TypeRef:
     break; // unreachable: remapped to Nil above
   }
 }

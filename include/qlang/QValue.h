@@ -52,4 +52,62 @@ namespace qlang
 
     inline QValue qval_table(TableValue v) { return QValue::Table(v); }
 
+    // -------------------------------------------------------------------
+    // External C++ type constructors (docs/EXTERNAL_TYPES.md).
+    // -------------------------------------------------------------------
+    inline QValue qval_external(const TypeDescriptor *type,
+                                const std::shared_ptr<void> &owned) {
+        return QValue::External(type, owned);
+    }
+
+    inline QValue qval_external(const TypeDescriptor *type,
+                                const std::weak_ptr<void> &borrowed) {
+        return QValue::External(type, borrowed);
+    }
+
+    inline QValue qval_bound_method(const Member *member,
+                                    const ExternalRef &target) {
+        return QValue::BoundMethod(member, target);
+    }
+
+    inline QValue qval_type_ref(const TypeDescriptor *type) {
+        return QValue::TypeRef(type);
+    }
+
+    // -------------------------------------------------------------------
+    // Generic C++ -> QValue for scalars (used by meta bindings). These map
+    // a natural C++ type to its QLang value; the overloads keep the call
+    // site deduction-based so `qval_of(member)` works for any supported T.
+    // -------------------------------------------------------------------
+    inline QValue qval_of(bool v) { return QValue::Bool(v ? 1 : 0); }
+    inline QValue qval_of(int32_t v) { return QValue::Int(v); }
+    inline QValue qval_of(uint32_t v) { return QValue::Unsigned(v); }
+    inline QValue qval_of(uint8_t v) { return QValue::Byte(v); }
+    inline QValue qval_of(uint16_t v) { return QValue::Word(v); }
+    inline QValue qval_of(int16_t v) { return QValue::Short(v); }
+    inline QValue qval_of(int64_t v) { return QValue::Long(v); }
+    inline QValue qval_of(uint64_t v) { return QValue::Qword(v); }
+    inline QValue qval_of(double v) { return QValue::Float(v); }
+    inline QValue qval_of(float v) { return QValue::Float(static_cast<double>(v)); }
+    inline QValue qval_of(const std::string &v) { return QValue::String(v); }
+    inline QValue qval_of(const char *v) { return QValue::String(std::string(v)); }
+
+    // Container helpers: a vector of convertible elements -> a QLang array,
+    // an optional -> its value or Nil. Used by meta bindings for member
+    // types that are collections.
+    template <class T>
+    QValue qval_vec(const std::vector<T> &v) {
+        ArrayValue arr;
+        arr.reserve(v.size());
+        for (const auto &e : v)
+            arr.push_back(qval_of(e));
+        return QValue::Array(std::move(arr));
+    }
+
+    template <class T>
+    QValue qval_opt(const std::optional<T> &o) {
+        if (!o) return QValue();
+        return qval_of(*o);
+    }
+
 } // namespace qlang

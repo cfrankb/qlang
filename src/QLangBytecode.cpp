@@ -15,13 +15,17 @@ std::string valueKey(const QLangValue &v) {
 
   using T = QLangValue::Type;
   T t = v.type();
-  if (t == T::Generator)
+  if (t == T::Generator || t == T::External || t == T::BoundMethod ||
+      t == T::TypeRef)
     t = T::Nil; // not durable
   k.push_back(static_cast<char>(static_cast<uint8_t>(t)));
   switch (t) {
   case T::Nil:
   case T::Eof:
   case T::Generator: // unreachable: remapped to Nil above
+  case T::External:  // unreachable: remapped to Nil above
+  case T::BoundMethod: // unreachable: remapped to Nil above
+  case T::TypeRef:  // unreachable: remapped to Nil above
     break;
   case T::Bool:
   case T::Int:

@@ -1,6 +1,7 @@
 #include "qlang/QLangValue.h"
 
 #include "qlang/QLangErrors.h"
+#include "qlang/QLangTypes.h"  // full TypeDescriptor for ExternalRef::self()
 
 namespace qlang {
 
@@ -26,6 +27,9 @@ const char *QLangValue::typeName() const {
   case Type::Generator: return "generator";
   case Type::Object: return "object";
   case Type::Eof: return "eof";
+  case Type::External: return "external";
+  case Type::BoundMethod: return "bound method";
+  case Type::TypeRef: return "type";
   }
   return "?";
 }
@@ -164,6 +168,66 @@ ObjectValue &QLangValue::asObject() {
   return std::get<ObjectValue>(m_storage);
 }
 
+const ExternalRef &QLangValue::asExternal() const {
+  if (m_type != Type::External)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected External but value is ") + typeName());
+  return std::get<ExternalRef>(m_storage);
+}
+
+ExternalRef &QLangValue::asExternal() {
+  if (m_type != Type::External)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected External but value is ") + typeName());
+  return std::get<ExternalRef>(m_storage);
+}
+
+const BoundMethodRef &QLangValue::asBoundMethod() const {
+  if (m_type != Type::BoundMethod)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected BoundMethod but value is ") +
+                         typeName());
+  return std::get<BoundMethodRef>(m_storage);
+}
+
+BoundMethodRef &QLangValue::asBoundMethod() {
+  if (m_type != Type::BoundMethod)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected BoundMethod but value is ") +
+                         typeName());
+  return std::get<BoundMethodRef>(m_storage);
+}
+
+const TypeRefRef &QLangValue::asTypeRef() const {
+  if (m_type != Type::TypeRef)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected TypeRef but value is ") + typeName());
+  return std::get<TypeRefRef>(m_storage);
+}
+
+TypeRefRef &QLangValue::asTypeRef() {
+  if (m_type != Type::TypeRef)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("expected TypeRef but value is ") + typeName());
+  return std::get<TypeRefRef>(m_storage);
+}
+
+// ExternalRef object resolution: owned.get() if set, else borrowed.lock();
+// an expired borrow means the engine object is gone.
+const void *ExternalRef::self() const {
+  if (owned) return owned.get();
+  if (auto p = borrowed.lock()) return p.get();
+  throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                   std::string("object destroyed: ") + (type ? type->name : "?"));
+}
+
+void *ExternalRef::selfMut() {
+  if (owned) return owned.get();
+  if (auto p = borrowed.lock()) return p.get();
+  throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                   std::string("object destroyed: ") + (type ? type->name : "?"));
+}
+
 int64_t toInt64(const QLangValue &v) {
   switch (v.type()) {
   case QLangValue::Type::Bool: return static_cast<int64_t>(v.asInt());
@@ -185,5 +249,66 @@ int64_t toInt64(const QLangValue &v) {
   default: return 0;
   }
 }
+
+// ---------------------------------------------------------------------------
+// as<T>() — QValue -> C++ conversion for external-type bindings (Task 2).
+// Wrong script type -> QLangError (Type kind). The numeric specializations
+// follow the existing asInt/asFloat rules: asInt accepts Int/Bool/Char, and
+// as<double> also accepts Int (1 -> 1.0).
+// ---------------------------------------------------------------------------
+namespace {
+[[noreturn]] void asTypeError(const QLangValue &v, const char *t) {
+  throw QLangError(QLangErrorKind::Type, 0, 0,
+                   std::string("cannot convert ") + v.typeName() +
+                       " to " + t);
+}
+}
+
+template <> bool QLangValue::as<bool>() const {
+  switch (m_type) {
+  case Type::Bool:
+  case Type::Char:
+  case Type::Int: return this->asInt() != 0;
+  default: asTypeError(*this, "bool");
+  }
+}
+
+template <> int32_t QLangValue::as<int32_t>() const {
+  // asInt rules: Int/Bool/Char storage.
+  if (m_type != Type::Int && m_type != Type::Bool && m_type != Type::Char)
+    asTypeError(*this, "int");
+  return std::get<int32_t>(m_storage);
+}
+
+template <> int64_t QLangValue::as<int64_t>() const {
+  // Any numeric script type; non-numeric is a type error.
+  auto t = m_type;
+  if (t == Type::Bool || t == Type::Char || t == Type::Byte ||
+      t == Type::Word || t == Type::Short || t == Type::Int ||
+      t == Type::Unsigned || t == Type::Qword || t == Type::Long ||
+      t == Type::Float)
+    return toInt64(*this);
+  asTypeError(*this, "long");
+}
+
+template <> double QLangValue::as<double>() const {
+  auto t = m_type;
+  if (t == Type::Float) return this->asFloat();
+  if (t == Type::Int || t == Type::Bool || t == Type::Char ||
+      t == Type::Byte || t == Type::Word || t == Type::Short ||
+      t == Type::Unsigned || t == Type::Qword || t == Type::Long)
+    return static_cast<double>(toInt64(*this));
+  asTypeError(*this, "float");
+}
+
+template <> float QLangValue::as<float>() const {
+  return static_cast<float>(as<double>());
+}
+
+template <> std::string QLangValue::as<std::string>() const {
+  if (m_type != Type::String) asTypeError(*this, "string");
+  return this->asString();
+}
+
 
 } // namespace qlang
