@@ -14,3 +14,4 @@ test_module
 test_gen_simple
 range_check
 **/graphify-out/*
+.tmp/*

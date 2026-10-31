@@ -1151,10 +1151,10 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       if (hasStep) {
         compileExpr(s->stepExpr, stepReg);
       } else {
-        emit(Opcode::CONST, stepReg, emitConst(QLangValue::Int(1)));
+        emitImm(Opcode::MOVI, stepReg, 1);
       }
       int zeroReg = tmpRegister();
-      emit(Opcode::CONST, zeroReg, emitConst(QLangValue::Int(0)));
+      emitImm(Opcode::MOVI, zeroReg, 0);
 
       // direction = (end > start) ? 1 : -1
       int subReg = tmpRegister();
@@ -1162,13 +1162,13 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       int posReg = tmpRegister();
       emit(Opcode::GT, posReg, subReg, zeroReg);
       int dirReg = tmpRegister();
-      emit(Opcode::CONST, dirReg, emitConst(QLangValue::Int(-1)));
+      emitImm(Opcode::MOVI, dirReg, -1);
       int dPosLabel = static_cast<int>(m_code.size());
       emit(Opcode::JMPIFTRUE, posReg, 0);
       int dDoneLabel = static_cast<int>(m_code.size());
       emit(Opcode::JMP, 0);
       patchJump(m_code.instructions()[dPosLabel], dPosLabel + 2);
-      emit(Opcode::CONST, dirReg, emitConst(QLangValue::Int(1)));
+      emitImm(Opcode::MOVI, dirReg, 1);
       patchJump(m_code.instructions()[dDoneLabel], dPosLabel + 3);
 
       // No explicit step: advance in the loop's natural direction (unit step).
@@ -1344,23 +1344,23 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         if (hasStep) {
           compileExpr(s->stepExpr, stepReg);
         } else {
-          emit(Opcode::CONST, stepReg, emitConst(QLangValue::Int(1)));
+          emitImm(Opcode::MOVI, stepReg, 1);
         }
         int zeroReg = tmpRegister();
-        emit(Opcode::CONST, zeroReg, emitConst(QLangValue::Int(0)));
+        emitImm(Opcode::MOVI, zeroReg, 0);
         // Natural direction from the (runtime) bounds.
         int subReg = tmpRegister();
         emit(Opcode::SUB, subReg, endReg, startReg);
         int posReg = tmpRegister();
         emit(Opcode::GT, posReg, subReg, zeroReg);
         int dirReg = tmpRegister();
-        emit(Opcode::CONST, dirReg, emitConst(QLangValue::Int(-1)));
+        emitImm(Opcode::MOVI, dirReg, -1);
         int dPosLabel = static_cast<int>(m_code.size());
         emit(Opcode::JMPIFTRUE, posReg, 0);
         int dDoneLabel = static_cast<int>(m_code.size());
         emit(Opcode::JMP, 0);
         patchJump(m_code.instructions()[dPosLabel], dPosLabel + 2);
-        emit(Opcode::CONST, dirReg, emitConst(QLangValue::Int(1)));
+        emitImm(Opcode::MOVI, dirReg, 1);
         patchJump(m_code.instructions()[dDoneLabel], dPosLabel + 3);
 
         // step == 0 -> infinite loop: body + increment forever, no guard.
@@ -1456,7 +1456,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     // for i in <collection> ... next i : iterate array elements / table keys.
     int x = declareVar(s->loopVar); // loopVar holds each element/key
     int idx = tmpRegister();        // index counter
-    emit(Opcode::CONST, idx, emitConst(QLangValue::Int(0)));
+    emitImm(Opcode::MOVI, idx, 0);
     int colReg = tmpRegister();
     compileExpr(s->forEnd, colReg); // load the collection once
     int lenReg = tmpRegister();
@@ -1970,7 +1970,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
           int keyR = tmpRegister();
           emit(Opcode::CONST, keyR, emitConst(QLangValue::String(cn)));
           int valR = tmpRegister();
-          emit(Opcode::CONST, valR, emitConst(QLangValue::Int(1)));
+          emitImm(Opcode::MOVI, valR, 1);
           emit(Opcode::TABPUT, sconstReg, keyR, valR);
           freeRegister(keyR);
           freeRegister(valR);
@@ -2000,7 +2000,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         int keyR = tmpRegister();
         emit(Opcode::CONST, keyR, emitConst(QLangValue::String(cn)));
         int valR = tmpRegister();
-        emit(Opcode::CONST, valR, emitConst(QLangValue::Int(1)));
+        emitImm(Opcode::MOVI, valR, 1);
         emit(Opcode::TABPUT, cfieldsReg, keyR, valR);
         freeRegister(keyR);
         freeRegister(valR);
@@ -2048,8 +2048,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         int keyR = tmpRegister();
         emit(Opcode::CONST, keyR, emitConst(QLangValue::String(fieldNames[i])));
         int valR = tmpRegister();
-        emit(Opcode::CONST, valR,
-             emitConst(QLangValue::Int(static_cast<int32_t>(i))));
+        emitImm(Opcode::MOVI, valR, static_cast<int32_t>(i));
         emit(Opcode::TABPUT, fieldsReg, keyR, valR);
         freeRegister(keyR);
         freeRegister(valR);
@@ -3147,7 +3146,7 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
     if (target->indexExpr)
       compileExpr(target->indexExpr, idxR);
     else
-      emit(Opcode::CONST, idxR, emitConst(QLangValue::Int(0))); // ab[] -> append
+      emitImm(Opcode::MOVI, idxR, 0); // ab[] -> append
     int valR = tmpRegister();
     if (target->indexExpr) {
       // read-modify-write for compound ops (e.g. a[i] += v)

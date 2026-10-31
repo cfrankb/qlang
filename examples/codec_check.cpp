@@ -328,6 +328,45 @@ static void testMovi() {
 }
 
 // ---------------------------------------------------------------------------
+// MOVI (step 4.4): compiler-generated Ints (loop counters, class-metadata
+// markers, per-field indices) also compile to MOVI, so the main function's
+// constant pool holds no Type::Int at all. User literals were already MOVI
+// (Round 30); this removes the last compiler-generated pool entries.
+// ---------------------------------------------------------------------------
+static bool poolHasAnyInt(const Function &fn) {
+  for (const auto &c : fn.constants)
+    if (c.type() == QLangValue::Type::Int)
+      return true;
+  return false;
+}
+
+static void testCompilerMovi() {
+  try {
+    // for-loop (unit/zero/direction/counter) + a two-field class (markers +
+    // name->index metadata). Every compiler-generated Int is MOVI; the pool
+    // must contain no Type::Int entries.
+    const char *src =
+        "for x = 1 to 3 {\n"
+        "  local s = 0\n"
+        "}\n"
+        "class C {\n"
+        "  a = 1\n"
+        "  b = 2\n"
+        "}\n"
+        "local c = C()\n";
+    CompiledProgram p = compileSrc(src);
+    check(!poolHasAnyInt(p.functions[0]),
+          "compiler-movi: no Type::Int in main pool (for + class)");
+    // The for-loop's compiler-generated constants are present as MOVI.
+    check(hasMovi(p.functions[0], 1) && hasMovi(p.functions[0], 0) &&
+          hasMovi(p.functions[0], -1),
+          "compiler-movi: for step/zero/direction emitted as MOVI");
+  } catch (const QLangError &e) {
+    check(false, std::string("compiler-movi: ") + e.what());
+  }
+}
+
+// ---------------------------------------------------------------------------
 // ADDI: compound `+=` with an Int-literal RHS compiles to ADDI (immediate in
 // i32, no pool slot); non-Int RHS stays pooled + ADD. The v2 format
 // round-trips ADDI instruction-for-instruction (memcmp covers the encoding).
@@ -698,6 +737,7 @@ int main() {
   testValues();
   testProgram();
   testMovi();
+  testCompilerMovi();
   testAddi();
   testSubi();
   testCmpJump();

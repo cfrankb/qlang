@@ -90,6 +90,13 @@ VM dispatches it in all four exec loops, the compiler emits it for `Type::Int
 latter two inlined into the target register, saving the temp + `mov`), and
 the `.qlc` writer emits format version 2 (readers accept ≤ 2).
 
+**Step 4.4 (2026-10-30):** the compiler-generated `Type::Int` constants also
+compile to `MOVI` — the `for`-loop unit/zero/direction counters, the `for-in`
+index init, the class `__static_const__`/`__const_fields__` markers, the
+per-field `__fields__` indices, and the `ab[]` append index. After this the
+constant pool holds no `Type::Int` entries at all (user literals were already
+`MOVI` in Round 30); instruction count is unchanged (1:1).
+
 if the constant fits in a 4 bytes (32bits) integer, it should be encoded as `movi` (immediate) thus not requiring extra storage in the constant pool.  otherwise,  the opcode will be `movc` (CONST), the  constant is stored in the constant pool and the index is stored in the bytecode (current behavior)
 
 for `movi`. the target register is stored in `Instruction.a` and the immediate 32bit value is stored in `Instruction.i32`.
