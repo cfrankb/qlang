@@ -19,6 +19,8 @@ Entry point for the QLang language specification (migrated from root `SPEC.md`,
 | [12-errors-trace.md](12-errors-trace.md) | error reporting, requirements, execution trace, format | 1684–1712 | `db3ec239276a6b51638e82be2ade9071605259aafda451b117060213e6e57f4c` |
 | [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle) |  | `e7e5d8f5d27597c03474da944b79b24b606094972992b4aa47f5c5ed19724434` |
 
+| [14-scope.md](14-scope.md) | visibility scope. execution context  |  | `` |
+
 
 Compliance: see [../compliance/README.md](../compliance/README.md).
 Migration plan: [../plans/spec_migration_plan.md](../plans/spec_migration_plan.md).
