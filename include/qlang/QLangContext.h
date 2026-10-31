@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "QLangParser.h"
+#include "QLangTypes.h"
 #include "QLangValue.h"
 
 namespace qlang
@@ -128,6 +129,22 @@ namespace qlang
     // the `main` module (SPEC # modules); error reports reference it.
     const char *moduleName() const { return "main"; }
 
+    // External C++ type registration (docs/EXTERNAL_TYPES.md).
+    //
+    // Validates the meta (empty/duplicate names, property-vs-method name
+    // clashes, duplicate type names) and, when a constructor is present,
+    // registers the type name as a native function so `T(args)` constructs.
+    // The type name is also seeded as a script variable (a TypeRef value)
+    // so `T.Constant` resolves — see kTypeRefOps. The returned pointer is
+    // stable for the context's lifetime; clear() invalidates it (host code
+    // must re-run import<T>() after clear()).
+    const TypeDescriptor *registerType(const TypeMeta &meta);
+    template <class T>
+    const TypeDescriptor *import()
+    {
+      return registerType(T::qlang_meta());
+    }
+
   private:
     // Pimpl: holds the compiled program without creating a circular include.
     struct Pimpl;
@@ -135,6 +152,8 @@ namespace qlang
     std::unordered_map<std::string, QLangValue> m_vars;
     std::unordered_set<std::string> m_injectedConsts;
     std::unordered_map<std::string, NativeFunc> m_nativeFuncs;
+    // Registered external C++ types (TypeDescriptor ownership).
+    std::vector<std::unique_ptr<TypeDescriptor>> m_types;
     int m_verboseLevel = 0;
     std::size_t m_maxSteps = 100000; // live infinite-loop guard (see setMaxSteps)
     std::vector<Module> m_modules;

@@ -183,11 +183,75 @@ namespace {
     m_modules.clear();
     m_pimpl->livePrograms.clear();
     m_pimpl->compiled.reset();
+    // External type descriptors, their constructor natives, and the TypeRef
+    // variables all die together; host code must re-run import<T>() after
+    // clear().
+    m_types.clear();
   }
 
   void QLangContext::setFunc(const std::string &name, NativeFunc func)
   {
     m_nativeFuncs[name] = std::move(func);
+  }
+
+  const TypeDescriptor *QLangContext::registerType(const TypeMeta &meta)
+  {
+    if (meta.name.empty())
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "external type name is empty");
+    for (const auto &m : meta.members) {
+      if (m.name.empty())
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "external type '" + meta.name +
+                             "' has a member with an empty name");
+    }
+    // Duplicate member names, and a name used as both property and method.
+    std::unordered_map<std::string, int> memberKinds;
+    for (const auto &m : meta.members) {
+      auto it = memberKinds.find(m.name);
+      if (it != memberKinds.end())
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "duplicate member name '" + m.name + "' on type '" +
+                             meta.name + "'");
+      memberKinds[m.name] = m.kind;
+    }
+    // Duplicate type name: re-import is supported only after clear(), which
+    // also clears m_types and the constructor native.
+    for (const auto &t : m_types) {
+      if (t->name == meta.name)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "type '" + meta.name + "' is already registered");
+    }
+    // A type name clashing with an existing native function is only a
+    // problem when the type also registers a constructor native under the
+    // same name.
+    if (meta.construct && m_nativeFuncs.count(meta.name))
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "type name '" + meta.name +
+                           "' clashes with an existing native function");
+
+    auto desc = std::make_unique<TypeDescriptor>();
+    desc->name = meta.name;
+    desc->members = meta.members;
+    desc->toString = meta.toString;
+    desc->construct = meta.construct;
+    desc->enums = meta.enums;
+
+    if (meta.construct) {
+      // `T(args)` constructs: the native wraps the construct result in an
+      // owned External value.
+      setFunc(meta.name, [d = desc.get()](QLangContext &c,
+                                          const std::vector<QLangValue> &a) {
+        return QValue::External(d, d->construct(c, a));
+      });
+    }
+    // Seed the type-level value so `T.Constant` compiles: the name becomes
+    // a (const) script variable holding a TypeRef. The native table above
+    // keeps `T(args)` working; `T = ...` is rejected (const).
+    set(meta.name, QValue::TypeRef(desc.get()), true);
+
+    m_types.push_back(std::move(desc));
+    return m_types.back().get();
   }
 
   void QLangContext::registerModule(const std::string &name, const Module &module)

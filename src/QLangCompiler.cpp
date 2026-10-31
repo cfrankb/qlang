@@ -2352,6 +2352,14 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       emit(Opcode::MOV, dest, r);
       break;
     }
+    // Host-injected external variable (seeded via QLangContext::set, e.g.
+    // a TypeRef from import<T>()): declare a register on first use so it
+    // can be loaded; the VM seeds it from the scope at run start.
+    if (m_externalVars.count(e->name)) {
+      r = declareVar(e->name);
+      emit(Opcode::MOV, dest, r);
+      break;
+    }
     // Enum name: resolves to the hidden table variable holding its values
     // (captured across function boundaries like a free variable).
     if (m_enums.count(e->name)) {
@@ -2363,13 +2371,14 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         emit(Opcode::MOV, dest, regOf(hvar));
       break;
     }
-    // Global const: emit a CONST instruction to load its value.
+    // Global const: script-level consts already have a register (declared
+    // by the `const` statement); a register-less const is a host-injected
+    // external const (e.g. a TypeRef seeded by import<T>()) — declare a
+    // register on first use so it can be loaded.
     if (m_constVars.count(e->name)) {
-      // Global consts are captured via the closure mechanism. If we get here,
-      // it means the const was not captured (e.g., used without being in scope).
-      // This shouldn't happen for properly captured consts.
-      throw QLangError(QLangErrorKind::Parse, 0, 0,
-                       "use of undeclared variable '" + e->name + "'");
+      r = declareVar(e->name);
+      emit(Opcode::MOV, dest, r);
+      break;
     }
     throw QLangError(QLangErrorKind::Parse, 0, 0,
                      "use of undeclared variable '" + e->name + "'");
