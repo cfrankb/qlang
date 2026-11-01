@@ -2,12 +2,46 @@
 // must call `__str__` (and fall back to the class name), not "<table>".
 // Value-level assertions avoid stdout scraping; one capture case each for
 // print/println themselves.
+#if defined(_WIN32)
+#include <io.h>
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 #include <iostream>
 #include <string>
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
 using namespace qlang;
+
+// MSVC has no pipe(); build the fd pair from an anonymous Win32 pipe, and
+// alias the POSIX fd functions to their _-prefixed CRT equivalents.
+#if defined(_WIN32)
+#define dup _dup
+#define dup2 _dup2
+#define close _close
+#define read _read
+#endif
+
+static bool makePipe(int pipefd[2]) {
+#if defined(_WIN32)
+  SECURITY_ATTRIBUTES sa{};
+  sa.nLength = sizeof(sa);
+  HANDLE rd = nullptr, wr = nullptr;
+  if (!CreatePipe(&rd, &wr, &sa, 0))
+    return false;
+  pipefd[0] = _open_osfhandle((intptr_t)rd, _O_RDONLY);
+  pipefd[1] = _open_osfhandle((intptr_t)wr, _O_WRONLY);
+  if (pipefd[0] < 0 || pipefd[1] < 0) {
+    if (pipefd[0] >= 0) _close(pipefd[0]);
+    if (pipefd[1] >= 0) _close(pipefd[1]);
+    return false;
+  }
+  return true;
+#else
+  return pipe(pipefd) == 0;
+#endif
+}
 
 static int passes = 0, fails = 0;
 
@@ -26,7 +60,7 @@ static void expectStr(const std::string &name, const std::string &src,
 static std::string captureStdout(const std::string &src) {
   std::cout.flush(); // drain pending test reports into the real stdout first
   int pipefd[2];
-  if (pipe(pipefd) != 0) return "<pipe-failed>";
+  if (!makePipe(pipefd)) return "<pipe-failed>";
   int saved = dup(1);
   dup2(pipefd[1], 1);
   close(pipefd[1]);

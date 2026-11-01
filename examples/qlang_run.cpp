@@ -108,7 +108,11 @@ namespace
   {
     const std::time_t now = std::time(nullptr);
     std::tm tm{};
+#if defined(_WIN32)
+    localtime_s(&tm, &now); // MSVC: reversed argument order vs. localtime_r
+#else
     localtime_r(&now, &tm);
+#endif
     char buf[16];
     snprintf(buf, sizeof(buf), "%04d%02d%02d%02d%02d",
              tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
@@ -771,7 +775,7 @@ namespace
           }
         }
         char addr[32];
-        snprintf(addr, sizeof(addr), "%.4x", j);
+        snprintf(addr, sizeof(addr), "%.4x", static_cast<unsigned>(j));
 
         // Level 4: pseudo-mnemonic (register-level meaning), padded so the
         // trailing "#" note starts in the same column on every line.
