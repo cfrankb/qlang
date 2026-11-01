@@ -25,6 +25,9 @@ defined against C++20.
 | [12-errors-trace.md](12-errors-trace.md) | error reporting, requirements, execution trace, format | `f0814e4811e60570546d4771c048ecb1e903e6737ad388ee752d9699b9e68ff8` |
 | [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle) | `470bb91389c4c620559eba5ddc39e83a4558236fc0c134cdc653a4737c6f9114` |
 | [14-scope.md](14-scope.md) | visibility scope. execution context | `6ce00980b534b4cdd1a069605a3493b3949c0efa8285c800bf804cbc8731762c` |
+| [15-tests.md](15-tests.md) | tests |  |
+
+|docs/spec/15-tests.md
 
 Compliance: see [../compliance/README.md](../compliance/README.md).
 Migration plan: [../plans/spec_migration_plan.md](../plans/spec_migration_plan.md).

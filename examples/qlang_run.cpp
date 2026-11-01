@@ -6,8 +6,9 @@
 //
 // The app drives the pipeline directly (parse -> compile -> execute) so it
 // can time each stage and hand the compiled program to the .qlc writer.
-// Trace and profile output go to stderr; the script's own program output
-// (print/println) goes to stdout and is never affected.
+// Trace output goes to stderr; profile output goes to stderr and, when a
+// .qla listing is requested, is appended to that file as well. The script's
+// own program output (print/println) goes to stdout and is never affected.
 //
 // Exit codes:
 //   0  script ran to completion
@@ -60,7 +61,8 @@ namespace
               << "                        1 = frame/call events\n"
               << "                        2 = VM loop + opcodes + returns\n"
               << "                        3 = full detail (generators, table ops, compile)\n"
-              << "  --profile           report parse / compile / execute times in ms (stderr)\n"
+              << "  --profile           report parse / compile / execute times in ms (stderr,\n"
+              << "                        also appended to the --asm .qla listing when given)\n"
               << "  --output <file.qlc> write the compiled bytecode to <file.qlc>\n"
               << "  --asm <file.qla>    write a disassembly listing to <file.qla>\n"
               << "  --asm-level <n>     disassembly detail (default 1):\n"
@@ -882,6 +884,30 @@ namespace
     return ss.str();
   }
 
+  // Profile report as plain text — the same lines the --profile flag prints
+  // to stderr — so the block can also be appended to the .qla listing when
+  // both --profile and --asm are given.
+  std::string profileText(double parseMs, size_t stmtCount, double compileMs,
+                          size_t instrCount, size_t constCount, size_t funcCount,
+                          double executeMs, double totalMs)
+  {
+    char buf[160];
+    std::string s;
+    snprintf(buf, sizeof buf, "profile: parse    %.3f ms  (%zu statements)\n", parseMs,
+             stmtCount);
+    s += buf;
+    snprintf(buf, sizeof buf,
+             "profile: compile  %.3f ms  (%zu instructions, %zu constants, %zu functions)\n",
+             compileMs, instrCount, constCount, funcCount);
+    s += buf;
+    snprintf(buf, sizeof buf, "profile: execute  %.3f ms  (%zu instructions)\n", executeMs,
+             instrCount);
+    s += buf;
+    snprintf(buf, sizeof buf, "profile: total    %.3f ms\n", totalMs);
+    s += buf;
+    return s;
+  }
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -1174,13 +1200,31 @@ int main(int argc, char **argv)
     size_t constCount = 0;
     for (const auto &f : compiled.functions)
       constCount += f.constants.size();
-    std::fprintf(stderr, "profile: parse    %.3f ms  (%zu statements)\n",
-                 msBetween(t0, t1), stmtCount);
-    std::fprintf(stderr, "profile: compile  %.3f ms  (%zu instructions, %zu constants, %zu functions)\n",
-                 msBetween(t1, t2), instrCount, constCount, compiled.functions.size());
-    std::fprintf(stderr, "profile: execute  %.3f ms  (%zu instructions)\n",
-                 msBetween(t3, t4), instrCount);
-    std::fprintf(stderr, "profile: total    %.3f ms\n", msBetween(t0, t4));
+    const std::string text =
+        profileText(msBetween(t0, t1), stmtCount, msBetween(t1, t2), instrCount,
+                    constCount, compiled.functions.size(), msBetween(t3, t4),
+                    msBetween(t0, t4));
+    std::fputs(text.c_str(), stderr);
+    if (!asmOut.empty())
+    {
+      // The listing was written before execution, so the profile block can
+      // only be added now: execute time is not known until vm.run() returns.
+      std::ofstream aout(asmOut, std::ios::app);
+      if (!aout)
+      {
+        std::fprintf(stderr, "%s: cannot append profile to disassembly file '%s'\n",
+                     kAppName, asmOut.c_str());
+        return 5;
+      }
+      aout << "\n" << text;
+      aout.flush();
+      if (!aout)
+      {
+        std::fprintf(stderr, "%s: cannot append profile to disassembly file '%s'\n",
+                     kAppName, asmOut.c_str());
+        return 5;
+      }
+    }
   }
   return 0;
 }
