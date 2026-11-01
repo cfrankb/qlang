@@ -11,7 +11,7 @@ Commits: `ce31e3c` (value types + boundaries), `a93e58e` (declarative meta +
 emscripten/WASM.** Four of the five were verified by actually compiling (and,
 for the two native ones, running) a smoke test that exercises every macro.
 MSVC is not installed in the build environment, so it is addressed by removing
-exactly the two non-standard constructs it is known to reject; a `cl /std:c++17`
+exactly the two non-standard constructs it is known to reject; a `cl /std:c++20`
 compile on a Windows box would close the last cell.
 
 ## Compatibility matrix
@@ -24,7 +24,7 @@ compile on a Windows box would close the last cell.
 | **emscripten / WASM** (`em++`) | 6.0.9 | ✅ verified | compiles to object |
 | **MSVC** | via CI: VS 2022 on `windows-latest` (19.4x) | ⚠️ reasoned → pending first green CI run | both incompatibilities removed; CI gate added (`.github/workflows/msvc.yml`) |
 
-Everything in the header is **standard C++17** (CRTP, qualified
+Everything in the header is **standard C++20** (CRTP, qualified
 pointers-to-member, `std::variant`, templates, lambdas, `std::function`,
 `std::pair` brace-init) except for **two** constructs, both of which MSVC's
 conforming preprocessor / front-end lacks. Both are now gone from the
@@ -145,13 +145,13 @@ above is the portable one.
 
 ```sh
 # native (build + run the smoke test, which exercises every macro):
-g++     -std=c++17 -Iinclude smoke.cpp build/libqlang.a -o smoke && ./smoke
-clang++ -std=c++17 -Iinclude smoke.cpp build/libqlang.a -o smoke && ./smoke
+g++     -std=c++20 -Iinclude smoke.cpp build/libqlang.a -o smoke && ./smoke
+clang++ -std=c++20 -Iinclude smoke.cpp build/libqlang.a -o smoke && ./smoke
 # cross (compile to object only — no runnable target on this host):
-x86_64-w64-mingw32-g++ -std=c++17 -Iinclude -c smoke.cpp -o smoke.o
-em++    -std=c++17 -Iinclude -c smoke.cpp -o smoke.o
+x86_64-w64-mingw32-g++ -std=c++20 -Iinclude -c smoke.cpp -o smoke.o
+em++    -std=c++20 -Iinclude -c smoke.cpp -o smoke.o
 # MSVC (on Windows):
-cl /std:c++17 /Iinclude smoke.cpp qlang.lib
+cl /std:c++20 /Iinclude smoke.cpp qlang.lib
 ```
 
 The smoke test defines a CRTP `Point` with a data property, a computed
@@ -186,7 +186,7 @@ now gated by a continuous job instead of a one-off manual check:
 ## Open item
 
 - **MSVC compile-test — CI gate added.** The two known MSVC
-  incompatibilities are removed and the rest is standard C++17, but MSVC
+  incompatibilities are removed and the rest is standard C++20, but MSVC
   is not present in the local environment. `.github/workflows/msvc.yml`
   now builds every `CMakeLists.txt` target with the latest hosted MSVC
   and runs the full `ctest` suite on every push/PR. On the **first green

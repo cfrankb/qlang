@@ -35,6 +35,10 @@ static bool isArrayExpr(const ExprPtr &e) {
   return e && e->kind == ExprKind::Array;
 }
 
+// Forward declaration: defined further down, used by the encoding-guideline
+// helpers below (inPlaceReg/foldSelfArith/compileArgsToSlots).
+static bool isIntLiteral(const ExprPtr &e);
+
 // Backpatch a jump-family instruction's 32-bit pc target: it lives in the
 // combined i32 slot (usesI32 in QLangBytecode.h), not in a/b.
 static void patchJump(Instruction &ins, int target) { ins.i32 = target; }
@@ -127,6 +131,13 @@ void QLangCompiler::addModules(const std::vector<QLangContext::Module> &modules)
 }
 
 int QLangCompiler::newRegister() { return m_nextReg++; }
+bool QLangCompiler::inSlotRange(int r) const
+{
+  for (auto &slot : m_slotRanges)
+    if (r >= slot.first && r < slot.second)
+      return true;
+  return false;
+}
 int QLangCompiler::maxLiveTmp() const
 {
   int m = -1;
@@ -143,7 +154,10 @@ void QLangCompiler::promoteDeferred()
   auto it = m_deferred.begin();
   while (it != m_deferred.end())
   {
-    if (*it > hi)
+    // Deferred regs inside an active slot range stay out: promoting them
+    // would defeat beginArgSlots' quarantine (they re-enter the pool while
+    // the call's slot values are live, and tmpRegister() can alias them).
+    if (*it > hi && !inSlotRange(*it))
     {
       m_freeRegs.push_back(*it);
       it = m_deferred.erase(it);
@@ -176,16 +190,17 @@ int QLangCompiler::tmpRegister()
   int hi = maxLiveTmp();
   int r = -1;
   for (int c : m_freeRegs)
-    if (c > hi && (r < 0 || c < r))
+    if (c > hi && !inSlotRange(c) && (r < 0 || c < r))
       r = c;
   if (r >= 0)
     m_freeRegs.erase(std::find(m_freeRegs.begin(), m_freeRegs.end(), r));
   else
   {
-    // Demote the sub-high entries so the next allocation re-checks them
-    // (they become eligible once the high temp dies).
+    // Demote the sub-high and in-slot-range entries so the next allocation
+    // re-checks them (they become eligible once the high temp dies / the
+    // slot range closes).
     for (auto it = m_freeRegs.begin(); it != m_freeRegs.end();)
-      if (*it <= hi)
+      if (*it <= hi || inSlotRange(*it))
       {
         m_deferred.insert(*it);
         it = m_freeRegs.erase(it);
@@ -417,6 +432,88 @@ int QLangCompiler::regOf(const std::string &name) const {
   return it == m_regs.end() ? -1 : it->second;
 }
 
+int QLangCompiler::inPlaceReg(const ExprPtr &e) const {
+  // Only plain local/parameter variables can be read directly: their
+  // register is stable for the rest of the statement (named registers are
+  // never handed back to the temp pool). Captures (REFLOAD), enum tables,
+  // externals, literals and compound expressions all need a register.
+  if (e && e->kind == ExprKind::Variable) {
+    int r = regOf(e->name);
+    if (r >= 0)
+      return r;
+  }
+  return -1;
+}
+
+bool QLangCompiler::foldSelfArith(const ExprPtr &e, const std::string &name,
+                                  int r) {
+  // `x = x + k` / `x = x - k` -> inc/dec/addi/subi in place (SPEC
+  // §bytecodes: encoding guidelines — favor int immediates over
+  // temporaries). `+` is commutative so the variable may be on either side;
+  // `-` only folds when the variable is the left operand.
+  if (!e || e->kind != ExprKind::Binary)
+    return false;
+  const std::string &t = e->op.text;
+  if (t != "+" && t != "-")
+    return false;
+  bool leftIsSelf = e->left && e->left->kind == ExprKind::Variable &&
+                    e->left->name == name;
+  bool rightIsSelf = e->right && e->right->kind == ExprKind::Variable &&
+                     e->right->name == name;
+  if (!leftIsSelf && !rightIsSelf)
+    return false;
+  const ExprPtr &lit = (t == "+" && leftIsSelf) ? e->right
+                          : (t == "+")           ? e->left
+                                                 : e->right;
+  if (!isIntLiteral(lit))
+    return false;
+  int64_t k = lit->literal.asInt();
+  if (t == "+") {
+    if (k == 1)
+      emit(Opcode::INC, r, r);
+    else
+      emitImm(Opcode::ADDI, r, k);
+  } else {
+    if (k == 1)
+      emit(Opcode::DEC, r, r);
+    else
+      emitImm(Opcode::SUBI, r, k);
+  }
+  return true;
+}
+
+void QLangCompiler::compileArgsToSlots(const std::vector<ExprPtr> &args,
+                                       int slotBase) {
+  // Simple operands land directly in their slot; complex ones share a single
+  // scratch register (allocated on first use) so an N-arg call costs at most
+  // one temp instead of N (SPEC §bytecodes: encoding guidelines — universal
+  // scratch pad register).
+  int scratch = -1;
+  for (size_t i = 0; i < args.size(); i++) {
+    const ExprPtr &arg = args[i];
+    int slot = slotBase + static_cast<int>(i);
+    int direct = inPlaceReg(arg);
+    if (direct >= 0) {
+      if (slot != direct)
+        emit(Opcode::MOV, slot, direct, 0);
+      continue;
+    }
+    if (isIntLiteral(arg)) {
+      emitImm(Opcode::MOVI, slot, arg->literal.asInt());
+      continue;
+    }
+    if (arg->kind == ExprKind::Literal) {
+      emit(Opcode::CONST, slot, emitConst(arg->literal), 0);
+      continue;
+    }
+    if (scratch < 0)
+      scratch = tmpRegister();
+    compileExpr(arg, scratch);
+    if (slot != scratch)
+      emit(Opcode::MOV, slot, scratch, 0);
+  }
+}
+
 int QLangCompiler::emitConst(const QLangValue &value) {
   int idx = m_code.addConstant(value);
   std::string valStr;
@@ -495,20 +592,33 @@ int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
   // Both operands must be compile-time Int (SPEC: cmp/cmpi are Int-only).
   if (inferType(cond->left) != QLangValue::Type::Int) return -1;
   if (inferType(cond->right) != QLangValue::Type::Int) return -1;
-  int ra = tmpRegister();
-  compileExpr(cond->left, ra);
+  // Plain-variable operands are compared in place (no mov into a temp).
+  int ra = inPlaceReg(cond->left);
+  bool raTmp = false;
+  if (ra < 0) {
+    ra = tmpRegister();
+    raTmp = true;
+    compileExpr(cond->left, ra);
+  }
   int jumpIdx;
   if (isIntLiteral(cond->right)) {
     emitImm(Opcode::CMPI, ra, cond->right->literal.asInt());
     emitImm(cmpJumpIfFalse(rel), 0, 0);
     jumpIdx = static_cast<int>(m_code.size()) - 1;
   } else {
-    int rb = tmpRegister();
-    compileExpr(cond->right, rb);
+    int rb = inPlaceReg(cond->right);
+    bool rbTmp = false;
+    if (rb < 0) {
+      rb = tmpRegister();
+      rbTmp = true;
+      compileExpr(cond->right, rb);
+    }
     jumpIdx = emitCmpJumpFalse(rel, ra, rb);
-    freeRegister(rb);
+    if (rbTmp)
+      freeRegister(rb);
   }
-  freeRegister(ra);
+  if (raTmp)
+    freeRegister(ra);
   return jumpIdx;
 }
 
@@ -524,7 +634,8 @@ CompiledProgram QLangCompiler::compile() {
   Function mainFn;
   mainFn.name = "main";
   mainFn.paramCount = 0;
-  mainFn.registerCount = m_nextReg;
+  // Register 0 is always live (the implicit final `return regs[0]`).
+  mainFn.registerCount = std::max(m_nextReg, 1);
   mainFn.instructions = std::move(mainScratch.instructions());
   mainFn.constants = std::move(mainScratch.constants());
 
@@ -544,7 +655,8 @@ CompiledProgram QLangCompiler::compile() {
   out.code = std::move(outCode);
   out.vars = std::move(m_regs);
   out.constVars = std::move(m_constVars);
-  out.registerCount = m_nextReg;
+  // Register 0 is always live (see mainFn.registerCount above).
+  out.registerCount = std::max(m_nextReg, 1);
   return out;
 }
 
@@ -717,6 +829,11 @@ int QLangCompiler::buildFunction(const std::string &name,
     if (r >= m_nextReg)
       m_nextReg = r + 1;
   }
+  // Register 0 is always live (the frame's return register, read by the
+  // implicit final `return regs[0]`): even a parameterless function must
+  // not hand it out as a temp, or the frame would be sized too small.
+  if (m_nextReg < 1)
+    m_nextReg = 1;
 
   // Now detect free variables in the fresh context.
   std::vector<std::string> updatedCaptures = captures;
@@ -897,13 +1014,10 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       // the CONV emitted below.
       emitImm(Opcode::MOVI, r, 0);
     } else {
-      int t = tmpRegister();
-      compileExpr(s->value, t);
-      emit(Opcode::MOV, r, t);
-      // RHS temp is dead: clear + return to the pool (the clear matters for
-      // tables with finalizers: a lingering temp reference keeps the instance
-      // alive past its true final release).
-      releaseTemp(t);
+      // Compile the RHS directly into the declared register (SPEC
+      // §bytecodes: encoding guidelines — always copy directly to the
+      // final register): no temp, no MOV, no dead nil-clear.
+      compileExpr(s->value, r);
     }
     updateVarType(s->name, s->value);
     // Track generator variables: if RHS calls a generator function, mark LHS.
@@ -929,15 +1043,13 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
   case StmtKind::Const: {
     int r = declareVar(s->name, true);
     m_constVars.insert(s->name);
-    int t = tmpRegister();
+    // Compile the RHS directly into the declared register (SPEC
+    // §bytecodes: encoding guidelines — always copy directly to the
+    // final register): no temp, no MOV, no dead nil-clear.
     if (s->value)
-      compileExpr(s->value, t);
+      compileExpr(s->value, r);
     else
-      emit(Opcode::CONST, t, emitConst(QLangValue()));
-    emit(Opcode::MOV, r, t);
-    // RHS temp is dead: clear + return to the pool (keeps finalized tables
-    // from surviving their true final release).
-    releaseTemp(t);
+      emit(Opcode::CONST, r, emitConst(QLangValue()));
     updateVarType(s->name, s->value);
     // Enforce a typed declaration (e.g. local b:byte = 32).
     if (s->declaredType)
@@ -1030,13 +1142,13 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       if (isIntLiteral(s->assignValue)) {
         // `a = 0` -> one MOVI into the target register (SPEC §bytecodes: MOVI).
         emitImm(Opcode::MOVI, r, s->assignValue->literal.asInt());
+      } else if (foldSelfArith(s->assignValue, s->name, r)) {
+        // `a = a + 1` -> inc a / `a = a - 4` -> subi a, 4 (in place).
       } else {
-        int t = tmpRegister();
-        compileExpr(s->assignValue, t);
-        emit(Opcode::MOV, r, t);
-        // RHS temp is dead: clear + return to the pool (keeps finalized
-        // tables from surviving their true final release).
-        releaseTemp(t);
+        // Compile the RHS directly into the target register (SPEC
+        // §bytecodes: encoding guidelines — always copy directly to the
+        // final register): no temp, no MOV, no dead nil-clear.
+        compileExpr(s->assignValue, r);
       }
       updateVarType(s->name, s->assignValue);
     } else {
@@ -1627,7 +1739,6 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       }
     }
     int r = declareVar(s->name);
-    int t = tmpRegister();
     // Constant describing the closure: funcIndex + enclosing capture registers.
     auto closure = std::make_shared<Closure>();
     closure->funcIndex = funcIndex;
@@ -1642,16 +1753,18 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       closure->captures.push_back(cr);
     }
     int constIdx = emitConst(QLangValue::Function(closure));
-    emit(Opcode::MAKEFUNC, t, constIdx);
-    emit(Opcode::MOV, r, t);
+    // Build the closure value directly in the declared register (SPEC
+    // §bytecodes: encoding guidelines — always copy directly to the
+    // final register).
+    emit(Opcode::MAKEFUNC, r, constIdx);
     break;
   }
   case StmtKind::Return: {
     // Return value goes into register 0 (the frame's return register).
+    // Compile the expression directly into it (SPEC §bytecodes: encoding
+    // guidelines — always copy directly to the final register).
     if (s->returnValue) {
-      int t = tmpRegister();
-      compileExpr(s->returnValue, t);
-      emit(Opcode::MOV, 0, t);
+      compileExpr(s->returnValue, 0);
     } else {
       emit(Opcode::CONST, 0, emitConst(QLangValue())); // nil
     }
@@ -1660,10 +1773,10 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
   }
   case StmtKind::Yield: {
     // Yield value goes into register 0 (the generator's yield register).
+    // Compile the expression directly into it (SPEC §bytecodes: encoding
+    // guidelines — always copy directly to the final register).
     if (s->yieldValue) {
-      int t = tmpRegister();
-      compileExpr(s->yieldValue, t);
-      emit(Opcode::MOV, 0, t);
+      compileExpr(s->yieldValue, 0);
     } else {
       emit(Opcode::CONST, 0, emitConst(QLangValue())); // nil
     }
@@ -2360,7 +2473,10 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     }
     int r = regOf(e->name);
     if (r >= 0) {
-      emit(Opcode::MOV, dest, r);
+      // Value already in dest: skip the self-MOV (SPEC §bytecodes:
+      // encoding guidelines — avoid redundant copies / aliasing).
+      if (dest != r)
+        emit(Opcode::MOV, dest, r);
       break;
     }
     // Host-injected external variable (seeded via QLangContext::set, e.g.
@@ -2403,8 +2519,13 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       if (e->op.text == "in") {
         ExprPtr ra, rb;
         if (isRangeCall(e->right, ra, rb)) {
-          int l = tmpRegister();
-          compileExpr(e->left, l);
+          int l = inPlaceReg(e->left);
+          bool lTmp = false;
+          if (l < 0) {
+            l = tmpRegister();
+            lTmp = true;
+            compileExpr(e->left, l);
+          }
           int aReg = tmpRegister();
           compileExpr(ra, aReg);
           int geReg = tmpRegister();
@@ -2414,7 +2535,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
           int leReg = tmpRegister();
           emit(Opcode::LE, leReg, l, bReg);
           emit(Opcode::LAND, dest, geReg, leReg);
-          freeRegister(l);
+          if (lTmp)
+            freeRegister(l);
           freeRegister(aReg);
           freeRegister(geReg);
           freeRegister(bReg);
@@ -2422,18 +2544,39 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
           break;
         }
       }
-      int l = tmpRegister();
-      compileExpr(e->left, l);
-      int rr = tmpRegister();
-      compileExpr(e->right, rr);
+      // Plain-variable operands are used in place (no mov); anything else
+      // is compiled into a temp (SPEC §bytecodes: encoding guidelines —
+      // avoid temporary registers when possible).
+      int l = inPlaceReg(e->left);
+      bool lTmp = false;
+      if (l < 0) {
+        l = tmpRegister();
+        lTmp = true;
+        compileExpr(e->left, l);
+      }
+      int rr = inPlaceReg(e->right);
+      bool rrTmp = false;
+      if (rr < 0) {
+        rr = tmpRegister();
+        rrTmp = true;
+        compileExpr(e->right, rr);
+      }
       emit(binOp(e->op.text), dest, l, rr);
-      freeRegister(l);
-      freeRegister(rr);
+      if (lTmp)
+        freeRegister(l);
+      if (rrTmp)
+        freeRegister(rr);
     } else {
-      int o = tmpRegister();
-      compileExpr(e->operand, o);
+      int o = inPlaceReg(e->operand);
+      bool oTmp = false;
+      if (o < 0) {
+        o = tmpRegister();
+        oTmp = true;
+        compileExpr(e->operand, o);
+      }
       emit(unOp(e->uop.text), dest, o);
-      freeRegister(o);
+      if (oTmp)
+        freeRegister(o);
     }
     break;
   }
@@ -2441,25 +2584,16 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     int argCount = static_cast<int>(e->args.size());
     trace(TRACE_FRAME, "[DBG-CALL] Entering call expr for '%s' with %d args\n", e->callee.c_str(), argCount);
     trace(TRACE_FULL, "[DBG-CALL] &m_code=%p m_code.size=%zu\n", (void*)&m_code, m_code.instructions().size());
-    // Allocate the result slot first, then compile each arg into a temp
-    // register. After all args are in place, move them to the VM's expected
-    // arg slots (dest+1 .. dest+argCount) and emit CALL.
     // Reserve one extra slot: method/constructor calls shift args up by one
     // (self/anchor), so their live slots reach dest+argCount+1. Must happen
-    // BEFORE argRegs are allocated, or they would take the slot registers.
+    // BEFORE any arg register is allocated, or it would take a slot register.
     reserveArgSlots(dest, argCount + 1);
     int argBase = dest + 1;
-    std::vector<int> argRegs(argCount);
-    for (int i = 0; i < argCount; i++)
-      argRegs[i] = tmpRegister();
-    for (int i = 0; i < argCount; i++) {
-      trace(TRACE_FULL, "[DBG-CALL] Compiling arg %d\n", i);
-      compileExpr(e->args[i], argRegs[i]);
-      trace(TRACE_FULL, "[DBG-CALL] After arg %d: m_code=%zu\n", i, m_code.instructions().size());
-    }
-    // Move each arg into the slot the VM reads from.
-    for (int i = 0; i < argCount; i++)
-      emit(Opcode::MOV, argBase + i, argRegs[i], 0);
+    // Compile each arg directly into the VM's slot (dest+1 ..
+    // dest+argCount): simple operands land in the slot without a temp,
+    // complex ones share ONE scratch register (SPEC §bytecodes: encoding
+    // guidelines — universal scratch pad).
+    compileArgsToSlots(e->args, argBase);
 
     // Method call: obj.method(args) -> load the member (closure) first.
     if (e->calleeMember) {
@@ -2488,19 +2622,18 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
                   std::to_string(declaredArity) + " argument" +
                   (declaredArity == 1 ? "" : "s") + ", got " +
                   std::to_string(argCount));
-        int baseR = tmpRegister();
-        emit(Opcode::MOV, baseR, regOf("__proto_" + cname));
         int staticsR = tmpRegister();
         int skR = tmpRegister();
         emit(Opcode::CONST, skR, emitConst(QLangValue::String("__statics__")));
-        emit(Opcode::TABGET, staticsR, baseR, skR);
+        // __proto_<class> is a named register: read it in place.
+        emit(Opcode::TABGET, staticsR, regOf("__proto_" + cname), skR);
         int keyR = tmpRegister();
         emit(Opcode::CONST, keyR, emitConst(QLangValue::String(e->callee)));
         int funcReg = tmpRegister();
         emit(Opcode::TABGET, funcReg, staticsR, keyR);
         // Shift user args down by one to make room for the anchor at argBase.
         for (int i = argCount - 1; i >= 0; i--)
-          emit(Opcode::MOV, argBase + i + 1, argRegs[i], 0);
+          emit(Opcode::MOV, argBase + i + 1, argBase + i, 0);
         emit(Opcode::MOV, argBase, staticsR, 0); // anchor = statics table
         emit(Opcode::MOV, dest, funcReg);
         emit(Opcode::CALLCLOS, dest, argCount + 1, argCount + 1);
@@ -2531,23 +2664,28 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
             (expected == 1 ? "" : "s") + ", got " +
             std::to_string(argCount));
       }
+      // Resolve the callee's base once: a plain-variable base (obj.name)
+      // reads in place, only compound bases take a temp.
+      int baseR = inPlaceReg(e->calleeMember->memberBase);
+      if (baseR < 0)
+      {
+        baseR = tmpRegister();
+        compileExpr(e->calleeMember->memberBase, baseR);
+      }
+      int keyR = tmpRegister();
+      emit(Opcode::CONST, keyR,
+           emitConst(QLangValue::String(e->calleeMember->memberName)));
+      int funcReg = tmpRegister();
+      emit(Opcode::TABGET, funcReg, baseR, keyR);
       if (prependSelf) {
-        // Shift existing args down by one FIRST, before allocating new temps
-        // that might collide with the shifted slots.
+        // Shift user args down by one, then store the base (self) directly
+        // into the vacated argBase slot.
         for (int i = argCount - 1; i >= 0; i--)
-          emit(Opcode::MOV, argBase + i + 1, argRegs[i], 0);
-        // argBase slot is free (reserved at the top of the Call case).
-        // Compile base into a fresh temp.
-        int selfReg = tmpRegister();
-        compileExpr(e->calleeMember->memberBase, selfReg);
-        emit(Opcode::MOV, argBase, selfReg, 0);
-        int funcReg = tmpRegister();
-        compileExpr(e->calleeMember, funcReg);
+          emit(Opcode::MOV, argBase + i + 1, argBase + i, 0);
+        emit(Opcode::MOV, argBase, baseR, 0);
         emit(Opcode::MOV, dest, funcReg);
         emit(Opcode::CALLCLOS, dest, argCount + 1, argCount + 1);
       } else {
-        int funcReg = tmpRegister();
-        compileExpr(e->calleeMember, funcReg);
         emit(Opcode::MOV, dest, funcReg);
         emit(Opcode::CALLCLOS, dest, argCount, argCount);
       }
@@ -2666,7 +2804,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       int newArgCount = argCount + 1;
       int newArgBase = dest + 1;
       for (int i = argCount - 1; i >= 0; i--) {
-        emit(Opcode::MOV, newArgBase + i + 1, argRegs[i], 0);
+        emit(Opcode::MOV, newArgBase + i + 1, newArgBase + i, 0);
       }
       emit(Opcode::MOV, newArgBase, dest, 0);
       // Call __init__ (fixed arity, Phase 4.3/4.4).
@@ -2896,9 +3034,15 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       emit(Opcode::TABGET, dest, staticsR, keyR);
       break;
     }
-    // base.name read -> TABGET dest, baseR, keyR
-    int baseR = tmpRegister();
-    compileExpr(e->memberBase, baseR);
+    // base.name read -> TABGET dest, baseR, keyR. A plain-variable base is
+    // read in place (its named register is stable for the statement); only
+    // compound bases need a temp (SPEC §bytecodes: avoid temporaries).
+    int baseR = inPlaceReg(e->memberBase);
+    if (baseR < 0)
+    {
+      baseR = tmpRegister();
+      compileExpr(e->memberBase, baseR);
+    }
     int keyR = tmpRegister();
     emit(Opcode::CONST, keyR, emitConst(QLangValue::String(e->memberName)));
     emit(Opcode::TABGET, dest, baseR, keyR);
@@ -3051,21 +3195,15 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     int totalArgs = exprCount + 1;
     beginArgSlots(dest, totalArgs);
 
-    // Compile each expression into temp registers.
-    std::vector<int> argRegs(exprCount);
-    for (int i = 0; i < exprCount; i++)
-      argRegs[i] = tmpRegister();
-    for (int i = 0; i < exprCount; i++)
-      compileExpr(e->exprParts[i], argRegs[i]);
-
     // Layout: dest+1=template, dest+2..dest+totalArgs=expr args.
     int templateReg = dest + 1;
     int exprStartReg = dest + 2;
 
     emit(Opcode::CONST, templateReg, emitConst(QLangValue::String(fmt)));
 
-    for (int i = 0; i < exprCount; i++)
-      emit(Opcode::MOV, exprStartReg + i, argRegs[i], 0);
+    // Each interpolated expression lands directly in its slot (simple
+    // operands without a temp; complex ones share one scratch register).
+    compileArgsToSlots(e->exprParts, exprStartReg);
 
     emit(Opcode::CALL, dest, static_cast<int>(Builtin::Format), totalArgs);
     break;

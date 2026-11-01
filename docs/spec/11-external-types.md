@@ -1,5 +1,8 @@
 ## conformance with external (C++) types
 
+External-type bindings are written in **C++20** (the project's implementation
+standard; the root `CMakeLists.txt` sets `CMAKE_CXX_STANDARD 20`).
+
 A registered C++ type (`docs/EXTERNAL_TYPES.md`) implements this exact
 model. The mapping:
 

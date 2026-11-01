@@ -55,7 +55,7 @@ ctest --test-dir build
 
 Targets: `qlang` (library → `libqlang.a`), `qlang_example` (hello),
 `qlang_run` (driver), plus one executable per test suite. A single suite can
-also be built and run directly against `build/libqlang.a` with g++ (C++17);
+also be built and run directly against `build/libqlang.a` with g++ (C++20);
 see `AGENTS.md` for the exact harness.
 
 ## Usage

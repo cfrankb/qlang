@@ -166,6 +166,22 @@ private:
   // Compile an index/member assignment target (a[i]=v, t.name=v).
   void compileAssignTarget(const ExprPtr &target, const Token &op,
                            const ExprPtr &value);
+  // Register that already holds e's value and can be used directly as an
+  // operand of a following instruction without emitting code (-1 when e
+  // must be compiled into a register first). Only plain local/parameter
+  // variables qualify (SPEC §bytecodes: encoding guidelines — avoid
+  // temporary registers and register aliasing).
+  int inPlaceReg(const ExprPtr &e) const;
+  // Fold `x = x + k` / `x = x - k` into an in-place INC/DEC/ADDI/SUBI on
+  // register r (SPEC §bytecodes: encoding guidelines — favor int
+  // immediates over temporaries). Returns true when a fold was emitted.
+  bool foldSelfArith(const ExprPtr &e, const std::string &name, int r);
+  // Compile each call argument directly into its VM slot (slotBase + i):
+  // simple operands (plain variables, literals) land in the slot without a
+  // temp; everything else is routed through ONE shared scratch register so
+  // an N-arg call needs at most one temp (SPEC §bytecodes: encoding
+  // guidelines — universal scratch pad register).
+  void compileArgsToSlots(const std::vector<ExprPtr> &args, int slotBase);
   // Recursively check if a statement (or any of its children) contains a yield.
   static bool containsYield(const StmtPtr &s);
 
@@ -310,6 +326,10 @@ private:
   // boundary, skipping registers still inside an enclosing active range.
   std::vector<std::pair<int, int>> m_slotRanges;
   std::set<int> m_quarantined;
+  // True if r falls inside any active call-arg slot range. Slot registers
+  // hold live values, so no allocator path (pool, deferred) may hand them
+  // out as temps while the range is active.
+  bool inSlotRange(int r) const;
   // Freed temps BELOW the highest live temp (e.g. loop-header temps): kept
   // out of the pool so tmpRegister() stays above every live temp — a call's
   // arg slots (dest+1..) must never alias a live temp. Promoted to the pool

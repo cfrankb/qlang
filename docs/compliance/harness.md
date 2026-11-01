@@ -8,9 +8,9 @@
 - `examples/range_check.cpp` — 22 range tests: `for i in range(a,b)` counter loop (sum/count/break/continue), `in range(a,b)` bounds check (inside/low/high/above/below/as-value), `arr = range(a,b)` materialization, for-in array membership, generator range. Result: **22 passed, 0 failed.**
 - `examples/codec_check.cpp` — `.qlc` codec round-trip checks: format version 2, MOVI + ADDI + SUBI + CMP/j* suites (Rounds 30–31), malformed-file guards. Result: **all codec checks passed.**
 Compile against the static lib:
-`g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
+`g++ -std=c++20 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
 Result: **421 passed, 0 failed.** All spec builtins implemented.
-`g++ -std=c++17 -Iinclude examples/spec_cast_test.cpp build/libqlang.a -o /tmp/cast_test && /tmp/cast_test 2>/dev/null`
+`g++ -std=c++20 -Iinclude examples/spec_cast_test.cpp build/libqlang.a -o /tmp/cast_test && /tmp/cast_test 2>/dev/null`
 Result: **20 passed, 0 failed.**
 
 ## C++ Interface (new this round)

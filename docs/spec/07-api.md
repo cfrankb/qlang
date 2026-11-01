@@ -1,5 +1,8 @@
 # Qlang C++ API
 
+The API is defined against **C++20** (the root `CMakeLists.txt` sets
+`CMAKE_CXX_STANDARD 20`).
+
 ## Module registration
 
 System modules are auto-registered on `QLangContext` construction. Call

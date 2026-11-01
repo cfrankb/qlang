@@ -3,7 +3,7 @@
 Purpose: hand-off notes for the next session. Records what was verified against
 SPEC.md, what works, what does not, root causes, and recommended next steps.
 
-Verified by building the project (CMake, C++17, clean) and empirically running
+Verified by building the project (CMake, C++20, clean) and empirically running
 spec constructs through `QLangContext::run()` via `examples/spec_check2.cpp`
 (246 cases). The shipped `examples/hello.cpp` smoke test passes.
 
