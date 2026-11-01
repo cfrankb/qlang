@@ -424,3 +424,59 @@ all the functions within a module must share a common const table or at the very
   aliases is already a requirment. (e.g. `from m import f as g`)
 
 6. **Compatibility rule** — at this early stage, compatible bytecode is `qlang` bytecodes generated with the exact same compiler version. 
+
+## bytecode encoding guidelines
+
+- favor using int immediates over constants 
+- avoid temporary register when possible
+- always copy directly to the final register 
+- avoid register aliasing
+- use a universal scratch pad register to avoid temporary
+
+
+### egregious examples 
+
+here are some of the worse encodings in the current encoder.
+
+
+```
+  L26:    n = n - 1
+  0048  mov          11, 0c     ; r17 = r12                        
+  0049  movi         12, 1i     ; r18 = 1                          
+  004a  sub          10, 11, 12 ; r16 = r17 - r18                  
+  004b  mov          0c, 10     ; r12 = r16                        
+
+better encoding
+
+  L26:    n = n - 1
+  0048  dec          0c        ; r12 = r12 - 1
+```
+
+```
+  L3:  local s = "hello"            # string
+  0003  movc         03, 00     ; r3 = pool[0]                       # "hello"
+  0004  mov          02, 03     ; r2 = r3                          
+  0005  movc         03, 01     ; r3 = pool[1]                       # nil
+
+better encoding
+
+  L3:  local s = "hello"            # string
+  0003  movc         02, 00     ; r2 = pool[0]                       # "hello"
+```
+
+
+```
+  L14:    sum = sum + i
+  002c  mov          17, 03     ; r23 = r3                         
+  002d  mov          18, 09     ; r24 = r9                         
+  002e  add          16, 17, 18 ; r22 = r23 + r24                  
+  002f  mov          03, 16     ; r3 = r22                         
+  0030  movc         16, 01     ; r22 = pool[1]                      # nil
+
+better encoding
+
+  L14:    sum = sum + i
+  002d  mov          16, 09     ; r22 = r9                         
+  002e  add          03, 03, 16 ; r3 = r3 + r22                  
+
+```
