@@ -1,7 +1,8 @@
 // External C++ types: the TDD suite for docs/EXTERNAL_TYPES.md (plan v2,
-// Task 5). Covers public-member setters, read-only computed props, methods
+// Tasks 5-6). Covers public-member setters, read-only computed props, methods
 // (incl. extraction as a first-class BoundMethod value), enum constants,
-// str, handoff integrity, and registration-time validation.
+// str, handoff integrity, registration-time validation, and QL_FLAGS
+// (bitmask flag tables resolve and OR in script).
 //
 // Written against the real throwing API: run() throws QLangError on
 // failure; results come back via get().
@@ -42,6 +43,23 @@ struct Point : qlang::QLObject<Point> {
       }));
 };
 
+// Task 6: QL_FLAGS — a flag-style table (bitmask values). QL_FLAGS is the
+// same enum_table as QL_ENUM (marked); the script treats the constants as
+// native ints and combines them with |. Six bitmask enumerators.
+enum class DockOption : int {
+  None = 0,
+  AnimatedDocks = 1,
+  AllowTabbedDocks = 2,
+  VerticalTabs = 4,
+  AllowNestedDocks = 8,
+  AllowFloat = 16,
+};
+
+struct DockArea : qlang::QLObject<DockArea> {
+  QL_OBJECT(QL_FLAGS(DockOption, None, AnimatedDocks, AllowTabbedDocks,
+                     VerticalTabs, AllowNestedDocks, AllowFloat));
+};
+
 static int failures = 0;
 #define CHECK(cond)                                                     \
   do {                                                                  \
@@ -68,6 +86,7 @@ static bool runThrows(QLangContext &ctx, const std::string &src) {
 int main() {
   QLangContext ctx;
   const TypeDescriptor *pt = ctx.import<Point>();
+  ctx.import<DockArea>();  // seeds the DockArea TypeRef (no instance needed)
 
   // 1. Public data member = read-write: script SETTER works and is visible to C++.
   auto e = std::make_shared<Point>(1, 2);
@@ -136,6 +155,13 @@ int main() {
   // 11. type-level value: type(Point) names the type; Point is not settable.
   CHECK(runAndGet(ctx, "type(Point)").asString() == "Point");
   CHECK(runThrows(ctx, "Point = 1"));
+
+  // 12. QL_FLAGS (Task 6): a flag-style table (bitmask values) resolves and
+  // ORs in script. Named constant resolves to its int value; two constants
+  // combine with the native int bit-op (1 | 2 == 3).
+  CHECK(runAndGet(ctx, "DockArea.AnimatedDocks").asInt() == 1);
+  CHECK(runAndGet(ctx, "DockArea.AnimatedDocks | DockArea.AllowTabbedDocks")
+            .asInt() == 3);
 
   if (failures) {
     printf("%d FAILURES\n", failures);
