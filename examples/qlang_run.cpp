@@ -2,7 +2,7 @@
 // diagnostic trace level, optional stage timing, and bytecode output.
 //
 //   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>]
-//             [--asm <file.qla>] [--asm-level <0-4>] [--rotate] file.ql
+//             [--asm <file.qla>] [--asm-level <0-5>] [--rotate] file.ql
 //
 // The app drives the pipeline directly (parse -> compile -> execute) so it
 // can time each stage and hand the compiled program to the .qlc writer.
@@ -69,6 +69,9 @@ namespace
               << "                        2 = level 1 + interleaved source lines\n"
               << "                        3 = level 2 + const values inlined next to instructions\n"
               << "                        4 = level 3 + register map, operand names, pseudo-mnemonics\n"
+              << "                        5 = level 4 + end-of-compile register breakdown\n"
+              << "                            (per register: named var / free pool / quarantine /\n"
+              << "                             deferred / live temp / call-arg slot / unallocated)\n"
               << "  --rotate            append a YYYYMMDDHHMM timestamp to --output/--asm file names\n"
               << "                        (e.g. cmp.qlc -> cmp_202611010513.qlc)\n"
               << "  -h, --help          show this help and exit\n"
@@ -91,10 +94,10 @@ namespace
     return true;
   }
 
-  // Accept exactly "0".."4". Returns false on failure.
+  // Accept exactly "0".."5". Returns false on failure.
   bool parseAsmLevel(const std::string &s, int &out)
   {
-    if (s.size() != 1 || s[0] < '0' || s[0] > '4')
+    if (s.size() != 1 || s[0] < '0' || s[0] > '5')
       return false;
     out = s[0] - '0';
     return true;
@@ -165,6 +168,11 @@ namespace
   //       for CALL (builtin/native), CALLFN (function name), CONV/CAST (target
   //       type), and a pseudo-mnemonic: the register-level meaning of each
   //       instruction (e.g. `const 1 0 0` -> `r1 = pool[0]`)
+  //   5 = level 4 + an end-of-compile register breakdown: for every register
+  //       in the main program's frame, where the compiler's allocator left it
+  //       (named var / dead-temp pool / dead-named pool / quarantine /
+  //       deferred / live temp / call-arg slot / unallocated gap) plus a
+  //       category summary
   // ---------------------------------------------------------------------------
 
   // Builtin id (CALL operand b, >= 0) -> name. Order mirrors the Builtin enum
@@ -657,7 +665,7 @@ namespace
   }
 
   std::string disassemble(const CompiledProgram &prog, const std::vector<std::string> &srcLines,
-                          int level)
+                          int level, const RegisterReport *report = nullptr)
   {
     std::ostringstream ss;
     if (level >= 1)
@@ -782,6 +790,91 @@ namespace
       }
       ss << "\n";
     }
+    // Level 5: end-of-compile register breakdown (main program allocator).
+    // The snapshot is taken after the last top-level statement, so live
+    // temps, slot ranges, and the quarantine are normally all closed; what
+    // usually remains is named vars, the dead-temp pool, the dead-named
+    // pool, and any deferred temps.
+    if (level >= 5 && report)
+    {
+      auto inVec = [](int r, const std::vector<int> &v)
+      { return std::find(v.begin(), v.end(), r) != v.end(); };
+      auto inSet = [](int r, const std::set<int> &s) { return s.count(r) != 0; };
+      // 0 named, 1 free (temp), 2 free (named), 3 quarantine, 4 deferred,
+      // 5 live temp, 6 call-arg slot, 7 unallocated
+      int counts[8] = {0};
+      ss << "\n";
+      ss << "================================================================\n";
+      ss << "register breakdown @ end of compile (main, " << report->registerCount
+         << " registers)\n";
+      ss << "================================================================\n";
+      for (int r = 0; r < report->registerCount; r++)
+      {
+        const char *label = "unallocated";
+        std::string extra = "gap";
+        auto nit = report->named.find(r);
+        if (inSet(r, report->namedRegs) || nit != report->named.end())
+        {
+          label = "named";
+          counts[0]++;
+          extra = (nit != report->named.end())
+                      ? ("'" + nit->second + "'" +
+                         (prog.constVars.count(nit->second) ? " (const)" : ""))
+                      : "";
+        }
+        else if (inSet(r, report->quarantined))
+        {
+          label = "quarantine";
+          counts[3]++;
+          extra = "call-arg slot";
+        }
+        else if (inSet(r, report->deferred))
+        {
+          label = "deferred";
+          counts[4]++;
+          extra = "dead temp below high temp";
+        }
+        else if (inVec(r, report->freeRegs))
+        {
+          label = "free pool";
+          counts[1]++;
+          extra = "dead temp";
+        }
+        else if (inVec(r, report->freeNamedRegs))
+        {
+          label = "free pool";
+          counts[2]++;
+          extra = "dead named";
+        }
+        else if (inVec(r, report->liveTmps))
+        {
+          label = "live temp";
+          counts[5]++;
+          extra = inSet(r, report->protectedTmps) ? "protected" : "";
+        }
+        else
+        {
+          for (const auto &rng : report->slotRanges)
+            if (r >= rng.first && r < rng.second)
+            {
+              label = "call-arg slot";
+              counts[6]++;
+              extra = "";
+              break;
+            }
+        }
+        if (label == "unallocated")
+          counts[7]++;
+        ss << "  r" << std::setw(3) << r << "  " << std::left << std::setw(14) << label
+           << (extra.empty() ? "" : "  " + extra) << "\n";
+      }
+      ss << "  summary: " << counts[0] << " named, " << counts[1] << " free pool (dead temp), "
+         << counts[2] << " free pool (dead named), " << counts[3] << " quarantine, "
+         << counts[4] << " deferred, " << counts[5] << " live temp, " << counts[6]
+         << " call-arg slot, " << counts[7] << " unallocated\n";
+      ss << "  high water: m_nextReg=" << report->registerCount
+         << "  m_nextNamedReg=" << report->nextNamedReg << "\n";
+    }
     return ss.str();
   }
 
@@ -884,12 +977,12 @@ int main(int argc, char **argv)
     {
       if (i + 1 >= argc)
       {
-        std::fprintf(stderr, "%s: --asm-level requires a value (0-3)\n", kAppName);
+        std::fprintf(stderr, "%s: --asm-level requires a value (0-5)\n", kAppName);
         return 1;
       }
       if (!parseAsmLevel(argv[++i], asmLevel))
       {
-        std::fprintf(stderr, "%s: invalid --asm-level '%s' (expected 0, 1, 2, or 3)\n",
+        std::fprintf(stderr, "%s: invalid --asm-level '%s' (expected 0, 1, 2, 3, 4, or 5)\n",
                      kAppName, argv[i]);
         return 1;
       }
@@ -900,7 +993,7 @@ int main(int argc, char **argv)
     {
       if (!parseAsmLevel(arg.substr(12), asmLevel))
       {
-        std::fprintf(stderr, "%s: invalid --asm-level '%s' (expected 0, 1, 2, or 3)\n",
+        std::fprintf(stderr, "%s: invalid --asm-level '%s' (expected 0, 1, 2, 3, 4, or 5)\n",
                      kAppName, arg.c_str());
         return 1;
       }
@@ -1032,7 +1125,8 @@ int main(int argc, char **argv)
       while (std::getline(ls, line))
         srcLines.push_back(line);
     }
-    const std::string text = disassemble(compiled, srcLines, asmLevel);
+    const std::string text = disassemble(compiled, srcLines, asmLevel,
+                                         &compiler.registerReport());
     std::ofstream out(asmOut, std::ios::trunc);
     if (!out)
     {

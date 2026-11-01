@@ -333,6 +333,28 @@ void QLangCompiler::endArgSlots()
   }
 }
 
+void QLangCompiler::buildRegisterReport()
+{
+  m_report = RegisterReport{};
+  m_report.registerCount = std::max(m_nextReg, 1);
+  m_report.nextNamedReg = m_nextNamedReg;
+  for (const auto &[name, r] : m_regs)
+    m_report.named[r] = name;
+  // Block-scoped names too (normally none survive to end of compile, since
+  // every block is closed; innermost scope wins if one does).
+  for (const auto &scope : m_blockScopes)
+    for (const auto &[name, r] : scope)
+      m_report.named[r] = name;
+  m_report.namedRegs = m_namedRegs;
+  m_report.freeNamedRegs = m_freeNamedRegs;
+  m_report.freeRegs = m_freeRegs;
+  m_report.liveTmps = m_liveTmps;
+  m_report.protectedTmps = m_protectedTmps;
+  m_report.quarantined = m_quarantined;
+  m_report.deferred = m_deferred;
+  m_report.slotRanges = m_slotRanges;
+}
+
 int QLangCompiler::declareVar(const std::string &name, bool blockScoped) {
   // A named register must never alias an active call-arg slot region:
   // declare-on-first-use (host-injected external vars, register-less consts)
@@ -653,6 +675,7 @@ CompiledProgram QLangCompiler::compile() {
     outCode.addFunction(fn.name, fn.paramCount, fn.registerCount,
                         fn.instructions, fn.constants);
   out.code = std::move(outCode);
+  buildRegisterReport(); // before m_regs moves out (names are read from it)
   out.vars = std::move(m_regs);
   out.constVars = std::move(m_constVars);
   // Register 0 is always live (see mainFn.registerCount above).

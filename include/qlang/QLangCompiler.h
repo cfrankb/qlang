@@ -36,6 +36,26 @@ struct CompiledProgram {
   int registerCount = 0;
 };
 
+// Per-register breakdown of the MAIN program's register-allocator state,
+// snapshotted at the end of compile(). Function bodies compile in
+// saved/restored state, so this reflects the top-level allocator only.
+// The sets are mutually exclusive by construction (a register is named,
+// live, quarantined, deferred, pooled, or unallocated — never two of them);
+// consumers classify with that priority.
+struct RegisterReport {
+  int registerCount = 0;         // m_nextReg at end of compile (high-water mark)
+  int nextNamedReg = 0;          // dense named-allocation counter
+  std::unordered_map<int, std::string> named; // reg -> var name (live named regs)
+  std::set<int> namedRegs;       // live named registers
+  std::vector<int> freeNamedRegs; // named regs freed by dead block scopes
+  std::vector<int> freeRegs;      // dead temp pool
+  std::vector<int> liveTmps;      // live temps (normally empty at end of compile)
+  std::set<int> protectedTmps;    // live temps that must survive statement ends
+  std::set<int> quarantined;      // kept out of the pool for live call-arg slots
+  std::set<int> deferred;         // freed temps below the highest live temp
+  std::vector<std::pair<int, int>> slotRanges; // active call-arg slot ranges
+};
+
 // Walks a parsed AST and emits register-machine bytecode. Each script variable
 // is assigned a stable register; control flow is lowered to jumps.
 class QLangCompiler {
@@ -64,6 +84,10 @@ public:
   const std::vector<QLangContext::NativeFunc> &nativeFuncsResolved() const { return m_nativeFuncsResolved; }
 
   CompiledProgram compile();
+
+  // Register-allocator breakdown at the end of compile() (see
+  // RegisterReport). Populated by compile(); empty before it is called.
+  const RegisterReport &registerReport() const { return m_report; }
 
   // Gated diagnostic emit (mirrors QLangVM::trace). Prints printf-style
   // output to stderr only when the owning context's verbose level is >=
@@ -336,6 +360,9 @@ private:
   // once the high temp dies (tmpRegister).
   std::set<int> m_deferred;
   void endOfStatement();
+  // Snapshot the allocator state into m_report (called at the end of
+  // compile(), before m_regs is moved out).
+  void buildRegisterReport();
   // Source position of the statement currently being compiled; stamped into
   // every instruction by emit() so runtime errors report line/col (SPEC #
   // error reporting).
@@ -355,6 +382,8 @@ private:
   // Register holding the current method's `__statics__` table (emits the
   // `self.__statics__` TABGET for instance methods; reg 0 for static methods).
   int staticsTableReg();
+  // End-of-compile allocator snapshot for registerReport().
+  RegisterReport m_report;
 };
 
 } // namespace qlang
