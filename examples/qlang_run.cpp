@@ -2,7 +2,7 @@
 // diagnostic trace level, optional stage timing, and bytecode output.
 //
 //   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>]
-//             [--asm <file.qla>] [--asm-level <0-4>] file.ql
+//             [--asm <file.qla>] [--asm-level <0-4>] [--rotate] file.ql
 //
 // The app drives the pipeline directly (parse -> compile -> execute) so it
 // can time each stage and hand the compiled program to the .qlc writer.
@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <ctime>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -68,6 +69,8 @@ namespace
               << "                        2 = level 1 + interleaved source lines\n"
               << "                        3 = level 2 + const values inlined next to instructions\n"
               << "                        4 = level 3 + register map, operand names, pseudo-mnemonics\n"
+              << "  --rotate            append a YYYYMMDDHHMM timestamp to --output/--asm file names\n"
+              << "                        (e.g. cmp.qlc -> cmp_202611010513.qlc)\n"
               << "  -h, --help          show this help and exit\n"
               << "\n"
               << "exit codes:\n"
@@ -95,6 +98,32 @@ namespace
       return false;
     out = s[0] - '0';
     return true;
+  }
+
+  // Current local time as "YYYYMMDDHHMM" (e.g. "202611010513").
+  std::string rotateStamp()
+  {
+    const std::time_t now = std::time(nullptr);
+    std::tm tm{};
+    localtime_r(&now, &tm);
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%04d%02d%02d%02d%02d",
+             tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min);
+    return buf;
+  }
+
+  // Insert "_<stamp>" before the extension: "cmp.qlc" -> "cmp_202611010513.qlc".
+  // Paths with no extension get the stamp appended; directory components are
+  // left untouched.
+  std::string rotatePath(const std::string &path)
+  {
+    const size_t slash = path.find_last_of("/\\");
+    const std::string dir = (slash == std::string::npos) ? "" : path.substr(0, slash + 1);
+    const std::string base = (slash == std::string::npos) ? path : path.substr(slash + 1);
+    const size_t dot = base.find_last_of('.');
+    if (dot == std::string::npos || dot == 0)
+      return dir + base + "_" + rotateStamp();
+    return dir + base.substr(0, dot) + "_" + rotateStamp() + base.substr(dot);
   }
 
   // ---------------------------------------------------------------------------
@@ -762,6 +791,7 @@ int main(int argc, char **argv)
 {
   int traceLevel = TRACE_OFF;
   bool profile = false;
+  bool rotate = false;
   int asmLevel = 1;
   std::string file;
   std::string output;
@@ -807,6 +837,12 @@ int main(int argc, char **argv)
     if (arg == "--profile")
     {
       profile = true;
+      continue;
+    }
+
+    if (arg == "--rotate")
+    {
+      rotate = true;
       continue;
     }
 
@@ -890,6 +926,14 @@ int main(int argc, char **argv)
   {
     std::fprintf(stderr, "%s: missing script file (see --help)\n", kAppName);
     return 1;
+  }
+
+  if (rotate)
+  {
+    if (!output.empty())
+      output = rotatePath(output);
+    if (!asmOut.empty())
+      asmOut = rotatePath(asmOut);
   }
 
   std::ifstream in(file, std::ios::binary);
