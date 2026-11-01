@@ -27,3 +27,4 @@ at line 3 in main
   every emitted instruction; missing pieces are omitted.
 - the trace has one `at line N in <function>` per frame, innermost first.
 - parse/lex errors carry the token position; runtime errors carry the
+  failing instruction's position and the full frame chain.

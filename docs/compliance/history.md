@@ -1,3 +1,40 @@
+## Round 30 (2026-10-29)
+
+**MOVI** — 32-bit `Int` literal immediate; inlines the `CONST poolIdx + mov`
+pair for integer literals (plan step 4.4, `docs/plans/qlc-codec-plan.md`).
+- `Opcode::MOVI` appended **last** in the `Opcode` enum (existing `.qlc`
+  opcode numbers unchanged); `usesI32()` covers it. Layout: `a` = destination
+  register, `i32` = 32-bit `Int` literal — `r[a] = Int(i32)`, `Type::Int`
+  only.
+- Compiler: `local`/plain-assignment inlined into the target register (saves
+  the temp + `mov`); expression context keeps the temp + `MOV`.
+- `.qlc` writer emits format version 2 (readers accept ≤ 2).
+- VM: dispatched in all four exec loops. `codec_check` passes.
+- **Step 4.4 (2026-10-30, `58a9659`):** compiler-generated `Type::Int`
+  constants (for-loop unit/zero/direction counters, for-in index init, class
+  `__static_const__`/`__const_fields__` markers, per-field `__fields__`
+  indices, `ab[]` append index) also compile to `MOVI` — the constant pool
+  holds no `Type::Int` entries at all; instruction count unchanged (1:1).
+
+## Round 31 (2026-10-29)
+
+**ADDI + SUBI (Part 1) and alternate conditional jump — CMP/CMPI +
+je/jne/jg/jge/jl/jle (Part 2).**
+- Part 1: `Opcode::ADDI` (`r[a] = r[a] + Int(i32)`, in-place, `Type::Int`
+  only) and `Opcode::SUBI` (`r[a] = r[a] - Int(i32)`) appended after `MOVI`;
+  `usesI32()` covers both; VM dispatch in all four exec loops; compiler emits
+  them for integer-literal `+=`/`-=`.
+- Part 2: flag-based conditional jump. `Opcode::CMP` (flags =
+  `cmp(r[a], r[b])`) and `Opcode::CMPI` (flags = `cmp(r[a], Int(i32))`) set
+  independent GT/EQ/LT bits (mutually exclusive per comparison); `JE`/`JNE`/
+  `JG`/`JGE`/`JL`/`JLE` jump on the flags (`JE` = EQ, `JNE` = EQ not set,
+  `JG` = GT, `JGE` = GT|EQ, `JL` = LT, `JLE` = LT|EQ), pc target in `i32`.
+  The spec flag/jump tables in `docs/spec/13-bytecodes.md` were corrected to
+  the coherent independent-bits model, and the operand map gained rows for
+  SUBI/CMP/CMPI/J*.
+- `codec_check` covers the new MOVI + ADDI + SUBI + CMP/j* suites; all
+  suites green (421 `spec_check2`, ctest 5/5).
+
 ## Round 16 (2026-10-27)
 
 Spec drift audit: SPEC.md moved `1edc77ac` (41751 B / 1485 lines) → `c7f30b2a` (42276 B / 1502 lines) → `658c5631` (42315 B / 1503 lines, staged refinement mid-audit).

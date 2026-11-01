@@ -62,8 +62,8 @@ Conventions:
 | TABGET | dest reg | table reg | key reg | | |
 | TABPUT | table reg | key reg | value reg | | |
 | TABFINALIZE | instance reg | — | — | | install `__destroy__` deleter |
-| INDGET | dest reg | table reg | key reg | | `$$` indirect read |
-| INDPUT | table reg | key reg | value reg | | `$$` indirect write |
+| INDGET | dest reg | table reg | key reg | | **reserved** (enum placeholder) — `$$` indirect read, not yet implemented |
+| INDPUT | table reg | key reg | value reg | | **reserved** (enum placeholder) — `$$` indirect write, not yet implemented |
 | EVALKEY | dest reg | value reg | — | | `$` dynamic key stringify |
 | JMP | — | — | — | pc target | |
 | JMPIFFALSE | cond reg | — | — | pc target | |
@@ -80,6 +80,15 @@ Conventions:
 | YIELD | generator value reg | yield value reg | generator reg | | |
 | MOVI | dest reg | — | — | int32 literal | `r[a] = Int(i32)`; Type::Int only |
 | ADDI | dest reg | — | — | int32 literal | `r[a] = r[a] + Int(i32)`; in-place; Type::Int only |
+| SUBI | dest reg | — | — | int32 literal | `r[a] = r[a] - Int(i32)`; in-place; Type::Int only |
+| CMP | left reg | right reg | — | | flags = `cmp(r[a], r[b])`; independent GT/EQ/LT bits, wipes prior flags |
+| CMPI | left reg | — | — | int32 literal | flags = `cmp(r[a], Int(i32))` |
+| JE | — | — | — | pc target | jump when flags == EQ (`a == b`) |
+| JNE | — | — | — | pc target | jump when EQ not set (`a != b`) |
+| JG | — | — | — | pc target | jump when GT only (`a > b`) |
+| JGE | — | — | — | pc target | jump when GT or EQ (`a >= b`) |
+| JL | — | — | — | pc target | jump when LT only (`a < b`) |
+| JLE | — | — | — | pc target | jump when LT or EQ (`a <= b`) |
 
 ## new opcode: MOVI
 

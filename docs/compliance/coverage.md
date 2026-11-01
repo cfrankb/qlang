@@ -52,6 +52,11 @@
 | `$` | `Dollar` | ✓ | ★ **Implemented** (`0c63f4b`). SPEC §The $ Operator: `$age` → `"33"` (scalar-to-string evaluator), table-literal dynamic keys `{ $property = "male" }`, `OP_EVALKEY` opcode dispatched in all 4 exec loops. Rejects array/table/class instances (runtime type error; instances are typed `Table` at compile time, so the check is runtime — documented deviation, Phase 9.2 in `class_action_plan.md`). 6 tests at spec_check2 L617–L626. |
 | `$$` | — | — | ★ **Not implemented** — now **fully specified** (SPEC §operator $$, committed `c83ebc8`): indirect access operator, runtime name resolution from a string. No `DollarDollar` token, no `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE` opcodes. Spec: six-stage check pipeline, local-only writes, reads locals + `global`-exposed (global const visible everywhere), no variable creation, functions/lambdas never targetable, const read-only, sequential declaration state. See Not Yet Implemented + Open Items. |
 | `static` | `Static` | ✓ | ★ **Implemented** (Round 12, 2026-10-27; spec additions uncommitted). `TokenType::Static` in `keywordType()` — `local static = 1` → parse error (reserved word). `## static` (new extension beyond v1): static fields/methods in a shared `__statics__` table, `ClassName::name` via the `::` scope-resolution operator (`TokenType::ScopeRes`), instance-level static read/write, `static`+`const` allowed / `static`+`local`/`let` forbidden (parse error). 17 tests in `class_static_test`. See "user defined classes — spec conformance" + Open Items. |
+| `if` | `If` | ✓ | Reserved word; conditions (`if`/`else if`/`else`, brace and `then`/`end` forms) |
+| `next` | `Next` | ✓ | Reserved word; loop delimiter — `next` (no var) assumes the current loop variable; `next x` with explicit var; `next y` where `y != loopVar` is treated as `next` + statement `y` |
+| `isset` | `Isset` | ✓ | Reserved word; existence probe — undeclared names allowed. Also the `isset(var)` builtin (§builtins, string arg naming a variable) |
+| `set` | `TypeSet` | ✓ | Reserved word; also callable as `set(...)` (unique-value container, Rounds 26–27: `in`/`for x in`/`set == set`/`cast<array>(set)`/`cast<set>(array)`/`__str__` → `"set(1, 2, 3)"`) |
+| `yield` | `Yield` | ✓ | Reserved word; generator keyword — `yield expr` / empty `yield`; generator exhaustion returns `nil` (EOF sentinel). 5 tests in `gen_test` |
 
 ## Value-Type Coverage (SPEC.md §14–28 vs. QLangValue::Type)
 
@@ -65,10 +70,12 @@
 | `short (int16_t)` | `Short` | `TypeShort` | ✓ |
 | `int (int32_t)` | `Int` | `TypeInt` | ✓ |
 | `unsigned (uint32_t)` | `Unsigned` | `TypeUnsigned` | ✓ |
+| `dword` | `Unsigned` (alias) | `TypeUnsigned` | ✓ | 4-byte `uint32_t` alias of `unsigned` (spec errata: the original documentation mislabeled `dword` as 8 bytes). See status "dword as a 4-byte alias of unsigned (Round 22)". |
 | `qword (uint64_t)` | `Qword` | `TypeQword` | ✓ | `local d:qword = 4294967296` parses; `type(d)` → `"qword"`; `uint64_t` storage; participates in arithmetic; `toStr()` works (renamed from `dword`, Round 21) |
 | `long (int64_t)` | `Long` | `TypeLong` | ✓ | `local l:long = 9007199254740993` parses; `type(l)` → `"long"`; `int64_t` storage; `len` 8; casts work (Round 23) |
 | `array` | `Array` | `TypeArray` | ✓ |
 | `float` | `Float` | `TypeFloat` | ✓ |
 | `table` | `Table` | `TypeTable` | ✓ |
 | `bool` | `Bool` | `TypeBool` | ✓ | `true`/`false` compile to `Bool(1/0)` (Round 14); comparison/logical operators return `Bool` (Round 17); `local b:bool` accepted; `type(true)` → `"bool"`; stringify as `"true"`/`"false"`; bools are numeric for arithmetic/comparisons |
+| `set` | `Set` | `TypeSet` | ✓ | Unique-value container (ArrayValue storage) — `set(1,2,3)`, `x in set`, `for x in set`, `set == set` (exact match), `cast<array>(set)` / `cast<set>(array)`, `__str__` → `"set(1, 2, 3)"` (Rounds 26–27, 10 `spec_check2` cases) |
 

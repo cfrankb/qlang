@@ -1,3 +1,5 @@
+# Lexical
+
 ## reserved words
 ```
 for
@@ -82,7 +84,7 @@ enum Animal {
 }
 
 # enum type: byte
-enum SoftDrimk:byte {
+enum SoftDrink:byte {
    CocaCola , # implied 0
    Pepsi, # implied 1
    SevenUp # implied 2

@@ -157,7 +157,9 @@ v1 classes have no static members (see `## v1 restrictions`).
 - no inheritance (no base clause; the dispatch reserves a `base` hook for a
   later version)
 - no method overloading, no operator overloading
-- no static / class methods
+- no static / class methods **in v1** — the `static` fields/methods + `::`
+  scope resolution spec'd in this module are a documented extension beyond
+  v1 (v1 core stands as specified)
 - instances are not tables: the `$` dynamic-key pipeline does not apply to
   them; field access is by declared name only
 

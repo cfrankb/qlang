@@ -2,13 +2,14 @@
 
 - `examples/spec_check.cpp` — original cases (const, nil, float, concat, for, if,
   while, operators, toStr/toInt). Result: **33 passed, 0 failed.**
-- `examples/spec_check2.cpp` — 369 test cases covering all spec features including `bool`, `char`, `qword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, method calls, `==`/`!=` nil-equality, function/generator returns, 19 `step` loop cases, 42 class-conformance cases (L449–L615), 6 `$` dynamic-key cases (L617–L626), 6 block-scope cases (L633–L640), 9 `len` storage-size cases, 2 `delete` guard cases (Round 21), 16 `enum` cases (Round 28) and 6 error-reporting cases (Round 29: line numbers for lex/parse/runtime errors, module + function name in the report, deep call-chain trace). Result: **369 passed, 0 failed.**
+- `examples/spec_check2.cpp` — 421 test cases covering all spec features including `bool`, `char`, `qword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, method calls, `==`/`!=` nil-equality, function/generator returns, 19 `step` loop cases, 42 class-conformance cases (L449–L615), 6 `$` dynamic-key cases (L617–L626), 6 block-scope cases (L633–L640), 9 `len` storage-size cases, 2 `delete` guard cases (Round 21), 16 `enum` cases (Round 28), 6 error-reporting cases (Round 29: line numbers for lex/parse/runtime errors, module + function name in the report, deep call-chain trace) and the Round 30/31 MOVI/ADDI/SUBI + CMP/j* cases. Result: **421 passed, 0 failed.**
 - `examples/spec_cast_test.cpp` — 20 cast tests: numeric casts (int/float/byte/word/short/unsigned/qword/char/bool), string casts, invalid collection casts, nested casts, expression-context casts, nil cast. Result: **20 passed, 0 failed.**
 - `examples/gen_test.cpp` — 5 generator tests: basic yield, second yield, exhaustion/EOF, loop accumulate, empty yield, outer variable capture, type check. Result: **5 passed, 0 failed.**
 - `examples/range_check.cpp` — 22 range tests: `for i in range(a,b)` counter loop (sum/count/break/continue), `in range(a,b)` bounds check (inside/low/high/above/below/as-value), `arr = range(a,b)` materialization, for-in array membership, generator range. Result: **22 passed, 0 failed.**
+- `examples/codec_check.cpp` — `.qlc` codec round-trip checks: format version 2, MOVI + ADDI + SUBI + CMP/j* suites (Rounds 30–31), malformed-file guards. Result: **all codec checks passed.**
 Compile against the static lib:
 `g++ -std=c++17 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
-Result: **369 passed, 0 failed.** All spec builtins implemented.
+Result: **421 passed, 0 failed.** All spec builtins implemented.
 `g++ -std=c++17 -Iinclude examples/spec_cast_test.cpp build/libqlang.a -o /tmp/cast_test && /tmp/cast_test 2>/dev/null`
 Result: **20 passed, 0 failed.**
 

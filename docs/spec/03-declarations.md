@@ -1,3 +1,5 @@
+# Declarations
+
 ## boolean evaluation
 
 |type||

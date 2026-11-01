@@ -1,3 +1,5 @@
+# Qlang C++ API
+
 ## Module registration
 
 System modules are auto-registered on `QLangContext` construction. Call
@@ -62,10 +64,9 @@ the default name.
 Modules are resolved at compile time — no VM changes needed for flat import.
 
 ```python
-import math                   # import module into the namespace
-                              # use math.min and math.max
+import math                   # flat import: min, max, sum, rand usable by name
 
-import math as m              # m.min, m.max
+import math as m              # register under alias m; flat import all
 
 from math import *            # import all public names from the math module
 from math import min, max     # import `min` and `max` only
@@ -73,15 +74,16 @@ from math import min, max     # import `min` and `max` only
 
 | Form | Behaviour |
 |---|---|
-| `import math` | Register the module under `math`; call as `math.min(...)`, `math.max(...)` (qualified access) |
-| `import math as m` | Register the module under alias `m`; call as `m.min(...)` |
+| `import math` | Flat import: copy all public names into the current scope (call as `min(...)`) |
+| `import math as m` | Register the module under alias `m`; flat import all (call as `min(...)`) |
 | `from math import *` | Flat import: copy all public names into the current scope |
 | `from math import min, max` | Flat import: copy only the listed names into the current scope |
 
-Qualified access (`math.min(...)`) is a future extension — v1 supports flat
-import only (`from math import *` / `from math import min, max`). The module
-is still resolved at compile time and each imported function is registered as
-an external (native) function in the current scope.
+The parser additionally accepts the legacy single-function form
+`import math.min` (flat import of that one function). Qualified access
+(`math.min(...)`) is a future extension — v1 supports flat import only. The
+module is resolved at compile time and each imported function is registered
+as an external (native) function in the current scope.
 
 ## ctx.clear()
 
@@ -196,3 +198,12 @@ $ ./vtest prog.lang            # prog.lang: set_verbose(1); print(foo())
 42                             # <- stdout: program output
 [pushCall] calleeIndex=1 …     # <- stderr: trace, only when level >= 1
 ```
+
+## external types
+
+See [EXTERNAL_TYPES.md](../EXTERNAL_TYPES.md)
+and [11-external-types.md](11-external-types.md)
+
+## serialization
+
+See [SERIALIZATION.md](../SERIALIZATION.md)

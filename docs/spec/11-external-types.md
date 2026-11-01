@@ -36,7 +36,7 @@ table key order is implementation defined (depends on the underlying container).
 
 # warning 
 
-compiler and interpreter warning can be togged off.
+compiler and interpreter warning can be toggled off.
 
 all warnings defered until further notice.
 

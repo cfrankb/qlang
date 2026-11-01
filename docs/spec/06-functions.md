@@ -1,3 +1,4 @@
+# Functions
 ## build-in functions
 
 |helpers|-|-|

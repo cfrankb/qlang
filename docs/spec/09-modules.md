@@ -3,8 +3,7 @@
 ## import statement
 
 ```python
-import math                   # import module into the namespace
-                              # use math.min and matn.max
+import math                   # flat import: min, max, sum, rand usable by name
 
 import math as m              # m.min, m.max
 
@@ -12,6 +11,13 @@ from math import *            # import all public names from the math
 from math import min, max     # import `min` and `max` 
 
 ```
+
+`FLAT IMPORT ONLY UNTIL THE MODULE SUPPORT IS COMPLETED` 
+```
+# future extentsion
+import math # math.min, math.max, math.sum
+```
+
 
 Modules are registered from C++ via `ctx.registerModule(name, module)`. The
 `import` statement is resolved at compile time: each function in the module
