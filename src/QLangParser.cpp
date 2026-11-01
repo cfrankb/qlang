@@ -321,17 +321,20 @@ StmtPtr QLangParser::parseStatementImpl() {
       return stmt;
     }
     // Member assignment target: t.name = value.
-    // But if the token after the member name is '(' it's a method call, not assignment.
+    // The token after the member name decides: '(' -> method call,
+    // Assign -> member assignment, anything else (binary op, ';', end of
+    // input) -> a plain expression statement. (The lexer appends an
+    // EndOfFile sentinel, so peeking one past the member name is always
+    // in range.)
     if (nxt == TokenType::Dot) {
       m_pos++; // consume '.'
-      // Peek past the member-name token to check for '(' vs assignment op.
-      size_t saved = m_pos;
-      m_pos++; // consume the member-name token
-      TokenType afterMember = current().type;
-      m_pos = saved; // rewind to after '.'
-      if (afterMember == TokenType::LParen) {
-        // Method call: not an assignment. Rewind fully and let parseExpression handle it.
-        m_pos = m_pos - 2; // step back onto the identifier
+      size_t saved = m_pos; // member-name position
+      TokenType afterMember = m_tokens[m_pos + 1].type;
+      if (afterMember != TokenType::LParen &&
+          afterMember != TokenType::Assign) {
+        // Not a method call and not an assignment: parse the whole thing
+        // as an expression statement from the identifier.
+        m_pos = saved - 2; // step back onto the identifier
         auto expr = parseExpression();
         match(TokenType::Semicolon);
         auto stmt = std::make_shared<Stmt>();
@@ -339,12 +342,22 @@ StmtPtr QLangParser::parseStatementImpl() {
         stmt->value = expr;
         return stmt;
       }
-      std::string name = current().value;
-      m_pos++; // consume the member-name token
+      if (afterMember == TokenType::LParen) {
+        // Method call: not an assignment. Rewind fully and let parseExpression handle it.
+        m_pos = saved - 2; // step back onto the identifier
+        auto expr = parseExpression();
+        match(TokenType::Semicolon);
+        auto stmt = std::make_shared<Stmt>();
+        stmt->kind = StmtKind::ExprStmt;
+        stmt->value = expr;
+        return stmt;
+      }
+      std::string name = m_tokens[saved].value;
+      m_pos = saved + 1; // consume the member-name token
       auto stmt = std::make_shared<Stmt>();
       stmt->kind = StmtKind::Assignment;
       stmt->name = idt.value;
-      stmt->assignOp = current();
+      stmt->assignOp = m_tokens[m_pos];
       m_pos++; // consume the operator (= or +=)
       stmt->assignValue = parseExpression();
       auto mNode = std::make_shared<Expr>();
