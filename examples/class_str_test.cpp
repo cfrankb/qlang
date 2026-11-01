@@ -3,6 +3,7 @@
 // Value-level assertions avoid stdout scraping; one capture case each for
 // print/println themselves.
 #if defined(_WIN32)
+#include <fcntl.h> // _O_RDONLY/_O_WRONLY
 #include <io.h>
 #include <windows.h>
 #else
@@ -21,6 +22,7 @@ using namespace qlang;
 #define dup2 _dup2
 #define close _close
 #define read _read
+typedef long long ssize_t; // MSVC has no ssize_t
 #endif
 
 static bool makePipe(int pipefd[2]) {
