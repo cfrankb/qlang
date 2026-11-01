@@ -56,14 +56,19 @@ Every `QLangValue` serializes as `u8 tag` + payload. Tags are the
 | 17  | Eof     | — |
 | 18  | Long    | `i64` |
 | 19  | Set     | `u32 count` + `count` × Value |
+| 20  | External| **not durable** — writer MUST emit tag 0 (Nil) |
+| 21  | BoundMethod | **not durable** — writer MUST emit tag 0 (Nil) |
+| 22  | TypeRef | **not durable** — writer MUST emit tag 0 (Nil) |
 
 Rules:
 
 - **R1** New `QLangValue::Type` values are appended at the end of the enum and
   table; existing tags never change meaning.
-- **R2** A value of a non-durable type (Generator, Object) is lossy by
-  design: it round-trips as Nil. The writer MUST NOT emit tags 15/16; a
-  reader MUST reject a file carrying them.
+- **R2** A value of a non-durable type (Generator, Object, External,
+  BoundMethod, TypeRef) is lossy by design: it round-trips as Nil. The
+  writer MUST NOT emit tags 15, 16, 20, 21, 22; a reader MUST reject a file
+  carrying them. (Tags 17–19 — Eof, Long, Set — are durable and round-trip
+  with their payloads.)
 - **R3** Table keys are stored in `std::map` (lexicographic) order. Readers
   MUST NOT depend on entry order.
 - **R4** For tag 14, `funcIndex` is an index into the program's function

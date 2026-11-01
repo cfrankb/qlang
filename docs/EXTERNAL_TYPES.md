@@ -1,291 +1,236 @@
 # C++ External Types — Importing C++ Structures via the QLang API
 
-Status: **draft — design findings, decisions open**
-Related: `SPEC.md` (language), `docs/SERIALIZATION.md` (§3 value tags), `docs/EVENT_HANDLERS.md` (handler dispatch)
+Status: **implemented (2026-10-27)**
+Related: `docs/spec/11-external-types.md` (spec module), `docs/SERIALIZATION.md` (§3 value tags), `docs/EVENT_HANDLERS.md` (handler dispatch), `include/qlang/QLangMeta.h` (macro layer)
 
 ## 1. Goal
 
-Expose C++ structs/classes to QLang scripts: create instances, read/write
-fields, call methods — through a public registration API on
-`QLangContext` (not yet defined).
+Expose C++ structs/classes to QLang scripts — construct instances, read/write
+fields, call methods, use enum/flag constants — through a public registration
+API on `QLangContext` (`import<T>()` / `registerType()`), driven by a
+per-class **Qt-style declarative meta** written in plain C++: no MOC, no code
+generation, no class-name repetition.
 
-## 2. The RTTI reality check
+## 2. The `QL_` declarative meta model
 
 C++ RTTI **cannot do this alone**. `type_info` provides type identity and
 `dynamic_cast` only; it has zero knowledge of member layout, fields, or
-methods. A struct's fields cannot be enumerated from `type_info`.
+methods. The design is therefore **explicit declarative meta, one line per
+binding** — and v1 ended up using no RTTI at all (see §11(e)).
 
-The design is therefore: **explicit registration tables, with RTTI as the
-identity/safety layer** (the pybind11 model).
-
-RTTI's actual contributions:
-
-1. `std::type_index` as the registry key — compile-time-safe lookup, no
-   stringly-typed keys.
-2. `dynamic_cast` validation when C++ hands an object across the boundary
-   (and inheritance support, if added later).
-3. `type_info::name` for a `type()` builtin and diagnostics.
-
-Everything else comes from a host-written registration table:
+The class names itself exactly once, as a CRTP base
+(`qlang::QLObject<Point>`), which exposes a `SelfType` alias. Every entry
+macro forms a **qualified member pointer** (`&SelfType::x`,
+`&SelfType::translate`), so the C++ type and the binding kind are deduced by
+the compiler from the member pointer:
 
 ```cpp
-struct FieldBinding {
-  const char* name;
-  QLangValue (*get)(const T&);
-  void (*set)(T&, const QLangValue&);   // nullptr = read-only
-};
-
-struct MethodBinding {
-  const char* name;
-  QLangValue (*invoke)(T*, QLangContext&, const std::vector<QLangValue>&);
-};
-
-struct TypeDescriptor {
-  std::type_index id;        // RTTI identity
-  const char* name;          // script-visible name
-  std::shared_ptr<void> (*construct)(QLangContext&,
-                                     const std::vector<QLangValue>&);
-  std::vector<FieldBinding> fields;
-  std::vector<MethodBinding> methods;
-  QLangValue (*str)(const T&) = nullptr;   // __str__, optional
-  void (*destroy)(T*) = nullptr;           // __destroy__, optional
+struct Point : qlang::QLObject<Point> {
+  double x = 0, y = 0;                            // public data member -> read-write property
+  double dist() const { return std::sqrt(x*x + y*y); }  // const getter -> read-only property
+  void translate(double dx, double dy) { x += dx; y += dy; }
+  std::string str() const { return "(" + std::to_string(x) + "," + std::to_string(y) + ")"; }
+  QL_OBJECT(
+    QL_PROPERTY(x),
+    QL_PROPERTY(dist),
+    QL_INVOKABLE(translate),
+    QL_STR(str),
+    QL_CTOR([](qlang::QLangContext&, const std::vector<qlang::QValue>& a) {
+      return std::make_shared<Point>(a.at(0).as<double>(), a.at(1).as<double>());
+    }))
 };
 ```
 
-A `registerType<T>(ctx, ...)` template fills the descriptor with minimal
-boilerplate.
+The macro layer (`include/qlang/QLangMeta.h`) is the MOC replacement:
 
-**Memory-safety invariant:** script access goes *only* through registered
-bindings — never raw offsets, never `void*` escape hatches. No
-memory-safety hole by construction.
+| Macro | Meaning |
+|---|---|
+| `QL_OBJECT(...)` | The one assembly point. Generates `static const TypeMeta& qlang_meta()`. The script-visible type name is recovered **at compile time** from the platform "current function" string (`QL_PRETTY_FUNCTION`: `__PRETTY_FUNCTION__` on GCC/Clang/MinGW/emscripten, `__FUNCSIG__` on MSVC; the identifier before `::qlang_meta`, innermost for nested scopes). `__CLASS__` is an MSVC-only extension and is not used. |
+| `QL_PROPERTY(x)` | Data member `x` → **read-write property** (getter + setter, deduced from `&SelfType::x`). |
+| `QL_PROPERTY(x)` (x a `const` getter) | **Read-only property** (bare non-const getters match no overload — list via `QL_INVOKABLE`, make `const`, or use `READ`). |
+| `QL_PROPERTY(name, READ g)` | Computed read-only property via const getter `g`. |
+| `QL_PROPERTY(name, READ g, WRITE s)` | Computed read-write property; the setter is `void (T::*)(M)` (Qt-style void return), so `M` is the converted script-argument type. |
+| `QL_INVOKABLE(name)` / `QL_SLOTS(name)` | Method binding (slots and invokables are the same thing to the VM); const and non-const member functions both bind. |
+| `QL_ENUM(E, a, b, ...)` / `QL_FLAGS(F, ...)` | **Whole-group** enum/flag table (up to 16 enumerators): the value is the compile-time constant `E::a`, the name the stringified `#a` — one line per group. |
+| `QL_STR(name)` | `__str__` binding — const member function `const T* → std::string`. |
+| `QL_CTOR(expr)` | Constructor: a lambda `(QLangContext&, const std::vector<QValue>&) → shared_ptr<void>`. |
+
+A `QL_PROPERTY` on a member whose type has no `qval_of`/`as<T>` coverage is a
+**compile error at the `QL_OBJECT` line**, not a runtime surprise.
+
+Portability: everything is `QL_`-prefixed (or in `namespace qlang`), so the
+header can be included alongside Qt headers without macro collisions
+(`QL_OBJECT` vs `Q_OBJECT`, …). The GNU `##__VA_ARGS__` extension is avoided,
+so the header compiles under g++/Clang/MinGW/MSVC/emscripten. `READ`/`WRITE`
+are the only un-prefixed macros (trivial token transformers that collide with
+nothing in Qt).
+
+Memory-safety invariant: script access goes only through the registered
+bindings; there is no raw-pointer escape.
 
 ## 3. Value representation and ownership
 
-New `QLangValue::Type::External` — **tag 17** in the serialization spec
-(amendment to `docs/SERIALIZATION.md` §3):
+Three new `QLangValue::Type` values, appended **after `Set`** so existing
+`.qlc` tags stay stable: `External` (20), `BoundMethod` (21), `TypeRef` (22).
+All three are **not durable** — the `.qlc` codec emits tag 0 (Nil) for them
+(`docs/SERIALIZATION.md` §3).
 
-```
-payload: const TypeDescriptor* + ownership handle (see below)
-```
-
-**The engine (C++) is the authoritative owner.** QLang is a consumer of
-engine state, not an owner of it. Ownership follows the object's source:
-
-| Source | Handle held by script | Lifetime authority |
-|---|---|---|
-| engine handoff (event handler args, native return values) | `weak_ptr<void>` | **engine** — the script cannot keep it alive |
-| script construction (`let p = Point(1,2)`) | `shared_ptr<void>` | script (the engine never held a reference) |
-
-- Engine-handoff objects: every access `lock()`s the weak reference. If the
-  engine has destroyed the object, access is a clean runtime error
-  (`object destroyed: <type>`) — never a dangling pointer, never a silent
-  extension of the engine's lifetime.
-- Script-constructed objects die when the script drops its last reference.
-- **No copy path** (decision): there is no `to_table` / `from_table`
-  flatten API. Engine objects are **long-lived** and continuously evolving;
-  a QLang deep copy is a **short-lived snapshot** — stale by the next event,
-  diverged from the authoritative state. The script must operate on the
-  *live* object.
-- **Not durable**: External values cannot be written to `.qlc`. The writer
-  emits tag 0 (Nil), same rule as Generator (SERIALIZATION.md §3 R2 extends
-  to tag 17).
-
-## 4. Field access — resolved: dot syntax per SPEC.md
-
-SPEC.md already specifies the object model ("user defined classes" section):
-dot field access (`person.name`, `self.total`), constructor calls
-(`let money = Money(125)`), dot method calls (`money.receive(25)`), and
-f-string interpolation that resolves fields and methods
-(`f"balance: {money.balance()}"`). Dot access on table literals is existing
-sugar over the key-resolution pipeline.
-
-**There is no syntax fork.** External C++ values must participate in the
-*same* object dispatch as QLang classes, at four points:
-
-| Dispatch point | Table/Class behavior | External behavior |
-|---|---|---|
-| field get (`p.x`) | map lookup / instance field | registered `FieldBinding::get` |
-| field set (`p.x = v`) | map insert / field store | registered `FieldBinding::set` (nullptr → read-only error) |
-| method call (`p.m(a)`) | class method with `self` | `MethodBinding::invoke` with `self` |
-| string conversion (`f"{p}"`, `str(p)`) | `__str__` | registered `__str__` binding (else → type name + error) |
-
-The VM's object-dispatch path is shared between QLang classes and External
-types; a script cannot tell the difference. Note: the SPEC.md class section
-is spec-only — not yet implemented in the VM. The object-dispatch path is
-the shared foundation both features build on (see §9).
-
-## 5. Methods
-
-New `NativeMethod` signature — the existing `NativeFunc` has no `this`:
+`External` is a **view** over exactly one C++ object:
 
 ```cpp
-using NativeMethod =
-    QLangValue (*)(void* self, QLangContext&, const std::vector<QLangValue>&);
+struct ExternalRef {
+  const TypeDescriptor* type;   // the context-owned descriptor
+  std::shared_ptr<void> owned;  // set when the script constructed the object
+  std::weak_ptr<void> borrowed; // set when the engine handed the object over
+};
 ```
 
-- `self` first — matches the SPEC.md class-method convention
-  (`receive(self, amount)`).
-- No overloading in v1: method names are unique per type.
-- Invocation dispatches through the type's `MethodBinding` table.
-
-### Dunder bindings
-
-The class model's dunders map directly onto optional descriptor bindings:
-
-| Dunder | Descriptor binding | Behavior |
+| Source | Lifetime | Reference held by the view |
 |---|---|---|
-| `__str__` | `QLangValue (*str)(const T&)` | used by `str(p)` and `f"{p}"`; if absent, string conversion is a `Type` error naming the type |
-| `__destroy__` | `void (*destroy)(T*)` | cleanup hook run on the **final** `shared_ptr` release; `shared_ptr` still owns lifetime — this is for resource teardown (handles, sockets), not memory |
+| C++ engine handoff (`qval_external_borrowed(type, weak)`) | engine-controlled | `weak_ptr` |
+| Script construction (`T(args)` via `QL_CTOR`) | script-controlled | `shared_ptr` |
 
-`__init__` is the constructor binding (§6).
+There is **no copy path**: every `External` value names one C++ object, and a
+script setter write is visible to the engine (single-instance semantics). An
+expired borrow throws `runtime error: object destroyed: <type>` on next
+access.
 
-## 6. Construction
+## 4. Field access — the v1 dispatch paths
 
-Registered constructors make the type name callable:
+Dot syntax is per spec; no syntactic fork. The VM routes member get/set
+through `getObjectOps(value)` (`src/QLangObjects.cpp`), which now returns ops
+for Table, Object (class), External, and TypeRef:
 
-```
-let p = Point(1, 2)
-```
-
-Exactly the SPEC.md form (`let money = Money(125)`). The compiler's name
-resolution already has a native-function path; type names join that table.
-Small compiler/VM change, large ergonomics win.
-
-## 7. Boundary conversion table
-
-Applied at every field get/set and method argument/return:
-
-| C++ | QLang |
+| Script operation | v1 path |
 |---|---|
-| bool | Bool |
-| char | Char |
-| int8 / uint16 / int16 / int32 / uint32 | Byte / Word / Short / Int / Unsigned |
-| int64 | Long |
-| uint64 | Qword |
-| float / double | Float |
-| std::string | String |
-| enum | Int |
-| std::vector\<T\> | Array |
-| nested registered type | External |
-| std::optional\<T\> / pointer | value / Nil |
+| `p.x` (property read) | `TABGET` → `external_ops::getField` — resolves the descriptor's member list; kind 0/1 → `get(self)` (kind 0 = read-write, kind 1 = read-only) |
+| `p.x = v` | `TABPUT` → `external_ops::setField` — kind 0 only; kind 1 → `"... is read-only"`, kind 2 → `"... is a method"` |
+| `p.m(args)` (method call) | compiles to `TABGET` + `CALLCLOS` — the kind-2 member read returns a **`BoundMethod`** value, and `CALLCLOS` (all four exec loops) dispatches it. `ops->callMethod` is **not** called by the VM in v1 (see §9) |
+| `f"{p}"` / `str(p)` / `print(p)` | `valueToString` (context-threaded) → `ops->toStr` → the `QL_STR` binding; a type with no `QL_STR` gets a type error |
+| `Point.AnimatedDocks` | `TABGET` on the seeded `TypeRef` variable → `typeref_ops::getField` → the type's enum/flag tables → `Int` |
 
-Mismatch → `QLangError(Type)` naming the field.
+Method extraction is a first-class value: `m = p.translate; m(4, 5)` works —
+a `BoundMethod` is exactly what `CALLCLOS` dispatches, not a special case.
+
+## 5. Methods — the `BoundMethod` value type
+
+A method read of an `External` value produces a **`BoundMethod`** value (tag
+21, not durable): `BoundMethodRef { const Member* member; ExternalRef target }`
+— the bound member plus the target view. This **replaces the draft's
+`NativeMethod` function-pointer proposal**: `CALLCLOS` gained a `BoundMethod`
+branch (alongside its `Function`/`Generator` branches, in all four exec
+loops) that invokes `member->invoke(self, ctx, args)`.
+
+- `Member::invoke` is
+  `std::function<QLangValue(void*, QLangContext&, const std::vector<QLangValue>&)>`.
+  The binding converts each script argument via `as<A>()` and throws a `Type`
+  error on an arity mismatch (`"method expects N argument(s), got M"`).
+- C++ exceptions escaping a binding are rethrown as
+  `QLangError(Runtime, e.what())`; `QLangError`s pass through untouched.
+- No method overloading in v1 — one binding per name; duplicate member names
+  are rejected at registration (§11(b)).
+- Dunders: `__str__` via `QL_STR`; **no `__destroy__`/`destroy` hook in v1**
+  (plain shared/weak view — §11(d)).
+- Lifetime: `BoundMethodRef::member` points into the context-owned
+  `TypeDescriptor` — stable exactly as long as the `TypeDescriptor*` in the
+  `ExternalRef` (both die in `clear()`). A `BoundMethod` value outliving its
+  context is a host bug, same class as a dangling `ExternalRef`.
+
+## 6. Construction and type-level values
+
+- **`T(args)`** — when `QL_CTOR` is present, `registerType` registers a
+  **native function** under the type name that wraps the construct result in
+  an owned `External` value. `let p = Point(1, 2)`.
+- **`Type.Constant`** — `registerType` also **seeds the type name as a const
+  script variable** holding a `TypeRef` (tag 22). `Point.AnimatedDocks`
+  compiles as a const-variable load + `TABGET` and resolves through
+  `kTypeRefOps` into the type's enum tables (→ `Int`). Flag combination is a
+  native int bit-op: `DockArea.AnimatedDocks | DockArea.AllowTabbedDocks` →
+  `5`. `type(Point)` → `"Point"`; `Point = 1` → type error (the seeded
+  variable is const).
+- Import shadowing: a same-name script variable is silently overwritten at
+  import; a name already taken by a native function is rejected **only** when
+  the type also registers a constructor native under that name.
+- `clear()` invalidates all `TypeDescriptor*` (and the seeded variables and
+  constructor natives); host code must re-run `import<T>()` afterwards.
+
+## 7. Boundary conversion
+
+`qval_of<T>()` (value → `QValue`) covers `bool`, `int32_t`, `uint32_t`,
+`uint8_t`, `uint16_t`, `int16_t`, `int64_t`, `uint64_t`, `double`, `float`,
+`std::string`; `qval_vec<T>` converts `std::vector<T>`; `qval_opt`/
+`qval_ptr` convert optionals/pointers (null → Nil). The reverse direction is
+`QValue::as<T>()` — the setter/invoke bindings call it per member type.
+Member types without an `as<T>` specialization are a compile error at the
+`QL_OBJECT` line (a diagnostic, not a crash).
 
 ## 8. Exception boundary
 
-C++ exceptions thrown inside a binding MUST be caught at the boundary and
-converted to `QLangError`. C++ unwinding must never tear through the VM's
-frame stack.
+C++ exceptions escaping a binding are converted at the ops layer
+(`src/QLangObjects.cpp`, `QL_EXTERNAL_CALL`): `QLangError` passes through;
+any other `std::exception` becomes `QLangError(Runtime, e.what())`. The VM
+never sees a raw C++ exception from an external binding.
 
-## 9. Object dispatch foundation (shared runtime infrastructure)
+## 9. Object dispatch substrate (implemented)
 
-Both consumer features — External C++ types and QLang classes — need the
-exact same four runtime operations on an object value, and none of those
-operations contains feature-specific semantics:
+`ObjectOps` (`kindName`, `getField`, `setField`, `callMethod`, `toStr`,
+`base`) is the neutral dispatch surface; `getObjectOps` routes:
 
-```
-GETFIELD(obj, name)          -> value
-SETFIELD(obj, name, value)
-CALLMETHOD(obj, name, args)  -> value
-TOSTRING(obj)                -> string        (f-strings, str())
-```
+| Value kind | Ops |
+|---|---|
+| Table | `table_ops::kTableOps` |
+| Object (QLang class) | the per-class ops from its `ObjectDescriptor` |
+| External | `external_ops::kExternalOps` |
+| TypeRef | `typeref_ops::kTypeRefOps` |
+| BoundMethod | none — it is callable (`CALLCLOS`), not an object |
 
-A class instance and a C++ external object differ in *what* those operations
-do — not *that* they exist. The shared foundation is a dispatch layer: a
-"kind" vtable per object value.
+`callMethod` exists on every ops table but the VM does **not** call it in v1
+(method calls are `TABGET` → `BoundMethod` → `CALLCLOS`); it is kept for the
+future event-handler contract (context-level `hasMethod`/`callMethod`
+wrappers). `base` is reserved for inheritance (returns null in v1).
 
-```cpp
-// qlang/QLangObjects.h — the entire neutral surface
-struct ObjectOps {
-  const char* kindName;
-  QLangValue (*getField)(const QLangValue&, const std::string&, QLangContext&);
-  void       (*setField)(QLangValue&, const std::string&, const QLangValue&, QLangContext&);
-  QLangValue (*callMethod)(const QLangValue&, const std::string&,
-                           const std::vector<QLangValue>&, QLangContext&);
-  QLangValue (*toStr)(const QLangValue&, QLangContext&);
-  const ObjectOps* (*base)(const QLangValue&);  // reserved, null in v1 — inheritance later
-};
+## 10. Open questions
 
-const ObjectOps* getObjectOps(const QLangValue&);  // table kind today; null otherwise
-```
-
-### Why it is "neutral"
-
-Zero class semantics (no `self` allocation, no instance storage, no
-`__init__` protocol, no inheritance) and zero C++-RTTI (no `type_info`, no
-`dynamic_cast`, no ownership rules). Four function pointers and a lookup.
-The only existing consumer is the **table kind**: today's table
-key-lookup/insert semantics ported into the pointers — a pure refactor. The
-existing table test corpus must pass unmodified; that is what makes the
-layer trustworthy before either real feature lands on it.
-
-`base()` is reserved in v1 with a null implementation so that inheritance
-later fills it in without changing the struct layout.
-
-### Build order
-
-1. **Audit** — what does the parser/VM already do with `x.name` on tables?
-   SPEC.md specifies it. If the VM desugars dot to table-index today, step 2
-   is a refactor. If not, the dispatch landing includes implementing dot
-   access for tables — still neutral, just bigger. This audit determines the
-   size of the work.
-2. **`QLangObjects`** — `ObjectOps` + table kind + registry.
-3. **VM** — route field access/call through `getObjectOps()` (one
-   indirection); add `GETFIELD`/`SETFIELD`/`CALLMETHOD` where missing.
-   Opcodes are cheap: the enum grows, and old `.qlc` files stay valid
-   because the loader checks `op < kOpcodeCount` (SERIALIZATION.md §5.1).
-4. **Compiler** — `x.name`, `x.name = v`, `x.name(args)` emit the object
-   opcodes instead of inline table desugaring. Mechanical.
-5. **f-string / `str()` path** — `TOSTRING` on an object value calls
-   `toStr`. One branch, serves both features permanently.
-
-### Why dispatch-first (option a) beats External-types-first (option b)
-
-If External types land first, the dispatch gets written *against*
-`TypeDescriptor` — field lookup hardcoded to the binding table, `toStr`
-hardcoded to `__str__`. When classes arrive with needs the dispatch wasn't
-shaped for (instance field storage, `self` binding, prototype lookup,
-`__init__` at construction), the same code gets reworked — and SPEC.md's
-still-open class decisions (how is `self` represented? are instance fields a
-map? inheritance?) have already leaked into the C++ API's shape, coupling
-the two features' release timelines.
-
-With dispatch-first, the coupling points at the tiny stable `ObjectOps`
-surface: both features depend on it, neither on the other. External types
-register one `ObjectOps` that delegates to `TypeDescriptor` — no class
-concepts touched. Classes, whenever their semantics are settled, register
-another. Each feature is independently shippable.
-
-**Caveat:** "small" is conditional on the audit (step 1). The dispatch
-itself is a day or two of work; if dot access is unimplemented in the
-parser/VM, the parser/lexer/opcode work for table dot sugar joins the same
-landing — same neutral layer, more surface.
-
-### Consumers of `ObjectOps`
-
-Two features land on the dispatch — External C++ types and QLang classes.
-A third is the **event handler contract** (`docs/EVENT_HANDLERS.md`): the
-engine drives multi-level handler dispatch (type / map / game levels) through
-`callMethod`, guarded by `hasMethod` and a **step budget** around each
-dispatch. It consumes the same `ObjectOps` surface and adds no new dispatch
-machinery — only the level objects and the budget.
-
-## 10. Open questions (decisions pending)
-
-1. **Copy vs. view** — is a cheap `to_table(T)` / `from_table<T>(table)`
-   flatten path wanted for identity-less POD data, as a complement to the
-   view model? (Leaning yes, as a separate API.)
-2. **Inheritance** — registered base type with `dynamic_cast` downcast on
-   access. Complicates the descriptor (base-chain walk). Leaning defer to
-   v2. The `ObjectOps::base` hook is already reserved for it (§9).
-3. **Class runtime dependency** — resolved in principle: land the
-   object-dispatch path first as neutral runtime infrastructure (§9), then
-   External types and QLang classes build on it independently. Remaining
-   unknown: the audit result (step 1 of §9) — how much dot access the
-   parser/VM already implements.
+1. **`hasMethod`/`callMethod` context wrappers** for the event-handler
+   contract (`docs/EVENT_HANDLERS.md`).
+2. **RTTI validation on handoff** — a wrong `weak_ptr` is UB in v1; a
+   `dynamic_cast` check is deferred.
+3. **Inheritance** — `ObjectOps::base` is reserved; base-chain walk deferred
+   to v2.
+4. **Signals** (`Q_SIGNALS`/`emit`/`connect`) — revisit with
+   `docs/EVENT_HANDLERS.md`.
+5. **Enum-name string form** (reverse lookup for enum-valued properties) —
+   deferred: no dispatch point sees both the field value and its type context
+   (`str(e.options)` sees a bare `Int`).
+6. **Copy vs. view** (`to_table`/`from_table` APIs) — the view model is v1.
 
 ## 11. Implementation status
 
-Nothing implemented. No API defined on `QLangContext` yet. The
-object-dispatch layer (§9) is the prerequisite landing for this feature.
-This document is the design baseline for when the API is written.
+**Implemented** (2026-10-27). Files: `include/qlang/QLangMeta.h` (macro
+layer), `QLangTypes.h` (`TypeDescriptor`), `QLangValue.h`/`QLangVariant.h`
+(the three value types + `ExternalRef`/`BoundMethodRef`/`TypeRefRef`),
+`QLangContext.h`/`src/QLangContext.cpp` (`registerType`/`import<T>()`,
+validation, TypeRef seeding, constructor native), `src/QLangObjects.cpp`
+(`external_ops`, `typeref_ops`, `getObjectOps` routing), `src/QLangVM.cpp`
+(`CALLCLOS` `BoundMethod` dispatch in all four exec loops; context-threaded
+`valueToString` → `toStr`), `src/QLangBytecodeIO.cpp` (tags 20–22 emit tag 0).
+The **compiler is unchanged** — `T.Constant` compiles as an ordinary
+const-variable load. Test: `examples/test_external.cpp` (ctest `external`,
+24 checks).
+
+Deviations from the draft:
+
+- **(a) Compile-time integrity via member pointers** — identity and layout
+  come from the `QL_OBJECT` member-pointer list, not from RTTI; every binding
+  is type-checked at the `QL_OBJECT` line.
+- **(b) Registration-time validation** — `registerType` rejects empty names,
+  duplicate member names, and type-name/native-function clashes at
+  `import<T>()` time, not at script-execution time.
+- **(c) `Object` landed at tag 16 before external** — the draft proposed
+  `External` at tag 17; the final layout is 16=Object, 17=Eof, 18=Long,
+  19=Set, 20=External, 21=BoundMethod, 22=TypeRef.
+- **(d) No `__destroy__`/`destroy` hook in v1** — a plain shared/weak view;
+  the resource-teardown hook is deferred. (QLang classes have `__destroy__`;
+  external types do not.)
+- **(e) `type(x)` returns the declared name string, not `type_info::name`** —
+  v1 uses no RTTI at all.
