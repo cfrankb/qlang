@@ -149,9 +149,12 @@ Member prop(const char* n, AccPtr<R (T::*)() const> g) {
 }
 
 // QL_PROPERTY(name, READ g, WRITE s) -> computed read-write property.
+// The setter is `void (T::*)(M)`: Qt-style setters return void, so the
+// parameter type M is the only deduced type (return == parameter would
+// reject every real setter).
 template <class T, class R, class M>
 Member prop(const char* n, AccPtr<R (T::*)() const> g,
-            AccPtr<M (T::*)(M)> s) {
+            AccPtr<void (T::*)(M)> s) {
   return {0, n,
           [g](const void* o) {
             return qval_of((static_cast<const T*>(o)->*g.p)());
@@ -306,10 +309,12 @@ template <class... Ts> TypeMeta assemble(std::string name, Ts... es) {
 #define QL_PROPERTY_SEL_IMPL(N) QL_PROPERTY_CASE##N
 #define QL_PROPERTY_CASE1(name) \
   qlang::meta_detail::prop(#name, &SelfType::name)
+// 2/3-arg forms are computed properties: the accessor overloads take only
+// the name plus the READ/WRITE accessor(s) — no data-member pointer.
 #define QL_PROPERTY_CASE2(name, a) \
-  qlang::meta_detail::prop(#name, &SelfType::name, a)
+  qlang::meta_detail::prop(#name, a)
 #define QL_PROPERTY_CASE3(name, a, b) \
-  qlang::meta_detail::prop(#name, &SelfType::name, a, b)
+  qlang::meta_detail::prop(#name, a, b)
 #define READ(a) qlang::meta_detail::acc(&SelfType::a, qlang::meta_detail::Acc::read)
 #define WRITE(a) qlang::meta_detail::acc(&SelfType::a, qlang::meta_detail::Acc::write)
 
