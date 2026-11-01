@@ -22,7 +22,7 @@ compile on a Windows box would close the last cell.
 | **Clang** | 22.1.8 | ✅ verified | compiles **and runs** the smoke test ("all checks passed") |
 | **MinGW** (`x86_64-w64-mingw32-g++`) | 16.2.0 (GCC) | ✅ verified | compiles to object |
 | **emscripten / WASM** (`em++`) | 6.0.9 | ✅ verified | compiles to object |
-| **MSVC** | n/a (not installed) | ⚠️ reasoned | both incompatibilities removed; not compile-tested here |
+| **MSVC** | via CI: VS 2022 on `windows-latest` (19.4x) | ⚠️ reasoned → pending first green CI run | both incompatibilities removed; CI gate added (`.github/workflows/msvc.yml`) |
 
 Everything in the header is **standard C++17** (CRTP, qualified
 pointers-to-member, `std::variant`, templates, lambdas, `std::function`,
@@ -160,9 +160,35 @@ then `import<Point>()`s it and asserts: the type name round-trips, property
 get/set closures work, the method invokes, enum values are correct, and a
 duplicate type name is rejected by `registerType`.
 
+## MSVC CI (GitHub Actions)
+
+Since MSVC is not available in the local build environment, the MSVC cell is
+now gated by a continuous job instead of a one-off manual check:
+`.github/workflows/msvc.yml` (job: *MSVC x64 (windows-latest)*).
+
+- **Trigger:** every push to `main`, every pull request, and manual
+  dispatch.
+- **Runner:** `windows-latest` → Visual Studio 2022 Community with the
+  most recent hosted MSVC toolset (14.4x / compiler 19.4x).
+- **Configure:** `cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release`.
+- **Build:** *all* targets in the root `CMakeLists.txt` are built
+  explicitly — `qlang`, `qlang_example`, `qlang_run`, `spec_check2`,
+  `test_module`, `test_gen_simple`, `range_check`, `class_str_test`,
+  `class_static_test`, `codec_check` — so a new target added to
+  `CMakeLists.txt` must be added to the workflow's `$targets` list to be
+  covered.
+- **Test:** `ctest --test-dir build -C Release --output-on-failure`
+  (smoke, range, class_str, class_static, codec).
+- **Version capture:** the *Show compiler version* step prints `cl /?`
+  and records the exact "C/C++ Optimizing Compiler Version" in the step
+  output. That number is the one to fill into the matrix row above.
+
 ## Open item
 
-- **MSVC compile-test.** The two known MSVC incompatibilities are removed and
-  the rest is standard C++17, but MSVC is not present in this environment.
-  Confirm with `cl /std:c++17` on a Windows host (or CI) before claiming a
-  green MSVC cell.
+- **MSVC compile-test — CI gate added.** The two known MSVC
+  incompatibilities are removed and the rest is standard C++17, but MSVC
+  is not present in the local environment. `.github/workflows/msvc.yml`
+  now builds every `CMakeLists.txt` target with the latest hosted MSVC
+  and runs the full `ctest` suite on every push/PR. On the **first green
+  run**, flip the MSVC matrix row to ✅ verified and record the exact
+  compiler version from the *Show compiler version* step log.

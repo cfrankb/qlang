@@ -1,0 +1,63 @@
+# MSVC portability gate.
+#
+# Builds every target in the root CMakeLists.txt with the most recent MSVC
+# hosted on GitHub (VS 2022, windows-latest) and runs the full ctest suite.
+# The "Show compiler version" step records the exact
+# "C/C++ Optimizing Compiler Version" so the matrix in
+# docs/COMPILER_PORTABILITY.md stays exact.
+name: MSVC Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  msvc-windows:
+    name: MSVC x64 (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show compiler version
+        shell: pwsh
+        run: |
+          cmake --version
+          $line = (cl /? 2>&1 | Select-String 'Optimizing Compiler Version').ToString()
+          Write-Host $line
+          $ver = [regex]::Match($line, 'Version ([\d.]+)').Groups[1].Value
+          "msvc_version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Configure (CMake, x64, Release)
+        shell: pwsh
+        run: cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build all CMakeLists.txt targets
+        shell: pwsh
+        run: |
+          $targets = @(
+            'qlang',
+            'qlang_example',
+            'qlang_run',
+            'spec_check2',
+            'test_module',
+            'test_gen_simple',
+            'range_check',
+            'class_str_test',
+            'class_static_test',
+            'codec_check'
+          )
+          foreach ($t in $targets) {
+            Write-Host "=== Building target: $t ==="
+            cmake --build build --config Release --target $t --parallel
+          }
+
+      - name: Run tests (ctest)
+        shell: pwsh
+        run: ctest --test-dir build -C Release --output-on-failure
