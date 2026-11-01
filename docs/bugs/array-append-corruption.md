@@ -1,121 +1,94 @@
-# BUG: Array append (`arr[] = v`) corrupts element 0 and shifts appends
+# RESOLVED: "Array append corrupts element 0" was a test-harness false positive
 
-Status: **open** — pre-existing, independent of the Task 4 (external-type
-display) work. Not caused by, and not fixed by, the register-allocator
-changes in `src/QLangCompiler.cpp`.
+Status: **closed — not an engine bug.** The reported corruption was a
+dangling reference in the C++ test harness, not a defect in the QLang engine.
+Array append (`arr[] = v`) is correct.
 
-Severity: **high** (silent data corruption: a garbage element of an
-unrecognized type enters user data).
+A real (minor) documentation bug found while investigating — the `ARRAPP`
+operand was documented as `c` but is `b` — **is fixed** in this change.
 
-## Symptom
+## The original (incorrect) report
 
-Appending to an empty array literal produces a leading element whose
-`QLangValue` type is not a valid enum value (`QLangValue::typeName()` →
-`"?"`), and the appended values land shifted by one slot.
+`local out = []; out[] = 1; out[] = 2; out[] = 3` was reported to produce a
+garbage element 0 (`typeName()` → `"?"`) with shifted values. That was wrong.
 
-```
-local out = []
-out[] = 1
-out[] = 2
-out[] = 3
-# expected: [1, 2, 3]
-# actual:   size=3, [0]=<type "?">, [1]=int, [2]=int   (one value lost)
-```
+## Root cause of the false positive
 
-Inside a loop the same pattern yields an extra trailing element:
-
-```
-local out = []
-for i in range(0, 3) {   # range is inclusive -> i = 0,1,2,3 (4 iterations)
-  out[] = i
-}
-# expected: [0, 1, 2, 3]
-# actual:   size=4, [0]=<type "?">, [1]=int, [2]=int, [3]=int
-```
-
-The `?` type is the "no matching enum case" default returned by
-`QLangValue::typeName()` (`src/QLangValue.cpp:34`). It means the `QLangValue`
-stored in the array has a **corrupted / uninitialized `m_type`** — this is a
-memory-level defect, not a value the language is supposed to produce.
-
-## Reproduction
-
-Minimal harness (builds against `build/libqlang.a`):
+The harness read the array like this:
 
 ```cpp
-#include <iostream>
-#include "qlang/QLangContext.h"
-using namespace qlang;
-
-int main() {
-  QLangContext ctx;
-  ctx.run("local out = []\nout[] = 1\nout[] = 2\nout[] = 3\n");
-  const auto &arr = ctx.get("out").asArray();
-  std::cout << "size=" << arr.size();
-  for (size_t i = 0; i < arr.size(); i++)
-    std::cout << " [" << i << "]=" << arr[i].typeName();
-  std::cout << "\n";   // prints: size=3 [0]=? [1]=int [2]=int
-  return 0;
-}
+const auto &arr = ctx.get("out").asArray();   // DANGLES
 ```
 
-Compile: `g++ -std=c++17 -I include <file> build/libqlang.a -o <bin>`
+`QLangContext::get()` returns a `QLangValue` **by value** (`src/QLangContext.cpp:152`).
+`asArray()` is a plain `const` member (not ref-qualified) that returns a
+reference to the `m_storage` member *inside* that temporary. Binding a
+reference to the result of a **member-function call** on a temporary does NOT
+extend the temporary's lifetime (that extension only applies to direct member
+access `obj.member`, or to ref-qualified member functions). So the temporary
+`QLangValue` is destroyed at the end of the full expression and `arr` dangles
+into dead stack memory. Reading it yields freed-stack garbage — including a
+bogus `m_type` that `typeName()` renders as `"?"`.
 
-A second probe form (index assignment) does not even parse, so the only
-working append path is the bare `arr[] = v`:
+AddressSanitizer confirms it:
 
 ```
-local out = [0, 0, 0]
-for i in range(0, 3) { out[i] = i * 10 }
-# parse error: unsupported operator ''
+ERROR: AddressSanitizer: stack-use-after-scope ... READ of size 8
+  #0 ... std::vector<qlang::QLangValue>::size() const
+  #1 ... main  (the arr.size() read)
+Address ... in stack of thread T0 ... 'ctx' frame   <== dead temporary
 ```
 
-## Confirmed pre-existing
+## Correct behavior (verified)
 
-Reproduced identically with the Task 4 / register-allocator changes stashed
-(`git stash push src/QLangCompiler.cpp include/qlang/QLangCompiler.h`,
-rebuild, run). The corruption is present on the unmodified compiler, so it
-is **not a regression** introduced by the current work.
+Using the safe pattern — copy the value out first, then take the reference:
 
-## What is *not* the cause
+```cpp
+QLangValue v = ctx.get("out");   // copy the temporary into a named object
+const auto &arr = v.asArray();   // safe: v outlives arr
+```
 
-- The f-string / external-type display path (Task 4) — the corruption occurs
-  with plain integer appends, no externals and no f-strings involved.
-- The register allocator — verified identical behavior with those changes
-  stashed.
+- `out[] = 1;2;3` → `size=3  [0]=1 [1]=2 [2]=3` (all `int`)
+- `for i in range(0,3) { out[] = i }` → `size=4  [0]=0 [1]=1 [2]=2 [3]=3`
+  (range is **inclusive** per spec 04-control-flow, so 4 elements is correct)
 
-## Where to look (suggested)
+The engine path is clean end to end: the `[]` literal builds an empty
+`ArrayValue` via the constant pool (`src/QLangCompiler.cpp:2806-2813`); the
+bare-append statement emits `ARRAPP baseR, valR, 0`
+(`src/QLangCompiler.cpp:3226`); the VM handler does a plain
+`asArray().push_back(val)` (`src/QLangVM.cpp:320-326, 1481-1483`). No
+off-by-one, no raw-byte copy.
 
-The append path for `arr[] = v` (bare-append / `TABPUT`-with-empty-key, or a
-dedicated append opcode) and the `Array` storage growth in
-`QLangValue`/`ArrayValue`. Likely candidates:
+## The real bug found & fixed: `ARRAPP` operand documented as `c`, is `b`
 
-1. The empty literal `[]` initializes the `ArrayValue` with a stray
-   default-constructed (zeroed) element, so index 0 is a `QLangValue` whose
-   `m_type` is 0-ish garbage rather than `Type::Nil`.
-2. The append writes at `size` but `size` is computed before/after the push
-   inconsistently, giving the one-slot shift and the lost/extra element.
-3. A `QLangValue` is copied/moved into the vector by raw bytes (e.g. a
-   `memcpy` or a placement issue) leaving `m_type` unset for the first slot.
+While tracing, the disassembly of the append read `arrapp 00, 00` (base, 0),
+which *looked* like a self-append and is what first pointed the investigation
+at "append writing at the wrong index." In reality the value is in operand
+**b** (the compiler emits it there and the VM reads it there); operand **c**
+is unused/zero. Three sites wrongly referenced `c`:
 
-The asymmetry between the no-loop case (size 3, one value lost) and the
-loop case (size 4, extra trailing slot) suggests the off-by-one interacts
-with how the loop body re-reads `out` each iteration — worth a targeted
-disassembly of the append instruction sequence.
+| File | Line | Before | After |
+|------|------|--------|-------|
+| `include/qlang/QLangBytecode.h` | 101 | `arrays[a].push_back(c)` | `arrays[a].push_back(b)` |
+| `examples/qlang_run.cpp` | 341 | `rn(ins.a) << " += " << rn(ins.c)` | `rn(ins.a) << " += " << rn(ins.b)` |
+| `examples/qlang_run.cpp` | 465-467 | `ARRAPP` in the `A + C` mask group | `ARRAPP` → `A + B` (separated from `CALLCLOS`) |
 
-## Impact
+After the fix the listing reads `arrapp 00, 03` / `arrapp 00, 05` (base,
+value-register), matching the emitted bytecode. Runtime behavior is unchanged
+(it was already correct); only the documentation and the `.qla` listing are
+fixed.
 
-Any script that builds arrays by repeated `arr[] = v` gets a poisoned
-leading element and a count/value mismatch. Downstream `str`/`join`/indexing
-on such arrays will misbehave or, for the `?` element, hit the type switch's
-default path. This blocks the common "accumulate into a list" idiom.
+## Guidance for C++ harnesses
 
-## Acceptance criteria for a fix
+Never bind a reference to a member of a by-value return in the same full
+expression. Copy first:
 
-- `local out = []; out[] = 1; out[] = 2; out[] = 3` → exactly `[1, 2, 3]`,
-  every element `typeName() == "int"`.
-- Loop accumulation yields the expected element count with no `?` element.
-- No `QLangValue` in a script-owned array can have an `m_type` outside the
-  declared enum (consider a debug assertion in the `Array` factory/accessors).
-- Full suite green: `ctest`, `spec_check2`, `range_check`, `test_module`,
-  `qlang_example`.
+```cpp
+QLangValue v = ctx.get(name);      // always
+const auto &arr = v.asArray();     // safe
+```
+
+## Regression
+
+Full suite green after the doc/disassembly fix: `ctest` 5/5, `spec_check2`
+421/421, `range_check` 22/22, `test_module` OK, `qlang_example` OK.

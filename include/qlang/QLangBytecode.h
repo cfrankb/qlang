@@ -98,7 +98,7 @@ enum class Opcode : uint16_t {
   // Array operations (register holds an ArrayValue).
   ARRGET, // r[a] = arrays[b][c]               (subscript read)
   ARRPUT, // arrays[a][b] = c                   (subscript write)
-  ARRAPP, // arrays[a].push_back(c)             (append single element)
+  ARRAPP, // arrays[a].push_back(b)             (append single element)
   ARRAPPV, // arrays[a] += arrays[b]            (extend with another array)
   ARRLEN, // r[a] = arrays[b].size()            (length)
   LEN,    // r[a] = length(r[b])               — string/array/table/blob

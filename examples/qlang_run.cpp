@@ -338,7 +338,7 @@ namespace
       ss << rn(ins.a) << "[" << rn(ins.b) << "] = " << rn(ins.c);
       break;
     case Opcode::ARRAPP:
-      ss << rn(ins.a) << " += " << rn(ins.c);
+      ss << rn(ins.a) << " += " << rn(ins.b);
       break;
     case Opcode::ARRAPPV:
       ss << rn(ins.a) << " += " << rn(ins.b);
@@ -463,6 +463,7 @@ namespace
     case Opcode::CMPI:
       return A + B;
     case Opcode::ARRAPP:
+      return A + B; // base and value
     case Opcode::CALLCLOS:
       return A + C; // a and c only
     default:
