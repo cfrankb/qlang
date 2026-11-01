@@ -1,7 +1,5 @@
 #include "qlang/QLangCompiler.h"
 
-#include <execinfo.h>
-
 #include <algorithm>
 #include <iostream>
 #include <optional>

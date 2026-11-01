@@ -432,7 +432,9 @@ all the functions within a module must share a common const table or at the very
 - always copy directly to the final register 
 - avoid register aliasing
 - use a universal scratch pad register to avoid temporary
-
+- when calling functions, compiler must favor passing objects by pointer when they are arrays, tables, sets, objects, blobs. primitives (fit in a pair of cpu registers) are passed by value. strings are passed by value.
+- deep copy of arrays, sets, tables, objects must be explicit. string is the exception. it will be copied as it is immutable
+- always favor shorter enconding sequences
 
 ### egregious examples 
 
