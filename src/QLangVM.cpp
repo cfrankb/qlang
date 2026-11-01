@@ -1578,7 +1578,28 @@ void QLangVM::run() {
     case Opcode::CALLCLOS: {
       // Arrow-closure value in register a; its funcIndex is read at runtime.
       const QLangValue &cv = frame.regs[i.a];
-      if (cv.type() == QLangValue::Type::Generator) {
+      if (cv.type() == QLangValue::Type::BoundMethod) {
+        // External C++ method (docs/EXTERNAL_TYPES.md): invoke the bound
+        // member on the target object. Args sit at dest+1..dest+argCount
+        // (same convention as CALL). selfMut() throws on an expired
+        // borrow; C++ exceptions from the binding become runtime errors.
+        frame.pc += 1;
+        const auto &bm = cv.asBoundMethod();
+        ExternalRef target = bm.target; // copy: selfMut() is non-const
+        void *self = target.selfMut();
+        std::vector<QLangValue> args;
+        args.reserve(i.c);
+        for (int k = 0; k < i.c; k++)
+          args.push_back(frame.regs[i.a + 1 + k]);
+        try {
+          frame.regs[i.a] = bm.member->invoke(self, m_scope, args);
+        } catch (const QLangError &) {
+          throw;
+        } catch (const std::exception &e) {
+          vmThrow(QLangErrorKind::Runtime, e.what());
+        }
+        break;
+      } else if (cv.type() == QLangValue::Type::Generator) {
         frame.pc += 1;
         auto &gen = const_cast<GeneratorValue &>(cv.asGenerator());
         auto result = gen();
@@ -1921,6 +1942,28 @@ void QLangVM::runFrames(int startFrame)
     }
     case Opcode::CALLCLOS: {
       const QLangValue &cv = frame.regs[i.a];
+      if (cv.type() == QLangValue::Type::BoundMethod) {
+        // External C++ method (docs/EXTERNAL_TYPES.md): invoke the bound
+        // member on the target object. Args sit at dest+1..dest+argCount
+        // (same convention as CALL). selfMut() throws on an expired
+        // borrow; C++ exceptions from the binding become runtime errors.
+        frame.pc += 1;
+        const auto &bm = cv.asBoundMethod();
+        ExternalRef target = bm.target; // copy: selfMut() is non-const
+        void *self = target.selfMut();
+        std::vector<QLangValue> args;
+        args.reserve(i.c);
+        for (int k = 0; k < i.c; k++)
+          args.push_back(frame.regs[i.a + 1 + k]);
+        try {
+          frame.regs[i.a] = bm.member->invoke(self, m_scope, args);
+        } catch (const QLangError &) {
+          throw;
+        } catch (const std::exception &e) {
+          vmThrow(QLangErrorKind::Runtime, e.what());
+        }
+        break;
+      }
       if (cv.type() != QLangValue::Type::Function)
         vmThrow(QLangErrorKind::Type,
                          "attempt to call a non-function value");
@@ -2317,7 +2360,28 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       }
       case Opcode::CALLCLOS: {
         const QLangValue &cv = frame.regs[i.a];
-        if (cv.type() == QLangValue::Type::Generator) {
+        if (cv.type() == QLangValue::Type::BoundMethod) {
+          // External C++ method (docs/EXTERNAL_TYPES.md): invoke the bound
+          // member on the target object. Args sit at dest+1..dest+argCount
+          // (same convention as CALL). selfMut() throws on an expired
+          // borrow; C++ exceptions from the binding become runtime errors.
+          frame.pc += 1;
+          const auto &bm = cv.asBoundMethod();
+          ExternalRef target = bm.target; // copy: selfMut() is non-const
+          void *self = target.selfMut();
+          std::vector<QLangValue> args;
+          args.reserve(i.c);
+          for (int k = 0; k < i.c; k++)
+            args.push_back(frame.regs[i.a + 1 + k]);
+          try {
+            frame.regs[i.a] = bm.member->invoke(self, m_scope, args);
+          } catch (const QLangError &) {
+            throw;
+          } catch (const std::exception &e) {
+            vmThrow(QLangErrorKind::Runtime, e.what());
+          }
+          break;
+        } else if (cv.type() == QLangValue::Type::Generator) {
           // Generator call: inline the resume logic.
           frame.pc += 1;
           auto &innerGen = cv.asGenerator();
@@ -2677,7 +2741,28 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     }
     case Opcode::CALLCLOS: {
       const QLangValue &cv = frame.regs[i.a];
-      if (cv.type() == QLangValue::Type::Generator) {
+      if (cv.type() == QLangValue::Type::BoundMethod) {
+        // External C++ method (docs/EXTERNAL_TYPES.md): invoke the bound
+        // member on the target object. Args sit at dest+1..dest+argCount
+        // (same convention as CALL). selfMut() throws on an expired
+        // borrow; C++ exceptions from the binding become runtime errors.
+        frame.pc += 1;
+        const auto &bm = cv.asBoundMethod();
+        ExternalRef target = bm.target; // copy: selfMut() is non-const
+        void *self = target.selfMut();
+        std::vector<QLangValue> args;
+        args.reserve(i.c);
+        for (int k = 0; k < i.c; k++)
+          args.push_back(frame.regs[i.a + 1 + k]);
+        try {
+          frame.regs[i.a] = bm.member->invoke(self, m_scope, args);
+        } catch (const QLangError &) {
+          throw;
+        } catch (const std::exception &e) {
+          vmThrow(QLangErrorKind::Runtime, e.what());
+        }
+        break;
+      } else if (cv.type() == QLangValue::Type::Generator) {
         frame.pc += 1;
         auto &gen = const_cast<GeneratorValue &>(cv.asGenerator());
         auto result = gen();
