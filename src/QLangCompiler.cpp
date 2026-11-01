@@ -135,15 +135,33 @@ int QLangCompiler::maxLiveTmp() const
       m = t;
   return m;
 }
+int QLangCompiler::maxNamedReg() const
+{
+  int m = -1;
+  for (int r : m_namedRegs)
+    if (r > m)
+      m = r;
+  return m;
+}
+// A temp is pool-eligible only while it stays strictly above BOTH the
+// highest live temp and the named-register high-water mark. Named registers
+// are allocated densely and monotonically upward within a function, so
+// m_nextNamedReg bounds the next named allocation: pooling a temp at or
+// below it would let a later named variable alias a pooled register.
+// (tmpRegister re-reserves any pooled register it hands out, so a stale
+// bound only costs reuse, never correctness.)
+bool QLangCompiler::poolEligible(int r) const
+{
+  return r > maxLiveTmp() && r > m_nextNamedReg;
+}
 // Move deferred temps that are now above the highest live temp into the
 // pool (they became reusable once the high temp died).
 void QLangCompiler::promoteDeferred()
 {
-  int hi = maxLiveTmp();
   auto it = m_deferred.begin();
   while (it != m_deferred.end())
   {
-    if (*it > hi)
+    if (poolEligible(*it))
     {
       m_freeRegs.push_back(*it);
       it = m_deferred.erase(it);
@@ -152,10 +170,11 @@ void QLangCompiler::promoteDeferred()
       ++it;
   }
 }
-// Pool entry point: keep the pool strictly above the highest live temp.
+// Pool entry point: keep the pool strictly above the highest live temp and
+// the highest named register (see poolEligible).
 void QLangCompiler::returnToPool(int r)
 {
-  if (r > maxLiveTmp())
+  if (poolEligible(r))
     m_freeRegs.push_back(r);
   else
     m_deferred.insert(r);
@@ -194,6 +213,14 @@ int QLangCompiler::tmpRegister()
         ++it;
     r = newRegister();
   }
+  // Reserve this temp from the named-register stream: registers are static
+  // for the whole function, so a named variable declared LATER must never
+  // land on a register any statement uses as a temp (the statement would
+  // clobber the seeded/assigned value at runtime). Named allocation is
+  // dense and monotonic within a function, so pushing the counter past r
+  // keeps every future named register above it.
+  while (m_nextNamedReg <= r)
+    m_nextNamedReg++;
   m_liveTmps.push_back(r);
   return r;
 }
@@ -280,6 +307,15 @@ void QLangCompiler::beginArgSlots(int dest, int nSlots)
   int lo = dest + 1, hi = dest + 1 + nSlots;
   while (m_nextReg < hi)
     m_nextReg++;
+  // Reserve the slot region from the named-register stream too: registers
+  // are static for the whole function, so a named variable declared LATER
+  // in the program (e.g. an external var first used in a later statement)
+  // would otherwise be allocated inside this statement's slot region and
+  // clobbered by the slot MOVs at runtime. Named allocation is dense and
+  // monotonically increasing within a function, so pushing the counter
+  // past hi keeps every future named register above the slots.
+  while (m_nextNamedReg < hi)
+    m_nextNamedReg++;
   m_slotRanges.push_back({lo, hi});
   auto it = m_freeRegs.begin();
   while (it != m_freeRegs.end())
@@ -319,6 +355,16 @@ void QLangCompiler::endArgSlots()
 }
 
 int QLangCompiler::declareVar(const std::string &name, bool blockScoped) {
+  // A named register must never alias an active call-arg slot region
+  // (beginArgSlots quarantines dest+1..dest+n for the in-flight call). The
+  // dense counter and the free list are both blind to the quarantine, so
+  // check every live slot range explicitly.
+  auto inSlotRange = [this](int r) {
+    for (auto &slot : m_slotRanges)
+      if (r >= slot.first && r < slot.second)
+        return true;
+    return false;
+  };
   if (blockScoped && !m_blockScopes.empty()) {
     auto &top = m_blockScopes.back();
     auto it = top.find(name);
@@ -336,11 +382,11 @@ int QLangCompiler::declareVar(const std::string &name, bool blockScoped) {
     else
       r = m_nextNamedReg++;
     // Skip live temps (e.g. an enclosing loop's header temps, protected
-    // across statements) and already-allocated named registers: a named
-    // register must never alias either.
+    // across statements), already-allocated named registers, and active
+    // call-arg slots: a named register must never alias any of them.
     while (std::find(m_liveTmps.begin(), m_liveTmps.end(), r) !=
              m_liveTmps.end() ||
-           m_namedRegs.count(r))
+           m_namedRegs.count(r) || inSlotRange(r))
       r++;
     // Temps must stay ABOVE named registers: a call's arg slots are
     // dest+1..dest+argCount, and dest is a temp — a low temp would put the
@@ -369,7 +415,7 @@ int QLangCompiler::declareVar(const std::string &name, bool blockScoped) {
     r = m_nextNamedReg++;
   while (std::find(m_liveTmps.begin(), m_liveTmps.end(), r) !=
            m_liveTmps.end() ||
-         m_namedRegs.count(r))
+         m_namedRegs.count(r) || inSlotRange(r))
     r++;
   while (m_nextReg <= r)
     m_nextReg++;

@@ -110,6 +110,14 @@ private:
   // a call's arg slots (dest+1..dest+n, dest = temp) must never alias a
   // live temp (loop-header temps survive across statements).
   int maxLiveTmp() const;
+  // Highest named (script variable) register, or -1. The free pool must
+  // also stay strictly above this: a temp handed out as a call's dest puts
+  // the arg slots at dest+1.., which would clobber a named register above
+  // the dest.
+  int maxNamedReg() const;
+  // True when a freed temp may enter the free pool (see maxLiveTmp /
+  // maxNamedReg).
+  bool poolEligible(int r) const;
   void promoteDeferred();
   void returnToPool(int r);
   int declareVar(const std::string &name, bool blockScoped = false);

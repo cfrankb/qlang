@@ -29,7 +29,21 @@ jobs:
         shell: pwsh
         run: |
           cmake --version
+          # windows-latest does not put MSVC tools on PATH by default; import
+          # the vcvars64 environment into this pwsh session so `cl` resolves.
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (Test-Path $vswhere) {
+            $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          }
+          $vcvars = if ($vsPath) { Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat' } else { "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat" }
+          if (-not (Test-Path $vcvars)) { throw "vcvars64.bat not found (looked for: $vcvars)" }
+          cmd /c "`"$vcvars`" && set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') {
+              [System.Environment]::SetEnvironmentVariable($matches[1], $matches[2])
+            }
+          }
           $line = (cl /? 2>&1 | Select-String 'Optimizing Compiler Version').ToString()
+          if (-not $line) { throw "Could not find 'Optimizing Compiler Version' in `cl /?` output" }
           Write-Host $line
           $ver = [regex]::Match($line, 'Version ([\d.]+)').Groups[1].Value
           "msvc_version=$ver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append

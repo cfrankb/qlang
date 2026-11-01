@@ -10,24 +10,29 @@ namespace qlang {
 class QLangContext;
 
 // ObjectOps: the dispatch layer for object operations.
-// This is the neutral runtime infrastructure shared between QLang classes
-// and external C++ types. Both object kinds go through the same four
-// dispatch operations (GETFIELD / SETFIELD / CALLMETHOD / TOSTRING).
+// This is the neutral runtime infrastructure shared between QLang tables,
+// QLang classes, and external C++ types. Every object kind goes through the
+// same four dispatch operations (GETFIELD / SETFIELD / CALLMETHOD /
+// TOSTRING).
 //
-// The table below shows the dispatch points:
+// The table below shows the dispatch points per object kind:
 //
-// Dispatch point | Table/Class behavior | External behavior
-// -------------- | -------------------- | -----------------
-// field get      | map lookup / instance field | registered FieldBinding::get
-// field set      | map insert / field store | registered FieldBinding::set (nullptr -> read-only error)
-// method call    | class method with `self` | MethodBinding::invoke with `self`
-// string conversion | `__str__` | registered `__str__` binding (else -> type name + error)
+// Dispatch point  | Table/Class behavior          | External behavior                | TypeRef behavior
+// --------------- | ----------------------------- | ------------------------------------ | ----------------------------
+// field get       | map lookup / instance field   | member binding get (kind 2 -> the    | enum/flag constant -> Int
+//                 |                               | callable BoundMethod value)          |
+// field set       | map insert / field store      | member binding set (kind 1 read-only,| type value is not settable
+//                 |                               | kind 2 method -> Type errors)        |
+// method call     | class method with `self`      | member binding invoke with `self`    | type construction (owned)
+// string          | `__str__` / class name        | the type's QL_STR binding            | "<type T>"
 //
 // Why dispatch-first: Zero class semantics (no `self` allocation, no instance
 // storage, no `__init__` protocol, no inheritance) and zero C++-RTTI.
-// Four function pointers and a lookup. The only existing consumer is the
-// **table kind**: today's table key-lookup/insert semantics ported into the
-// pointers — a pure refactor.
+// Four function pointers and a lookup. Consumers: the **table kind** (today's
+// table key-lookup/insert semantics ported into the pointers), the **object
+// kind** (class instances, per-class ops), the **external kind** (a view over
+// one C++ object, shared ops), and the **type kind** (the type itself as a
+// value, shared ops).
 struct ObjectOps {
   const char* kindName;  // Human-readable name for the object kind (e.g., "table")
 
@@ -57,7 +62,9 @@ struct ObjectOps {
 
 // getObjectOps: Returns the ObjectOps for a value's type, or nullptr if
 // the type doesn't have object operations (e.g., Int, String, etc.).
-// Currently returns the table ops for Table type.
+// Table -> table ops; Object -> the class's ops; External -> external ops;
+// TypeRef -> type-ref ops. BoundMethod has no ops (it is callable, not an
+// object).
 const ObjectOps* getObjectOps(const QLangValue& obj);
 
 // Table kind ObjectOps implementation.
@@ -89,5 +96,19 @@ const ObjectOps* base(const QLangValue& obj);
 extern const ObjectOps kTableOps;
 
 } // namespace table_ops
+
+// External C++ type ObjectOps implementation (docs/EXTERNAL_TYPES.md).
+// Shared by every External value: member lookups against the
+// TypeDescriptor's member list, QL_STR for string conversion.
+namespace external_ops {
+extern const ObjectOps kExternalOps;
+} // namespace external_ops
+
+// Type-ref ObjectOps implementation (docs/EXTERNAL_TYPES.md). Shared by
+// every TypeRef value: enum/flag constant lookup and (declared)
+// construction.
+namespace typeref_ops {
+extern const ObjectOps kTypeRefOps;
+} // namespace typeref_ops
 
 } // namespace qlang

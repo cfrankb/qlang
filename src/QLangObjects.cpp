@@ -2,8 +2,10 @@
 
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
+#include "qlang/QLangTypes.h"
 #include "qlang/QLangValue.h"
 
+#include <exception>
 #include <map>
 #include <string>
 #include <vector>
@@ -246,6 +248,188 @@ const ObjectOps kTableOps = {
 
 } // namespace table_ops
 
+// ---------------------------------------------------------------------------
+// External C++ types (docs/EXTERNAL_TYPES.md): the two object kinds that
+// dispatch through the same ObjectOps table.
+//   External  — a view over exactly one C++ object (ExternalRef)
+//   TypeRef   — the type itself as a value: enum/flag constants, and
+//               (when the type declares a ctor) script-side construction
+//
+// getField/setField/callMethod resolve the descriptor's member list; each
+// member's std::function bindings carry the C++ access (deduced from the
+// member pointer at the QL_OBJECT line). C++ exceptions escaping a binding
+// are rethrown as QLangError(Runtime); QLangErrors pass through untouched.
+namespace external_ops {
+
+// Find a member of the descriptor by name; null when absent.
+static const Member* findMember(const TypeDescriptor& t, const std::string& name) {
+  for (const auto& m : t.members)
+    if (m.name == name) return &m;
+  return nullptr;
+}
+
+// Reroute C++ exceptions from a member binding into QLang runtime errors.
+#define QL_EXTERNAL_CALL(expr)                                    \
+  try {                                                           \
+    return (expr);                                                \
+  } catch (const QLangError&) {                                   \
+    throw;                                                        \
+  } catch (const std::exception& e) {                             \
+    throw QLangError(QLangErrorKind::Runtime, 0, 0, e.what());    \
+  }
+
+QLangValue getField(const QLangValue& obj, const std::string& name,
+                    QLangContext&) {
+  const auto& ref = obj.asExternal();
+  const TypeDescriptor& t = *ref.type;
+  const Member* m = findMember(t, name);
+  if (!m)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     "no field '" + name + "' on type '" + t.name + "'");
+  if (m->kind == 2) {
+    // Method read: a first-class callable value (dispatched by CALLCLOS).
+    return QLangValue::BoundMethod(m, ref);
+  }
+  // kind 0/1: property read (self() throws "object destroyed: <type>" on an
+  // expired borrow).
+  const void* self = ref.self();
+  QL_EXTERNAL_CALL(m->get(self))
+}
+
+void setField(QLangValue& obj, const std::string& name,
+              const QLangValue& value, QLangContext&) {
+  const TypeDescriptor& t = *obj.asExternal().type;
+  const Member* m = findMember(t, name);
+  if (!m)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     "no field '" + name + "' on type '" + t.name + "'");
+  if (m->kind == 1)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     "field '" + name + "' on type '" + t.name +
+                         "' is read-only");
+  if (m->kind == 2)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     "field '" + name + "' on type '" + t.name +
+                         "' is a method");
+  // Copy the ref so selfMut() (non-const) is callable on it.
+  ExternalRef ref = obj.asExternal();
+  void* self = ref.selfMut();
+  try {
+    m->set(self, value);
+  } catch (const QLangError&) {
+    throw;
+  } catch (const std::exception& e) {
+    throw QLangError(QLangErrorKind::Runtime, 0, 0, e.what());
+  }
+}
+
+QLangValue callMethod(const QLangValue& obj, const std::string& name,
+                      const std::vector<QLangValue>& args, QLangContext& ctx) {
+  // Not called by the VM in v1 (method calls are TABGET -> BoundMethod ->
+  // CALLCLOS); kept for the future event-handler contract.
+  const TypeDescriptor& t = *obj.asExternal().type;
+  const Member* m = findMember(t, name);
+  if (!m || m->kind != 2)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     "no method '" + name + "' on type '" + t.name + "'");
+  // Copy the ref so selfMut() (non-const) is callable: const-method
+  // bindings cast to const T* themselves, and selfMut() throws on expiry
+  // like self().
+  ExternalRef ref = obj.asExternal();
+  void* self = ref.selfMut();
+  QL_EXTERNAL_CALL(m->invoke(self, ctx, args))
+}
+
+QLangValue toStr(const QLangValue& obj, QLangContext&) {
+  const auto& ref = obj.asExternal();
+  const TypeDescriptor& t = *ref.type;
+  if (t.toString) {
+    const void* self = ref.self();
+    QL_EXTERNAL_CALL(t.toString(self))
+  }
+  throw QLangError(QLangErrorKind::Type, 0, 0,
+                   "no str binding for type '" + t.name + "'");
+}
+
+const ObjectOps* base(const QLangValue&) {
+  // Reserved for inheritance — null in v1.
+  return nullptr;
+}
+
+// The global external ObjectOps instance.
+const ObjectOps kExternalOps = {
+    .kindName = "external",
+    .getField = getField,
+    .setField = setField,
+    .callMethod = callMethod,
+    .toStr = toStr,
+    .base = base,
+};
+
+} // namespace external_ops
+
+namespace typeref_ops {
+
+QLangValue getField(const QLangValue& obj, const std::string& name,
+                    QLangContext&) {
+  const TypeDescriptor& t = *obj.asTypeRef().type;
+  // Enum/flag constant lookup across the type's tables: `DockArea.A`
+  // resolves to the Int value of enumerator A.
+  for (const auto& e : t.enums)
+    for (const auto& entry : e.entries)
+      if (entry.name == name)
+        return QLangValue::Int(static_cast<int32_t>(entry.value));
+  throw QLangError(QLangErrorKind::Type, 0, 0,
+                   "type '" + t.name + "' has no constant '" + name + "'");
+}
+
+void setField(QLangValue& obj, const std::string&, const QLangValue&,
+              QLangContext&) {
+  const TypeDescriptor& t = *obj.asTypeRef().type;
+  throw QLangError(QLangErrorKind::Type, 0, 0,
+                   "type '" + t.name + "' is not settable");
+}
+
+QLangValue callMethod(const QLangValue& obj, const std::string&,
+                      const std::vector<QLangValue>& args, QLangContext& ctx) {
+  // Not called by the VM in v1 (script-side `T(args)` goes through the
+  // constructor native registered at import); kept for the future
+  // event-handler contract.
+  const TypeDescriptor& t = *obj.asTypeRef().type;
+  if (!t.construct)
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     "type '" + t.name + "' is not constructible");
+  try {
+    return QLangValue::External(&t, t.construct(ctx, args));
+  } catch (const QLangError&) {
+    throw;
+  } catch (const std::exception& e) {
+    throw QLangError(QLangErrorKind::Runtime, 0, 0, e.what());
+  }
+}
+
+QLangValue toStr(const QLangValue& obj, QLangContext&) {
+  const TypeDescriptor& t = *obj.asTypeRef().type;
+  return QLangValue::String("<type " + t.name + ">");
+}
+
+const ObjectOps* base(const QLangValue&) {
+  // Reserved for inheritance — null in v1.
+  return nullptr;
+}
+
+// The global type-ref ObjectOps instance.
+const ObjectOps kTypeRefOps = {
+    .kindName = "type",
+    .getField = getField,
+    .setField = setField,
+    .callMethod = callMethod,
+    .toStr = toStr,
+    .base = base,
+};
+
+} // namespace typeref_ops
+
 const ObjectOps* getObjectOps(const QLangValue& obj) {
   // Tables use the table ops dispatch layer.
   if (obj.type() == QLangValue::Type::Table) {
@@ -256,6 +440,15 @@ const ObjectOps* getObjectOps(const QLangValue& obj) {
     const auto& desc = obj.asObject();
     return desc->ops;
   }
+  // External C++ types: one view over one object; the type value itself
+  // resolves enum constants and construction.
+  if (obj.type() == QLangValue::Type::External) {
+    return &external_ops::kExternalOps;
+  }
+  if (obj.type() == QLangValue::Type::TypeRef) {
+    return &typeref_ops::kTypeRefOps;
+  }
+  // BoundMethod is callable (CALLCLOS), not an object.
   return nullptr;
 }
 

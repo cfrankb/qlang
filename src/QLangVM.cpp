@@ -51,7 +51,22 @@ double toDouble(const QLangValue &v) {
 }
 
 // Text form of a value, used by toStr/print/printf and string concatenation.
-std::string valueToString(const QLangValue &v) {
+// External and type values render through their ObjectOps toStr binding when
+// one succeeds (QL_STR / the type's default form); a type without a str
+// binding falls through to the static form in the switch below, so print()
+// stays sane.
+std::string valueToString(const QLangValue &v, QLangContext &ctx) {
+  if (v.type() == QLangValue::Type::External ||
+      v.type() == QLangValue::Type::TypeRef) {
+    const ObjectOps *ops = getObjectOps(v);
+    if (ops && ops->toStr) {
+      try {
+        return ops->toStr(v, ctx).asString();
+      } catch (const QLangError &) {
+        // No str binding (external type without QL_STR): static form below.
+      }
+    }
+  }
   switch (v.type()) {
   case QLangValue::Type::Nil: return "nil";
   case QLangValue::Type::String: return v.asString();
@@ -77,6 +92,16 @@ std::string valueToString(const QLangValue &v) {
   case QLangValue::Type::Generator: return "<generator>";
   case QLangValue::Type::Eof: return "<eof>";
   case QLangValue::Type::Object: return "<object>";
+  case QLangValue::Type::External: {
+    const auto &ref = v.asExternal();
+    return std::string("<external: ") + (ref.type ? ref.type->name : "?") +
+           ">";
+  }
+  case QLangValue::Type::BoundMethod: return "<bound method>";
+  case QLangValue::Type::TypeRef: {
+    const auto &ref = v.asTypeRef();
+    return std::string("<type ") + (ref.type ? ref.type->name : "?") + ">";
+  }
   }
   return "?";
 }
@@ -427,6 +452,17 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
       auto &desc = args[0].asObject();
       if (desc && desc->ops)
         return QLangValue::String(desc->ops->kindName);
+    }
+    // External C++ types and type values report the declared type name
+    // (no RTTI: the name comes from the descriptor, not type_info).
+    if (args[0].type() == QLangValue::Type::External ||
+        args[0].type() == QLangValue::Type::TypeRef) {
+      const TypeDescriptor *t =
+          args[0].type() == QLangValue::Type::External
+              ? args[0].asExternal().type
+              : args[0].asTypeRef().type;
+      if (t)
+        return QLangValue::String(t->name);
     }
     // Type::Table with __class__ key -> use that (table-based classes; the
     // constructor stamps kClassMetaKey, not "__type__").
@@ -938,7 +974,7 @@ std::string QLangVM::displayString(const QLangValue &v) {
         QLangValue r = callClosure(it->second, {v});
         m_inDisplayString = false;
         if (r.type() == QLangValue::Type::String) return r.asString();
-        return valueToString(r);
+        return valueToString(r, m_scope);
       }
     }
     auto kit = t.find("__class__");
@@ -975,7 +1011,7 @@ std::string QLangVM::displayString(const QLangValue &v) {
     }
     return out + ")";
   }
-  return valueToString(v);
+  return valueToString(v, m_scope);
 }
 
 std::string QLangVM::renderElement(const QLangValue &v) {
@@ -1116,7 +1152,7 @@ QLangValue strict_convert(const QLangValue &v, QLangValue::Type type,
   }
   // String target: convert anything to string.
   if (type == QLangValue::Type::String) {
-    return QLangValue::String(valueToString(v));
+    return QLangValue::String(valueToString(v, vm->m_scope));
   }
   // Collection targets: array <-> set convert (SPEC cast table); table and
   // same-type collections pass through; anything else is rejected.
@@ -1161,7 +1197,7 @@ QLangValue QLangVM::doUnary(Opcode op, const QLangValue &a, QLangVM *vm) {
                        std::string("operator '$' cannot stringify ") +
                          a.typeName() + " (collections and functions not supported)");
     default:
-      return QLangValue::String(valueToString(a));
+      return QLangValue::String(valueToString(a, vm->m_scope));
     }
   }
   default:
@@ -1178,7 +1214,7 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
   case Opcode::ADD:
     // Left-is-string rule: if the left operand is a string, concat both sides.
     if (a.type() == QLangValue::Type::String)
-      return QLangValue::String(a.asString() + valueToString(b));
+      return QLangValue::String(a.asString() + valueToString(b, vm->m_scope));
     if (b.type() == QLangValue::Type::String)
       thr(QLangErrorKind::Type,
                        "operator '+' cannot mix numeric and string operands");
@@ -1286,7 +1322,7 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
       return QLangValue::Bool(0);
     }
     if (col.type() == QLangValue::Type::Table) {
-      std::string key = valueToString(a);
+      std::string key = valueToString(a, vm->m_scope);
       return QLangValue::Bool(col.asTable()->count(key) ? 1 : 0);
     }
     if (col.type() == QLangValue::Type::Set) {
@@ -1386,7 +1422,8 @@ void QLangVM::run() {
       QLangValue *r2 = (kv.second.regs.size() > 2) ? &kv.second.regs[2] : nullptr;
       trace(TRACE_VM_LOOP, "[DBG-MAIN]   map[%d] base=%p size=%zu reg2=%p type=%d val=%s overlapsMain=%d\n",
               kv.first, kv.second.regs.data(), kv.second.regs.size(), r2,
-              r2 ? (int)r2->type() : -1, r2 ? valueToString(*r2).c_str() : "nil",
+              r2 ? (int)r2->type() : -1,
+              r2 ? valueToString(*r2, m_scope).c_str() : "nil",
               (r2 && (uintptr_t)r2 >= (uintptr_t)frame.regs.data() &&
                    (uintptr_t)r2 < (uintptr_t)frame.regs.data() + frame.regs.size()*sizeof(QLangValue)) ? 1 : 0);
     }
@@ -1470,7 +1507,7 @@ void QLangVM::run() {
       break;
     case Opcode::TABGET: {
       QLangValue &base = frame.regs[i.b];
-      const std::string &key = valueToString(frame.regs[i.c]);
+      const std::string &key = valueToString(frame.regs[i.c], m_scope);
       // Use ObjectOps dispatch for member access (Phase 0.4)
       const ObjectOps* ops = getObjectOps(base);
       if (ops) {
@@ -1493,7 +1530,7 @@ void QLangVM::run() {
     }
     case Opcode::TABPUT: {
       QLangValue &base = frame.regs[i.a];
-      const std::string &key = valueToString(frame.regs[i.b]);
+      const std::string &key = valueToString(frame.regs[i.b], m_scope);
       // Use ObjectOps dispatch for member assignment (Phase 0.4)
       const ObjectOps* ops = getObjectOps(base);
       if (ops) {
@@ -1616,7 +1653,7 @@ void QLangVM::run() {
       // (the deque keeps frame pointers stable, so the caller frame is valid).
       QLangValue retVal = frame.regs.empty() ? QLangValue() : frame.regs[0];
       int dest = frame.callDest;
-      trace(TRACE_VM_LOOP, "[DBG-RET] func=%d dest=%d retVal=%s\n", frame.funcIndex, dest, valueToString(retVal).c_str());
+      trace(TRACE_VM_LOOP, "[DBG-RET] func=%d dest=%d retVal=%s\n", frame.funcIndex, dest, valueToString(retVal, m_scope).c_str());
       if (m_cur == 0) {
         // Returning from main: sync the frame back into the scope before
         // unwinding so script variables persist.
@@ -1678,7 +1715,7 @@ void QLangVM::run() {
     case Opcode::IN: {
       QLangValue result = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       frame.regs[i.a] = result;
-      trace(TRACE_VM_LOOP, "[DBG-RES] op=%d a=%d b=%d c=%d -> regs[%d]=%s (b=%s, c=%s)\n", (int)op, i.a, i.b, i.c, i.a, valueToString(result).c_str(), valueToString(frame.regs[i.b]).c_str(), valueToString(frame.regs[i.c]).c_str());
+      trace(TRACE_VM_LOOP, "[DBG-RES] op=%d a=%d b=%d c=%d -> regs[%d]=%s (b=%s, c=%s)\n", (int)op, i.a, i.b, i.c, i.a, valueToString(result, m_scope).c_str(), valueToString(frame.regs[i.b], m_scope).c_str(), valueToString(frame.regs[i.c], m_scope).c_str());
       break;
     }
     case Opcode::CMP:
@@ -1821,7 +1858,7 @@ void QLangVM::runFrames(int startFrame)
       break;
     case Opcode::TABGET: {
       QLangValue &base = frame.regs[i.b];
-      const std::string &key = valueToString(frame.regs[i.c]);
+      const std::string &key = valueToString(frame.regs[i.c], m_scope);
       // Use ObjectOps dispatch for member access (Phase 0.4)
       const ObjectOps* ops = getObjectOps(base);
       if (ops) {
@@ -1844,7 +1881,7 @@ void QLangVM::runFrames(int startFrame)
     }
     case Opcode::TABPUT: {
       QLangValue &base = frame.regs[i.a];
-      const std::string &key = valueToString(frame.regs[i.b]);
+      const std::string &key = valueToString(frame.regs[i.b], m_scope);
       // Use ObjectOps dispatch for member assignment (Phase 0.4)
       const ObjectOps* ops = getObjectOps(base);
       if (ops) {
@@ -2217,7 +2254,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         break;
       case Opcode::TABGET: {
         QLangValue &base = frame.regs[i.b];
-        const std::string &key = valueToString(frame.regs[i.c]);
+        const std::string &key = valueToString(frame.regs[i.c], m_scope);
         // Use ObjectOps dispatch for member access (Phase 0.4)
         const ObjectOps* ops = getObjectOps(base);
         if (ops) {
@@ -2237,7 +2274,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         break;
       case Opcode::TABPUT: {
         QLangValue &base = frame.regs[i.a];
-        const std::string &key = valueToString(frame.regs[i.b]);
+        const std::string &key = valueToString(frame.regs[i.b], m_scope);
         // Use ObjectOps dispatch for member assignment (Phase 0.4)
         const ObjectOps* ops = getObjectOps(base);
         if (ops) {
@@ -2342,9 +2379,9 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         // reference (frame is m_frames[m_cur] and becomes invalid after pop).
         QLangValue yielded = frame.regs.empty() ? QLangValue() : frame.regs[0];
         trace(TRACE_FULL, "[DBG-YIELD] func=%d yielded type=%d val=%s pc=%zu regs[0]=%s\n",
-                frame.funcIndex, (int)yielded.type(), valueToString(yielded).c_str(), frame.pc, valueToString(yielded).c_str());
+                frame.funcIndex, (int)yielded.type(), valueToString(yielded, m_scope).c_str(), frame.pc, valueToString(yielded, m_scope).c_str());
         for (size_t ri = 0; ri < frame.regs.size() && ri < 10; ri++) {
-          trace(TRACE_FULL, "[DBG-YIELD]   reg[%zu]=type%d val=%s\n", ri, (int)frame.regs[ri].type(), valueToString(frame.regs[ri]).c_str());
+          trace(TRACE_FULL, "[DBG-YIELD]   reg[%zu]=type%d val=%s\n", ri, (int)frame.regs[ri].type(), valueToString(frame.regs[ri], m_scope).c_str());
         }
         Frame savedFrame = m_frames[m_cur];
         savedFrame.pc = frame.pc + 1; // resume at next instruction
@@ -2578,7 +2615,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       break;
     case Opcode::TABGET: {
       QLangValue &base = frame.regs[i.b];
-      const std::string &key = valueToString(frame.regs[i.c]);
+      const std::string &key = valueToString(frame.regs[i.c], m_scope);
       // Use ObjectOps dispatch for member access (Phase 0.4)
       const ObjectOps* ops = getObjectOps(base);
       if (ops) {
@@ -2600,7 +2637,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     }
     case Opcode::TABPUT: {
       QLangValue &base = frame.regs[i.a];
-      const std::string &key = valueToString(frame.regs[i.b]);
+      const std::string &key = valueToString(frame.regs[i.b], m_scope);
       // Use ObjectOps dispatch for member assignment (Phase 0.4)
       const ObjectOps* ops = getObjectOps(base);
       if (ops) {
