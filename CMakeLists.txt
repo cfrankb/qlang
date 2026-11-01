@@ -72,3 +72,10 @@ add_test(NAME class_static COMMAND class_static_test)
 add_executable(codec_check examples/codec_check.cpp)
 target_link_libraries(codec_check PRIVATE qlang)
 add_test(NAME codec COMMAND codec_check)
+
+# External C++ types (docs/EXTERNAL_TYPES.md): public-member setters,
+# read-only computed props, methods (incl. BoundMethod extraction), enum
+# constants, str, handoff integrity, registration-time validation.
+add_executable(test_external examples/test_external.cpp)
+target_link_libraries(test_external PRIVATE qlang)
+add_test(NAME external COMMAND test_external)
