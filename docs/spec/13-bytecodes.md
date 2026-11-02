@@ -428,7 +428,7 @@ all the functions within a module must share a common const table or at the very
     return f"hello {name}"
   }
 
-  AUTHOR = "cfrankn;
+  AUTHOR = "cfrankb";
   export AUTHOR;
   export AUTHOR; # trigger an error: already exported
 

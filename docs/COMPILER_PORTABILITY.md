@@ -22,7 +22,7 @@ compile on a Windows box would close the last cell.
 | **Clang** | 22.1.8 | ✅ verified | compiles **and runs** the smoke test ("all checks passed") |
 | **MinGW** (`x86_64-w64-mingw32-g++`) | 16.2.0 (GCC) | ✅ verified | compiles to object |
 | **emscripten / WASM** (`em++`) | 6.0.9 | ✅ verified | compiles to object |
-| **MSVC** | via CI: VS 2022 on `windows-latest` (19.4x) | ⚠️ reasoned → pending first green CI run | both incompatibilities removed; CI gate added (`.github/workflows/ci-msvc.yml`) |
+| **MSVC** | via CI: VS 2022 on `windows-latest` (19.51.36260) | ⚠️ reasoned → pending first green CI run | both incompatibilities removed; CI gate added (`.github/workflows/ci-msvc.yml`) |
 
 Everything in the header is **standard C++20** (CRTP, qualified
 pointers-to-member, `std::variant`, templates, lambdas, `std::function`,
@@ -184,7 +184,7 @@ triggers by design):
 MSVC job details (the cell this document tracks):
 
 - **Runner:** `windows-latest` → Visual Studio 2022 Community with the
-  most recent hosted MSVC toolset (14.4x / compiler 19.4x).
+  most recent hosted MSVC toolset (14.51 / compiler 19.51.36260).
 - **Configure:** `cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release`.
 - **Build:** `cmake --build build --config Release --parallel` — *all*
   targets in the root `CMakeLists.txt`, so a new target is covered

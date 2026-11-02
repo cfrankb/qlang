@@ -54,6 +54,7 @@ isset
 set
 long
 enum
+export
 ```
 
 ## constants

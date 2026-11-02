@@ -5,6 +5,24 @@ compiles to a register-machine bytecode, and runs it in a stack-of-frames VM.
 Built to be embedded in an engine — a `QLangContext` owns the script scope,
 injects native functions, and hands script results back to the host.
 
+```
+       ARCHITECTURAL TOPOLOGY
+
+   +------------------------------------+
+   |  hitbox editor, tile editor        |
+   |  map editor                        |  <-- The Spatial UI Tools (Qt 6)
+   +------------------------------------+
+                     │
+                     ▼ (Generates Assets & Logic Scripts)
+   +------------------------------------+
+   |     C++ Runtime / Engine           |  <-- The Core Execution Engine (SDL)
+   |  ┌──────────────────────────────┐  |
+   |  │         qlang client         │  |  <-- Embedded Sandbox VM Context
+   |  └──────────────────────────────┘  |
+   +------------------------------------+
+```
+
+
 **Stage:** POC. The language core (values, control flow, functions, closures,
 generators, tables, sets, enums, classes, modules, native interop, external
 types) is implemented and test-covered; `.qlc` bytecode is written and read
@@ -172,6 +190,9 @@ is part of **QLang**; the multi-level event-handler architecture and its
 budget/retention/re-entrancy policies are **engine-specifics** built on that
 API (`docs/EVENT_HANDLERS.md` §0). Adding a handler level needs no QLang
 change — only engine wiring.
+
+
+
 
 ## Next steps
 
