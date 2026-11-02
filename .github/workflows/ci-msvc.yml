@@ -5,20 +5,21 @@
 # The "Show compiler version" step records the exact
 # "C/C++ Optimizing Compiler Version" so the matrix in
 # docs/COMPILER_PORTABILITY.md stays exact.
-name: MSVC Build
+#
+# Trigger: push to `main` only (placeholder — the repo branch is renamed from
+# `master` before CI goes live; no PR, tag, or other-branch triggers by design).
+name: CI (MSVC)
 
 on:
   push:
     branches: [master]
-  pull_request:
-  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  msvc-windows:
+  vs:
     name: MSVC x64 (windows-latest)
     runs-on: windows-latest
     steps:
@@ -54,24 +55,7 @@ jobs:
 
       - name: Build all CMakeLists.txt targets
         shell: pwsh
-        run: |
-          $targets = @(
-            'qlang',
-            'qlang_example',
-            'qlang_run',
-            'spec_check2',
-            'test_module',
-            'test_gen_simple',
-            'range_check',
-            'class_str_test',
-            'class_static_test',
-            'codec_check',
-            'test_external'
-          )
-          foreach ($t in $targets) {
-            Write-Host "=== Building target: $t ==="
-            cmake --build build --config Release --target $t --parallel
-          }
+        run: cmake --build build --config Release --parallel
 
       - name: Run tests (ctest)
         shell: pwsh

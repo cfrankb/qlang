@@ -19,4 +19,11 @@ performance tests must create a baseline for the script `parser`, `compiler` and
 
 # automatic testing
 
-provide a complete github-ci system that will test the qlang library, smoke test app and testing suite against `vscode`, `g++`, `mingw`, `wasm`, and `clang`.
+provide a complete github-ci system that will test the qlang library, smoke test app and testing suite against `msvc`, `g++`, `mingw`, `wasm`, and `clang`.
+
+running on C++20
+
+three separate ci/cd yaml
+- msvc (windows)
+- wasm (special emscripten image)
+- everything else (ubuntu:latest)

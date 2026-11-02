@@ -22,7 +22,7 @@ compile on a Windows box would close the last cell.
 | **Clang** | 22.1.8 | ✅ verified | compiles **and runs** the smoke test ("all checks passed") |
 | **MinGW** (`x86_64-w64-mingw32-g++`) | 16.2.0 (GCC) | ✅ verified | compiles to object |
 | **emscripten / WASM** (`em++`) | 6.0.9 | ✅ verified | compiles to object |
-| **MSVC** | via CI: VS 2022 on `windows-latest` (19.4x) | ⚠️ reasoned → pending first green CI run | both incompatibilities removed; CI gate added (`.github/workflows/msvc.yml`) |
+| **MSVC** | via CI: VS 2022 on `windows-latest` (19.4x) | ⚠️ reasoned → pending first green CI run | both incompatibilities removed; CI gate added (`.github/workflows/ci-msvc.yml`) |
 
 Everything in the header is **standard C++20** (CRTP, qualified
 pointers-to-member, `std::variant`, templates, lambdas, `std::function`,
@@ -149,7 +149,9 @@ g++     -std=c++20 -Iinclude smoke.cpp build/libqlang.a -o smoke && ./smoke
 clang++ -std=c++20 -Iinclude smoke.cpp build/libqlang.a -o smoke && ./smoke
 # cross (compile to object only — no runnable target on this host):
 x86_64-w64-mingw32-g++ -std=c++20 -Iinclude -c smoke.cpp -o smoke.o
-em++    -std=c++20 -Iinclude -c smoke.cpp -o smoke.o
+em++    -std=c++20 -fexceptions -Iinclude -c smoke.cpp -o smoke.o
+# (-fexceptions is required for any *runnable* emscripten build: emscripten 6
+#  disables C++ exception catching by default and the library throws QLangError)
 # MSVC (on Windows):
 cl /std:c++20 /Iinclude smoke.cpp qlang.lib
 ```
@@ -160,25 +162,35 @@ then `import<Point>()`s it and asserts: the type name round-trips, property
 get/set closures work, the method invokes, enum values are correct, and a
 duplicate type name is rejected by `registerType`.
 
-## MSVC CI (GitHub Actions)
+## CI matrix (GitHub Actions)
 
-Since MSVC is not available in the local build environment, the MSVC cell is
-now gated by a continuous job instead of a one-off manual check:
-`.github/workflows/msvc.yml` (job: *MSVC x64 (windows-latest)*).
+Since MSVC (and the wider toolchain matrix) cannot be covered in the local
+build environment, the matrix cells are gated by three workflows, all
+triggered **only on push to `main`** (placeholder — the repo branch is
+renamed from `master` before CI goes live; no PR, tag, or other-branch
+triggers by design):
 
-- **Trigger:** every push to `main`, every pull request, and manual
-  dispatch.
+- `.github/workflows/ci.yml` — native matrix, all on `ubuntu-latest`:
+  **gxx** (system g++), **clang** (clang++), **mingw** (mingw-w64 cross,
+  build-only — Windows `.exe` cannot run on a Linux runner).
+- `.github/workflows/ci-msvc.yml` — MSVC x64 (`windows-latest`).
+- `.github/workflows/ci-wasm.yml` — emscripten (emsdk `latest` on
+  `ubuntu-latest`): builds `qlang` + `qlang_example` with
+  `-sALLOW_MEMORY_GROWTH -fexceptions` and runs the self-contained smoke
+  via `node build/qlang_example.js`. The full ctest suite is not
+  applicable on wasm (no filesystem for the script-level regression
+  suite).
+
+MSVC job details (the cell this document tracks):
+
 - **Runner:** `windows-latest` → Visual Studio 2022 Community with the
   most recent hosted MSVC toolset (14.4x / compiler 19.4x).
 - **Configure:** `cmake -B build -A x64 -DCMAKE_BUILD_TYPE=Release`.
-- **Build:** *all* targets in the root `CMakeLists.txt` are built
-  explicitly — `qlang`, `qlang_example`, `qlang_run`, `spec_check2`,
-  `test_module`, `test_gen_simple`, `range_check`, `class_str_test`,
-  `class_static_test`, `codec_check` — so a new target added to
-  `CMakeLists.txt` must be added to the workflow's `$targets` list to be
-  covered.
+- **Build:** `cmake --build build --config Release --parallel` — *all*
+  targets in the root `CMakeLists.txt`, so a new target is covered
+  automatically.
 - **Test:** `ctest --test-dir build -C Release --output-on-failure`
-  (smoke, range, class_str, class_static, codec).
+  (28 entries: 13 unit + 15 script).
 - **Version capture:** the *Show compiler version* step prints `cl /?`
   and records the exact "C/C++ Optimizing Compiler Version" in the step
   output. That number is the one to fill into the matrix row above.
@@ -187,8 +199,9 @@ now gated by a continuous job instead of a one-off manual check:
 
 - **MSVC compile-test — CI gate added.** The two known MSVC
   incompatibilities are removed and the rest is standard C++20, but MSVC
-  is not present in the local environment. `.github/workflows/msvc.yml`
-  now builds every `CMakeLists.txt` target with the latest hosted MSVC
-  and runs the full `ctest` suite on every push/PR. On the **first green
-  run**, flip the MSVC matrix row to ✅ verified and record the exact
-  compiler version from the *Show compiler version* step log.
+  is not present in the local environment. `.github/workflows/ci-msvc.yml`
+  builds every `CMakeLists.txt` target with the latest hosted MSVC and
+  runs the full `ctest` suite on every push to `main` (dormant until the
+  branch rename). On the **first green run**, flip the MSVC matrix row to
+  ✅ verified and record the exact compiler version from the *Show
+  compiler version* step log.

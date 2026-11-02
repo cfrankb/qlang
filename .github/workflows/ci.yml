@@ -1,0 +1,78 @@
+# Native CI matrix: g++, clang++, mingw-w64 cross.
+#
+# All jobs run on ubuntu-latest. gxx and clang build every CMake target and
+# run the full ctest suite (28 entries: 13 unit + 15 script). The mingw job
+# cross-compiles to Windows PE binaries, which cannot run on a Linux runner,
+# so it is build-only.
+#
+# Trigger: push to `main` only (placeholder — the repo branch is renamed from
+# `master` before CI goes live; no PR, tag, or other-branch triggers by design).
+name: CI (native)
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gxx:
+    name: g++ (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure (CMake, Release)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build all targets
+        run: cmake --build build --parallel
+
+      - name: Run tests (ctest)
+        run: ctest --test-dir build --output-on-failure
+
+      # Phase 4: perf baseline gate — run the `perf` ctest entry
+      # (tests/perf/perf_bench vs tests/perf/baseline.json) and upload
+      # perf_result.json as an artifact from this job only.
+
+  clang:
+    name: clang++ (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: Configure (CMake, Release, clang++)
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+
+      - name: Build all targets
+        run: cmake --build build --parallel
+
+      - name: Run tests (ctest)
+        run: ctest --test-dir build --output-on-failure
+
+  mingw:
+    name: mingw-w64 cross g++ (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install mingw-w64
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - name: Configure (CMake, MinGW Makefiles)
+        run: >
+          cmake -B build -G "MinGW Makefiles"
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc
+          -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++
+
+      - name: "Build all targets (build-only, .exe cannot run on Linux)"
+        run: cmake --build build --parallel

@@ -1,0 +1,51 @@
+# WASM CI: emscripten build of libqlang + the self-contained smoke app.
+#
+# examples/hello.cpp embeds its .ql program as a string, so the smoke test
+# needs no filesystem at runtime. The full ctest suite is NOT applicable on
+# wasm (the script-level regression suite reads .ql files); the gate is:
+# configure, build `qlang` + `qlang_example`, run the smoke via node.
+#
+# -fexceptions is REQUIRED: emscripten 6 disables C++ exception catching by
+# default (___cxa_throw aborts), and the library throws QLangError.
+# Verified locally with emscripten 6.0.9 + node 22: build links and
+# `node build/qlang_example.js` prints "VM result: OK".
+#
+# Trigger: push to `main` only (placeholder — the repo branch is renamed from
+# `master` before CI goes live; no PR, tag, or other-branch triggers by design).
+name: CI (wasm)
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  wasm:
+    name: emscripten (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install emsdk
+        run: |
+          git clone https://github.com/emscripten-core/emsdk.git
+          cd emsdk
+          ./emsdk install latest
+          ./emsdk activate latest
+
+      - name: Configure (emcmake, Release)
+        run: |
+          source emsdk/emsdk_env.sh
+          emcmake cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-sALLOW_MEMORY_GROWTH -fexceptions"
+
+      - name: Build libqlang + hello
+        run: |
+          source emsdk/emsdk_env.sh
+          cmake --build build --target qlang qlang_example --parallel
+
+      - name: Smoke test (node)
+        run: node build/qlang_example.js
