@@ -7,6 +7,7 @@ using namespace qlang;
 
 int main() {
   QLangContext ctx;
+  int fails = 0;
   
   // Test 1: $ operator with int
   std::cout << "Test 1: $ operator with int" << std::endl;
@@ -15,6 +16,7 @@ int main() {
     std::cout << "[PASS] $age = \"33\"" << std::endl;
   } catch (const QLangError& e) {
     std::cout << "[FAIL] " << e.what() << std::endl;
+    ++fails;
   }
   
   // Test 2: $ operator with string
@@ -24,6 +26,7 @@ int main() {
     std::cout << "[PASS] $name = \"Frank\"" << std::endl;
   } catch (const QLangError& e) {
     std::cout << "[FAIL] " << e.what() << std::endl;
+    ++fails;
   }
   
   // Test 3: $ operator with float
@@ -33,6 +36,7 @@ int main() {
     std::cout << "[PASS] $price = \"19.99\"" << std::endl;
   } catch (const QLangError& e) {
     std::cout << "[FAIL] " << e.what() << std::endl;
+    ++fails;
   }
   
   // Test 4: $ operator with bool
@@ -42,6 +46,7 @@ int main() {
     std::cout << "[PASS] $flag = \"true\"" << std::endl;
   } catch (const QLangError& e) {
     std::cout << "[FAIL] " << e.what() << std::endl;
+    ++fails;
   }
   
   // Test 5: $ operator with nil
@@ -51,6 +56,7 @@ int main() {
     std::cout << "[PASS] $z = \"false\" (nil is falsy)" << std::endl;
   } catch (const QLangError& e) {
     std::cout << "[FAIL] " << e.what() << std::endl;
+    ++fails;
   }
   
   // Test 6: $ operator with array (should fail)
@@ -58,6 +64,7 @@ int main() {
   try {
     ctx.run("local a = [1, 2, 3]\nlocal err = $a");
     std::cout << "[FAIL] Should have thrown error for array" << std::endl;
+    ++fails;
   } catch (const QLangError& e) {
     std::cout << "[PASS] Correctly rejected array: " << e.what() << std::endl;
   }
@@ -67,6 +74,7 @@ int main() {
   try {
     ctx.run("local t = {x=1, y=2}\nlocal err = $t");
     std::cout << "[FAIL] Should have thrown error for table" << std::endl;
+    ++fails;
   } catch (const QLangError& e) {
     std::cout << "[PASS] Correctly rejected table: " << e.what() << std::endl;
   }
@@ -78,8 +86,10 @@ int main() {
     std::cout << "[PASS] Dynamic key resolution works" << std::endl;
   } catch (const QLangError& e) {
     std::cout << "[FAIL] " << e.what() << std::endl;
+    ++fails;
   }
   
-  std::cout << "\nAll tests completed!" << std::endl;
-  return 0;
+  std::cout << "\n==== " << (8 - fails) << " passed, " << fails << " failed ===="
+            << std::endl;
+  return fails ? 1 : 0;
 }

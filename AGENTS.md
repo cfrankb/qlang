@@ -35,7 +35,7 @@ To ensure codebase consistency and minimize unnecessary version control diffs, a
 
 ## Build & test (required before claiming "verified")
 - Run: `cmake -B build && cmake --build build`
-- Run: `ctest --test-dir build` (or execute a single suite like `spec_check2.cpp` against `build/libqlang.a`).
+- Run: `ctest --test-dir build` (or execute a single suite binary like `build/spec_check2`; sources live in `tests/unit/`).
 - Always build out-of-source (`cmake -B build`). Never allow generated files to touch the source root.
 
 ## Diagnostic output (trace)
@@ -51,8 +51,9 @@ To ensure codebase consistency and minimize unnecessary version control diffs, a
 ## CMake layout
 - Maintain separate, independently buildable targets:
   - Library: `src/*.cpp` → `libqlang.a`
-  - Demo: e.g., `examples/hello.cpp`
-  - Tests: One set per feature area (defined in the specification).
+  - Demo: e.g., `examples/hello.cpp` (runner: `examples/qlang_run.cpp`); `examples/` holds demos only
+  - Tests: `tests/unit/*.cpp` — one executable per feature area (defined in the specification), each registered with `add_test`
+  - Script suites: `tests/scripts/*.ql` — QLang regression scripts driven by `qlang_run`
 
 ## Commits
 - Suggest a commit name; do not commit automatically.

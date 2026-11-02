@@ -257,8 +257,10 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::JGE: return "jge"; // if gr+eq        pc = i32
   case Opcode::JL: return "jl"; // if lt            pc = i32
   case Opcode::JLE: return "jle"; // if lt+eq        pc = i32
+  case Opcode::kOpcodeCount:
+    return "?";
   }
-  return "?";
+  return "???";
 }
 
 } // namespace qlang

@@ -222,6 +222,7 @@ inline bool usesI32(Opcode op) {
   case Opcode::JL:
   case Opcode::JLE: // pc target in i32
     return true;
+  case Opcode::kOpcodeCount:
   default:
     return false;
   }
