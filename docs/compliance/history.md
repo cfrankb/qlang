@@ -1,3 +1,42 @@
+## Round 32 (2026-11-02)
+
+Test migration + compliance docs (plan: `docs/plans/test-migration-plan.md`;
+Phases 0–5 landed in `cb853be` / `5b202ae` / `8f20139` / `0036dec` / `3e6e8b8` /
+`1577bf7`). No language changes, no new opcodes.
+- **Test suite relocated to `tests/`:** 15 unit harnesses in `tests/unit/`
+  (incl. `test_native` / `test_call` from the orphan-file triage), 16 `.ql`
+  regressions in `tests/scripts/`, perf harness + immutable baseline in
+  `tests/perf/`; `examples/` holds demos only (`hello.cpp`, `qlang_run.cpp`).
+- **ctest: 6 → 32 entries** — 15 unit + 16 script (`script_*`, driven by
+  `qlang_run`) + 1 `perf`; all green (re-verified 2026-11-02). **696 counted
+  unit cases**: 463 `spec_check2` (+42 scope/boolean/trace coverage, Phase 5),
+  33 `spec_check`, 20 `spec_cast_test`, 7 `test_module`, 5 `gen_test`, 22
+  `range`, 13 `class_str`, 17 `class_static`, 23 `external`, 8
+  `test_dollar_operator`, 85 `codec`; plus `ALL PASS` (`test_native`,
+  `test_call`, `test_inject`).
+- **Perf baseline (spec `15-tests.md` "performance tests"):**
+  `tests/perf/perf_bench.cpp` — median-of-5 per parse/compile/execute stage over
+  `hello.ql`, `money.ql`, `cast.ql`, `perf_stress.ql` (one unmeasured warm-up
+  pass per script) — compared against the committed
+  `tests/perf/baseline.json` (±20% `QL_PERF_TOLERANCE` + 0.5 ms `QL_PERF_EPS_MS`
+  floor; `--update-baseline` for deliberate regeneration). The gate runs in the
+  gxx CI job (g++/Linux Release calibration); non-Release builds → exit 77 →
+  ctest Skipped; clang/MSVC jobs exclude it (`ctest -E perf`).
+- **CI matrix (spec `15-tests.md` "automatic testing" — "three separate
+  ci/cd yaml"):** `ci.yml` (g++: full ctest incl. `perf` gate + `perf-result`
+  artifact; clang++: ctest `-E perf`; mingw-w64 cross: build-only),
+  `ci-msvc.yml` (MSVC x64 / `windows-latest`: ctest `-E perf` + compiler-version
+  step feeding `docs/COMPILER_PORTABILITY.md`), `ci-wasm.yml` (emscripten:
+  `qlang` + `qlang_example` with `-sALLOW_MEMORY_GROWTH -fexceptions`, smoke via
+  `node build/qlang_example.js`). Push-to-`main` triggers.
+- **Compliance:** new `docs/compliance/tests.md` module (validates
+  `15-tests.md`); spec hashes re-verified — `13-bytecodes.md` → `1eac6a97…`,
+  `14-scope.md` → `ec1eadb2…`, `15-tests.md` → `dd9c8fe3…` (stale since the
+  Round 31 spec corrections and the 15-tests CI-yaml amendment); status/harness
+  paths refreshed to `tests/unit/`.
+- Open (unchanged): `$$` indirect operator (fully specified, unimplemented),
+  duplicate-declaration warning (deferred pending warning-toggle infra).
+
 ## Round 30 (2026-10-29)
 
 **MOVI** — 32-bit `Int` literal immediate; inlines the `CONST poolIdx + mov`

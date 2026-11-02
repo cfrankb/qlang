@@ -23,9 +23,9 @@ defined against C++20.
 | [10-classes.md](10-classes.md) | user-defined classes, `static`, `::`, restrictions | `67ab74fb80ed191a63eac7f68ba787896aef2ff1c953d1627fac28b0ba854beb` |
 | [11-external-types.md](11-external-types.md) | conformance with external (C++) types | `43993db71abbc2f4145a8768c6a9c34d6245dd38ac3925744c333b8f51907b83` |
 | [12-errors-trace.md](12-errors-trace.md) | error reporting, requirements, execution trace, format | `f0814e4811e60570546d4771c048ecb1e903e6737ad388ee752d9699b9e68ff8` |
-| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle) | `9478c0492b1c367da8a941d3c320f587285050475e65b66eeca05064acec3889` |
-| [14-scope.md](14-scope.md) | visibility scope. execution context | `8425cef4ae81d4119e9eb5138a166eb2f2d454caa6359ced72b5da81ac675ff4` |
-| [15-tests.md](15-tests.md) | tests | `177097ef12200aabe9a140eb92fe9a59335ed291b2b988803b5e1608ef34634e` |
+| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle) | `1eac6a97597fdadac4102b6364613513a4514323bc369d928ca14b95b4562ca6` |
+| [14-scope.md](14-scope.md) | visibility scope. execution context | `ec1eadb21c4716b94590261fec12a16b1f11a715a5bfed53b5ca46232b6a0999` |
+| [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
 
 Compliance: see [../compliance/README.md](../compliance/README.md).
 Migration plan: [../plans/spec_migration_plan.md](../plans/spec_migration_plan.md).
