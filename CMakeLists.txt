@@ -5,6 +5,18 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# MSVC: use the conforming preprocessor. The declarative-meta macros in
+# include/qlang/QLangMeta.h rely on __VA_ARGS__ content being re-scanned for
+# further macro expansion (the recursive QL_FE2_N fold, and macro calls such
+# as READ(...)/WRITE(...) passed through __VA_ARGS__). MSVC's *traditional*
+# preprocessor does not re-scan __VA_ARGS__ (C99 6.10.3.1 restriction), which
+# breaks QL_ENUM/QL_FLAGS/QL_PROPERTY expansion (undeclared enumerator
+# identifiers, malformed prop(...) calls). /Zc:preprocessor (MSVC 19.29+)
+# implements the conforming behavior. See docs/COMPILER_PORTABILITY.md.
+if(MSVC)
+  add_compile_options(/Zc:preprocessor)
+endif()
+
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Debug)
 endif()
