@@ -109,3 +109,11 @@ add_test(NAME test_inject COMMAND test_inject)
 add_executable(test_dollar_operator tests/unit/test_dollar_operator.cpp)
 target_link_libraries(test_dollar_operator PRIVATE qlang)
 add_test(NAME test_dollar_operator COMMAND test_dollar_operator)
+
+# Script-level regression suite (tests/scripts/). Each .ql script is driven
+# by qlang_run (the smoke-test app); a non-zero exit code fails the suite.
+file(GLOB QL_SCRIPTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/*.ql)
+foreach(ql_script IN LISTS QL_SCRIPTS)
+  get_filename_component(ql_name ${ql_script} NAME_WE)
+  add_test(NAME script_${ql_name} COMMAND qlang_run ${ql_script})
+endforeach()
