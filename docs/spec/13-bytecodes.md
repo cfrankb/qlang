@@ -286,6 +286,20 @@ alternate, if r13 and r9
 OpCode `jge` and `jle` work exactly like `jg` and `jl`.
 `jne` is the opposite of `je`.
 
+## opCode divi
+
+```
+  L87:  local x = 1024 / 10
+  00b2  movi         0e, 1024i  ; r14 = 1024                       
+  00b3  movi         0f, 10i    ; r15 = 10                         
+  00b4  div          0d, 0e, 0f ; r13 = r14 / r15                  
+```
+```
+  L87:  local x = 1024 / 10
+  00b2  movi         0d, 1024i  ; r13 = 1024                       
+  00b3  divi         0d, 10i    ; r13 = r13 / 10
+```
+
 ## decompiler mnemonics 
 
 DO NOT IMPLEMENT YET

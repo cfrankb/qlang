@@ -1,6 +1,7 @@
 #include "qlang/QLangCompiler.h"
 
 #include <algorithm>
+#include <climits>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -36,6 +37,7 @@ static bool isArrayExpr(const ExprPtr &e) {
 // Forward declaration: defined further down, used by the encoding-guideline
 // helpers below (inPlaceReg/foldSelfArith/compileArgsToSlots).
 static bool isIntLiteral(const ExprPtr &e);
+static std::optional<int32_t> foldNegLiteral(const ExprPtr &e);
 
 // Backpatch a jump-family instruction's 32-bit pc target: it lives in the
 // combined i32 slot (usesI32 in QLangBytecode.h), not in a/b.
@@ -522,6 +524,13 @@ void QLangCompiler::compileArgsToSlots(const std::vector<ExprPtr> &args,
       emitImm(Opcode::MOVI, slot, arg->literal.asInt());
       continue;
     }
+    // `-(literal)` folds to one MOVI straight into the slot — no temp, no
+    // MOV (SPEC §bytecodes: encoding guidelines — avoid temporary registers).
+    auto negFold = foldNegLiteral(arg);
+    if (negFold) {
+      emitImm(Opcode::MOVI, slot, *negFold);
+      continue;
+    }
     if (arg->kind == ExprKind::Literal) {
       emit(Opcode::CONST, slot, emitConst(arg->literal), 0);
       continue;
@@ -574,6 +583,29 @@ void QLangCompiler::emitImm(Opcode op, int a, int32_t imm) {
 static bool isIntLiteral(const ExprPtr &e) {
   return e && e->kind == ExprKind::Literal &&
          e->literal.type() == QLangValue::Type::Int;
+}
+
+// Fold a unary-minus over an Int literal to a compile-time int32 so the
+// compiler can emit one MOVI with a negative immediate instead of
+// MOVI + NEG (+ MOV). Also folds one level of double negation (`-(-5)`
+// -> 5). Returns std::nullopt for anything else (float literals,
+// variables, other operators) or when the result overflows int32
+// (e.g. `-(-2147483648)`), in which case the caller falls back to the
+// MOVI + NEG sequence.
+static std::optional<int32_t> foldNegLiteral(const ExprPtr &e) {
+  if (!e || e->kind != ExprKind::Unary || e->uop.type != TokenType::Minus)
+    return std::nullopt;
+  const ExprPtr &o = e->operand;
+  if (isIntLiteral(o)) {
+    int64_t v = -static_cast<int64_t>(o->literal.asInt());
+    if (v < INT32_MIN || v > INT32_MAX) return std::nullopt;
+    return static_cast<int32_t>(v);
+  }
+  if (o && o->kind == ExprKind::Unary &&
+      o->uop.type == TokenType::Minus && isIntLiteral(o->operand)) {
+    return o->operand->literal.asInt(); // -(-x) == x, always in range
+  }
+  return std::nullopt;
 }
 
 // Map a comparison opcode to the conditional jump that fires when that
@@ -2588,6 +2620,16 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       if (rrTmp)
         freeRegister(rr);
     } else {
+      // Constant folding: `-(literal)` -> one MOVI with a negative
+      // immediate instead of MOVI + NEG (+ MOV) (SPEC §bytecodes:
+      // encoding guidelines — avoid temporary registers when possible).
+      if (e->uop.type == TokenType::Minus) {
+        auto folded = foldNegLiteral(e);
+        if (folded) {
+          emitImm(Opcode::MOVI, dest, *folded);
+          break;
+        }
+      }
       int o = inPlaceReg(e->operand);
       bool oTmp = false;
       if (o < 0) {
