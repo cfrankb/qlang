@@ -67,9 +67,15 @@ add_executable(gen_test tests/unit/gen_test.cpp)
 target_link_libraries(gen_test PRIVATE qlang)
 add_test(NAME gen_test COMMAND gen_test)
 
-# Legacy one-off script runner (superseded by qlang_run); built but not tested.
-add_executable(test_gen_simple examples/test_gen_simple.cpp)
-target_link_libraries(test_gen_simple PRIVATE qlang)
+# Native function injection + ctx.call round-trips (moved from examples/
+# during the Phase 1.5 orphan-file triage).
+add_executable(test_native tests/unit/test_native.cpp)
+target_link_libraries(test_native PRIVATE qlang)
+add_test(NAME test_native COMMAND test_native)
+
+add_executable(test_call tests/unit/test_call.cpp)
+target_link_libraries(test_call PRIVATE qlang)
+add_test(NAME test_call COMMAND test_call)
 
 # range keyword tests: for...in range (counter loop), `in range` (bounds check),
 # arr = range() (materialization), and range generators.

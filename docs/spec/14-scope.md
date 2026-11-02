@@ -85,7 +85,7 @@ the variable, lambda, constants and other entity that reside within a function a
 a = 10
 
 def make_test() {
-    a ++
+    a++
 }
 
 make_test()

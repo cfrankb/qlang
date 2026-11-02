@@ -66,7 +66,6 @@ private:
     int flags = 0;
   };
 
-  static bool isTrue(const QLangValue &v);
   // `vm` (optional) lets the operand checks attach pc -> line/col + the frame
   // chain to the thrown error (SPEC # error reporting); null falls back to a
   // plain 0,0 error.
@@ -93,6 +92,13 @@ private:
   // Extracts the funcIndex from the closure and invokes callFunction.
 public:
   QLangValue callClosure(const QLangValue &closure, const std::vector<QLangValue> &args);
+
+  // Truthiness of a value per SPEC §boolean evaluation: nil/eof false;
+  // string/array/table/blob/set empty => false; number 0 => false;
+  // generator true; function/lambda evaluated by its return value (the
+  // value is called with no arguments, so it needs a live VM — hence a
+  // member, not static).
+  bool isTrue(const QLangValue &v);
 
   // Display form of a value for print/println/printf/f-string/join: a table
   // with `__str__` calls it (re-entrancy guarded); class instances without

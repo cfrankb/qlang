@@ -825,18 +825,9 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     if (args[1].type() != QLangValue::Type::String)
       thr(QLangErrorKind::Type,
           "assert: second argument must be a string (error message)");
-    // Truthiness check (same logic as QLangVM::isTrue).
-    bool truthy = false;
-    const auto &arg0 = args[0];
-    if (arg0.type() == QLangValue::Type::Nil) truthy = false;
-    else if (arg0.type() == QLangValue::Type::Eof) truthy = false;
-    else if (arg0.type() == QLangValue::Type::String)
-      truthy = !arg0.asString().empty();
-    else if (isNumeric(arg0))
-      truthy = (long long)toInt64(arg0) != 0;
-    else
-      truthy = true;
-    if (!truthy)
+    // Truthiness check (SPEC §boolean evaluation, shared with the
+    // JMPIFTRUE/JMPIFFALSE and NOT/LAND/LOR paths).
+    if (!vm->isTrue(args[0]))
       thr(QLangErrorKind::Runtime, args[1].asString());
     return QLangValue();
   }
@@ -914,7 +905,18 @@ bool QLangVM::isTrue(const QLangValue &v) {
   case QLangValue::Type::Nil: return false;
   case QLangValue::Type::Eof: return false;
   case QLangValue::Type::String: return !v.asString().empty();
+  case QLangValue::Type::Array: return !v.asArray().empty();
+  case QLangValue::Type::Table: return !v.asTable()->empty();
+  case QLangValue::Type::Blob: return !v.asBlob().empty();
   case QLangValue::Type::Set: return !v.asSet().empty();
+  case QLangValue::Type::Generator: return true;
+  case QLangValue::Type::Function:
+    // SPEC §boolean evaluation: truthiness of a function/lambda is
+    // evaluated based on its return value — call it (no args) and
+    // evaluate the result. The step guard in the VM loop bounds any
+    // self-returning recursion.
+    return isTrue(callFunction(v.asFunction().funcIndex, {}));
+  case QLangValue::Type::Float: return v.asFloat() != 0.0;
   default: return isNumeric(v) && (long long)toInt64(v) != 0;
   }
 }
@@ -1179,7 +1181,7 @@ QLangValue QLangVM::doUnary(Opcode op, const QLangValue &a, QLangVM *vm) {
   case Opcode::NEG:
     return QLangValue::Int(static_cast<int32_t>(-num(a, "-", vm)));
   case Opcode::NOT:
-    return QLangValue::Bool(isTrue(a) ? 0 : 1);
+    return QLangValue::Bool(vm->isTrue(a) ? 0 : 1);
   case Opcode::INC:
     return QLangValue::Int(static_cast<int32_t>(num(a, "+", vm) + 1));
   case Opcode::DEC:
@@ -1296,9 +1298,9 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
   case Opcode::SHR:
     return QLangValue::Int(static_cast<int32_t>(num(a, ">>", vm) >> num(b, ">>", vm)));
   case Opcode::LAND:
-    return QLangValue::Bool(isTrue(a) && isTrue(b) ? 1 : 0);
+    return QLangValue::Bool(vm->isTrue(a) && vm->isTrue(b) ? 1 : 0);
   case Opcode::LOR:
-    return QLangValue::Bool(isTrue(a) || isTrue(b) ? 1 : 0);
+    return QLangValue::Bool(vm->isTrue(a) || vm->isTrue(b) ? 1 : 0);
   case Opcode::EQ:
     return QLangValue::Bool(isEqual(a, b) ? 1 : 0);
   case Opcode::NE:

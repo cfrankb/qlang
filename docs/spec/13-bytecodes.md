@@ -300,6 +300,23 @@ OpCode `jge` and `jle` work exactly like `jg` and `jl`.
   00b3  divi         0d, 10i    ; r13 = r13 / 10
 ```
 
+## new OpCode: swap
+
+this OpCode will swap register[Instruction.a] and register[Instruction.b]
+
+purpose: compiler to use this opCode tp prevent/minimize fragmentation of the register pool.
+
+```
+pseudo code:
+
+t = a
+a = b
+b = t
+```
+
+don't allocate a new register for `t`
+use a global scratch pad
+
 ## decompiler mnemonics 
 
 DO NOT IMPLEMENT YET

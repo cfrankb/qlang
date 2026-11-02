@@ -2,9 +2,13 @@
 #include <initializer_list>
 #include <iostream>
 #include <string>
+#include "qlang/QLangCompiler.h"
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
+#include "qlang/QLangLexer.h"
 #include "qlang/QLangObjects.h"
+#include "qlang/QLangParser.h"
+#include "qlang/QLangVM.h"
 using namespace qlang;
 
 static int passes = 0, fails = 0;
@@ -91,6 +95,8 @@ int main() {
   // -- array concat + access (88-104) --
   expectVal("array concat len", "local aa = [1,2,3]\nlocal ab = [4,5]\nlocal ac = aa + ab\nlocal n = len(ac);", "n", 5);
   expectVal("array append", "local ab = [1]\nab[] = 4\nlocal n = len(ab);", "n", 2);
+  expectVal("array += concat", "local ar = [1,2,3]\nar += [4,5]\nlocal n = len(ar);",
+            "n", 5);
   expectStr("table member set", "local t:table = {name=\"Frank\"}\nt.name = \"John\"\nlocal s = t.name;", "s", "John");
 
   // -- blob (16) --
@@ -1008,6 +1014,187 @@ int main() {
   expectVal("cmp: for-in array guard",
             "local a = [10, 20, 30]\nlocal s = 0\nfor v in a { s = s + v }",
             "s", 60);
+
+  // --- SPEC # function scope isolation (spec 14, 2026-11-01 example) ---
+  // `a ++` inside a function must not touch global `a`: globals are
+  // invisible in function scope, so the program fails to compile and the
+  // global stays put (only `global a` can reach it).
+  expectThrow("fn scope isolation: a++ in fn",
+              "a = 10\ndef make_test() {\n a ++\n}\nmake_test()");
+  // A `local a` inside a function shadows the global; the global is
+  // untouched after the call.
+  expectVal("fn scope isolation: local a in fn",
+            "a = 10\ndef make_test() { local a = 5; a ++ }\nmake_test()\nlocal r = a;",
+            "r", 10);
+  // Spec 14 if-block variant: `local a` in an if body does not leak out.
+  expectVal("fn scope isolation: if-block local a",
+            "a = 10\nb = 20\nif (b == 20) { local a = 20 }\nlocal r = a;",
+            "r", 10);
+  // Block scope in a `for` body (spec 14 loop example, range form).
+  expectStr("block scope for body",
+            "local j = 0\nfor i in range(0, 10) {\n local j = i\n}\nlocal s = $j;",
+            "s", "0");
+  // Block scope in a `while` body with a real body (spec 14 loop example).
+  expectStr("block scope while body",
+            "local j = 0\nlocal i = 0\nwhile (i < 10) {\n i = i + 1;\n local j = i;\n}"
+            "\nlocal s = $j;",
+            "s", "0");
+
+  // --- SPEC §boolean evaluation table (spec 03) ---
+  // string: empty => false; non-empty => true
+  expectVal("bool table: empty string falsy",
+            "local n = 0\nif \"\" { n = 1; }\nlocal r = n;", "r", 0);
+  expectVal("bool table: non-empty string truthy",
+            "local n = 0\nif \"x\" { n = 1; }\nlocal r = n;", "r", 1);
+  // array: empty => false; non-empty => true
+  expectVal("bool table: empty array falsy",
+            "local n = 0\nif [] { n = 1; }\nlocal r = n;", "r", 0);
+  expectVal("bool table: non-empty array truthy",
+            "local n = 0\nif [1, 2] { n = 1; }\nlocal r = n;", "r", 1);
+  // table: empty => false; non-empty => true
+  expectVal("bool table: empty table falsy",
+            "local t = {}\nlocal n = 0\nif t { n = 1; }\nlocal r = n;", "r", 0);
+  expectVal("bool table: non-empty table truthy",
+            "local t = {a = 1}\nlocal n = 0\nif t { n = 1; }\nlocal r = n;",
+            "r", 1);
+  // blob: empty => false (the non-empty row is value-level below; the
+  // language can only construct empty blobs)
+  expectVal("bool table: empty blob falsy",
+            "local b = blob()\nlocal n = 0\nif b { n = 1; }\nlocal r = n;",
+            "r", 0);
+  // number: 0 => false; non-zero => true (int and float)
+  expectVal("bool table: 0 falsy", "local n = 0\nif 0 { n = 1; }\nlocal r = n;",
+            "r", 0);
+  expectVal("bool table: non-zero int truthy",
+            "local n = 0\nif 7 { n = 1; }\nlocal r = n;", "r", 1);
+  expectVal("bool table: 0.0 falsy", "local n = 0\nif 0.0 { n = 1; }\nlocal r = n;",
+            "r", 0);
+  expectVal("bool table: non-zero float truthy",
+            "local n = 0\nif 0.5 { n = 1; }\nlocal r = n;", "r", 1);
+  // nil => false (a closure with no return yields nil)
+  expectVal("bool table: nil falsy",
+            "local f = ()[] { }\nlocal r = f()\nlocal n = 0\nif r { n = 1; }\nlocal s = n;",
+            "s", 0);
+  // generator => true
+  expectVal("bool table: generator truthy",
+            "def g() { yield 1 }\nlocal gen = g()\nlocal n = 0\nif gen { n = 1; }"
+            "\nlocal r = n;",
+            "r", 1);
+  // function/lambda: truthiness evaluated by its return value
+  expectVal("bool table: lambda returning 1 truthy",
+            "local f = ()[] { return 1 }\nlocal n = 0\nif f { n = 1; }\nlocal r = n;",
+            "r", 1);
+  expectVal("bool table: lambda returning 0 falsy",
+            "local f = ()[] { return 0 }\nlocal n = 0\nif f { n = 1; }\nlocal r = n;",
+            "r", 0);
+  expectVal("bool table: lambda returning string truthy",
+            "local f = ()[] { return \"hi\" }\nlocal n = 0\nif f { n = 1; }\nlocal r = n;",
+            "r", 1);
+  expectVal("bool table: lambda returning empty string falsy",
+            "local f = ()[] { return \"\" }\nlocal n = 0\nif f { n = 1; }\nlocal r = n;",
+            "r", 0);
+  // !/&&/|| share the same truthiness (spec 03 applies to every
+  // boolean context)
+  expectVal("bool table: ! of empty array", "local r = ! [];", "r", 1);
+  expectVal("bool table: generator && true",
+            "def g() { yield 1 }\nlocal gen = g()\nlocal r = gen && true;",
+            "r", 1);
+  expectVal("bool table: empty array || true",
+            "local r = [] || true;", "r", 1);
+
+  // --- SPEC §boolean evaluation table (spec 03), value level ---
+  // Rows not expressible in QLang source (a non-empty blob: the language
+  // can only build empty blobs) are checked directly against
+  // QLangVM::isTrue.
+  {
+    QLangContext ctx;
+    QLangLexer lexer("local a = 1");
+    QLangParser parser(lexer.tokenize());
+    QLangCompiler compiler(parser.parseProgram(), &ctx);
+    QLangVM vm(compiler.compile(), ctx);
+    auto check = [&](const char *what, bool got, bool want) {
+      if (got == want) {
+        std::cout << "[PASS] bool value-level: " << what << "\n";
+        passes++;
+      } else {
+        std::cout << "[FAIL] bool value-level: " << what << " (want "
+                  << (want ? "true" : "false") << ")\n";
+        fails++;
+      }
+    };
+    check("empty blob falsy", vm.isTrue(QLangValue::Blob({})), false);
+    check("non-empty blob truthy", vm.isTrue(QLangValue::Blob({1, 2, 3})), true);
+    // sanity: rows also expressible in scripts
+    check("nil falsy", vm.isTrue(QLangValue()), false);
+    check("0 falsy", vm.isTrue(QLangValue::Int(0)), false);
+    check("non-zero int truthy", vm.isTrue(QLangValue::Int(5)), true);
+    check("0.0 falsy", vm.isTrue(QLangValue::Float(0.0)), false);
+    check("0.5 truthy", vm.isTrue(QLangValue::Float(0.5)), true);
+    check("non-empty array truthy",
+          vm.isTrue(QLangValue::Array({QLangValue::Int(1)})), true);
+    check("non-empty string truthy",
+          vm.isTrue(QLangValue::String("x")), true);
+  }
+
+  // --- SPEC # execution trace: nested frames beyond the Round-29 cases ---
+  // Five nested frames: one `at line` per frame, innermost first, main last.
+  expectMsg("trace: 5-frame chain",
+            "def e()\n  local x = 1 / 0\nend\n"
+            "def d()\n  e()\nend\n"
+            "def c()\n  d()\nend\n"
+            "def b()\n  c()\nend\n"
+            "def a()\n  b()\nend\n"
+            "a()",
+            "in function 'e'",
+            "at line 2 in e",
+            "at line 5 in d",
+            "at line 8 in c",
+            "at line 11 in b",
+            "at line 14 in a",
+            "at line 16 in main");
+  // Lambda frames are named after their binding variable.
+  expectMsg("trace: lambda frame",
+            "local f = ()[] {\n  local x = 1 / 0\n}\nf()",
+            "in function 'f'",
+            "at line 2 in f",
+            "at line 4 in main");
+  // Lambda nested in a function: three frames.
+  expectMsg("trace: lambda in function",
+            "def outer() {\n  local f = ()[] {\n    local x = 1 / 0\n  }\n  f()\n}\n"
+            "outer()",
+            "in function 'f'",
+            "at line 3 in f",
+            "at line 5 in outer",
+            "at line 7 in main");
+  // Generator frames appear in the chain.
+  expectMsg("trace: generator frame",
+            "def gen() {\n  yield 1\n  local x = 1 / 0\n}\n"
+            "local g = gen()\ng()\ng()",
+            "in function 'gen'",
+            "at line 3 in gen",
+            "at line 7 in main");
+  // Class method frames are named after the method.
+  expectMsg("trace: class method frame",
+            "class C {\n  boom(self)[] {\n    local x = 1 / 0\n  }\n}\n"
+            "local c = C()\nc.boom()",
+            "in function 'boom'",
+            "at line 3 in boom",
+            "at line 7 in main");
+  // Method calling method: three frames.
+  expectMsg("trace: method calling method",
+            "class C {\n"
+            "  boom(self)[] {\n    self.inner()\n  }\n"
+            "  inner(self)[] {\n    local x = 1 / 0\n  }\n"
+            "}\n"
+            "local c = C()\nc.boom()",
+            "in function 'inner'",
+            "at line 6 in inner",
+            "at line 3 in boom",
+            "at line 10 in main");
+  // Header carries the column as well as the line.
+  expectMsg("trace: header has col",
+            "local a = 1\nlocal b = 2\nlocal c = a + \"x\"",
+            "line 3, col 1 in function 'main'");
 
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
