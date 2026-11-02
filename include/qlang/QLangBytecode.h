@@ -47,10 +47,10 @@ enum class Builtin : int {
 
 // Register-machine opcodes. This is a small register VM: each script variable
 // maps to a register, and arithmetic/comparison results are written to a
-// register. Constants live in a separate pool and are loaded with CONST.
+// register. Constants live in a separate pool and are loaded with MOVC.
 enum class Opcode : uint16_t {
   // Data movement
-  CONST, // r[a] = constants[b]
+  MOVC, // r[a] = constants[b]
   MOV,   // r[a] = r[b]
   CONV,  // r[a] = convert(r[b], type c)  -- enforce a typed declaration
   NEG,   // r[a] = -r[b]
@@ -235,7 +235,7 @@ inline bool usesI32(Opcode op) {
 // jump family a 32-bit pc target in the combined i32 slot (JMP/CONTINUE/
 // BREAK; JMPIFFALSE/JMPIFTRUE keep the condition register in a).
 struct Instruction {
-  Opcode op = Opcode::CONST; // uint16_t
+  Opcode op = Opcode::MOVC; // uint16_t
   int16_t a = 0;
   union {
     struct {

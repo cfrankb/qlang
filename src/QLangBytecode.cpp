@@ -189,7 +189,7 @@ int Bytecode::addFunction(const std::string &name, int paramCount,
 
 const char *Bytecode::name(Opcode op) {
   switch (op) {
-  case Opcode::CONST: return "movc"; // mov-from-constant-pool
+  case Opcode::MOVC: return "movc"; // mov-from-constant-pool
   case Opcode::MOV: return "mov";
   case Opcode::CONV: return "conv";
   case Opcode::NEG: return "neg";

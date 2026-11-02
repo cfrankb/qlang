@@ -579,7 +579,7 @@ static void rejects(const std::string &name, const std::string &bytes) {
   check(!ok && !err.empty() && prog.registerCount == -42, name);
 }
 
-// Valid file variant with one i16-operand instruction (op CONST, a=0 b=0 c=0).
+// Valid file variant with one i16-operand instruction (op MOVC, a=0 b=0 c=0).
 static std::string fileWithOneInstr() {
   Bin f;
   f.b += "QLC1";

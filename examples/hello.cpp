@@ -118,7 +118,7 @@ static void dumpBytecode(const CompiledProgram &cp)
   for (size_t i = 0; i < ins.size(); i++)
   {
     std::cout << "  " << i << ": " << Bytecode::name(ins[i].op);
-    if (ins[i].op == Opcode::CONST)
+    if (ins[i].op == Opcode::MOVC)
       std::cout << " r[" << ins[i].a << "] = const[" << ins[i].b << "] ("
                 << consts[ins[i].b].typeName() << ")";
     else if (ins[i].op == Opcode::JMP)

@@ -259,7 +259,7 @@ void QLangCompiler::endOfStatement()
 // release) and return it to the pool.
 void QLangCompiler::releaseTemp(int r)
 {
-  emit(Opcode::CONST, r, emitConst(QLangValue()), 0);
+  emit(Opcode::MOVC, r, emitConst(QLangValue()), 0);
   freeRegister(r);
 }
 // Drop freed registers in [lo, hi): those slots are about to be reserved for
@@ -532,7 +532,7 @@ void QLangCompiler::compileArgsToSlots(const std::vector<ExprPtr> &args,
       continue;
     }
     if (arg->kind == ExprKind::Literal) {
-      emit(Opcode::CONST, slot, emitConst(arg->literal), 0);
+      emit(Opcode::MOVC, slot, emitConst(arg->literal), 0);
       continue;
     }
     if (scratch < 0)
@@ -946,7 +946,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   // Implicit `return nil`. The RETURN opcode returns reg 0, but a prior
   // statement may have left a value there; force reg 0 to nil so a function
   // with no return statement returns nil (spec: return value defaults to nil).
-  emit(Opcode::CONST, 0, emitConst(QLangValue())); // reg 0 = nil
+  emit(Opcode::MOVC, 0, emitConst(QLangValue())); // reg 0 = nil
   emit(Opcode::RETURN, 0);
 
   Function fn;
@@ -1030,7 +1030,7 @@ int QLangCompiler::staticsTableReg() {
     return 0;
   int r = tmpRegister();
   int keyR = tmpRegister();
-  emit(Opcode::CONST, keyR, emitConst(QLangValue::String("__statics__")));
+  emit(Opcode::MOVC, keyR, emitConst(QLangValue::String("__statics__")));
   emit(Opcode::TABGET, r, 0, keyR);
   return r;
 }
@@ -1102,7 +1102,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     if (s->value)
       compileExpr(s->value, r);
     else
-      emit(Opcode::CONST, r, emitConst(QLangValue()));
+      emit(Opcode::MOVC, r, emitConst(QLangValue()));
     updateVarType(s->name, s->value);
     // Enforce a typed declaration (e.g. local b:byte = 32).
     if (s->declaredType)
@@ -1119,7 +1119,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         m_classStaticNames.count(s->name)) {
       int staticsR = staticsTableReg();
       int keyR = tmpRegister();
-      emit(Opcode::CONST, keyR, emitConst(QLangValue::String(s->name)));
+      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(s->name)));
       int t = tmpRegister();
       compileExpr(s->assignValue, t);
       const std::string &op = s->assignOp.text;
@@ -1819,7 +1819,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     if (s->returnValue) {
       compileExpr(s->returnValue, 0);
     } else {
-      emit(Opcode::CONST, 0, emitConst(QLangValue())); // nil
+      emit(Opcode::MOVC, 0, emitConst(QLangValue())); // nil
     }
     emit(Opcode::RETURN, 0);
     break;
@@ -1831,7 +1831,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     if (s->yieldValue) {
       compileExpr(s->yieldValue, 0);
     } else {
-      emit(Opcode::CONST, 0, emitConst(QLangValue())); // nil
+      emit(Opcode::MOVC, 0, emitConst(QLangValue())); // nil
     }
     emit(Opcode::YIELD, 0);
     break;
@@ -2040,7 +2040,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         }
         // A field: `name = value` or `const name = value`.
         int keyR = tmpRegister();
-        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(st->name)));
+        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(st->name)));
         int valR = tmpRegister();
         compileExpr(st->kind == StmtKind::Assignment ? st->assignValue
                                                      : st->value,
@@ -2083,7 +2083,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         closure->funcIndex = funcIndex;
         int constIdx = emitConst(QLangValue::Function(closure));
         int keyR = tmpRegister();
-        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(st->name)));
+        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(st->name)));
         int funcR = tmpRegister();
         emit(Opcode::MAKEFUNC, funcR, constIdx);
         emit(Opcode::TABPUT, 0, keyR, funcR);
@@ -2108,7 +2108,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       emit(Opcode::TABCREATE, staticsReg);
       for (auto &sf : staticFieldDecls) {
         int keyR = tmpRegister();
-        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(sf.first)));
+        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(sf.first)));
         int valR = tmpRegister();
         compileExpr(sf.second, valR);
         emit(Opcode::TABPUT, staticsReg, keyR, valR);
@@ -2131,7 +2131,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         closure->funcIndex = funcIndex;
         int constIdx = emitConst(QLangValue::Function(closure));
         int keyR = tmpRegister();
-        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(sm.name)));
+        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(sm.name)));
         int funcR = tmpRegister();
         emit(Opcode::MAKEFUNC, funcR, constIdx);
         emit(Opcode::TABPUT, staticsReg, keyR, funcR);
@@ -2145,7 +2145,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         emit(Opcode::TABCREATE, sconstReg);
         for (const auto &cn : staticConstNames) {
           int keyR = tmpRegister();
-          emit(Opcode::CONST, keyR, emitConst(QLangValue::String(cn)));
+          emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(cn)));
           int valR = tmpRegister();
           emitImm(Opcode::MOVI, valR, 1);
           emit(Opcode::TABPUT, sconstReg, keyR, valR);
@@ -2153,14 +2153,14 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
           freeRegister(valR);
         }
         int sckeyR = tmpRegister();
-        emit(Opcode::CONST, sckeyR,
+        emit(Opcode::MOVC, sckeyR,
              emitConst(QLangValue::String("__static_const__")));
         emit(Opcode::TABPUT, staticsReg, sckeyR, sconstReg);
         freeRegister(sckeyR);
         freeRegister(sconstReg);
       }
       int skeyR = tmpRegister();
-      emit(Opcode::CONST, skeyR, emitConst(QLangValue::String("__statics__")));
+      emit(Opcode::MOVC, skeyR, emitConst(QLangValue::String("__statics__")));
       emit(Opcode::TABPUT, 0, skeyR, staticsReg);
       freeRegister(skeyR);
       freeRegister(staticsReg);
@@ -2175,7 +2175,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       emit(Opcode::TABCREATE, cfieldsReg);
       for (const auto &cn : constNames) {
         int keyR = tmpRegister();
-        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(cn)));
+        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(cn)));
         int valR = tmpRegister();
         emitImm(Opcode::MOVI, valR, 1);
         emit(Opcode::TABPUT, cfieldsReg, keyR, valR);
@@ -2183,7 +2183,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         freeRegister(valR);
       }
       int cfkeyR = tmpRegister();
-      emit(Opcode::CONST, cfkeyR,
+      emit(Opcode::MOVC, cfkeyR,
            emitConst(QLangValue::String(kConstFieldMetaKey)));
       emit(Opcode::TABPUT, 0, cfkeyR, cfieldsReg);
       freeRegister(cfkeyR);
@@ -2198,16 +2198,16 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       emit(Opcode::TABCREATE, ftypesReg);
       for (const auto &ft : fieldTypes) {
         int keyR = tmpRegister();
-        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(ft.first)));
+        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(ft.first)));
         int valR = tmpRegister();
         QLangValue tv(ft.second);
-        emit(Opcode::CONST, valR, emitConst(QLangValue::String(tv.typeName())));
+        emit(Opcode::MOVC, valR, emitConst(QLangValue::String(tv.typeName())));
         emit(Opcode::TABPUT, ftypesReg, keyR, valR);
         freeRegister(keyR);
         freeRegister(valR);
       }
       int ftkeyR = tmpRegister();
-      emit(Opcode::CONST, ftkeyR,
+      emit(Opcode::MOVC, ftkeyR,
            emitConst(QLangValue::String(kFieldTypeMetaKey)));
       emit(Opcode::TABPUT, 0, ftkeyR, ftypesReg);
       freeRegister(ftkeyR);
@@ -2223,7 +2223,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       emit(Opcode::TABCREATE, fieldsReg);
       for (size_t i = 0; i < fieldNames.size(); i++) {
         int keyR = tmpRegister();
-        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(fieldNames[i])));
+        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(fieldNames[i])));
         int valR = tmpRegister();
         emitImm(Opcode::MOVI, valR, static_cast<int32_t>(i));
         emit(Opcode::TABPUT, fieldsReg, keyR, valR);
@@ -2231,7 +2231,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         freeRegister(valR);
       }
       int fkeyR = tmpRegister();
-      emit(Opcode::CONST, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));
+      emit(Opcode::MOVC, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));
       emit(Opcode::TABPUT, 0, fkeyR, fieldsReg);
       freeRegister(fkeyR);
       freeRegister(fieldsReg);
@@ -2337,7 +2337,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     TableValue kv = std::make_shared<std::map<std::string, QLangValue>>();
     for (const auto &m : members)
       (*kv)[m.first] = m.second;
-    emit(Opcode::CONST, r, emitConst(QLangValue::Table(kv)));
+    emit(Opcode::MOVC, r, emitConst(QLangValue::Table(kv)));
     m_enums[s->name] = std::move(members);
     if (!m_inFunction)
       m_globalEnums.insert(s->name);
@@ -2500,7 +2500,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     if (isIntLiteral(e))
       emitImm(Opcode::MOVI, dest, e->literal.asInt()); // no pool slot needed
     else
-      emit(Opcode::CONST, dest, emitConst(e->literal));
+      emit(Opcode::MOVC, dest, emitConst(e->literal));
     break;
   case ExprKind::Variable: {
     // Bare static member name inside a method body of a class with statics:
@@ -2508,7 +2508,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     if (!m_classStaticNames.empty() && m_classStaticNames.count(e->name)) {
       int staticsR = staticsTableReg();
       int keyR = tmpRegister();
-      emit(Opcode::CONST, keyR, emitConst(QLangValue::String(e->name)));
+      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(e->name)));
       emit(Opcode::TABGET, dest, staticsR, keyR);
       break;
     }
@@ -2687,11 +2687,11 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
                   std::to_string(argCount));
         int staticsR = tmpRegister();
         int skR = tmpRegister();
-        emit(Opcode::CONST, skR, emitConst(QLangValue::String("__statics__")));
+        emit(Opcode::MOVC, skR, emitConst(QLangValue::String("__statics__")));
         // __proto_<class> is a named register: read it in place.
         emit(Opcode::TABGET, staticsR, regOf("__proto_" + cname), skR);
         int keyR = tmpRegister();
-        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(e->callee)));
+        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(e->callee)));
         int funcReg = tmpRegister();
         emit(Opcode::TABGET, funcReg, staticsR, keyR);
         // Shift user args down by one to make room for the anchor at argBase.
@@ -2736,7 +2736,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         compileExpr(e->calleeMember->memberBase, baseR);
       }
       int keyR = tmpRegister();
-      emit(Opcode::CONST, keyR,
+      emit(Opcode::MOVC, keyR,
            emitConst(QLangValue::String(e->calleeMember->memberName)));
       int funcReg = tmpRegister();
       emit(Opcode::TABGET, funcReg, baseR, keyR);
@@ -2769,7 +2769,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // Copy methods from prototype to instance.
       for (const auto &mname : rec.methodNames) {
         int keyR = tmpRegister();
-        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(mname)));
+        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(mname)));
         int valR = tmpRegister();
         emit(Opcode::TABGET, valR, protoReg, keyR);
         emit(Opcode::TABPUT, instanceReg, keyR, valR);
@@ -2782,7 +2782,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // writes below, like the method copies.
       for (const auto &fname : rec.fieldNames) {
         int keyR = tmpRegister();
-        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(fname)));
+        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(fname)));
         int valR = tmpRegister();
         emit(Opcode::TABGET, valR, protoReg, keyR);
         emit(Opcode::TABPUT, instanceReg, keyR, valR);
@@ -2794,7 +2794,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // and every sibling mutate the same class-level map.
       if (!rec.staticFields.empty() || !rec.staticMethodFuncIndices.empty()) {
         int skeyR = tmpRegister();
-        emit(Opcode::CONST, skeyR, emitConst(QLangValue::String("__statics__")));
+        emit(Opcode::MOVC, skeyR, emitConst(QLangValue::String("__statics__")));
         int svalR = tmpRegister();
         emit(Opcode::TABGET, svalR, protoReg, skeyR);
         emit(Opcode::TABPUT, instanceReg, skeyR, svalR);
@@ -2806,9 +2806,9 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // a "class instance" (enforcement key present) while metadata is written.
       {
         int ckeyR = tmpRegister();
-        emit(Opcode::CONST, ckeyR, emitConst(QLangValue::String(kClassMetaKey)));
+        emit(Opcode::MOVC, ckeyR, emitConst(QLangValue::String(kClassMetaKey)));
         int cvalR = tmpRegister();
-        emit(Opcode::CONST, cvalR, emitConst(QLangValue::String(e->callee)));
+        emit(Opcode::MOVC, cvalR, emitConst(QLangValue::String(e->callee)));
         emit(Opcode::TABPUT, instanceReg, ckeyR, cvalR);
         freeRegister(ckeyR);
         freeRegister(cvalR);
@@ -2819,7 +2819,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // setField would otherwise reject the non-declared metadata key.
       if (!rec.constFields.empty()) {
         int cfkeyR = tmpRegister();
-        emit(Opcode::CONST, cfkeyR,
+        emit(Opcode::MOVC, cfkeyR,
              emitConst(QLangValue::String(kConstFieldMetaKey)));
         int cfvalR = tmpRegister();
         emit(Opcode::TABGET, cfvalR, protoReg, cfkeyR);
@@ -2832,7 +2832,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // the const-field metadata above).
       if (!rec.fieldTypes.empty()) {
         int ftkeyR = tmpRegister();
-        emit(Opcode::CONST, ftkeyR,
+        emit(Opcode::MOVC, ftkeyR,
              emitConst(QLangValue::String(kFieldTypeMetaKey)));
         int ftvalR = tmpRegister();
         emit(Opcode::TABGET, ftvalR, protoReg, ftkeyR);
@@ -2846,7 +2846,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // "class instance".
       if (!rec.fieldNames.empty()) {
         int fkeyR = tmpRegister();
-        emit(Opcode::CONST, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));
+        emit(Opcode::MOVC, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));
         int fvalR = tmpRegister();
         emit(Opcode::TABGET, fvalR, protoReg, fkeyR);
         emit(Opcode::TABPUT, instanceReg, fkeyR, fvalR);
@@ -2909,7 +2909,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       {
         int nilC = m_code.addConstant(QLangValue());
         for (int j = 0; j < newArgCount; j++)
-          emit(Opcode::CONST, newArgBase + j, nilC, 0);
+          emit(Opcode::MOVC, newArgBase + j, nilC, 0);
       }
       break;
     }
@@ -2923,7 +2923,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         emit(Opcode::MAKEGEN, dest, constIdx, argCount);
         // Clear arg regs so they don't leak into the next instruction.
         for (int j = 0; j < argCount; j++)
-          emit(Opcode::CONST, argBase + j, m_code.addConstant(QLangValue()), 0);
+          emit(Opcode::MOVC, argBase + j, m_code.addConstant(QLangValue()), 0);
       } else {
         emit(Opcode::CALLFN, dest, uit->second, argCount);
       }
@@ -2974,7 +2974,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     elems.reserve(e->elements.size());
     for (auto &el : e->elements)
       elems.push_back(evalConstExpr(el));
-    emit(Opcode::CONST, dest, emitConst(QLangValue::Array(std::move(elems))));
+    emit(Opcode::MOVC, dest, emitConst(QLangValue::Array(std::move(elems))));
     break;
   }
   case ExprKind::Table: {
@@ -2993,7 +2993,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       TableValue kv = std::make_shared<std::map<std::string, QLangValue>>();
       for (auto &item : e->items)
         kv->operator[](evalConstKey(item.first)) = evalConstExpr(item.second);
-      emit(Opcode::CONST, dest, emitConst(QLangValue::Table(kv)));
+      emit(Opcode::MOVC, dest, emitConst(QLangValue::Table(kv)));
       break;
     }
     // Runtime table construction.
@@ -3004,7 +3004,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // Static identifier keys are Variable expressions - emit as string constant.
       // Dynamic keys ($expr) are compiled as expressions.
       if (item.first->kind == ExprKind::Variable)
-        emit(Opcode::CONST, keyR, emitConst(QLangValue::String(item.first->name)));
+        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(item.first->name)));
       else
         compileExpr(item.first, keyR);
       int valR = tmpRegister();
@@ -3056,7 +3056,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         bool found = false;
         for (const auto &m : eit->second) {
           if (m.first == e->memberName) {
-            emit(Opcode::CONST, dest, emitConst(m.second));
+            emit(Opcode::MOVC, dest, emitConst(m.second));
             found = true;
             break;
           }
@@ -3090,10 +3090,10 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       emit(Opcode::MOV, baseR, regOf("__proto_" + cname));
       int staticsR = tmpRegister();
       int skR = tmpRegister();
-      emit(Opcode::CONST, skR, emitConst(QLangValue::String("__statics__")));
+      emit(Opcode::MOVC, skR, emitConst(QLangValue::String("__statics__")));
       emit(Opcode::TABGET, staticsR, baseR, skR);
       int keyR = tmpRegister();
-      emit(Opcode::CONST, keyR, emitConst(QLangValue::String(e->memberName)));
+      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(e->memberName)));
       emit(Opcode::TABGET, dest, staticsR, keyR);
       break;
     }
@@ -3107,7 +3107,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       compileExpr(e->memberBase, baseR);
     }
     int keyR = tmpRegister();
-    emit(Opcode::CONST, keyR, emitConst(QLangValue::String(e->memberName)));
+    emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(e->memberName)));
     emit(Opcode::TABGET, dest, baseR, keyR);
     break;
   }
@@ -3262,7 +3262,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     int templateReg = dest + 1;
     int exprStartReg = dest + 2;
 
-    emit(Opcode::CONST, templateReg, emitConst(QLangValue::String(fmt)));
+    emit(Opcode::MOVC, templateReg, emitConst(QLangValue::String(fmt)));
 
     // Each interpolated expression lands directly in its slot (simple
     // operands without a temp; complex ones share one scratch register).
@@ -3404,7 +3404,7 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
         baseR = declareVar(baseName);
     }
     int keyR = tmpRegister();
-    emit(Opcode::CONST, keyR, emitConst(QLangValue::String(target->memberName)));
+    emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(target->memberName)));
     int valR = tmpRegister();
     if (isCompound) {
       int tmpR = tmpRegister();

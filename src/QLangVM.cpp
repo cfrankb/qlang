@@ -1435,7 +1435,7 @@ void QLangVM::run() {
     }
 
     switch (op) {
-    case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
+    case Opcode::MOVC: frame.regs[i.a] = consts[i.b]; break;
     case Opcode::MOVI: frame.regs[i.a] = QLangValue::Int(i.i32); break;
     case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
     case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
@@ -1807,7 +1807,7 @@ void QLangVM::runFrames(int startFrame)
     Opcode op = i.op;
 
     switch (op) {
-    case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
+    case Opcode::MOVC: frame.regs[i.a] = consts[i.b]; break;
     case Opcode::MOVI: frame.regs[i.a] = QLangValue::Int(i.i32); break;
     case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
     case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
@@ -2225,7 +2225,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       trace(TRACE_FULL, "[DBG-GEN-STEP] func=%d pc=%zu op=%d a=%d b=%d c=%d (fn instrs.size=%zu)\\n", funcIndex, frame.pc, (int)op, i.a, i.b, i.c, instrs.size());
 
       switch (op) {
-      case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
+      case Opcode::MOVC: frame.regs[i.a] = consts[i.b]; break;
       case Opcode::MOVI: frame.regs[i.a] = QLangValue::Int(i.i32); break;
       case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
       case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;
@@ -2607,7 +2607,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     Opcode op = i.op;
 
     switch (op) {
-    case Opcode::CONST: frame.regs[i.a] = consts[i.b]; break;
+    case Opcode::MOVC: frame.regs[i.a] = consts[i.b]; break;
     case Opcode::MOVI: frame.regs[i.a] = QLangValue::Int(i.i32); break;
     case Opcode::MOV: frame.regs[i.a] = frame.regs[i.b]; break;
     case Opcode::NEG: frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this); break;

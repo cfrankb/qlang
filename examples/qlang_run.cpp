@@ -168,7 +168,7 @@ namespace
   //   2 = level 1 + the original source line interleaved before each run of
   //       instructions that share a line
   //   3 = level 2 + the referenced constant's value inlined next to the
-  //       instruction (CONST / MAKEFUNC / MAKEGEN, whose operand b is a pool
+  //       instruction (MOVC / MAKEFUNC / MAKEGEN, whose operand b is a pool
   //       index)
   //   4 = level 3 + the variable->register map (main function), operand names
   //       for CALL (builtin/native), CALLFN (function name), CONV/CAST (target
@@ -267,7 +267,7 @@ namespace
 
     switch (ins.op)
     {
-    case Opcode::CONST:
+    case Opcode::MOVC:
       ss << rn(ins.a) << " = pool[" << ins.b << "]";
       break;
     case Opcode::MOV:
@@ -490,7 +490,7 @@ namespace
     case Opcode::CONTINUE:
     case Opcode::BREAK:
       return I32;
-    case Opcode::CONST:
+    case Opcode::MOVC:
     case Opcode::MOV:
     case Opcode::NEG:
     case Opcode::NOT:
@@ -733,13 +733,13 @@ namespace
              << srcLines[static_cast<size_t>(ins.line) - 1] << "\n";
         lastLine = ins.line;
         // Level 3: append a copy of the referenced constant (operand b is the
-        // pool index for CONST / MAKEFUNC / MAKEGEN).
+        // pool index for MOVC / MAKEFUNC / MAKEGEN).
         std::string constNote;
         if (level >= 3)
         {
           switch (ins.op)
           {
-          case Opcode::CONST:
+          case Opcode::MOVC:
           case Opcode::MAKEFUNC:
           case Opcode::MAKEGEN:
             if (ins.b >= 0 && static_cast<size_t>(ins.b) < f.constants.size())
