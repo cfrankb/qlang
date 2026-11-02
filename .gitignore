@@ -15,3 +15,6 @@ test_gen_simple
 range_check
 **/graphify-out/*
 .tmp/*
+/*.qlc
+/*.qla
+/examples/qla/

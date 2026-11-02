@@ -2,7 +2,7 @@
 
 ## Documentation Architecture
 Documentation is modular under `docs/` (migrated 2026-10-29 from the monolithic root files, which are now stubs).
-- **Specification:** `docs/spec/` — 12 domain modules; `docs/spec/README.md` is the entry point.
+- **Specification:** `docs/spec/` — 15 domain modules; `docs/spec/README.md` is the entry point.
 - **Compliance:** `docs/compliance/` — modular validation sets; `docs/compliance/README.md` is the entry point.
 - **Instruction:** Do not append large blocks to the legacy root stubs. Create targeted `.md` files in `docs/` subdirectories. Consult directory `README.md` files as your entry points.
 

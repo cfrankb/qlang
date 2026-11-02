@@ -1,4 +1,4 @@
-# QLang
+# QLang (codename)
 
 A small, embeddable scripting language: a C++ toolchain that lexes, parses,
 compiles to a register-machine bytecode, and runs it in a stack-of-frames VM.
@@ -6,10 +6,12 @@ Built to be embedded in an engine — a `QLangContext` owns the script scope,
 injects native functions, and hands script results back to the host.
 
 **Stage:** POC. The language core (values, control flow, functions, closures,
-generators, tables, modules, native interop) is implemented and test-covered;
-the design docs (serialization, external types, event handlers) are the
-deliverable for the next phase, and a few features (classes, the `.qlc`
-loader, external-type dispatch) are spec'd but not yet built.
+generators, tables, sets, enums, classes, modules, native interop, external
+types) is implemented and test-covered; `.qlc` bytecode is written and read
+back through the library codec. The design docs (serialization, external
+types, event handlers) describe the implemented surface; the remaining gaps
+are the `$$` indirect operator and the warning-toggle infrastructure (see
+`docs/compliance/README.md`).
 
 ![Alt text](docs/images/Screenshot_2026-10-27_13-44-43.png)
 
@@ -23,10 +25,9 @@ byte code encoding
 include/qlang/   Public API headers
 src/             Library implementation (libqlang.a)
 examples/        qlang_run driver, demos, and per-feature test suites
-docs/            Design docs (serialization, external types, event handlers)
-SPEC.md          Language specification (authoritative)
-SPEC_COMPLIANCE.md  Spec ↔ implementation compliance tracker (SHA256-gated)
-HANDOFF.md       Session handoff: what's done, what's next, open issues
+docs/            spec/ (15 modules), compliance/, plans/, design docs
+SPEC.md          Stub — spec migrated to docs/spec/ (authoritative)
+SPEC_COMPLIANCE.md  Stub — tracker migrated to docs/compliance/ (SHA256-gated)
 ```
 
 ## Components
@@ -108,6 +109,7 @@ named native function groups to `import`.
 | `array` | list of mixed values | |
 | `float` | `double` | |
 | `table` | string → value map | |
+| `set` | array of unique values | numbers and strings only |
 | `function` | closure | `def` / arrow, with captures |
 | `generator` | yield-based closure | lazy, resumable |
 | `eof` | sentinel | end-of-file marker |
@@ -118,18 +120,27 @@ named native function groups to `import`.
   `continue`, `return`, labels
 - Functions: `def` and arrow closures with explicit capture lists; nested
   calls; generator functions (`yield`)
-- Collections: arrays and tables (keyed maps); runtime type tracking drives
-  `+=` (append vs. add) and index/member access
+- Collections: arrays, tables (keyed maps), and sets (unique numbers/strings);
+  runtime type tracking drives `+=` (append vs. add) and index/member access
+- Classes: closed fields, `const` fields, `__str__`, `__destroy__`, reference
+  counting; `static` members and `::` scope resolution (extension beyond v1)
+- Enums: compile-time constant tables (`enum Name[:type] { … }`, `E::M`)
+- External types: import C++ objects (`QL_` declarative meta), method
+  dispatch, read-only properties, enum constants
+- Bytecode: `.qlc` program-image codec (write + read back, `QLC1` v1)
 - Const vars (`const`) with reassignment guards
 - Native interop: inject C++ functions (`setFunc`), call script functions
   from C++ (`call`), modules (`import`, built-in `math`)
 - Safety: live infinite-loop step guard (`set_max_steps`, default 100 000)
-- Diagnostics: gated trace tiers (`set_verbose_level`, 0–3) — never touches
-  program output
+- Diagnostics: line+column error reports with module, function, and execution
+  trace; gated trace tiers (`set_verbose_level`, 0–3) — never touches program
+  output
 
-**Spec'd, not yet built:** classes (compiler has scaffolding, the VM does not
-run them), the `.qlc` bytecode loader, external-type object dispatch, and
-per-binding ownership. See the design docs and `SPEC_COMPLIANCE.md`.
+**Spec'd, not yet built:** the `$$` indirect operator (fully specified in
+`docs/spec/05-operators.md`), the duplicate-declaration warning (deferred
+pending the warning-toggle infrastructure), and the `.qls` state-snapshot
+format (`QLS1` v2, `docs/SERIALIZATION.md`). See `docs/compliance/README.md`
+for the full open-items list.
 
 ## Driver
 
@@ -137,15 +148,22 @@ per-binding ownership. See the design docs and `SPEC_COMPLIANCE.md`.
 
 | Flag | Effect |
 |------|--------|
-| `--profile` | Report compile + exec time in ms |
-| `--output <file.qlc>` | Write the compiled bytecode (POC image) |
+| `--trace-level <0-3>` | Diagnostic verbosity on stderr (0 = off, 3 = full detail) |
+| `--profile` | Report parse / compile / execute times in ms |
+| `--output <file.qlc>` | Write the compiled bytecode (`QLC1` v1) |
+| `--asm <file.qla>` | Write a disassembly listing |
+| `--asm-level <0-5>` | Disassembly detail (0 = instructions, 5 = register breakdown) |
+| `--rotate` | Append a timestamp to `--output`/`--asm` file names |
+
+Exit codes 0–5 (completion → write failures) are documented in `--help`.
 
 ## Design docs
 
 | Doc | Covers |
 |-----|--------|
-| `SPEC.md` | The language itself (authoritative) |
-| `docs/SERIALIZATION.md` | `.qlc` (bytecode) and `.qls` (scope) formats, step counter |
+| `docs/spec/README.md` | The language itself — 15 modules, authoritative |
+| `docs/compliance/README.md` | Spec ↔ implementation tracker (SHA256-gated) |
+| `docs/SERIALIZATION.md` | `.qlc` (bytecode) and `.qls` (state snapshot) formats, step counter |
 | `docs/EXTERNAL_TYPES.md` | C++ object import: the `ObjectOps` dispatch surface, ownership model |
 | `docs/EVENT_HANDLERS.md` | **Engine-specifics:** how the engine drives QLang as event handlers |
 
@@ -157,8 +175,7 @@ change — only engine wiring.
 
 ## Next steps
 
-- Implement classes in the VM (compiler scaffolding exists)
-- `.qlc` / `.qls` loader (formats defined in `docs/SERIALIZATION.md`)
-- External-type object dispatch + per-binding ownership
-  (`docs/EXTERNAL_TYPES.md`)
+- `$$` indirect operator (fully specified in `docs/spec/05-operators.md`)
+- Warning-toggle infrastructure + duplicate-declaration warning
+- `.qls` state-snapshot loader (`QLS1` v2, `docs/SERIALIZATION.md`)
 - Wire the event-handler contract into the engine (`docs/EVENT_HANDLERS.md`)

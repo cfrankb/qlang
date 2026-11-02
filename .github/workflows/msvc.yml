@@ -65,7 +65,8 @@ jobs:
             'range_check',
             'class_str_test',
             'class_static_test',
-            'codec_check'
+            'codec_check',
+            'test_external'
           )
           foreach ($t in $targets) {
             Write-Host "=== Building target: $t ==="

@@ -75,7 +75,6 @@ while (i < 10) {
 }
 
 println($j) # expected "0"
-
 ```
 
 # function and local scope
@@ -83,13 +82,13 @@ println($j) # expected "0"
 the variable, lambda, constants and other entity that reside within a function are considered to be within the `function scope`. the reach and life cycle of those entities also considered `local` since they expire upon closure.
 
 ```
-
 a = 10
 
 def make_test() {
     a ++
 }
 
+make_test()
 # expected: a = 10
 
 b = 20
@@ -99,5 +98,4 @@ if (b == 20) {
 }
 
 # expected: a = 10
-
 ```
