@@ -1313,7 +1313,7 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
     return QLangValue::Bool(cmp(a, b, "<=") <= 0 ? 1 : 0);
   case Opcode::GE:
     return QLangValue::Bool(cmp(a, b, ">=") >= 0 ? 1 : 0);
-  case Opcode::IN: {
+  case Opcode::INx: {
     // Membership test: `a in b` where b is an array (element match) or a
     // table (key match). Returns a Bool (spec §143-147).
     const QLangValue &col = b;
@@ -1735,7 +1735,7 @@ void QLangVM::run() {
     case Opcode::GE:
     case Opcode::MOD:
     case Opcode::POW:
-    case Opcode::IN: {
+    case Opcode::INx: {
       QLangValue result = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       frame.regs[i.a] = result;
       trace(TRACE_VM_LOOP, "[DBG-RES] op=%d a=%d b=%d c=%d -> regs[%d]=%s (b=%s, c=%s)\n", (int)op, i.a, i.b, i.c, i.a, valueToString(result, m_scope).c_str(), valueToString(frame.regs[i.b], m_scope).c_str(), valueToString(frame.regs[i.c], m_scope).c_str());
@@ -2081,7 +2081,7 @@ void QLangVM::runFrames(int startFrame)
     case Opcode::GE:
     case Opcode::MOD:
     case Opcode::POW:
-    case Opcode::IN:
+    case Opcode::INx:
       frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       break;
     case Opcode::CMP:
@@ -2510,7 +2510,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       case Opcode::GE:
       case Opcode::MOD:
       case Opcode::POW:
-      case Opcode::IN:
+      case Opcode::INx:
         frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
         break;
       case Opcode::CMP:
@@ -2863,7 +2863,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
     case Opcode::GE:
     case Opcode::MOD:
     case Opcode::POW:
-    case Opcode::IN:
+    case Opcode::INx:
       frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       break;
     case Opcode::CMP:

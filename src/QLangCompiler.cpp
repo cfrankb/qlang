@@ -2402,7 +2402,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       if (sc.isIn) {
         int exprReg = tmpRegister();
         compileExpr(sc.value, exprReg);
-        emit(Opcode::IN, cmpReg, valReg, exprReg);
+        emit(Opcode::INx, cmpReg, valReg, exprReg);
       } else {
         int exprReg = tmpRegister();
         compileExpr(sc.value, exprReg);
@@ -3449,7 +3449,7 @@ Opcode QLangCompiler::binOp(const std::string &text) const {
   if (text == "||") return Opcode::LOR;
   if (text == "**") return Opcode::POW;
   if (text == "%") return Opcode::MOD;
-  if (text == "in") return Opcode::IN;
+  if (text == "in") return Opcode::INx;
   throw QLangError(QLangErrorKind::Parse, 0, 0, "unsupported operator '" + text + "'");
 }
 

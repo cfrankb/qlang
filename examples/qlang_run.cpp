@@ -354,7 +354,7 @@ namespace
     case Opcode::GE:
       cmp(">=");
       break;
-    case Opcode::IN:
+    case Opcode::INx:
       ss << rn(ins.a) << " = (" << rn(ins.b) << " in " << rn(ins.c) << ")";
       break;
     case Opcode::CALL:

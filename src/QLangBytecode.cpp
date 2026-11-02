@@ -228,7 +228,7 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::ARRAPP: return "arrapp";
   case Opcode::ARRAPPV: return "arrappv";
   case Opcode::ARRLEN: return "arrlen";
-  case Opcode::IN: return "in";
+  case Opcode::INx: return "in";
   case Opcode::TABCREATE: return "tabcreate";
   case Opcode::TABGET: return "tabget";
   case Opcode::TABPUT: return "tabput";

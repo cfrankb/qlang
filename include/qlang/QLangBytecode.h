@@ -84,7 +84,9 @@ enum class Opcode : uint16_t {
   LE,
   GE,
   POW,       // r[a] = pow(r[b], r[c])  (exponential)
-  IN,   // r[a] = (r[b] in r[c])  membership: array element / table key
+  INx,  // r[a] = (r[b] in r[c])  membership: array element / table key
+        // (named INx, not IN: `IN` is a Windows SDK macro from rpcndr.h,
+        // which breaks MSVC TUs that include <windows.h> first)
 
   // Built-in function call. r[a] = call(funcId=b, args in r[a+1 .. a+c]).
   CALL, // r[a] = builtin(b, r[a+1 .. a+c])
