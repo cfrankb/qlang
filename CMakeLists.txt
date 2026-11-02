@@ -117,3 +117,21 @@ foreach(ql_script IN LISTS QL_SCRIPTS)
   get_filename_component(ql_name ${ql_script} NAME_WE)
   add_test(NAME script_${ql_name} COMMAND qlang_run ${ql_script})
 endforeach()
+
+# Performance baseline harness (SPEC # performance tests): median-of-5 per
+# stage (parse/compile/execute) over a fixed corpus, compared against
+# tests/perf/baseline.json (default tolerance ±20%, QL_PERF_TOLERANCE).
+# The `perf` gate is calibrated for Release builds (CI gxx job); in any
+# other build type it skips (exits 77, see SKIP_RETURN_CODE below).
+add_executable(perf_bench tests/perf/perf_bench.cpp)
+target_link_libraries(perf_bench PRIVATE qlang)
+target_compile_definitions(perf_bench PRIVATE
+  QLANG_TEST_SCRIPTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts"
+  QLANG_PERF_BASELINE="${CMAKE_CURRENT_SOURCE_DIR}/tests/perf/baseline.json"
+  QLANG_PERF_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
+)
+add_test(NAME perf COMMAND perf_bench)
+# In non-Release builds perf_bench exits 77 ("not run"): the baseline is
+# calibrated for Release (CI gxx job), so the gate skips instead of failing
+# on build-type noise.
+set_tests_properties(perf PROPERTIES SKIP_RETURN_CODE 77)

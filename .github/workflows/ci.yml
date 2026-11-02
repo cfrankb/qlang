@@ -32,11 +32,18 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Run tests (ctest)
+        # Includes the `perf` baseline gate (tests/perf/perf_bench vs
+        # tests/perf/baseline.json, ±20% / 0.5 ms per stage). The gate is
+        # calibrated for g++/Linux Release, so it only runs in this job.
         run: ctest --test-dir build --output-on-failure
 
-      # Phase 4: perf baseline gate — run the `perf` ctest entry
-      # (tests/perf/perf_bench vs tests/perf/baseline.json) and upload
-      # perf_result.json as an artifact from this job only.
+      - name: Upload perf result (artifact)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: perf-result
+          path: build/perf_result.json
+          if-no-files-found: warn
 
   clang:
     name: clang++ (ubuntu-latest)
@@ -55,7 +62,10 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Run tests (ctest)
-        run: ctest --test-dir build --output-on-failure
+        # The perf baseline gate is calibrated against the g++/Linux Release
+        # baseline; exclude it here because clang++ timings would only add
+        # cross-compiler noise (the gate runs in the gxx job).
+        run: ctest --test-dir build -E perf --output-on-failure
 
   mingw:
     name: mingw-w64 cross g++ (ubuntu-latest)

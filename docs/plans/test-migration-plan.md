@@ -123,6 +123,29 @@ Spec: baseline for `parser`, `compiler`, `execution time` — immutable, logged,
 
 **Commit:** `test: perf baseline harness + baseline.json`
 
+**Done (2026-11-02).** Implementation notes / deviations:
+
+- `tests/perf/perf_bench.cpp` (links `qlang`): corpus `hello.ql`, `money.ql`,
+  `cast.ql`, `perf_stress.ql`; N=5 measured runs per stage **after one
+  unmeasured warm-up pass per script** (warm-up stabilizes sub-ms stages).
+- Gate rule: a stage fails when it exceeds the relative tolerance (±20%,
+  `QL_PERF_TOLERANCE`) **and** an absolute floor (0.5 ms,
+  `QL_PERF_EPS_MS`). The epsilon floor is an addition to the plan: pure
+  ±20% on 30 µs stages flapped ±60% on the same machine; the floor keeps the
+  gate meaningful without flapping.
+- `perf_result.json` / `baseline.json` share the schema
+  `{script, stage, median_ms, runs_ms[]}` (array of objects).
+- ctest entry `perf`; the baseline is calibrated for g++/Linux Release, so:
+  non-Release builds → `perf_bench` exits 77 and ctest reports Skipped
+  (`SKIP_RETURN_CODE 77`); `clang` (ci.yml) and MSVC (ci-msvc.yml) jobs
+  exclude `perf` (`ctest -E perf`) to avoid cross-compiler/cross-OS noise;
+  the gxx job runs the gate and uploads `perf_result.json` as artifact
+  `perf-result`.
+- `perf_stress.ql` raises the VM step guard via `set_max_steps(10000000)`
+  (workload deliberately exceeds the 100k default); it is also part of the
+  script regression suite (16 scripts).
+- ctest total: 30 entries (13 unit + 16 script + perf).
+
 ## Phase 5 — Extra coverage (test gaps)
 
 New cases (extend `tests/unit/` suites; audit the existing 421 `spec_check2` cases first to avoid duplicates):

@@ -58,5 +58,8 @@ jobs:
         run: cmake --build build --config Release --parallel
 
       - name: Run tests (ctest)
+        # The perf baseline gate is calibrated against the g++/Linux Release
+        # baseline (run in the gxx job of ci.yml); exclude it here because
+        # MSVC timings on Windows would only add cross-OS noise.
         shell: pwsh
-        run: ctest --test-dir build -C Release --output-on-failure
+        run: ctest --test-dir build -C Release -E perf --output-on-failure
