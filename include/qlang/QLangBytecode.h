@@ -92,7 +92,9 @@ enum class Opcode : uint16_t {
   CALL, // r[a] = builtin(b, r[a+1 .. a+c])
 
   // Variable removal. r[a] is dropped from the scope at end-of-run.
-  DELETE, // remove script variable mapped to register a
+  DELETEx, // remove script variable mapped to register a
+           // (named DELETEx, not DELETE: keeps the opcode list clear of
+           // Windows/C++ reserved-word spellings for MSVC portability)
 
   // Runtime cast: strict type conversion (throws on invalid cast).
   CAST, // r[a] = strict_convert(r[b], type c)

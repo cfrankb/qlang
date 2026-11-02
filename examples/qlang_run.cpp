@@ -366,7 +366,7 @@ namespace
       else
         ss << rn(ins.a) << " = native" << (-1 - ins.b) << "(" << args(ins.a, ins.c) << ")";
       break;
-    case Opcode::DELETE:
+    case Opcode::DELETEx:
       ss << "delete " << rn(ins.a);
       break;
     case Opcode::ARRGET:
@@ -472,7 +472,7 @@ namespace
     {
     case Opcode::INC:
     case Opcode::DEC:
-    case Opcode::DELETE:
+    case Opcode::DELETEx:
     case Opcode::TABCREATE:
     case Opcode::TABFINALIZE:
     case Opcode::RETURN:

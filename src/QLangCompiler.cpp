@@ -1232,7 +1232,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       throw QLangError(QLangErrorKind::Parse, 0, 0,
                        "delete of undeclared variable '" + s->delName + "'");
     }
-    emit(Opcode::DELETE, r);
+    emit(Opcode::DELETEx, r);
     break;
   }
   case StmtKind::For: {

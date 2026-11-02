@@ -1451,7 +1451,7 @@ void QLangVM::run() {
       frame.regs[i.a] = strict_convert(frame.regs[i.b],
                                        static_cast<QLangValue::Type>(i.c), this);
       break;
-    case Opcode::DELETE:
+    case Opcode::DELETEx:
       m_deleted.insert(i.a);
       break;
     case Opcode::ARRGET: {
@@ -1823,7 +1823,7 @@ void QLangVM::runFrames(int startFrame)
       frame.regs[i.a] = strict_convert(frame.regs[i.b],
                                        static_cast<QLangValue::Type>(i.c), this);
       break;
-    case Opcode::DELETE:
+    case Opcode::DELETEx:
       m_deleted.insert(i.a);
       break;
     case Opcode::ARRGET: {
@@ -2241,7 +2241,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
         frame.regs[i.a] = strict_convert(frame.regs[i.b],
                                        static_cast<QLangValue::Type>(i.c), this);
         break;
-      case Opcode::DELETE:
+      case Opcode::DELETEx:
         m_deleted.insert(i.a);
         break;
       case Opcode::ARRGET: {
@@ -2623,7 +2623,7 @@ QLangValue QLangVM::callFunction(int funcIndex, const std::vector<QLangValue> &a
       frame.regs[i.a] = strict_convert(frame.regs[i.b],
                                        static_cast<QLangValue::Type>(i.c), this);
       break;
-    case Opcode::DELETE:
+    case Opcode::DELETEx:
       m_deleted.insert(i.a);
       break;
     case Opcode::ARRGET: {

@@ -221,7 +221,7 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::BREAK: return "break";
   case Opcode::YIELD: return "yield";
   case Opcode::CALL: return "call";
-  case Opcode::DELETE: return "delete";
+  case Opcode::DELETEx: return "delete";
   case Opcode::CAST: return "cast";
   case Opcode::ARRGET: return "arrget";
   case Opcode::ARRPUT: return "arrput";
