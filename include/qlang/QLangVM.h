@@ -25,11 +25,14 @@ class QLangContext; // owns the variable scope the VM reads/writes
 //           value is in m_returnValue).
 enum class RunResult { Returned, Yielded };
 
-// Register-based executor over a CompiledProgram (Phase 1 substrate).
-// All evaluation happens in per-frame register files; captures are shared
-// upvalue cells (Env) and generators are instances that own their saved
-// frame. ONE dispatch loop (runFrames) serves run(), callFunction() and
-// generator resumption; the scope is synced in at start and out at end.
+// Register-based executor over a CompiledProgram (Phase 1 substrate,
+// Phase 2 global table). All evaluation happens in per-frame register
+// files; captures are shared upvalue cells (Env) and generators are
+// instances that own their saved frame. ONE dispatch loop (runFrames)
+// serves run(), callFunction() and generator resumption. Top-level names
+// live in the context's global table: the main frame's register file
+// ALIASES the table's slots, so there is no scope sync in at start or out
+// at end (or on throw).
 class QLangVM {
 public:
   QLangVM(const CompiledProgram &program, QLangContext &scope);
@@ -47,8 +50,8 @@ public:
   QLangValue callClosure(const QLangValue &value,
                          const std::vector<QLangValue> &args);
 
-  // Number of registers allocated (for debugging / assertions).
-  int registerCount() const { return static_cast<int>(m_registers.size()); }
+  // Number of registers in the main program (for debugging / assertions).
+  int registerCount() const { return m_prog.registerCount; }
 
   // Throw a QLangError carrying the current pc's line/col, the owning module
   // name, and the full frame chain (innermost first) — SPEC # error
@@ -58,13 +61,39 @@ public:
                               const std::string &msg) const;
 
 private:
-  // One activation frame. `regs` is the frame's register file; `captures`
-  // is this function's bound capture table (shared cells); `envs` are the
-  // Envs this frame created (their cells alias this frame's registers until
-  // the frame pops, at which point the registers move into the cells).
+  // A frame's register file (Phase 2). Normal frames own their storage;
+  // the MAIN frame aliases the context's global-table slots instead, so
+  // top-level names live in the table directly — no sync in at run start,
+  // no sync out at run end (or on throw). `operator[]`/`size()` make the
+  // dispatch loop's `frame.regs[i]` sites work unchanged.
+  struct RegFile {
+    std::vector<QLangValue> owned;
+    std::vector<QLangValue> *aliased = nullptr;
+    std::vector<QLangValue> &vec() { return aliased ? *aliased : owned; }
+    const std::vector<QLangValue> &vec() const { return aliased ? *aliased : owned; }
+    size_t size() const { return vec().size(); }
+    bool empty() const { return vec().empty(); }
+    void resize(size_t n, const QLangValue &v = QLangValue()) { vec().resize(n, v); }
+    QLangValue &operator[](size_t i) { return vec()[i]; }
+    const QLangValue &operator[](size_t i) const { return vec()[i]; }
+    // Move the owned storage out (generator suspend). Only generator frames
+    // suspend, and they always own their storage (the main frame is the
+    // sole alias and never yields).
+    std::vector<QLangValue> takeOwned() {
+      if (aliased)
+        return {};
+      return std::move(owned);
+    }
+  };
+
+  // One activation frame. `regs` is the frame's register file (owned, or an
+  // alias of the global table for the main frame); `captures` is this
+  // function's bound capture table (shared cells); `envs` are the Envs this
+  // frame created (their cells alias this frame's registers until the frame
+  // pops, at which point the registers move into the cells).
   struct Frame {
     int funcIndex = 0;
-    std::vector<QLangValue> regs;
+    RegFile regs;
     std::vector<CaptureRef> captures;
     std::vector<EnvPtr> envs;
     size_t pc = 0;
@@ -110,10 +139,6 @@ private:
 public:
   bool isTrue(const QLangValue &v);
 
-  // Disable main-frame scope sync (used by finalizer dispatch — see
-  // m_noSync).
-  void setNoSync(bool on) { m_noSync = on; }
-
   // Display form of a value for print/println/printf/f-string/join: a table
   // with `__str__` calls it (re-entrancy guarded); class instances without
   // `__str__` render as their class name; everything else uses the generic
@@ -137,12 +162,11 @@ public:
   // `resultDest` (usually argBase, the callee's home register — they differ
   // when the callee value was hoisted to a temp to avoid clobbering a
   // capture-aliased register).
-  void pushCall(int calleeIndex, std::vector<QLangValue> &callerRegs,
+  void pushCall(int calleeIndex, RegFile &callerRegs,
                 int resultDest, int argBase, int argc);
 
   const CompiledProgram &m_prog;
   QLangContext &m_scope;
-  std::vector<QLangValue> m_registers;
   // Frame stack. A deque keeps pointers to frames stable so that cell owner
   // links (Env::owner) remain valid while the owning frame is live.
   // `m_cur` indexes the live frame; CALLFN/CALLCLOS push and advance it,
@@ -150,7 +174,6 @@ public:
   std::deque<Frame> m_frames;
   int m_cur = -1;
   QLangValue m_returnValue; // result handed back to the caller of a call
-  std::unordered_set<int> m_deleted; // registers removed by `delete`
   size_t m_steps = 0;
   // Re-entrancy guard for displayString: an `__str__` that displays `self`
   // must not recurse — the nested call skips `__str__` and falls back.
@@ -163,11 +186,6 @@ public:
   // no caller dest register holding its instance (host-driven
   // resumeGenerator); consumed by resumeGenerator() on the next Yielded.
   std::optional<GeneratorState> m_suspended;
-  // When true, runFrames() does not sync the main frame back into the scope.
-  // Finalizer dispatch (runFinalizer) sets it: the finalizer's transient
-  // frame must not overwrite the host scope, and during context teardown
-  // the scope map is being destroyed and must not be mutated.
-  bool m_noSync = false;
 
   // The single dispatch loop (Phase 1): runs the top frame
   // (m_frames[m_cur]) until it RETURNs (popping it) or a generator frame
@@ -179,14 +197,22 @@ public:
   // first.
   void popFrame();
 
-  // Bind a compile-time capture spec (env==null, reg set) to a fresh Env
-  // seeded — and live-aliased — from `frame`; appends the bound refs to
-  // `out`.
-  void bindCaptures(Frame &frame, const std::vector<CaptureRef> &spec,
-                    std::vector<CaptureRef> &out) const;
+  // Bind a compile-time capture spec (env==null, reg set) to live cells;
+  // appends the bound refs to `out`. Two kinds (Phase 2):
+  //  - GLOBAL: the capture name is a top-level name (in m_prog.vars) — the
+  //    bound ref aliases the context's table slot directly
+  //    (CaptureRef{nullptr, slot, -1}), so it stays live across frames,
+  //    VM instances and run() boundaries (fixes S2/P3).
+  //  - LOCAL: a fresh Env cell seeded — and live-aliased — from `frame`
+  //    (nullptr when there is no creating frame: nil cells, so
+  //    REFLOAD/REFSTORE stay safe).
+  void bindCaptures(Frame *frame, const Function &fn,
+                    const std::vector<CaptureRef> &spec,
+                    std::vector<CaptureRef> &out);
 
-  // Live cell access: while the owning frame is alive the cell aliases the
-  // frame register; after the frame pops it is the stored value.
+  // Live cell access: a global capture (env==null) aliases the context's
+  // table slot; a local capture aliases the owning frame's register while
+  // it is alive, and is the stored value after the frame pops.
   QLangValue &cellAt(const CaptureRef &cr);
 
   // Move a frame's captured registers into its Envs and clear their owner
@@ -195,10 +221,13 @@ public:
   void releaseFrame(Frame &frame);
   void releaseAllCaptures();
 
-  // Sync the main frame's final register values back out to the scope (the
-  // frame is about to be popped): deleted registers remove their names,
-  // const-injected names are left alone, everything else is written back.
-  void syncMainFrameOut(const Frame &frame) const;
+  // Reconcile a standalone-compiled program's main-program name->register
+  // map with the context's global table (Phase 2): names the table does not
+  // know get adopted at their program register; a name already in the table
+  // at a different slot keeps its value, relocated to the program register.
+  // No-op for programs compiled against this context (registers already are
+  // table slots).
+  void adoptGlobals(const CompiledProgram &prog);
 
   // Resume a generator instance to its next yield (or exhaustion): moves the
   // saved registers onto a live frame, runs the single loop, and moves the

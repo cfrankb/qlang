@@ -108,9 +108,9 @@ std::string valueToString(const QLangValue &v, QLangContext &ctx) {
 
 // Phase 7: if the table carries a `__destroy__` method, re-wrap it with a
 // finalizer deleter so the method runs exactly once at final release. The
-// deleter keeps the closure and the owning program id alive; dispatch goes
-// through the long-lived QLangContext (runFinalizer). No-op for plain tables
-// and instances without `__destroy__`.
+// deleter keeps the closure and the owning program (shared_ptr, Phase 2)
+// alive; dispatch goes through the long-lived QLangContext (runFinalizer).
+// No-op for plain tables and instances without `__destroy__`.
 //
 // Ownership subtlety: `shared_ptr(raw, deleter)` would create a SECOND
 // control block; the original shared_ptr (still in `v`) would then free
@@ -126,12 +126,12 @@ static void attachFinalizer(QLangValue &v, QLangContext &scope) {
   if (dit == tbl.end() || dit->second.type() != QLangValue::Type::Function)
     return;
   QLangValue closure = dit->second; // keep the method alive in the deleter
-  int progId = scope.currentProgramId();
+  auto prog = scope.liveProgram(); // keeps the program alive until release
   auto orig = v.asTable(); // second reference to the original control block
   auto wrapped = std::shared_ptr<std::map<std::string, QLangValue>>(
       v.asTable().get(),
-      [&scope, closure, progId, orig](std::map<std::string, QLangValue> *p) mutable {
-        scope.runFinalizer(p, closure, progId);
+      [&scope, closure, prog, orig](std::map<std::string, QLangValue> *p) mutable {
+        scope.runFinalizer(p, closure, prog);
         orig.reset(); // last reference: frees the map
       });
   v = QLangValue::Table(wrapped);
@@ -405,11 +405,8 @@ QLangValue seqGet(const QLangValue &col, int64_t idx, QLangVM *vm = nullptr) {
 // return value is stored by the caller into the call's destination register.
 // `scope` is the host scope (seeded at run start, synced at run end).
 // `prog.vars` maps variable names to frame registers; `deleted` tracks
-// registers removed by `delete`. Used by isset() to check existence during
-// execution (vars live in registers, not scope, until run completes).
 QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
                        QLangContext &scope, const CompiledProgram &prog,
-                       const std::unordered_set<int> &deleted,
                        int line = 0, int col = 0,
                        QLangVM *vm = nullptr) {
   auto need = [&](size_t n, const char *fn) {
@@ -808,14 +805,10 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
       thr(QLangErrorKind::Type,
                        "isset: argument must be a string (variable name)");
     const std::string &name = args[0].asString();
-    // Check scope first (for pre-seeded vars set before run()).
-    if (scope.has(name)) return QLangValue::Bool(1);
-    // During execution, vars live in frame registers. Check the program's
-    // name->reg map and the deleted set.
-    auto it = prog.vars.find(name);
-    if (it != prog.vars.end() && !deleted.count(it->second))
-      return QLangValue::Bool(1);
-    return QLangValue::Bool(0);
+    // Top-level names live in the context's global table (the main frame
+    // aliases it), so one check covers pre-seeded, in-flight and deleted
+    // state (Phase 2).
+    return QLangValue::Bool(scope.hasGlobal(name) ? 1 : 0);
   }
   case Builtin::Assert: {
     // assert(bool, str) — throws a runtime error with the given message if
@@ -855,8 +848,34 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
 } // namespace
 
 QLangVM::QLangVM(const CompiledProgram &program, QLangContext &scope)
-    : m_prog(program), m_scope(scope),
-      m_registers(program.registerCount, QLangValue()) {}
+    : m_prog(program), m_scope(scope) {
+  adoptGlobals(program);
+}
+
+void QLangVM::adoptGlobals(const CompiledProgram &prog) {
+  // Programs compiled against this context already use table slots as their
+  // main-program registers (declareVar asks the table); this is a no-op for
+  // them. Standalone-compiled programs (no context at compile time) get
+  // their layout adopted so the main frame's alias stays consistent.
+  auto &t = m_scope.globalTable();
+  for (const auto &[name, reg] : prog.vars) {
+    size_t r = static_cast<size_t>(reg);
+    auto it = t.names.find(name);
+    if (it == t.names.end()) {
+      if (t.slots.size() < r + 1)
+        t.slots.resize(r + 1);
+      t.names[name] = r;
+    } else if (it->second != r) {
+      // Conflict: keep the table's value, relocate it to the program's
+      // register so the program's code (which reads reg) sees it.
+      if (t.slots.size() < r + 1)
+        t.slots.resize(r + 1);
+      t.slots[r] = t.slots[it->second];
+      t.slots[it->second] = QLangValue();
+      t.names[name] = r;
+    }
+  }
+}
 
 // Build the execution trace (innermost frame first) from the current frame
 // stack and throw a QLangError carrying it plus the resolved line/col and
@@ -1335,7 +1354,7 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
   }
 }
 
-void QLangVM::pushCall(int calleeIndex, std::vector<QLangValue> &callerRegs,
+void QLangVM::pushCall(int calleeIndex, RegFile &callerRegs,
                        int resultDest, int argBase, int argc) {
   trace(TRACE_FRAME, "[pushCall] calleeIndex=%d functions.size()=%zu dest=%d argc=%d callerRegs=%zu\n", calleeIndex, m_prog.functions.size(), resultDest, argc, callerRegs.size());
   const Function &callee = m_prog.functions[calleeIndex];
@@ -1373,24 +1392,51 @@ struct CaptureReleaseGuard {
 };
 } // namespace
 
-void QLangVM::bindCaptures(Frame &frame, const std::vector<CaptureRef> &spec,
-                           std::vector<CaptureRef> &out) const {
+void QLangVM::bindCaptures(Frame *frame, const Function &fn,
+                           const std::vector<CaptureRef> &spec,
+                           std::vector<CaptureRef> &out) {
   if (spec.empty())
     return;
-  auto env = std::make_shared<Env>();
-  env->cells.reserve(spec.size());
-  env->ownerRegs.reserve(spec.size());
-  for (const CaptureRef &cr : spec) {
+  // Local captures share one fresh Env; global captures need none (they
+  // alias the context's table slots, which outlive every frame).
+  EnvPtr env;
+  for (size_t i = 0; i < spec.size(); i++) {
+    const CaptureRef &cr = spec[i];
+    const std::string &name =
+        (i < fn.captureNames.size()) ? fn.captureNames[i] : std::string();
+    auto vit = m_prog.vars.find(name);
+    if (!name.empty() && vit != m_prog.vars.end()) {
+      // GLOBAL: alias the table slot directly (slot == main-frame register).
+      // Live across frames, VM instances and run() boundaries — a `global`
+      // read always sees the current top-level value (S2/P3).
+      out.push_back(CaptureRef{nullptr, static_cast<int>(vit->second), -1});
+      continue;
+    }
+    // LOCAL: cell seeded from the creating frame's register.
+    if (!env) {
+      env = std::make_shared<Env>();
+      env->cells.reserve(spec.size());
+      env->ownerRegs.reserve(spec.size());
+    }
     int cell = static_cast<int>(env->cells.size());
-    env->cells.push_back(frame.regs[static_cast<size_t>(cr.reg)]);
+    if (frame)
+      env->cells.push_back(frame->regs[static_cast<size_t>(cr.reg)]);
+    else
+      env->cells.push_back(QLangValue());
     env->ownerRegs.push_back(cr.reg);
     out.push_back(CaptureRef{env, cell, cr.reg});
   }
-  env->owner = static_cast<void *>(&frame);
-  frame.envs.push_back(env);
+  if (env && frame) {
+    env->owner = static_cast<void *>(frame);
+    frame->envs.push_back(env);
+  }
 }
 
 QLangValue &QLangVM::cellAt(const CaptureRef &cr) {
+  if (cr.env == nullptr) {
+    // Global capture: the context's table slot (see bindCaptures).
+    return m_scope.globalTable().slots[static_cast<size_t>(cr.cell)];
+  }
   Env &e = *cr.env;
   if (e.owner != nullptr) {
     Frame *fr = static_cast<Frame *>(e.owner);
@@ -1421,19 +1467,6 @@ void QLangVM::releaseAllCaptures() {
     releaseFrame(f);
 }
 
-void QLangVM::syncMainFrameOut(const Frame &frame) const {
-  for (const auto &[name, reg] : m_prog.vars) {
-    if (reg < 0 || reg >= static_cast<int>(frame.regs.size()))
-      continue;
-    if (m_deleted.count(reg))
-      m_scope.remove(name);
-    else if (m_prog.constVars.count(name))
-      ; // const-injected vars are read-only: do not sync back
-    else
-      m_scope.set(name, frame.regs[static_cast<size_t>(reg)]);
-  }
-}
-
 void QLangVM::popFrame() {
   releaseFrame(m_frames[static_cast<size_t>(m_cur)]);
   m_frames.pop_back();
@@ -1448,7 +1481,7 @@ QLangValue QLangVM::resumeGenerator(GeneratorState &gen) {
   // RETURN/YIELD, and let the YIELD/RETURN path move the frame back.
   Frame frame;
   frame.funcIndex = gen.funcIndex;
-  frame.regs = std::move(gen.regs);
+  frame.regs.owned = std::move(gen.regs);
   // The first resume restores a register file sized to the argument count
   // (MAKEGEN); grow it to the function's full register count so body
   // registers are in bounds.
@@ -1478,20 +1511,20 @@ QLangValue QLangVM::resumeGenerator(GeneratorState &gen) {
 
 void QLangVM::run() {
   CaptureReleaseGuard guard{this};
-  // Set up the main frame (functions[0]).
+  // Set up the main frame (functions[0]). Its register file ALIASES the
+  // context's global-table slots (Phase 2): top-level names live in the
+  // table directly, so there is no seeding in and no sync out — the table
+  // is current at every point, including mid-run throws.
+  auto &slots = m_scope.globalSlots();
+  if (slots.size() < static_cast<size_t>(m_prog.registerCount))
+    slots.resize(static_cast<size_t>(m_prog.registerCount), QLangValue());
   Frame mainFrame;
   mainFrame.funcIndex = 0;
-  mainFrame.regs.resize(m_prog.registerCount, QLangValue());
-  // Seed from any pre-existing scope variables.
-  for (const auto &[name, reg] : m_prog.vars)
-    if (m_scope.has(name))
-      mainFrame.regs[reg] = m_scope.get(name);
+  mainFrame.regs.aliased = &slots;
   m_frames.push_back(std::move(mainFrame));
   m_cur = 0;
 
-  // Drive the single executor until the main frame has returned. Scope
-  // sync-out happens in runFrames() when the main frame is popped
-  // (syncMainFrameOut), so the scope is current before we return here.
+  // Drive the single executor until the main frame has returned.
   while (m_cur >= 0) {
     RunResult r = runFrames();
     if (r == RunResult::Yielded) {
@@ -1514,9 +1547,8 @@ RunResult QLangVM::runFrames() {
 
     if (frame.pc >= instrs.size()) {
       // Fell off the end without an explicit return: unwind with nil.
+      // (No scope sync: the main frame aliases the global table — Phase 2.)
       m_returnValue = frame.regs.empty() ? QLangValue() : frame.regs[0];
-      if (m_cur == 0 && !m_noSync)
-        syncMainFrameOut(frame);
       popFrame();
       if (m_cur >= 0)
         // Generator frame fell off its end: stop at the resume boundary.
@@ -1567,9 +1599,16 @@ RunResult QLangVM::runFrames() {
                                        static_cast<QLangValue::Type>(i.c),
                                        this);
       break;
-    case Opcode::DELETEx:
-      m_deleted.insert(i.a);
+    case Opcode::DELETEx: {
+      // Only a top-level delete (main frame) erases a table slot — a delete
+      // in a nested frame is a local-register clear with no scope effect
+      // (P2). The slot is marked erased and its value cleared; re-assigning
+      // revives it.
+      if (m_cur == 0)
+        m_scope.eraseGlobalSlot(static_cast<size_t>(i.a));
+      frame.regs[static_cast<size_t>(i.a)] = QLangValue();
       break;
+    }
     case Opcode::ARRGET: {
       QLangValue &base = frame.regs[i.b];
       if (base.type() != QLangValue::Type::Array)
@@ -1674,8 +1713,7 @@ RunResult QLangVM::runFrames() {
             m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, callArgs);
       } else {
         frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), callArgs,
-                                       m_scope, m_prog, m_deleted, i.line,
-                                       i.col, this);
+                                       m_scope, m_prog, i.line, i.col, this);
       }
       break;
     }
@@ -1687,7 +1725,8 @@ RunResult QLangVM::runFrames() {
       // rest, binds the callee's capture spec to cells seeded from the
       // caller frame.
       const Function &calleeFn = m_prog.functions[static_cast<size_t>(i.b)];
-      bindCaptures(m_frames[static_cast<size_t>(m_cur)], calleeFn.captures,
+      bindCaptures(&m_frames[static_cast<size_t>(m_cur)], calleeFn,
+                   calleeFn.captures,
                    m_frames[static_cast<size_t>(m_cur)].captures);
       continue;
     }
@@ -1753,10 +1792,12 @@ RunResult QLangVM::runFrames() {
       const Closure &spec = cv.asFunction();
       ClosurePtr closure = std::make_shared<Closure>();
       closure->funcIndex = spec.funcIndex;
-      // Bind each capture to a fresh cell seeded — and live-aliased — from
-      // this frame. The closure outlives the frame: on pop the registers
-      // move into the cells.
-      bindCaptures(frame, spec.captures, closure->captures);
+      // Bind each capture to a live cell: local captures to a fresh cell
+      // seeded from this frame (live-aliased until the frame pops), global
+      // captures to the context's table slot (Phase 2).
+      bindCaptures(&frame,
+                   m_prog.functions[static_cast<size_t>(spec.funcIndex)],
+                   spec.captures, closure->captures);
       // Register the prototype so host-driven calls (and CALLFN) reach the
       // def-time bindings.
       m_funcClosures[spec.funcIndex] = closure;
@@ -1779,7 +1820,9 @@ RunResult QLangVM::runFrames() {
       if (pit != m_funcClosures.end() && !pit->second->captures.empty())
         gen->captures = pit->second->captures;
       else
-        bindCaptures(frame, spec.captures, gen->captures);
+        bindCaptures(&frame,
+                     m_prog.functions[static_cast<size_t>(spec.funcIndex)],
+                     spec.captures, gen->captures);
       // Read call arguments from frame registers (already placed by
       // compiler).
       gen->regs.assign(static_cast<size_t>(i.c), QLangValue());
@@ -1804,8 +1847,6 @@ RunResult QLangVM::runFrames() {
     case Opcode::RETURN: {
       m_returnValue = frame.regs.empty() ? QLangValue() : frame.regs[0];
       int callDest = frame.callDest;
-      if (m_cur == 0 && !m_noSync)
-        syncMainFrameOut(frame);
       popFrame();
       if (m_cur >= 0 && callDest >= 0)
         m_frames[static_cast<size_t>(m_cur)].regs[static_cast<size_t>(callDest)] =
@@ -1835,7 +1876,7 @@ RunResult QLangVM::runFrames() {
       }
       if (gs) {
         gs->funcIndex = funcIndex;
-        gs->regs = std::move(frame.regs);
+        gs->regs = frame.regs.takeOwned();
         gs->captures = std::move(frame.captures);
         gs->pc = resumePc;
         gs->exhausted = false;
@@ -1844,7 +1885,7 @@ RunResult QLangVM::runFrames() {
         // suspended state in the resume slot for resumeGenerator().
         GeneratorState st;
         st.funcIndex = funcIndex;
-        st.regs = std::move(frame.regs);
+        st.regs = frame.regs.takeOwned();
         st.captures = std::move(frame.captures);
         st.pc = resumePc;
         st.exhausted = false;
@@ -1951,19 +1992,16 @@ QLangValue QLangVM::callFunction(int funcIndex,
     // after run()); otherwise bind fresh cells from the current top frame
     // (the call site); with no live frame, bind nil cells so REFLOAD/
     // REFSTORE stay safe.
+    // Prefer the def-time prototype closure's bound cells (host-driven call
+    // after run()); otherwise bind fresh cells from the current top frame
+    // (the call site); with no live frame, local captures bind nil cells so
+    // REFLOAD/REFSTORE stay safe (bindCaptures handles frame == nullptr).
     auto pit = m_funcClosures.find(funcIndex);
-    if (pit != m_funcClosures.end() && !pit->second->captures.empty()) {
+    if (pit != m_funcClosures.end() && !pit->second->captures.empty())
       gen->captures = pit->second->captures;
-    } else if (!fn.captures.empty() && !m_frames.empty()) {
-      bindCaptures(m_frames.back(), fn.captures, gen->captures);
-    } else {
-      auto env = std::make_shared<Env>();
-      for (const CaptureRef &cr : fn.captures) {
-        int cell = static_cast<int>(env->cells.size());
-        env->cells.push_back(QLangValue());
-        gen->captures.push_back(CaptureRef{env, cell, cr.reg});
-      }
-    }
+    else
+      bindCaptures(m_frames.empty() ? nullptr : &m_frames.back(), fn,
+                   fn.captures, gen->captures);
     gen->regs.assign(args.size(), QLangValue());
     for (size_t k = 0; k < args.size(); k++)
       gen->regs[k] = args[k];
@@ -1980,20 +2018,14 @@ QLangValue QLangVM::callFunction(int funcIndex,
   for (size_t k = 0; k < args.size() && k < frame.regs.size(); k++)
     frame.regs[k] = args[k];
   // Bind the capture spec the same way the def-time closure would: prefer
-  // the prototype's cells, else bind from the top frame, else nil cells.
+  // the prototype's cells, else bind from the top frame (nil cells when
+  // there is no live frame — bindCaptures handles frame == nullptr).
   auto pit = m_funcClosures.find(funcIndex);
-  if (pit != m_funcClosures.end() && !pit->second->captures.empty()) {
+  if (pit != m_funcClosures.end() && !pit->second->captures.empty())
     frame.captures = pit->second->captures;
-  } else if (!fn.captures.empty() && !m_frames.empty()) {
-    bindCaptures(m_frames.back(), fn.captures, frame.captures);
-  } else if (!fn.captures.empty()) {
-    auto env = std::make_shared<Env>();
-    for (const CaptureRef &cr : fn.captures) {
-      int cell = static_cast<int>(env->cells.size());
-      env->cells.push_back(QLangValue());
-      frame.captures.push_back(CaptureRef{env, cell, cr.reg});
-    }
-  }
+  else
+    bindCaptures(m_frames.empty() ? nullptr : &m_frames.back(), fn,
+                 fn.captures, frame.captures);
   frame.pc = 0;
   frame.callDest = -1;
   m_frames.push_back(std::move(frame));

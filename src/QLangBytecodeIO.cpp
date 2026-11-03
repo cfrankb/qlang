@@ -1,11 +1,13 @@
 // .qlc program-image codec (docs/SERIALIZATION.md).
 //
 // Values: 1-byte tag (QLangValue::Type in declaration order, fixed) plus a
-// little-endian payload. Non-durable types (Generator, Object) serialize as
-// Nil. Programs: header + function records + native-slot table + variable
-// map. The reader treats its input as untrusted: every read is
-// bounds-checked, structural invariants are validated, and any failure
-// leaves the out-parameters untouched.
+// little-endian payload. Non-durable types (Generator, Object, External,
+// BoundMethod, TypeRef) are rejected by writeQlc (F1): a program whose
+// constant pool holds them cannot be durably encoded, so the writer returns
+// false rather than silently remapping them to Nil. Programs: header +
+// function records + native-slot table + variable map. The reader treats its
+// input as untrusted: every read is bounds-checked, structural invariants are
+// validated, and any failure leaves the out-parameters untouched.
 
 #include "qlang/QLangBytecodeIO.h"
 
@@ -225,12 +227,45 @@ QLangValue decodeValue(Reader &r, int depth, size_t &valueCount) {
 
 } // namespace
 
+// True when the value (and every value nested inside arrays/sets/tables) is
+// durable — i.e. carries no non-durable type (Generator, Object, External,
+// BoundMethod, TypeRef). writeQlc rejects programs whose constant pools hold
+// non-durable values (F1): serializeValue would silently remap them to Nil,
+// corrupting a program that depends on them.
+bool isDurable(const QLangValue &v) {
+  using T = QLangValue::Type;
+  T t = v.type();
+  if (t == T::Generator || t == T::Object || t == T::External ||
+      t == T::BoundMethod || t == T::TypeRef)
+    return false;
+  switch (t) {
+  case T::Array:
+  case T::Set: {
+    const auto &a = (t == T::Array) ? v.asArray() : v.asSet();
+    for (const auto &e : a)
+      if (!isDurable(e))
+        return false;
+    break;
+  }
+  case T::Table: {
+    const auto &m = v.asTable();
+    for (const auto &[k, val] : *m)
+      if (!isDurable(val))
+        return false;
+    break;
+  }
+  default:
+    break;
+  }
+  return true;
+}
+
 void serializeValue(std::ostream &os, const QLangValue &v) {
   using T = QLangValue::Type;
   T t = v.type();
   if (t == T::Generator || t == T::Object || t == T::External ||
       t == T::BoundMethod || t == T::TypeRef)
-    t = T::Nil; // not durable (R2)
+    t = T::Nil; // not durable (R2); writeQlc rejects these up front (F1)
   putU8(os, static_cast<uint8_t>(t));
   switch (t) {
   case T::Nil:
@@ -317,6 +352,13 @@ QLangValue deserializeValue(std::istream &is) {
 
 bool writeQlc(std::ostream &os, const CompiledProgram &prog,
               const std::map<std::string, int> &nativeIds) {
+  // F1: reject programs whose constant pools hold non-durable values
+  // (Generator, Object, External, BoundMethod, TypeRef). serializeValue would
+  // silently remap them to Nil, corrupting a program that depends on them.
+  for (const auto &f : prog.functions)
+    for (const auto &c : f.constants)
+      if (!isDurable(c))
+        return false;
   // Header.
   putBytes(os, "QLC1", 4);
   // Format version 2: MOVI opcode (raw 12-byte layout, no new fields). v1

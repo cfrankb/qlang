@@ -18,3 +18,4 @@ range_check
 /*.qlc
 /*.qla
 /examples/qla/
+.aider*

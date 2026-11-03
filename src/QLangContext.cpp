@@ -63,8 +63,10 @@ namespace {
     std::optional<CompiledProgram> compiled;
     // Every program compiled by run() stays alive here so instance
     // finalizers (`__destroy__`) can still dispatch their closures after the
-    // run() VM is gone (Phase 7). Entries are shared_ptrs; cleared by
-    // clear() only AFTER m_vars (which owns the instances) is cleared.
+    // run() VM is gone (Phase 7). Entries are shared_ptrs (Phase 2: finalizer
+    // deleters capture the shared_ptr directly — no int-index protocol);
+    // cleared by clear() only AFTER m_globals (which owns the instances) is
+    // cleared.
     std::vector<std::shared_ptr<CompiledProgram>> livePrograms;
   };
 
@@ -94,9 +96,12 @@ namespace {
     std::vector<StmtPtr> program = parse(source);
     QLangCompiler compiler(std::move(program), this);
     compiler.addExternalConsts(m_injectedConsts);
+    // External vars are the table's LIVE names: erased (deleted) slots are
+    // not visible to the program, matching the old m_vars behavior.
     std::unordered_set<std::string> externalVars;
-    for (const auto &[name, _] : m_vars)
-      if (m_injectedConsts.find(name) == m_injectedConsts.end())
+    for (const auto &[name, slot] : m_globals.names)
+      if (m_injectedConsts.find(name) == m_injectedConsts.end() &&
+          m_globals.erased.find(slot) == m_globals.erased.end())
         externalVars.insert(name);
     compiler.addExternalVars(externalVars);
     std::unordered_set<std::string> nativeNames;
@@ -141,26 +146,29 @@ namespace {
 
   bool QLangContext::has(const std::string &name) const
   {
-    return m_vars.find(name) != m_vars.end();
+    return hasGlobal(name);
   }
 
   bool QLangContext::isset(const std::string &name) const
   {
-    return m_vars.find(name) != m_vars.end();
+    return hasGlobal(name);
   }
 
   QLangValue QLangContext::get(const std::string &name) const
   {
-    auto it = m_vars.find(name);
-    if (it == m_vars.end())
+    if (!hasGlobal(name))
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "undefined variable '" + name + "'");
-    return it->second;
+    return m_globals.slots[globalSlotOf(name)];
   }
 
   void QLangContext::set(const std::string &name, const QLangValue &value, const bool isConst)
   {
-    m_vars[name] = value;
+    // Write straight into the table (the main frame aliases it), and
+    // revive an erased slot: re-assigning a deleted variable re-creates it.
+    std::size_t slot = globalSlotFor(name);
+    m_globals.slots[slot] = value;
+    m_globals.erased.erase(slot);
     if (isConst)
       m_injectedConsts.insert(name);
     else
@@ -169,15 +177,87 @@ namespace {
 
   void QLangContext::remove(const std::string &name)
   {
-    m_vars.erase(name);
+    removeGlobal(name);
     m_injectedConsts.erase(name);
+  }
+
+  // -----------------------------------------------------------------------
+  // Global table (Phase 2)
+  // -----------------------------------------------------------------------
+
+  GlobalTable &QLangContext::globalTable()
+  {
+    return m_globals;
+  }
+
+  const GlobalTable &QLangContext::globalTable() const
+  {
+    return m_globals;
+  }
+
+  std::vector<QLangValue> &QLangContext::globalSlots()
+  {
+    return m_globals.slots;
+  }
+
+  const std::vector<QLangValue> &QLangContext::globalSlots() const
+  {
+    return m_globals.slots;
+  }
+
+  std::size_t QLangContext::globalCount() const
+  {
+    return m_globals.slots.size();
+  }
+
+  std::size_t QLangContext::globalSlotFor(const std::string &name)
+  {
+    auto it = m_globals.names.find(name);
+    if (it != m_globals.names.end())
+      return it->second;
+    std::size_t slot = m_globals.slots.size();
+    m_globals.slots.emplace_back();
+    m_globals.names[name] = slot;
+    return slot;
+  }
+
+  std::size_t QLangContext::globalSlotOf(const std::string &name) const
+  {
+    auto it = m_globals.names.find(name);
+    if (it == m_globals.names.end())
+      return SIZE_MAX;
+    return it->second;
+  }
+
+  bool QLangContext::hasGlobal(const std::string &name) const
+  {
+    auto it = m_globals.names.find(name);
+    if (it == m_globals.names.end())
+      return false;
+    return m_globals.erased.find(it->second) == m_globals.erased.end();
+  }
+
+  void QLangContext::eraseGlobalSlot(std::size_t slot)
+  {
+    m_globals.erased.insert(slot);
+  }
+
+  void QLangContext::removeGlobal(const std::string &name)
+  {
+    auto it = m_globals.names.find(name);
+    if (it == m_globals.names.end())
+      return;
+    std::size_t slot = it->second;
+    m_globals.names.erase(it);
+    m_globals.erased.erase(slot);
+    m_globals.slots[slot] = QLangValue();
   }
 
   void QLangContext::clear()
   {
-    // m_vars first: releasing the instances may fire `__destroy__`
+    // m_globals first: releasing the instances may fire `__destroy__`
     // finalizers, which need livePrograms still intact (Phase 7).
-    m_vars.clear();
+    m_globals = GlobalTable();
     m_injectedConsts.clear();
     m_nativeFuncs.clear();
     m_modules.clear();
@@ -288,7 +368,17 @@ namespace {
     registerBuiltinModules(*this);
   }
 
-  QLangContext::~QLangContext() = default;
+  QLangContext::~QLangContext()
+  {
+    // Members destroy in reverse declaration order, so m_globals (which owns
+    // the instances) is torn down while m_pimpl is still alive. Releasing an
+    // instance may fire its `__destroy__` finalizer, whose deleter captured
+    // the program's shared_ptr at attach time; runFinalizer would then build
+    // a VM against this half-destroyed context (SIGBUS in adoptGlobals). Flag
+    // the context so runFinalizer skips the dispatch — the context is going
+    // away, so its instances' external resources are released by the host.
+    m_destroying = true;
+  }
 
   QLangValue QLangContext::call(const std::string &name, const std::vector<QLangValue> &args)
   {
@@ -335,21 +425,28 @@ namespace {
     return vm.callClosure(closure, args);
   }
 
-  int QLangContext::currentProgramId() const
+  std::shared_ptr<const CompiledProgram> QLangContext::liveProgram() const
   {
-    return static_cast<int>(m_pimpl->livePrograms.size()) - 1;
+    if (!m_pimpl->compiled)
+      return nullptr;
+    // The cached program is the last entry of livePrograms (run() moves the
+    // same shared_ptr into both); share it so finalizer deleters keep the
+    // program alive for as long as their instances do (Phase 2).
+    if (m_pimpl->livePrograms.empty())
+      return nullptr;
+    return m_pimpl->livePrograms.back();
   }
 
   void QLangContext::runFinalizer(std::map<std::string, QLangValue> *tbl,
-                                  const QLangValue &closure, int programId)
+                                  const QLangValue &closure,
+                                  std::shared_ptr<const CompiledProgram> prog)
   {
-    // Guard: if the context was cleared (or is being destroyed) the program
-    // is gone — skip the finalizer rather than dispatch into a dead program.
-    if (programId < 0 ||
-        programId >= static_cast<int>(m_pimpl->livePrograms.size()))
-      return;
-    const auto &prog = m_pimpl->livePrograms[static_cast<size_t>(programId)];
-    if (!prog)
+    // The deleter captured the program's shared_ptr at attach time (Phase 2):
+    // if it is null the context was cleared before the attach — skip the
+    // finalizer rather than dispatch into a dead program. A context that is
+    // mid-destruction must also be skipped: building a VM against it would
+    // touch the half-destroyed global table (SIGBUS in adoptGlobals).
+    if (!prog || m_destroying)
       return;
     // Own the table transiently with a no-op deleter so the finalizer body
     // can read/write `self`; the caller's custom deleter destroys the map
@@ -360,10 +457,9 @@ namespace {
             tbl, [](std::map<std::string, QLangValue> *) {}));
     try {
       QLangVM vm(*prog, *this);
-      // The finalizer's frame is transient: syncing it back would overwrite
-      // the host scope's variables, and during clear()/destruction the
-      // scope map is mid-teardown and must not be mutated.
-      vm.setNoSync(true);
+      // The finalizer runs in a pushed function frame — the main frame
+      // (the only table alias, Phase 2) is never created, so the global
+      // table is untouched by the dispatch itself.
       vm.callClosure(closure, {instance});
     } catch (const std::exception &) {
       // Finalizer errors are swallowed: the deleter may run during stack

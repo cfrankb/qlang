@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -15,6 +16,11 @@
 namespace qlang
 {
 
+  // Forward declaration (defined in QLangCompiler.h): liveProgram() and
+  // runFinalizer() pass program shared_ptrs without including the compiler
+  // header (the pimpl keeps the dependency one-way).
+  struct CompiledProgram;
+
   // Gated trace-output tiers, used by QLangVM::trace / QLangCompiler::trace.
   // 0 = silent (default); 1 = frame/call events; 2 = VM loop + opcodes +
   // returns; 3 = full detail (generators, table ops, compile internals).
@@ -25,6 +31,23 @@ namespace qlang
     TRACE_FRAME,
     TRACE_VM_LOOP,
     TRACE_FULL
+  };
+
+  // The single home for every top-level (global) variable (Phase 2).
+  // Owned by QLangContext; the VM's MAIN frame register file ALIASES
+  // `slots`, so script reads/writes of top-level names and host get/set
+  // touch the same storage. There is no sync in at run start and no sync
+  // out at run end (or on throw) — the table is always current.
+  //
+  // `slots` is indexed by slot index, which is also the main-frame
+  // register index the compiler assigns to that name (`prog.vars[name]`).
+  // `erased` is per-slot (not per-register-index): a `delete` in a nested
+  // frame never touches it (P2).
+  struct GlobalTable
+  {
+    std::vector<QLangValue> slots; // slot index == main-frame register index
+    std::unordered_map<std::string, size_t> names; // name -> slot
+    std::unordered_set<size_t> erased; // per-slot, not per-register-index
   };
 
   // Host for the interpreter. Owns the variable scope and drives lexing,
@@ -45,13 +68,39 @@ namespace qlang
     // failure.
     void run(const std::string &source);
 
-    // Variable scope access.
+    // Variable scope access. All top-level variables live in the context's
+    // global table (Phase 2); these accessors operate on it directly.
     bool isset(const std::string &name) const;
     bool has(const std::string &name) const;
     QLangValue get(const std::string &name) const;
     void set(const std::string &name, const QLangValue &value, const bool isConst = false);
     void remove(const std::string &name);
     void clear();
+
+    // Global-table access (Phase 2). The compiler assigns top-level names
+    // to table slots (globalSlotFor) so the main frame can alias them;
+    // the VM's main frame aliases `globalSlots()` directly.
+    GlobalTable &globalTable();
+    const GlobalTable &globalTable() const;
+    // The table's slot vector: the main frame's register file aliases this
+    // storage, so top-level names live in the table with no sync.
+    std::vector<QLangValue> &globalSlots();
+    const std::vector<QLangValue> &globalSlots() const;
+    // High-water mark of assigned slots: the main program's non-global
+    // register space (top-level locals, temps) starts above this.
+    std::size_t globalCount() const;
+    // Look up the slot for `name`, appending a new slot if absent. Used by
+    // set() and the compiler's top-level declareVar.
+    std::size_t globalSlotFor(const std::string &name);
+    // Slot index of `name`, or SIZE_MAX if absent.
+    std::size_t globalSlotOf(const std::string &name) const;
+    // True when `name` is present and not erased (isset semantics).
+    bool hasGlobal(const std::string &name) const;
+    // Mark a slot erased (top-level `delete`). Unnamed slots may be marked
+    // too; it is a no-op for lookups, which go name -> slot -> erased.
+    void eraseGlobalSlot(std::size_t slot);
+    // Drop a name and its slot (host remove()).
+    void removeGlobal(const std::string &name);
 
     // Call a QLang or native function by name from C++.
     // Looks up the function in native funcs first, then in compiled user
@@ -67,16 +116,19 @@ namespace qlang
     // Run a class instance's `__destroy__` finalizer (Phase 7). Called from
     // the instance table's shared_ptr custom deleter at final release: the
     // table map `tbl` is still valid here but about to be destroyed by the
-    // caller. Dispatches `closure` in a fresh VM bound to the program at
-    // `programId` in the live-program list. All errors are swallowed — the
-    // deleter may run during stack unwinding, where a throw would abort.
+    // caller. Dispatches `closure` in a fresh VM bound to `prog` — the
+    // shared_ptr the deleter captured at attach time (Phase 2: no int-index
+    // protocol; the program stays alive exactly as long as instances do).
+    // All errors are swallowed — the deleter may run during stack unwinding,
+    // where a throw would abort.
     void runFinalizer(std::map<std::string, QLangValue> *tbl,
-                      const QLangValue &closure, int programId);
+                      const QLangValue &closure,
+                      std::shared_ptr<const CompiledProgram> prog);
 
-    // Index into the live-program list of the most recently run() program
-    // (-1 if none). Captured by instance finalizers at attach time so the
-    // closure dispatches against the program that compiled it.
-    int currentProgramId() const;
+    // Shared pointer to the most recently run() program (null if none).
+    // Captured by instance finalizers at attach time so the closure
+    // dispatches against the program that compiled it.
+    std::shared_ptr<const CompiledProgram> liveProgram() const;
 
     // Inject a C++ function callable from QLang. Called like a builtin:
     //   result = myFunc(arg1, arg2)
@@ -149,7 +201,10 @@ namespace qlang
     // Pimpl: holds the compiled program without creating a circular include.
     struct Pimpl;
     std::unique_ptr<Pimpl> m_pimpl;
-    std::unordered_map<std::string, QLangValue> m_vars;
+    // The single home for top-level variables (Phase 2). Replaces the old
+    // name->value map: slots are what the main frame aliases, `erased`
+    // carries delete state per slot.
+    GlobalTable m_globals;
     std::unordered_set<std::string> m_injectedConsts;
     std::unordered_map<std::string, NativeFunc> m_nativeFuncs;
     // Registered external C++ types (TypeDescriptor ownership).
@@ -157,6 +212,10 @@ namespace qlang
     int m_verboseLevel = 0;
     std::size_t m_maxSteps = 100000; // live infinite-loop guard (see setMaxSteps)
     std::vector<Module> m_modules;
+    // Set in the destructor before m_globals is torn down: instance
+    // finalizers (`__destroy__`) must not re-enter a half-destroyed context
+    // (runFinalizer would build a VM against it -> SIGBUS in adoptGlobals).
+    bool m_destroying = false;
   };
 
 } // namespace qlang

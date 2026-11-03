@@ -152,6 +152,9 @@ int main() {
       int rc = 1;
       try {
         QLangContext ctx;
+        // The churn loop below does ~200k function calls to stress frame
+        // push/pop; raise the step guard so it is not mistaken for a hang.
+        ctx.setMaxSteps(10000000);
         ctx.run("def make() {\n"
                 "  local n = 10\n"
                 "  local f = ()[n] { return n }\n"

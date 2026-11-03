@@ -139,6 +139,13 @@ add_executable(phase0_api tests/unit/phase0_api.cpp)
 target_link_libraries(phase0_api PRIVATE qlang)
 add_test(NAME phase0_api COMMAND phase0_api)
 
+# Phase 2 tests (architecture-remediation-plan.md): single global variable
+# home — live global captures, delete isolation, host-set no-alias, and
+# mid-run throw table consistency.
+add_executable(phase2_scope tests/unit/phase2_scope.cpp)
+target_link_libraries(phase2_scope PRIVATE qlang)
+add_test(NAME phase2_scope COMMAND phase2_scope)
+
 # Script-level regression suite (tests/scripts/). Each .ql script is driven
 # by qlang_run (the smoke-test app); a non-zero exit code fails the suite.
 file(GLOB QL_SCRIPTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/*.ql)

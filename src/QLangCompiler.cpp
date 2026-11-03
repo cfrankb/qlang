@@ -405,6 +405,31 @@ int QLangCompiler::declareVar(const std::string &name, bool blockScoped) {
   auto it = m_regs.find(name);
   if (it != m_regs.end())
     return it->second;
+  if (m_scope && !m_inFunction) {
+    // Phase 2: top-level names live in the context's global table, and the
+    // table slot IS the main-frame register — the main frame aliases the
+    // table's slots directly, so there is no scope sync in or out. Ask the
+    // table for the slot: existing names (host-injected externals/consts)
+    // keep their slot, new names append. Inside a function this path is
+    // skipped: locals are frame registers, and globals are reached only via
+    // an explicit `global` (capture), never through the table here.
+    int r = static_cast<int>(m_scope->globalSlotFor(name));
+    while (m_nextReg <= r)
+      m_nextReg++;
+    if (r + 1 > m_nextNamedReg)
+      m_nextNamedReg = r + 1;
+    // The slot may reuse a register the free lists handed out earlier (a
+    // released block-local below it): reclaim it from both lists.
+    m_freeNamedRegs.erase(
+        std::remove(m_freeNamedRegs.begin(), m_freeNamedRegs.end(), r),
+        m_freeNamedRegs.end());
+    dropFreeRegs(0, r + 1);
+    m_namedRegs.insert(r);
+    m_regs[name] = r;
+    trace(TRACE_FULL, "[DECL] line=%d '%s' -> r=%d (table)\n", m_curLine,
+          name.c_str(), r);
+    return r;
+  }
   int r;
   // Same free-list reuse and constraints as the block-scoped path above.
   if (!m_freeNamedRegs.empty())
@@ -676,6 +701,17 @@ int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
 
 CompiledProgram QLangCompiler::compile() {
   // Compile the top-level program into the main (scratch) function context.
+  if (m_scope) {
+    // Phase 2: the main program's non-global register space (locals, temps)
+    // starts ABOVE the context's global table — the table's slots are the
+    // top-level names' registers (see declareVar), so nothing else may
+    // claim them.
+    int base = static_cast<int>(m_scope->globalCount());
+    if (m_nextReg < base)
+      m_nextReg = base;
+    if (m_nextNamedReg < base)
+      m_nextNamedReg = base;
+  }
   for (auto &s : m_program)
     compileStmt(s, nullptr);
   // Implicit `return nil` at the end of the main program.
@@ -734,6 +770,11 @@ static void collectLocalVars(const StmtPtr &s, std::unordered_set<std::string> &
   } else if (s->kind == StmtKind::While) {
     for (auto &b : s->whileBody) collectLocalVars(b, locals);
   } else if (s->kind == StmtKind::Def) {
+    // A nested `def` name is a local of THIS function (declared via
+    // declareVar in the Def handler when it has captures). Without this it
+    // is auto-captured as a "free variable", shifting every capture index
+    // and turning references to the def into REFLOADs of the wrong slot.
+    locals.insert(s->funcName);
     for (auto &b : s->body) collectLocalVars(b, locals);
   } else if (s->kind == StmtKind::Arrow) {
     // `local f = (p)[c] { ... }`: the lambda's name is a local of THIS
@@ -760,6 +801,12 @@ static void collectIds(const ExprPtr &e, std::unordered_set<std::string> &ids,
   } else if (e->kind == ExprKind::Unary) {
     collectIds(e->operand, ids, skip);
   } else if (e->kind == ExprKind::Call) {
+    // A simple (non-method) call references the callee name as a value: a
+    // captured def-fn called from a nested scope must be a free variable of
+    // this function (S2). Method calls (obj.m()) carry a method name, not a
+    // free variable, so they are excluded.
+    if (!e->calleeMember)
+      ids.insert(e->callee);
     for (auto &a : e->args) collectIds(a, ids, skip);
   } else if (e->kind == ExprKind::Index) {
     collectIds(e->indexBase, ids, skip);
@@ -880,6 +927,11 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_labels.clear();
   m_nextReg = 0;
   m_nextNamedReg = static_cast<int>(params.size());
+  // Register 0 is the frame's return register: a parameterless function's
+  // first local must not claim it, or a capture seeded from reg 0 would read
+  // the return value (S1: closure outlives its creator frame).
+  if (m_nextNamedReg < 1)
+    m_nextNamedReg = 1;
   m_inFunction = true;
   for (size_t i = 0; i < params.size(); i++) {
     int r = static_cast<int>(i);
@@ -912,6 +964,7 @@ int QLangCompiler::buildFunction(const std::string &name,
         continue;
     }
     if (builtinId(id) >= 0) continue; // builtin
+    if (m_nativeFuncIds.count(id)) continue; // native (C++) function
     // Global consts are visible everywhere — capture them like free variables.
     if (m_constVars.count(id)) {
       if (std::find(updatedCaptures.begin(), updatedCaptures.end(), id) == updatedCaptures.end())
@@ -937,13 +990,13 @@ int QLangCompiler::buildFunction(const std::string &name,
       updatedCaptures.push_back(id);
   }
 
-  // Register the explicit capture list (name -> enclosing-frame register).
+  // Register the explicit capture list (name -> capture index). Phase 2:
+  // REFLOAD/REFSTORE index frame.captures by capture position, so this map
+  // must carry the capture index, not the enclosing frame's register (the
+  // pre-cell model). Global captures bind to table slots at MAKEFUNC time
+  // (bindCaptures), not to frame registers.
   for (size_t i = 0; i < updatedCaptures.size(); i++) {
-    const std::string &var = updatedCaptures[i];
-    // Use the enclosing frame's register mapping if available; otherwise
-    // fall back to the capture index (for nested-function captures).
-    auto it = savedRegs.find(var);
-    m_captureRegs[var] = (it != savedRegs.end()) ? it->second : static_cast<int>(i);
+    m_captureRegs[updatedCaptures[i]] = static_cast<int>(i);
   }
 
   // Also populate m_regs for captured globals so assignments work correctly.
@@ -975,8 +1028,17 @@ int QLangCompiler::buildFunction(const std::string &name,
   fn.captures.resize(updatedCaptures.size());
   for (size_t i = 0; i < updatedCaptures.size(); i++) {
     const std::string &var = updatedCaptures[i];
-    // Use the caller's register number if available (for globals), otherwise 0.
-    int callerReg = m_globalRegMap.count(var) ? m_globalRegMap[var] : 0;
+    // The capture's register in the CREATING frame: a local capture sits in
+    // the enclosing function's register map (savedRegs); a global capture is
+    // tracked in m_globalRegMap. bindCaptures seeds the cell from this
+    // register, so it must be the capture's real home register, not 0 (S1:
+    // a closure outliving its creator frame must read the captured value,
+    // not register 0).
+    int callerReg = 0;
+    if (savedRegs.count(var))
+      callerReg = savedRegs[var];
+    else if (m_globalRegMap.count(var))
+      callerReg = m_globalRegMap[var];
     fn.captures[i].reg = callerReg; // bound at call time by the VM
   }
 
