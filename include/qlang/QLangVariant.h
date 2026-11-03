@@ -13,18 +13,34 @@ namespace qlang {
 
 class QLangValue; // forward declaration: ArrayValue references it recursively
 
-// A captured-by-reference variable: an opaque pointer to the enclosing frame's
-// register file plus the register index within it. The VM stores a real frame
-// pointer here (see QLangVM); the pointer is intentionally opaque so the value
-// layer does not depend on the VM. The reference stays live across reassignment
-// of the outer variable because it addresses the register, not a snapshot.
+// A shared upvalue cell table (Phase 1 substrate): one Env per closure
+// creation (MAKEFUNC / MAKEGEN). While the creating frame is alive, cell i
+// aliases the frame register it was seeded from (`owner`/`ownerRegs`), so
+// reads and writes see the live register (write-through). When that frame
+// pops, the registers are moved into the cells and `owner` is cleared
+// (QLangVM::releaseFrame); the shared_ptr keeps captured state alive after
+// the creator frame is gone (fixes the dangling-capture defect, phase0 S1).
+struct Env {
+  std::vector<QLangValue> cells;
+  void* owner = nullptr; // opaque: VM stores Frame* (null once the frame pops)
+  std::vector<int> ownerRegs; // cell i aliases owner->regs[ownerRegs[i]]
+};
+using EnvPtr = std::shared_ptr<Env>;
+
+// A captured-by-reference variable: a shared cell (upvalue model).
+// Compile-time specs (the constant pool, Function::captures) carry the
+// source register in `reg` with `env` null; MAKEFUNC/MAKEGEN bind them to a
+// fresh Env at creation time. The reference stays live across reassignment
+// of the outer variable because it addresses the cell, not a snapshot.
 struct CaptureRef {
-  void* frame = nullptr; // opaque: VM stores Frame*
-  int reg = 0;
+  EnvPtr env = nullptr;
+  int cell = 0;
+  int reg = 0; // compile-time: source register in the creating frame
 };
 
 // A user-defined function value (arrow closure). `funcIndex` selects the
-// compiled Function in the program; `captures` is the explicit capture list.
+// compiled Function in the program; `captures` is the explicit capture list
+// (bound cells after MAKEFUNC).
 struct Closure {
   int funcIndex = -1;
   std::vector<CaptureRef> captures;
@@ -35,10 +51,19 @@ using ClosurePtr = std::shared_ptr<Closure>;
 // The value itself is recursively a QLangValue, so arrays nest freely.
 using ArrayValue = std::vector<QLangValue>;
 
-// A generator value: lazily yields values on each call.
-// Returns std::optional<QLangValue>; nullopt signals exhaustion (EOF).
-using GeneratorValue = std::function<std::optional<QLangValue>()>;
-using GeneratorValuePtr = std::shared_ptr<GeneratorValue>;
+// A generator instance (Phase 1 substrate): owns its saved frame state.
+// Each generator value is an independent instance — there is no VM-level
+// per-function frame map. Resuming moves the register file onto the live
+// frame and back. `exhausted` stays true once the body has returned, so
+// later resumes yield nil.
+struct GeneratorState {
+  int funcIndex = -1;
+  std::vector<QLangValue> regs; // saved register file (moved, not copied)
+  std::vector<CaptureRef> captures; // bound capture table (EnvPtr cells)
+  size_t pc = 0;
+  bool exhausted = false;
+};
+using GeneratorValuePtr = std::shared_ptr<GeneratorState>;
 
 // A script table is a keyed map of string -> script value (spec: table).
 // Shared across copies so mutations in callees are visible to callers (self semantics).

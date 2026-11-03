@@ -360,6 +360,10 @@ namespace {
             tbl, [](std::map<std::string, QLangValue> *) {}));
     try {
       QLangVM vm(*prog, *this);
+      // The finalizer's frame is transient: syncing it back would overwrite
+      // the host scope's variables, and during clear()/destruction the
+      // scope map is mid-teardown and must not be mutated.
+      vm.setNoSync(true);
       vm.callClosure(closure, {instance});
     } catch (const std::exception &) {
       // Finalizer errors are swallowed: the deleter may run during stack

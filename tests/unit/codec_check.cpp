@@ -168,7 +168,7 @@ static void testValues() {
     check(valueEq(c.v, roundTrip(c.v)), std::string("value: ") + c.name);
 
   // Non-durable types serialize as Nil (R2).
-  QLangValue gen = QLangValue::Generator(std::make_shared<GeneratorValue>());
+  QLangValue gen = QLangValue::Generator(std::make_shared<GeneratorState>());
   check(roundTrip(gen).type() == QLangValue::Type::Nil,
         "value: generator -> nil");
   QLangValue obj = QLangValue::Object({});

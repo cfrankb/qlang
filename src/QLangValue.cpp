@@ -140,14 +140,14 @@ Closure &QLangValue::asFunction() {
   return *std::get<ClosurePtr>(m_storage);
 }
 
-const GeneratorValue &QLangValue::asGenerator() const {
+const GeneratorState &QLangValue::asGenerator() const {
   if (m_type != Type::Generator)
     throw QLangError(QLangErrorKind::Type, 0, 0,
                      std::string("expected Generator but value is ") + typeName());
   return *std::get<GeneratorValuePtr>(m_storage);
 }
 
-GeneratorValue &QLangValue::asGenerator() {
+GeneratorState &QLangValue::asGenerator() {
   if (m_type != Type::Generator)
     throw QLangError(QLangErrorKind::Type, 0, 0,
                      std::string("expected Generator but value is ") + typeName());

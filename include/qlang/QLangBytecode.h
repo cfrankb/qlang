@@ -267,8 +267,13 @@ struct Function {
   // variable name to the register index in the enclosing frame where its value
   // lives at the time the closure is constructed.
   std::vector<CaptureRef> captures;
-  // True if the function body contains any `yield` statement; the VM wraps
-  // calls to such functions in a GeneratorValue rather than executing inline.
+  // Names of the captured variables (parallel to `captures`): the compiler
+  // uses them to materialize the def-time closure (Phase 1). Not serialized
+  // by the .qlc codec (the capture regs carry the wire data).
+  std::vector<std::string> captureNames;
+  // True if the function body contains any `yield` statement; the VM creates
+  // a generator instance for calls to such functions rather than executing
+  // them inline.
   bool isGenerator = false;
 };
 

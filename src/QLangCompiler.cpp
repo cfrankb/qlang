@@ -900,7 +900,17 @@ int QLangCompiler::buildFunction(const std::string &name,
     if (paramSet.count(id)) continue;
     if (localVars.count(id)) continue; // locally declared (loop var, local, etc.)
     if (m_regs.count(id)) continue; // already declared in this function
-    if (m_userFuncs.count(id)) continue; // user function name
+    if (m_userFuncs.count(id)) {
+      // Phase 1: a def function with captures is materialized as a closure
+      // value at def time; a reference from a nested scope must capture the
+      // closure itself so the call goes through its def-time cells.
+      // Capture-free defs are still called statically (CALLFN).
+      int fi = m_userFuncs[id];
+      // fi is the final program index (main is prepended at 0); m_functions
+      // holds user functions only, so it sits at fi-1.
+      if (m_functions[static_cast<size_t>(fi) - 1].captures.empty())
+        continue;
+    }
     if (builtinId(id) >= 0) continue; // builtin
     // Global consts are visible everywhere — capture them like free variables.
     if (m_constVars.count(id)) {
@@ -961,13 +971,13 @@ int QLangCompiler::buildFunction(const std::string &name,
   fn.registerCount = m_nextReg;
   // Populate the capture spec so the VM can bind enclosing-frame registers
   // when this function is called.
+  fn.captureNames = updatedCaptures;
   fn.captures.resize(updatedCaptures.size());
   for (size_t i = 0; i < updatedCaptures.size(); i++) {
     const std::string &var = updatedCaptures[i];
     // Use the caller's register number if available (for globals), otherwise 0.
     int callerReg = m_globalRegMap.count(var) ? m_globalRegMap[var] : 0;
-    fn.captures[i].reg = callerReg;
-    fn.captures[i].frame = nullptr; // bound at call time by the VM
+    fn.captures[i].reg = callerReg; // bound at call time by the VM
   }
 
   int funcIndex = static_cast<int>(m_functions.size()) + 1; // +1 for prepended mainFn
@@ -1782,6 +1792,39 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     trace(TRACE_FULL, "[DBG-GENVAR] After insert: m_generatorVars={");
     for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
     trace(TRACE_FULL, " }\n");
+    // Phase 1: a def function with captures is materialized as a closure
+    // value at def time (MAKEFUNC): its cells bind to THIS scope's
+    // registers, so calls from any depth reach the lexically correct
+    // variables (fixes phase0 S2). Calls go through CALLCLOS.
+    // buildFunction just pushed it: it is the last element of m_functions
+    // (the returned funcIndex is the final program index, main prepended at
+    // 0, so it is NOT a valid m_functions index).
+    const Function &built = m_functions.back();
+    if (!built.captures.empty()) {
+      int r = declareVar(s->funcName);
+      auto closure = std::make_shared<Closure>();
+      closure->funcIndex = funcIndex;
+      for (const std::string &cap : built.captureNames) {
+        int reg = regOf(cap);
+        if (reg < 0) {
+          // The capture is itself a free variable of this scope (transitive
+          // capture): load it into a hidden named register so the cell can
+          // alias it for the frame's lifetime.
+          auto cit = m_captureRegs.find(cap);
+          if (cit != m_captureRegs.end()) {
+            reg = declareVar(std::string("__cap_") + cap);
+            emit(Opcode::REFLOAD, reg, cit->second, 0);
+          }
+        }
+        if (reg < 0)
+          reg = 0; // preserve legacy binding for unresolvable names
+        CaptureRef cr;
+        cr.reg = reg;
+        closure->captures.push_back(cr);
+      }
+      int constIdx = emitConst(QLangValue::Function(closure));
+      emit(Opcode::MAKEFUNC, r, constIdx);
+    }
     break;
   }
   case StmtKind::Arrow: {
@@ -1807,8 +1850,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         throw QLangError(QLangErrorKind::Parse, 0, 0,
                          "capture of undeclared variable '" + cap + "'");
       CaptureRef cr;
-      cr.reg = reg;
-      cr.frame = nullptr; // filled in by MAKEFUNC at runtime
+      cr.reg = reg; // env/cell filled in by MAKEFUNC at runtime
       closure->captures.push_back(cr);
     }
     int constIdx = emitConst(QLangValue::Function(closure));
@@ -2658,6 +2700,55 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     // BEFORE any arg register is allocated, or it would take a slot register.
     reserveArgSlots(dest, argCount + 1);
     int argBase = dest + 1;
+    // Two clobber hazards for register-based callee loads (nested def-fns,
+    // arrow-closure vars, generator vars — e.g. `def outer(a) def inner(b)
+    // ... end; return inner(10); end`):
+    //  1. cr in the arg-slot range [argBase, argBase+argCount-1]:
+    //     compileArgsToSlots overwrites the closure before the call.
+    //  2. dest is a register the callee's capture cells live-alias (e.g.
+    //     `return inner(10)` compiles into reg 0, which is also outer's
+    //     param `a` that inner's cells alias): writing the callee into dest
+    //     BEFORE the callee runs corrupts the captured value.
+    // Both are fixed by hoisting the callee into a temp (never an arg slot)
+    // and calling with i.a = temp, i.b = dest: the VM reads the callee from
+    // the temp, reads args from the original slots, and writes the result
+    // into dest only at RETURN (after the callee has run).
+    int calleeTmpR = -1;
+    {
+      auto uit = m_userFuncs.find(e->callee);
+      if (uit != m_userFuncs.end()
+          && !m_generatorFuncIndices.count(uit->second)) {
+        int fi = uit->second;
+        // Only the register-based sub-path is exposed; REFLOAD-based loads
+        // (name is a free var in a capture cell) are immune — cells can't
+        // be clobbered by register writes.
+        const Function &fn = m_functions[static_cast<size_t>(fi) - 1];
+        if (!fn.captures.empty()
+            && m_captureRegs.find(e->callee) == m_captureRegs.end()) {
+          int cr = regOf(e->callee);
+          bool crInSlots =
+              cr >= 0 && cr >= argBase && cr <= argBase + argCount - 1;
+          bool destIsSource = false;
+          for (const std::string &cap : fn.captureNames)
+            if (regOf(cap) == dest)
+              destIsSource = true;
+          if (crInSlots || destIsSource) {
+            calleeTmpR = tmpRegister();  // never in the active slot range
+            emit(Opcode::MOV, calleeTmpR, cr);
+          }
+        }
+      } else if (m_closureVars.count(e->callee)
+                 || m_generatorVars.count(e->callee)) {
+        // Arrow-closure / generator vars: source registers are baked into
+        // the runtime closure, so be conservative — always call via a
+        // temp and let the result land in dest only at RETURN.
+        int cr = regOf(e->callee);
+        if (cr >= 0) {
+          calleeTmpR = tmpRegister();
+          emit(Opcode::MOV, calleeTmpR, cr);
+        }
+      }
+    }
     // Compile each arg directly into the VM's slot (dest+1 ..
     // dest+argCount): simple operands land in the slot without a temp,
     // complex ones share ONE scratch register (SPEC §bytecodes: encoding
@@ -2705,7 +2796,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
           emit(Opcode::MOV, argBase + i + 1, argBase + i, 0);
         emit(Opcode::MOV, argBase, staticsR, 0); // anchor = statics table
         emit(Opcode::MOV, dest, funcReg);
-        emit(Opcode::CALLCLOS, dest, argCount + 1, argCount + 1);
+        emit(Opcode::CALLCLOS, dest, dest, argCount + 1);
         break;
       }
       // Prepend self only for known class methods (whose signature includes self).
@@ -2753,10 +2844,10 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
           emit(Opcode::MOV, argBase + i + 1, argBase + i, 0);
         emit(Opcode::MOV, argBase, baseR, 0);
         emit(Opcode::MOV, dest, funcReg);
-        emit(Opcode::CALLCLOS, dest, argCount + 1, argCount + 1);
+        emit(Opcode::CALLCLOS, dest, dest, argCount + 1);
       } else {
         emit(Opcode::MOV, dest, funcReg);
-        emit(Opcode::CALLCLOS, dest, argCount, argCount);
+        emit(Opcode::CALLCLOS, dest, dest, argCount);
       }
       break;
     }
@@ -2922,16 +3013,46 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     // User `def` function: funcIndex known at compile time.
     auto uit = m_userFuncs.find(e->callee);
     if (uit != m_userFuncs.end()) {
+      int fi = uit->second;
       // Generator functions: emit MAKEGEN to create a generator object,
       // not CALLFN which would run the generator inline.
-      if (m_generatorFuncIndices.count(uit->second)) {
-        int constIdx = m_generatorConstIndices[uit->second];
+      if (m_generatorFuncIndices.count(fi)) {
+        int constIdx = m_generatorConstIndices[fi];
         emit(Opcode::MAKEGEN, dest, constIdx, argCount);
         // Clear arg regs so they don't leak into the next instruction.
         for (int j = 0; j < argCount; j++)
           emit(Opcode::MOVC, argBase + j, m_code.addConstant(QLangValue()), 0);
+      } else if (!m_functions[static_cast<size_t>(fi) - 1].captures.empty()) {
+        // Phase 1: def function with captures — the closure value (cells
+        // bound at def time) is the name's value in this scope; dispatch
+        // through CALLCLOS.
+        auto cit = m_captureRegs.find(e->callee);
+        if (cit != m_captureRegs.end()) {
+          // The name is a free variable of this function: its value comes
+          // from the capture cell, not a local register.
+          emit(Opcode::REFLOAD, dest, cit->second, 0);
+          emit(Opcode::CALLCLOS, dest, dest, argCount);
+        } else {
+          int cr = regOf(e->callee);
+          if (cr >= 0) {
+            if (calleeTmpR >= 0) {
+              // Callee hoisted to a temp: the VM reads the callee from
+              // the temp (i.a), reads args from the original slots, and
+              // writes the result into dest (i.b) at RETURN.
+              emit(Opcode::CALLCLOS, calleeTmpR, dest, argCount);
+            } else {
+              if (dest != cr)
+                emit(Opcode::MOV, dest, cr);
+              emit(Opcode::CALLCLOS, dest, dest, argCount);
+            }
+          } else {
+            throw QLangError(QLangErrorKind::Parse, 0, 0,
+                             "cannot call captured function '" + e->callee +
+                             "'");
+          }
+        }
       } else {
-        emit(Opcode::CALLFN, dest, uit->second, argCount);
+        emit(Opcode::CALLFN, dest, fi, argCount);
       }
       break;
     }
@@ -2940,8 +3061,14 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     auto cif = m_closureVars.find(e->callee);
     if (cif != m_closureVars.end()) {
       int cr = regOf(e->callee);
-      emit(Opcode::MOV, dest, cr);
-      emit(Opcode::CALLCLOS, dest, argCount, argCount);
+      if (calleeTmpR >= 0) {
+        // Conservative: source registers are baked into the runtime
+        // closure, so dest is written only at RETURN.
+        emit(Opcode::CALLCLOS, calleeTmpR, dest, argCount);
+      } else {
+        emit(Opcode::MOV, dest, cr);
+        emit(Opcode::CALLCLOS, dest, dest, argCount);
+      }
       break;
     }
     // Generator variable: use CALLCLOS (runtime dispatch to resume generator).
@@ -2949,8 +3076,14 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
           e->callee.c_str(), (int)m_generatorVars.count(e->callee));
     if (m_generatorVars.count(e->callee)) {
       int cr = regOf(e->callee);
-      emit(Opcode::MOV, dest, cr);
-      emit(Opcode::CALLCLOS, dest, argCount, argCount);
+      if (calleeTmpR >= 0) {
+        // Conservative: source registers are baked into the runtime
+        // closure, so dest is written only at RETURN.
+        emit(Opcode::CALLCLOS, calleeTmpR, dest, argCount);
+      } else {
+        emit(Opcode::MOV, dest, cr);
+        emit(Opcode::CALLCLOS, dest, dest, argCount);
+      }
       break;
     }
     // Built-in function.
@@ -3032,7 +3165,6 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
                          "capture of undeclared variable '" + cap + "'");
       CaptureRef cr;
       cr.reg = reg;
-      cr.frame = nullptr;
       closure->captures.push_back(cr);
     }
     int constIdx = emitConst(QLangValue::Function(closure));

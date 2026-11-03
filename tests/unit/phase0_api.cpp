@@ -108,8 +108,7 @@ int main() {
     fn.paramCount = 0;
     fn.registerCount = 1;
     fn.constants.push_back(
-        QLangValue::Generator(std::make_shared<GeneratorValue>(
-            [] { return std::optional<QLangValue>(); })));
+        QLangValue::Generator(std::make_shared<GeneratorState>()));
     fn.constants.push_back(
         QLangValue::External(nullptr, std::shared_ptr<void>()));
     fn.constants.push_back(QLangValue::TypeRef(nullptr));

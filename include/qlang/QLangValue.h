@@ -212,8 +212,8 @@ public:
   TableValue &asTable();
   const Closure &asFunction() const;
   Closure &asFunction();
-  const GeneratorValue &asGenerator() const;
-  GeneratorValue &asGenerator();
+  const GeneratorState &asGenerator() const;
+  GeneratorState &asGenerator();
   const ObjectValue &asObject() const;
   ObjectValue &asObject();
   const ExternalRef &asExternal() const;
