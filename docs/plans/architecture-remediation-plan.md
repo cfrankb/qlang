@@ -1,6 +1,8 @@
 # Plan: architecture remediation — substrate rewrite (frames, closures, scope, executor)
 
-Status: **proposed** (drafted 2026-11-02). Not yet adopted.
+Status: **in progress** (drafted 2026-11-02). Phase 0 done; Phase 1 done as
+of 2026-11-03 (see Phase 1 status line and the §2 as-of note). Phases 2–5
+pending.
 Scope: implementation substrate only. **No spec changes, no opcode changes, no
 value-tag changes, no value-representation rewrite, no GC, no JIT, no
 threading model.** The language semantics are sound; the machine under them
@@ -45,6 +47,18 @@ that bumps it.**
 ---
 
 ## 2. Defects driving this plan (evidence)
+
+**As-of 2026-11-03 (after Phase 1):** S3 is fixed — generator values are
+per-call instances (`GeneratorState`), two instances of the same generator no
+longer clobber each other, and the function-index-keyed frame map is deleted.
+S1, S2, P1, P2, P3 remain red and are Phase 2 scope (global table / scope
+model); F1 remains red and is Phase 4 scope (`.qlc` encoding). S2 changed
+form: at the base commit it silently returned the caller's register value;
+after Phase 1 it fails at compile time with
+`parse error: cannot call captured function 'f'` (a `global`-captured def-fn
+called from another def-fn has neither a local register nor a capture cell).
+Same root defect (global-capture resolution, F3), different manifestation —
+and arguably the safer failure.
 
 ### 2.1 Substrate (VM core) — unsound
 
@@ -177,6 +191,15 @@ tree for everything *except* the listed defect tests (which are red/skipped
 with a marker).
 
 ### Phase 1 — Substrate rewrite (the big one)
+
+**Status: DONE (2026-11-03).** Single `runFrames()` executor, cell-based
+captures, and per-call generator instances are in place; `m_generatorFrames`
+and the old `GeneratorValue` thunk path are deleted. Phase 0 generator test
+S3 is green. S1/S2 remain red and are carried to Phase 2 (see §2 as-of note
+— S2 now fails at compile time, which is the safer manifestation of the same
+defect). `spec_check2` 463/463; full ctest 32/34 with only
+`phase0_scope`/`phase0_api` red (both verified pre-existing at base commit
+`973eab5`). `perf_stress` improved ~28% vs the pre-Phase-1 baseline.
 
 One coordinated change to the `QLangVM` core. Target: `QLangVM.cpp` 2,918
 lines → ~1,500–1,800.
