@@ -21,6 +21,7 @@ Status: **POC-stage design.** Consumes `SPEC.md` (classes),
 | VM step counter (instruction budget primitive) | **QLang** — `SERIALIZATION.md` §7 |
 | Ownership model (weak/shared refs, engine authoritative) | **QLang** — `EXTERNAL_TYPES.md` §3 |
 | Structured `QLangError` at the boundary | **QLang** — `EXTERNAL_TYPES.md` §8 |
+| Instance finalizer queue + drain points (`__destroy__`) | **QLang** — `EXTERNAL_TYPES.md` §11, this doc §8.2 |
 | Multi-level handler architecture (type / map / game) | **Engine** — this doc |
 | Level objects at global scope + selection mechanisms | **Engine** — this doc |
 | Type-tag → handler-object lookup | **Engine** — this doc |
@@ -257,6 +258,18 @@ The VM is **single-threaded and not re-entrant**.
   mid-frame.
 - Events are delivered **on the VM thread**. If events arrive from other
   threads, the engine **marshals** them onto the VM thread.
+- **Instance finalizers (`__destroy__`) follow the same queue-and-drain
+  policy (Phase 3).** When a QLang class instance's last reference drops, the
+  `shared_ptr` deleter only **enqueues** `(table, closure, program)` on the
+  context's finalizer queue — it never runs script, so it is safe to fire on
+  any thread (even during stack unwinding). The queue is **drained at safe
+  points**: the start of `run()`/`call()`/`callClosure()`, inside `clear()`,
+  or an explicit `ctx.processFinalizers()` (the engine's per-tick hook). The
+  drain runs to a fixpoint (a finalizer that releases more instances runs
+  them in the same call), swallows finalizer errors (a finalizer must never
+  take down the drain), and is re-entrancy-guarded. A finalizer therefore
+  runs **exactly once, at a drain point, never from a destructor on a foreign
+  thread** — the engine can rely on this when it owns the drain cadence.
 
 ### 8.3 No suspension across events
 

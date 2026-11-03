@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -113,17 +114,26 @@ namespace qlang
     // Used by the ObjectOps dispatch layer for method calls on tables.
     QLangValue callClosure(const QLangValue &closure, const std::vector<QLangValue> &args);
 
-    // Run a class instance's `__destroy__` finalizer (Phase 7). Called from
-    // the instance table's shared_ptr custom deleter at final release: the
-    // table map `tbl` is still valid here but about to be destroyed by the
-    // caller. Dispatches `closure` in a fresh VM bound to `prog` — the
-    // shared_ptr the deleter captured at attach time (Phase 2: no int-index
-    // protocol; the program stays alive exactly as long as instances do).
-    // All errors are swallowed — the deleter may run during stack unwinding,
-    // where a throw would abort.
-    void runFinalizer(std::map<std::string, QLangValue> *tbl,
-                      const QLangValue &closure,
-                      std::shared_ptr<const CompiledProgram> prog);
+    // Drain pending instance finalizers (`__destroy__`) (Phase 3, H3). The
+    // instance table's shared_ptr custom deleter no longer dispatches
+    // script — it only enqueues (table, closure, program) on the context's
+    // finalizer queue, from any thread. The queue is drained at safe points:
+    // the start of run()/call()/callClosure(), inside clear(), or explicitly
+    // from the host (e.g. an engine tick). Drains to a fixpoint — a
+    // finalizer that releases more instances enqueues them, and they run in
+    // the same call. Finalizer errors are swallowed (a finalizer must never
+    // take down the drain). No-op while the context is destroying or a drain
+    // is already in progress (re-entrancy guard).
+    void processFinalizers();
+
+    // Enqueue a finalizer from the instance table's shared_ptr deleter
+    // (Phase 3). Public because the VM's attachFinalizer deleter calls it;
+    // thread-safe (the deleter may fire on any thread) and never throws
+    // (the deleter may run during stack unwinding, where a throw would
+    // abort).
+    void enqueueFinalizer(TableValue table,
+                          QLangValue closure,
+                          std::shared_ptr<const CompiledProgram> prog);
 
     // Shared pointer to the most recently run() program (null if none).
     // Captured by instance finalizers at attach time so the closure
@@ -187,12 +197,12 @@ namespace qlang
     // clashes, duplicate type names) and, when a constructor is present,
     // registers the type name as a native function so `T(args)` constructs.
     // The type name is also seeded as a script variable (a TypeRef value)
-    // so `T.Constant` resolves — see kTypeRefOps. The returned pointer is
-    // stable for the context's lifetime; clear() invalidates it (host code
-    // must re-run import<T>() after clear()).
-    const TypeDescriptor *registerType(const TypeMeta &meta);
+    // so `T.Constant` resolves — see kTypeRefOps. The returned handle is a
+    // shared_ptr (Phase 3): it stays valid as long as the host (or any
+    // script value) holds it, including across clear().
+    std::shared_ptr<TypeDescriptor> registerType(const TypeMeta &meta);
     template <class T>
-    const TypeDescriptor *import()
+    std::shared_ptr<TypeDescriptor> import()
     {
       return registerType(T::qlang_meta());
     }
@@ -201,20 +211,42 @@ namespace qlang
     // Pimpl: holds the compiled program without creating a circular include.
     struct Pimpl;
     std::unique_ptr<Pimpl> m_pimpl;
+    // One queued instance finalizer (Phase 3). The table is owned — the
+    // shared_ptr deleter moved its last reference in — so the instance
+    // stays alive until the drain runs the finalizer.
+    struct FinalizerEntry
+    {
+      TableValue table;
+      QLangValue closure;
+      std::shared_ptr<const CompiledProgram> prog;
+    };
+    // Run one queued finalizer in a fresh VM bound to its program. Errors
+    // are swallowed. Called only from processFinalizers().
+    void runFinalizer(const FinalizerEntry &entry);
+    // Finalizer queue (Phase 3, H3): `__destroy__` dispatch is deferred
+    // from the shared_ptr deleter to a safe point. Declared BEFORE
+    // m_globals so the queue outlives the global table — a deleter firing
+    // during m_globals teardown (context destruction) must find a live
+    // queue and mutex.
+    std::mutex m_finalizerMutex;
+    std::vector<FinalizerEntry> m_finalizerQueue;
+    bool m_drainingFinalizers = false;
     // The single home for top-level variables (Phase 2). Replaces the old
     // name->value map: slots are what the main frame aliases, `erased`
     // carries delete state per slot.
     GlobalTable m_globals;
     std::unordered_set<std::string> m_injectedConsts;
     std::unordered_map<std::string, NativeFunc> m_nativeFuncs;
-    // Registered external C++ types (TypeDescriptor ownership).
-    std::vector<std::unique_ptr<TypeDescriptor>> m_types;
+    // Registered external C++ types live in the Pimpl's TypeRegistry
+    // (Phase 3, H1): shared handles stay valid across clear() because the
+    // registry drops only its own reference.
     int m_verboseLevel = 0;
     std::size_t m_maxSteps = 100000; // live infinite-loop guard (see setMaxSteps)
     std::vector<Module> m_modules;
-    // Set in the destructor before m_globals is torn down: instance
-    // finalizers (`__destroy__`) must not re-enter a half-destroyed context
-    // (runFinalizer would build a VM against it -> SIGBUS in adoptGlobals).
+    // Set in the destructor before m_globals is torn down: finalizer drains
+    // must not build a VM against a half-destroyed context (SIGBUS in
+    // adoptGlobals). Deleters firing during teardown only enqueue; the
+    // queued entries die with the context undrained.
     bool m_destroying = false;
   };
 

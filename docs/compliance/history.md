@@ -1,3 +1,54 @@
+## Round 33 (2026-11-03)
+
+**Phase 3 — host API hardening** (plan:
+`docs/plans/architecture-remediation-plan.md` §3; uncommitted). No language
+changes, no new opcodes, no `.qlc` format change. Closes H1–H4 from the plan's
+defect list.
+- **3.1 Stable type handles + `type_info` validation (H2, H4):**
+  `registerType`/`import<T>()` now return `std::shared_ptr<TypeDescriptor>`
+  (was a raw `const TypeDescriptor*` invalidated by `clear()`). The Pimpl
+  `TypeRegistry` drops only its own reference, so a handle the host legitimately
+  holds — including a copied `NativeFunc` ctor lambda — stays valid across
+  `clear()`. `ExternalRef` gains `const std::type_info* expected` + a `check`
+  predicate; `self()`/`selfMut()` validate the resolved pointer and throw a
+  clean `QLangError(Type, "external type mismatch: …")` on a mismatch
+  (EXTERNAL_TYPES §10.2's "a wrong `weak_ptr` is UB" is now a runtime error).
+  An expired borrow throws `QLangError(Runtime, "object destroyed: …")`.
+- **3.2 Finalizer queue (H3):** the instance table's `shared_ptr` custom
+  deleter no longer dispatches script — it only enqueues `(table, closure,
+  program)` on the context's finalizer queue (`enqueueFinalizer`, thread-safe,
+  never throws, so it is safe from a foreign thread or during unwinding).
+  `processFinalizers()` drains at safe points — the start of `run()`/`call()`/
+  `callClosure()`, inside `clear()`, or explicitly from the host — to a
+  fixpoint (a finalizer that releases more instances runs them in the same
+  call), swallows finalizer errors, and is guarded against re-entrancy
+  (`m_drainingFinalizers`) and against a drain during context destruction
+  (`m_destroying`).
+- **3.3 `release()` builtin (H2 retention leak):** `Builtin::Release`
+  (`releaseExternal`) drops the `owned` shared_ptr of an owned `External`,
+  letting scripts free script-constructed objects; the value becomes `Nil`
+  (use-after-release is a clean nil error). A borrowed external (host-owned) or
+  a non-external is a type error. The argument is mutated in place (special-
+  cased in `CALL`; the compiler writes the slot back to the source variable so
+  the original reference is dropped).
+- **3.4 Context split (H1):** `QLangContext`'s Pimpl now holds two small
+  classes — `ProgramCache` (the compiled-program cache, cleared by `clear()`
+  only after the global table) and `TypeRegistry` (the type handles). The
+  public header surface stays source-compatible for existing embedders.
+- **Tests:** new `tests/unit/phase3_api.cpp` (23 checks: T1 handle survives
+  `clear()`, T2 type-mismatch clean error, T3 expired-borrow clean error,
+  F1–F7 finalizer queue — not-from-deleter / drain-at-run / fixpoint /
+  error-swallow / clear-drain / foreign-thread-enqueue / re-entrancy-guard,
+  R1–R4 `release()` — owned freed / borrowed rejected / non-external rejected /
+  use-after-release, C1 copied `NativeFunc` survives `clear()`). ctest 32 → 36
+  entries; counted unit cases 696 → 737. Full suite green (36/36; `perf`
+  skipped on this non-Release build).
+- **Docs:** `docs/EXTERNAL_TYPES.md` §3/§5/§6/§10.2/§11 (shared handles,
+  `type_info` validation, `release()`, UB → clean error) and
+  `docs/EVENT_HANDLERS.md` §0/§8.2 (finalizer drain point) updated.
+- Open (unchanged): `$$` indirect operator (fully specified, unimplemented),
+  duplicate-declaration warning (deferred pending warning-toggle infra).
+
 ## Round 32 (2026-11-02)
 
 Test migration + compliance docs (plan: `docs/plans/test-migration-plan.md`;

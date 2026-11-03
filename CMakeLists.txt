@@ -146,6 +146,15 @@ add_executable(phase2_scope tests/unit/phase2_scope.cpp)
 target_link_libraries(phase2_scope PRIVATE qlang)
 add_test(NAME phase2_scope COMMAND phase2_scope)
 
+# Phase 3 tests (architecture-remediation-plan.md): host API hardening —
+# stable type handles (shared_ptr, type_info validation), finalizer queue
+# (enqueue at release, drain at safe points, thread-safe, re-entrancy
+# guard), release() builtin for owned externals, and the context split
+# (ProgramCache + TypeRegistry).
+add_executable(phase3_api tests/unit/phase3_api.cpp)
+target_link_libraries(phase3_api PRIVATE qlang)
+add_test(NAME phase3_api COMMAND phase3_api)
+
 # Script-level regression suite (tests/scripts/). Each .ql script is driven
 # by qlang_run (the smoke-test app); a non-zero exit code fails the suite.
 file(GLOB QL_SCRIPTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/*.ql)

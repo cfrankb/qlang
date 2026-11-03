@@ -33,6 +33,21 @@ static void expectValImpl(const std::string &name, const std::string &src,
     else { std::cout << "[FAIL] val:  [L" << line << "] " << name << " (" << var << " got " << got << " exp " << expect << ")\n"; fails++; }
   } catch (const QLangError &e) { std::cout << "[FAIL] val:  [L" << line << "] " << name << " -> " << e.what() << "\n"; fails++; }
 }
+// Like expectVal, but drains pending instance finalizers (Phase 3) between
+// the run and the read: a `__destroy__` finalizer is enqueued at final
+// release and runs at the next safe point (processFinalizers), not from
+// the shared_ptr deleter.
+static void expectValDrainImpl(const std::string &name, const std::string &src,
+                               const std::string &var, int expect, int line) {
+  QLangContext ctx;
+  try {
+    ctx.run(src);
+    ctx.processFinalizers();
+    int got = toInt64(ctx.get(var));
+    if (got == expect) { std::cout << "[PASS] valD: [L" << line << "] " << name << " (" << var << "=" << got << ")\n"; passes++; }
+    else { std::cout << "[FAIL] valD: [L" << line << "] " << name << " (" << var << " got " << got << " exp " << expect << ")\n"; fails++; }
+  } catch (const QLangError &e) { std::cout << "[FAIL] valD: [L" << line << "] " << name << " -> " << e.what() << "\n"; fails++; }
+}
 static void expectStrImpl(const std::string &name, const std::string &src,
                           const std::string &var, const std::string &expect, int line) {
   QLangContext ctx;
@@ -71,6 +86,7 @@ static void expectMsgImpl(const std::string &name, const std::string &src,
 #define expectRun(name, src)        expectRunImpl(name, src, __LINE__)
 #define expectThrow(name, src)      expectThrowImpl(name, src, __LINE__)
 #define expectVal(name, src, var, expect)  expectValImpl(name, src, var, expect, __LINE__)
+#define expectValDrain(name, src, var, expect)  expectValDrainImpl(name, src, var, expect, __LINE__)
 #define expectStr(name, src, var, expect)  expectStrImpl(name, src, var, expect, __LINE__)
 #define expectMsg(name, src, ...)   expectMsgImpl(name, src, {__VA_ARGS__}, __LINE__)
 
@@ -715,13 +731,14 @@ int main() {
             "class R { v = 3 }\nlocal a = R()\nlocal b = a\na = nil\nlocal x = b.v;",
             "x", 3);
 
-  // -- Phase 7: __destroy__ --
-  expectVal("destroy: runs once on final release",
-            "local log = {n = 0}\n"
-            "class D {\n  log = nil\n"
-            "__init__ (self, lg) [ ] { self.log = lg }\n"
-            "__destroy__ (self) [ ] { local lg = self.log\nlg.n = lg.n + 1 }\n}\n"
-            "local a = D(log)\nlocal b = a\na = nil\nb = nil\nlocal n = log.n;",
+  // -- Phase 7: __destroy__ (Phase 3: finalizers drain at a safe point,
+  // not from the shared_ptr deleter) --
+  expectValDrain("destroy: runs once on final release",
+            "local n = 0\n"
+            "class D {\n"
+            "  __destroy__ (self) [ ] { n = n + 1 }\n"
+            "}\n"
+            "local a = D()\nlocal b = a\na = nil\nb = nil;",
             "n", 1);
   expectVal("destroy: not before final ref",
             "local log = {n = 0}\n"

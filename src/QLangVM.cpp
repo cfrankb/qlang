@@ -106,18 +106,21 @@ std::string valueToString(const QLangValue &v, QLangContext &ctx) {
   return "?";
 }
 
-// Phase 7: if the table carries a `__destroy__` method, re-wrap it with a
-// finalizer deleter so the method runs exactly once at final release. The
-// deleter keeps the closure and the owning program (shared_ptr, Phase 2)
-// alive; dispatch goes through the long-lived QLangContext (runFinalizer).
-// No-op for plain tables and instances without `__destroy__`.
+// Phase 7 / Phase 3 (H3): if the table carries a `__destroy__` method,
+// re-wrap it with a finalizer deleter so the method runs exactly once at
+// final release. The deleter keeps the closure and the owning program
+// (shared_ptr, Phase 2) alive; it no longer dispatches script — it only
+// enqueues (table, closure, program) on the context's finalizer queue,
+// which is drained at a safe point (run()/call()/callClosure() start,
+// clear(), or an explicit processFinalizers()). No-op for plain tables and
+// instances without `__destroy__`.
 //
 // Ownership subtlety: `shared_ptr(raw, deleter)` would create a SECOND
 // control block; the original shared_ptr (still in `v`) would then free
 // the map as soon as it is overwritten, dangling the wrapped pointer.
 // Instead the wrapped deleter captures a copy of the original
-// shared_ptr and releases it last — the map is freed exactly once, when
-// the final wrapped reference goes away, with the finalizer running first.
+// shared_ptr and moves it into the queue — the map is freed exactly once,
+// when the drained finalizer entry is destroyed.
 static void attachFinalizer(QLangValue &v, QLangContext &scope) {
   if (v.type() != QLangValue::Type::Table)
     return;
@@ -130,11 +133,32 @@ static void attachFinalizer(QLangValue &v, QLangContext &scope) {
   auto orig = v.asTable(); // second reference to the original control block
   auto wrapped = std::shared_ptr<std::map<std::string, QLangValue>>(
       v.asTable().get(),
-      [&scope, closure, prog, orig](std::map<std::string, QLangValue> *p) mutable {
-        scope.runFinalizer(p, closure, prog);
-        orig.reset(); // last reference: frees the map
+      [&scope, closure, prog, orig](std::map<std::string, QLangValue> *) mutable {
+        // `orig` is the last reference to the original control block; moving
+        // it into the queue keeps the map alive until the drain runs the
+        // finalizer. enqueueFinalizer never throws (deleter-safe).
+        scope.enqueueFinalizer(std::move(orig), closure, prog);
       });
   v = QLangValue::Table(wrapped);
+}
+
+// release(x) (Phase 3, H2): drop the owned shared_ptr of an owned External so
+// the script can free script-constructed objects (the retention leak). The
+// value becomes Nil — the object is gone, and using it after release is a
+// clean nil error, not a dangling view. A borrowed external (the host owns
+// it) or a non-external is a type error. Mutates the argument register in
+// place (callBuiltin takes const copies, so this is special-cased in CALL).
+static void releaseExternal(QLangValue &v, int line, int col, QLangVM *vm) {
+  if (v.type() != QLangValue::Type::External)
+    vThrow(vm, QLangErrorKind::Type, "release: expected an external object",
+           line, col);
+  const auto &ref = v.asExternal();
+  if (!ref.owned)
+    vThrow(vm, QLangErrorKind::Type,
+           "release: not an owned external (borrowed objects are released by "
+           "the host)",
+           line, col);
+  v = QLangValue(); // destroys the ExternalRef -> releases the object
 }
 
 // Numeric operand with a clear error if the type is wrong.
@@ -456,8 +480,8 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
         args[0].type() == QLangValue::Type::TypeRef) {
       const TypeDescriptor *t =
           args[0].type() == QLangValue::Type::External
-              ? args[0].asExternal().type
-              : args[0].asTypeRef().type;
+              ? args[0].asExternal().type.get()
+              : args[0].asTypeRef().type.get();
       if (t)
         return QLangValue::String(t->name);
     }
@@ -1711,6 +1735,12 @@ RunResult QLangVM::runFrames() {
           vmThrow(QLangErrorKind::Runtime, "unknown native function");
         frame.regs[dest] =
             m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, callArgs);
+      } else if (i.b == static_cast<int>(Builtin::Release)) {
+        // release(x) mutates the argument register in place (drops the
+        // owned shared_ptr); callBuiltin takes const copies, so it is
+        // handled here (Phase 3, H2).
+        releaseExternal(frame.regs[dest + 1], i.line, i.col, this);
+        frame.regs[dest] = QLangValue();
       } else {
         frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), callArgs,
                                        m_scope, m_prog, i.line, i.col, this);

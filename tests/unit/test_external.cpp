@@ -85,12 +85,12 @@ static bool runThrows(QLangContext &ctx, const std::string &src) {
 
 int main() {
   QLangContext ctx;
-  const TypeDescriptor *pt = ctx.import<Point>();
+  auto pt = ctx.import<Point>();  // shared handle (Phase 3)
   ctx.import<DockArea>();  // seeds the DockArea TypeRef (no instance needed)
 
   // 1. Public data member = read-write: script SETTER works and is visible to C++.
   auto e = std::make_shared<Point>(1, 2);
-  ctx.set("e", QValue::External(pt, std::weak_ptr<void>(e)));
+  ctx.set("e", qval_external_borrowed<Point>(pt, std::weak_ptr<Point>(e)));
   CHECK(!runThrows(ctx, "e.x = 10"));  // setter on public member
   CHECK(e->x == 10);                   // referential integrity: same object
   CHECK(runAndGet(ctx, "e.y + e.x").asFloat() == 12);
@@ -147,7 +147,7 @@ int main() {
   // callee like `m(...)` is a compile error in this zero-compiler-changes
   // design, so extraction is verified at the value level here.
   auto e2 = std::make_shared<Point>(0, 0);
-  ctx.set("e2", QValue::External(pt, std::weak_ptr<void>(e2)));
+  ctx.set("e2", qval_external_borrowed<Point>(pt, std::weak_ptr<Point>(e2)));
   CHECK(!runThrows(ctx, "m = e2.translate"));
   CHECK(ctx.get("m").type() == QValue::Type::BoundMethod);
   CHECK(runAndGet(ctx, "type(e2)").asString() == "Point");  // type() on the instance

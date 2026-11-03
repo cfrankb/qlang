@@ -149,18 +149,28 @@ public:
     q.m_storage = std::move(v);
     return q;
   }
-  // External C++ types (docs/EXTERNAL_TYPES.md). `owned` is set when the
-  // script constructed the object; `borrowed` when the engine handed it over.
-  static QLangValue External(const TypeDescriptor *type,
+  // External C++ types (docs/EXTERNAL_TYPES.md). `type` is a shared handle
+  // (Phase 3): the descriptor outlives the value. `owned` is set when the
+  // script constructed the object; `borrowed` when the engine handed it
+  // over. The untyped factories carry no type check; use the typed
+  // qval_external_owned<T>/qval_external_borrowed<T> helpers (QValue.h) for
+  // a clean type-mismatch error at first use.
+  static QLangValue External(const std::shared_ptr<TypeDescriptor> &type,
                              const std::shared_ptr<void> &owned) {
     QLangValue q(Type::External);
-    q.m_storage = ExternalRef{type, owned, {}};
+    q.m_storage = ExternalRef{type, owned, {}, nullptr, nullptr};
     return q;
   }
-  static QLangValue External(const TypeDescriptor *type,
+  static QLangValue External(const std::shared_ptr<TypeDescriptor> &type,
                              const std::weak_ptr<void> &borrowed) {
     QLangValue q(Type::External);
-    q.m_storage = ExternalRef{type, {}, borrowed};
+    q.m_storage = ExternalRef{type, {}, borrowed, nullptr, nullptr};
+    return q;
+  }
+  // From a fully prepared ref (typed handoff helpers set expected/check).
+  static QLangValue External(ExternalRef ref) {
+    QLangValue q(Type::External);
+    q.m_storage = std::move(ref);
     return q;
   }
   static QLangValue BoundMethod(const Member *member,
@@ -169,7 +179,7 @@ public:
     q.m_storage = BoundMethodRef{member, target};
     return q;
   }
-  static QLangValue TypeRef(const TypeDescriptor *type) {
+  static QLangValue TypeRef(const std::shared_ptr<TypeDescriptor> &type) {
     QLangValue q(Type::TypeRef);
     q.m_storage = TypeRefRef{type};
     return q;

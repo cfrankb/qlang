@@ -566,6 +566,11 @@ void QLangCompiler::compileArgsToSlots(const std::vector<ExprPtr> &args,
     if (slot != scratch)
       emit(Opcode::MOV, slot, scratch, 0);
   }
+  // Clear the shared scratch so it does not keep a reference alive past the
+  // call (Phase 3 H2: release() must drop the last reference; a leaked temp
+  // would retain the owned external).
+  if (scratch >= 0)
+    releaseTemp(scratch);
 }
 
 int QLangCompiler::emitConst(const QLangValue &value) {
@@ -3021,14 +3026,6 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // none). The deleter keeps the closure and owning program alive so the
       // method can run at final release, even after this run()'s VM is gone.
       emit(Opcode::TABFINALIZE, dest);
-      // Prepend instance as first arg (self): move args into place,
-      // then move saved instance as arg[0].
-      int newArgCount = argCount + 1;
-      int newArgBase = dest + 1;
-      for (int i = argCount - 1; i >= 0; i--) {
-        emit(Opcode::MOV, newArgBase + i + 1, newArgBase + i, 0);
-      }
-      emit(Opcode::MOV, newArgBase, dest, 0);
       // Call __init__ (fixed arity, Phase 4.3/4.4).
       auto initIt = rec.methodFuncIndices.find("__init__");
       if (initIt == rec.methodFuncIndices.end()) {
@@ -3040,8 +3037,20 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
               "argument" + (argCount == 1 ? "" : "s") + ", got " +
               std::to_string(argCount));
         }
+        // No __init__: dest already holds the finalized instance and no
+        // self-arg copy was made, so there is nothing to release (Phase 7
+        // finalizers need the true final release — a stray self-arg copy
+        // would extend the instance's lifetime past its last named ref).
         break;
       }
+      // Prepend instance as first arg (self): move args into place,
+      // then move saved instance as arg[0].
+      int newArgCount = argCount + 1;
+      int newArgBase = dest + 1;
+      for (int i = argCount - 1; i >= 0; i--) {
+        emit(Opcode::MOV, newArgBase + i + 1, newArgBase + i, 0);
+      }
+      emit(Opcode::MOV, newArgBase, dest, 0);
       // Phase 4.3: __init__ exists -> check arg count against its declared
       // arity (params include `self`, so expected = arity - 1).
       auto ait = rec.methodArities.find("__init__");
@@ -3164,10 +3173,22 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
                        "unknown function '" + e->callee + "'");
     }
     emit(Opcode::CALL, dest, funcId, argCount);
-    if (e->callee == "range") trace(TRACE_FULL, "[DBG-RANGE] emitted CALL dest=%d b=%d c=%d\n", dest, funcId, argCount);
-    // Propagate source position for runtime error reporting.
+    // Propagate source position for runtime error reporting (on the CALL).
     m_code.at(m_code.size() - 1).line = e->callLine;
     m_code.at(m_code.size() - 1).col = e->callCol;
+    // release(x) mutates its argument in place (drops the owned shared_ptr,
+    // Phase 3 H2). The argument was compiled into the slot dest+1; write it
+    // back to the source variable so the mutation is visible (the slot is a
+    // copy — without this, the original variable keeps its reference and the
+    // object is never freed).
+    if (e->callee == "release") {
+      for (size_t i = 0; i < e->args.size(); i++) {
+        int argReg = inPlaceReg(e->args[i]);
+        if (argReg >= 0)
+          emit(Opcode::MOV, argReg, dest + 1 + i, 0);
+      }
+    }
+    if (e->callee == "range") trace(TRACE_FULL, "[DBG-RANGE] emitted CALL dest=%d b=%d c=%d\n", dest, funcId, argCount);
     break;
   }
   case ExprKind::Array: {
@@ -3495,6 +3516,7 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "set") return static_cast<int>(Builtin::Set);
   if (name == "set_max_steps") return static_cast<int>(Builtin::SetMaxSteps);
   if (name == "get_max_steps") return static_cast<int>(Builtin::GetMaxSteps);
+  if (name == "release") return static_cast<int>(Builtin::Release);
   return -1;
 }
 

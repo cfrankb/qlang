@@ -5,6 +5,7 @@
 // QLangValue name. Free functions let you construct values from common C++
 // types without spelling out the static-factory syntax.
 
+#include "qlang/QLangObject.h"
 #include "qlang/QLangValue.h"
 
 namespace qlang
@@ -54,15 +55,47 @@ namespace qlang
 
     // -------------------------------------------------------------------
     // External C++ type constructors (docs/EXTERNAL_TYPES.md).
+    // `type` is the shared handle from import<T>() / registerType()
+    // (Phase 3): it keeps the descriptor alive as long as the value does.
     // -------------------------------------------------------------------
-    inline QValue qval_external(const TypeDescriptor *type,
+    inline QValue qval_external(const std::shared_ptr<TypeDescriptor> &type,
                                 const std::shared_ptr<void> &owned) {
         return QValue::External(type, owned);
     }
 
-    inline QValue qval_external(const TypeDescriptor *type,
+    inline QValue qval_external(const std::shared_ptr<TypeDescriptor> &type,
                                 const std::weak_ptr<void> &borrowed) {
         return QValue::External(type, borrowed);
+    }
+
+    // Typed handoff (Phase 3): the concrete type T is recorded so a wrong
+    // pointer is a clean type error at first use, not UB. The check casts
+    // through the polymorphic QLObject<T> base (dynamic_cast cannot source
+    // from a void*).
+    template <class T>
+    QValue qval_external_owned(const std::shared_ptr<TypeDescriptor> &type,
+                               const std::shared_ptr<T> &p) {
+        ExternalRef ref;
+        ref.type = type;
+        ref.owned = p;
+        ref.expected = &typeid(T);
+        ref.check = [](const void *q) {
+          return dynamic_cast<const T *>(static_cast<const QLObject<T> *>(q)) != nullptr;
+        };
+        return QValue::External(std::move(ref));
+    }
+
+    template <class T>
+    QValue qval_external_borrowed(const std::shared_ptr<TypeDescriptor> &type,
+                                  const std::weak_ptr<T> &p) {
+        ExternalRef ref;
+        ref.type = type;
+        ref.borrowed = p;
+        ref.expected = &typeid(T);
+        ref.check = [](const void *q) {
+          return dynamic_cast<const T *>(static_cast<const QLObject<T> *>(q)) != nullptr;
+        };
+        return QValue::External(std::move(ref));
     }
 
     inline QValue qval_bound_method(const Member *member,
@@ -70,7 +103,7 @@ namespace qlang
         return QValue::BoundMethod(member, target);
     }
 
-    inline QValue qval_type_ref(const TypeDescriptor *type) {
+    inline QValue qval_type_ref(const std::shared_ptr<TypeDescriptor> &type) {
         return QValue::TypeRef(type);
     }
 

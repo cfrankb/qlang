@@ -61,13 +61,8 @@ namespace qlang {
 // Forward declaration for QLangContext (used in method/ctor signatures).
 class QLangContext;
 
-// CRTP base for external types. The class name is written exactly once, as
-// this base: `struct Point : qlang::QLObject<Point>`. It exposes a `SelfType`
-// alias that the entry macros use to form qualified member pointers
-// (`&SelfType::x`); no other base-state or behavior is added.
-template <class Self> struct QLObject {
-  using SelfType = Self;
-};
+// QLObject (the CRTP base for external types) lives in qlang/QLangObject.h;
+// it is included transitively via QValue.h above.
 
 // One bound member of an external type.
 //   kind 0 = read-write property (data member, or READ+WRITE accessors)
@@ -102,6 +97,12 @@ struct TypeMeta {
   std::function<std::shared_ptr<void>(QLangContext&, const std::vector<QLangValue>&)>
       construct;
   std::vector<EnumMeta> enums;
+  // Concrete C++ type of constructed objects (Phase 3): deduced from the
+  // QL_CTOR lambda's return type. `typeCheck` validates a resolved object
+  // pointer against it (dynamic_cast at the binding site); both are null
+  // when the lambda returns a void-typed shared_ptr.
+  const std::type_info* typeInfo = nullptr;
+  std::function<bool(const void*)> typeCheck = nullptr;
 };
 
 namespace meta_detail {
@@ -238,6 +239,8 @@ struct StrClause {
 struct CtorClause {
   std::function<std::shared_ptr<void>(QLangContext&, const std::vector<QLangValue>&)>
       f;
+  const std::type_info* typeInfo = nullptr;
+  std::function<bool(const void*)> check = nullptr;
 };
 
 template <class T, class R> StrClause str_clause(R (T::*f)() const) {
@@ -246,8 +249,36 @@ template <class T, class R> StrClause str_clause(R (T::*f)() const) {
           }};
 }
 
+// The lambda's return type is deduced (shared_ptr<T>, T the concrete object
+// type) before erasure to shared_ptr<void>: T is known here, so the
+// descriptor can validate constructed/handed-off pointers with a clean type
+// error instead of UB (Phase 3). A void-typed return carries no check.
 template <class F> CtorClause ctor_clause(F f) {
-  return {std::move(f)};
+  using R = std::decay_t<std::invoke_result_t<F, QLangContext &,
+                                              const std::vector<QLangValue> &>>;
+  if constexpr (std::is_void_v<typename R::element_type>) {
+    return CtorClause{
+        [g = std::move(f)](QLangContext &c,
+                           const std::vector<QLangValue> &a) -> std::shared_ptr<void> {
+          return g(c, a);
+        },
+        nullptr, nullptr};
+  } else {
+    using T = typename R::element_type;
+    return CtorClause{
+        [g = std::move(f)](QLangContext &c,
+                           const std::vector<QLangValue> &a) -> std::shared_ptr<void> {
+          return g(c, a);
+        },
+        &typeid(T),
+        // dynamic_cast cannot source from void*: go through the polymorphic
+        // QLObject<T> base (the static_cast is safe — p is a T by
+        // construction; the dynamic_cast validates the dynamic type).
+        [](const void *p) {
+          return dynamic_cast<const T *>(static_cast<const QLObject<T> *>(p)) !=
+                 nullptr;
+        }};
+  }
 }
 
 // --- Assembly: fold the heterogeneous entry list into a TypeMeta ----------
@@ -255,7 +286,11 @@ template <class F> CtorClause ctor_clause(F f) {
 inline void add(TypeMeta& m, Member e) { m.members.push_back(std::move(e)); }
 inline void add(TypeMeta& m, EnumMeta e) { m.enums.push_back(std::move(e)); }
 inline void add(TypeMeta& m, StrClause e) { m.toString = std::move(e.f); }
-inline void add(TypeMeta& m, CtorClause e) { m.construct = std::move(e.f); }
+inline void add(TypeMeta& m, CtorClause e) {
+  m.construct = std::move(e.f);
+  m.typeInfo = e.typeInfo;
+  m.typeCheck = std::move(e.check);
+}
 
 // Recover the (innermost) class name without `__CLASS__`. `__CLASS__` is an
 // MSVC extension and is NOT available in GCC/Clang, so we derive the name

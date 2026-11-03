@@ -42,7 +42,8 @@ enum class Builtin : int {
   Next,      // next(gen) -> value (resume generator, returns yielded value or nil)
   SetMaxSteps, // set_max_steps(n) -> void (set the VM's infinite-loop step limit)
   GetMaxSteps, // get_max_steps() -> int (current infinite-loop step limit)
-  Set         // set(...) -> set (unique-value collection constructor)
+  Set,         // set(...) -> set (unique-value collection constructor)
+  Release      // release(x) -> nil (drop an owned external's shared_ptr)
 };
 
 // Register-machine opcodes. This is a small register VM: each script variable

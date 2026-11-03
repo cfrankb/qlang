@@ -92,13 +92,24 @@ struct ObjectDescriptor {
 // A view over exactly one C++ object of an external type. `owned` is set when
 // the script constructed the object (it lives as long as this value);
 // `borrowed` is set when the engine handed the object over (it lives as long
-// as the engine keeps it alive). Exactly one of the two is set.
+// as the engine keeps it alive). Exactly one of the two is set. `type` is a
+// shared handle (Phase 3): the descriptor outlives any value that names it,
+// including across context clear().
 struct ExternalRef {
-  const TypeDescriptor* type = nullptr;
+  std::shared_ptr<TypeDescriptor> type;
   std::shared_ptr<void> owned;
   std::weak_ptr<void> borrowed;
+  // Expected concrete C++ type (Phase 3): set at the handoff/construction
+  // site. `check` validates the resolved pointer against it (a dynamic_cast
+  // captured where T is known); a mismatch is a clean QLangError(Type) at
+  // first use instead of UB. Both are null when the concrete type is unknown
+  // (void-typed ctor return, untyped host handoff).
+  const std::type_info* expected = nullptr;
+  std::function<bool(const void*)> check = nullptr;
   // Resolve the object pointer: owned.get() if set, else borrowed.lock();
-  // throws QLangError(Runtime, "object destroyed: <type>") on an expired borrow.
+  // throws QLangError(Runtime, "object destroyed: <type>") on an expired
+  // borrow, QLangError(Type, "external type mismatch: ...") on a check
+  // failure.
   const void* self() const;
   void* selfMut();
 };
@@ -111,9 +122,11 @@ struct BoundMethodRef {
 };
 
 // The type itself as a value: resolves enum/flag constants and (if the type
-// is constructible) constructs instances. Seeded as a script variable at import.
+// is constructible) constructs instances. Seeded as a script variable at
+// import. `type` is a shared handle (Phase 3): the descriptor outlives any
+// value that names it, including across context clear().
 struct TypeRefRef {
-  const TypeDescriptor* type = nullptr;
+  std::shared_ptr<TypeDescriptor> type;
 };
 
 // The storage variant for every script variable value. Mirrors the spec's

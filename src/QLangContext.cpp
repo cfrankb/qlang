@@ -57,17 +57,75 @@ namespace {
   }
 }
 
+  // Program cache (Phase 3, H1): the compiled program(s) for a context,
+  // split out of QLangContext so the context is a thin public API. The
+  // cached program is the last entry of livePrograms (run() stores the same
+  // shared_ptr in both); livePrograms keeps every run() program alive so
+  // instance finalizers (`__destroy__`) can dispatch their closures after
+  // the run() VM is gone (Phase 7). Entries are shared_ptrs (Phase 2:
+  // finalizer deleters capture the shared_ptr directly — no int-index
+  // protocol); cleared by clear() only AFTER m_globals (which owns the
+  // instances) is cleared.
+  class ProgramCache
+  {
+  public:
+    void store(CompiledProgram prog)
+    {
+      auto live = std::make_shared<CompiledProgram>(std::move(prog));
+      m_compiled = *live;
+      m_livePrograms.push_back(std::move(live));
+    }
+    bool has() const { return m_compiled.has_value(); }
+    const CompiledProgram &compiled() const { return m_compiled.value(); }
+    std::shared_ptr<const CompiledProgram> live() const
+    {
+      if (m_livePrograms.empty())
+        return nullptr;
+      return m_livePrograms.back();
+    }
+    void clear()
+    {
+      m_livePrograms.clear();
+      m_compiled.reset();
+    }
+
+  private:
+    std::optional<CompiledProgram> m_compiled;
+    std::vector<std::shared_ptr<CompiledProgram>> m_livePrograms;
+  };
+
+  // Type registry (Phase 3, H1): registered external C++ types, split out of
+  // QLangContext. Shared handles: the registry holds one reference, the host
+  // may hold others; clear() drops only the registry's, so host-held handles
+  // stay valid.
+  class TypeRegistry
+  {
+  public:
+    std::shared_ptr<TypeDescriptor> add(std::shared_ptr<TypeDescriptor> d)
+    {
+      m_types.push_back(std::move(d));
+      return m_types.back();
+    }
+    bool contains(const std::string &name) const
+    {
+      for (const auto &t : m_types)
+        if (t->name == name)
+          return true;
+      return false;
+    }
+    void clear() { m_types.clear(); }
+
+  private:
+    std::vector<std::shared_ptr<TypeDescriptor>> m_types;
+  };
+
   // Pimpl definition — breaks the circular include with QLangCompiler.h.
+  // Phase 3 (H1): the context's program cache and type registry are separate
+  // classes; the context itself is a thin public API.
   struct QLangContext::Pimpl
   {
-    std::optional<CompiledProgram> compiled;
-    // Every program compiled by run() stays alive here so instance
-    // finalizers (`__destroy__`) can still dispatch their closures after the
-    // run() VM is gone (Phase 7). Entries are shared_ptrs (Phase 2: finalizer
-    // deleters capture the shared_ptr directly — no int-index protocol);
-    // cleared by clear() only AFTER m_globals (which owns the instances) is
-    // cleared.
-    std::vector<std::shared_ptr<CompiledProgram>> livePrograms;
+    ProgramCache programs;
+    TypeRegistry types;
   };
 
   QLangContext::QLangContext()
@@ -91,6 +149,9 @@ namespace {
 
   void QLangContext::run(const std::string &source)
   {
+    // Safe point (Phase 3): drain instance finalizers enqueued since the
+    // last dispatch before starting a new run.
+    processFinalizers();
     try {
     // Pipeline: source -> AST -> bytecode -> execute.
     std::vector<StmtPtr> program = parse(source);
@@ -129,12 +190,10 @@ namespace {
         compiled.nativeFuncs[i] = resolved[i];
     }
     // Cache the compiled program for subsequent call() invocations, and keep
-    // it alive in livePrograms so instance finalizers can dispatch against
-    // it later (Phase 7).
-    auto live = std::make_shared<CompiledProgram>(std::move(compiled));
-    m_pimpl->compiled = *live;
-    m_pimpl->livePrograms.push_back(std::move(live));
-    QLangVM vm(m_pimpl->compiled.value(), *this);
+    // it alive in the program cache so instance finalizers can dispatch
+    // against it later (Phase 7).
+    m_pimpl->programs.store(std::move(compiled));
+    QLangVM vm(m_pimpl->programs.compiled(), *this);
     vm.run();
     } catch (const QLangError &e) {
       // Attach the full report (module + line/col + innermost function +
@@ -255,18 +314,19 @@ namespace {
 
   void QLangContext::clear()
   {
-    // m_globals first: releasing the instances may fire `__destroy__`
-    // finalizers, which need livePrograms still intact (Phase 7).
+    // m_globals first: releasing the instances enqueues `__destroy__`
+    // finalizers (Phase 3), which are drained below while livePrograms is
+    // still intact (each entry also holds its own program shared_ptr).
     m_globals = GlobalTable();
+    processFinalizers();
     m_injectedConsts.clear();
     m_nativeFuncs.clear();
     m_modules.clear();
-    m_pimpl->livePrograms.clear();
-    m_pimpl->compiled.reset();
+    m_pimpl->programs.clear();
     // External type descriptors, their constructor natives, and the TypeRef
     // variables all die together; host code must re-run import<T>() after
     // clear().
-    m_types.clear();
+    m_pimpl->types.clear();
   }
 
   void QLangContext::setFunc(const std::string &name, NativeFunc func)
@@ -274,7 +334,7 @@ namespace {
     m_nativeFuncs[name] = std::move(func);
   }
 
-  const TypeDescriptor *QLangContext::registerType(const TypeMeta &meta)
+  std::shared_ptr<TypeDescriptor> QLangContext::registerType(const TypeMeta &meta)
   {
     if (meta.name.empty())
       throw QLangError(QLangErrorKind::Type, 0, 0,
@@ -296,12 +356,10 @@ namespace {
       memberKinds[m.name] = m.kind;
     }
     // Duplicate type name: re-import is supported only after clear(), which
-    // also clears m_types and the constructor native.
-    for (const auto &t : m_types) {
-      if (t->name == meta.name)
-        throw QLangError(QLangErrorKind::Type, 0, 0,
-                         "type '" + meta.name + "' is already registered");
-    }
+    // also clears the type registry and the constructor native.
+    if (m_pimpl->types.contains(meta.name))
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "type '" + meta.name + "' is already registered");
     // A type name clashing with an existing native function is only a
     // problem when the type also registers a constructor native under the
     // same name.
@@ -310,28 +368,35 @@ namespace {
                        "type name '" + meta.name +
                            "' clashes with an existing native function");
 
-    auto desc = std::make_unique<TypeDescriptor>();
+    auto desc = std::make_shared<TypeDescriptor>();
     desc->name = meta.name;
     desc->members = meta.members;
     desc->toString = meta.toString;
     desc->construct = meta.construct;
     desc->enums = meta.enums;
+    desc->typeInfo = meta.typeInfo;
+    desc->typeCheck = meta.typeCheck;
 
     if (meta.construct) {
       // `T(args)` constructs: the native wraps the construct result in an
-      // owned External value.
-      setFunc(meta.name, [d = desc.get()](QLangContext &c,
-                                          const std::vector<QLangValue> &a) {
-        return QValue::External(d, d->construct(c, a));
+      // owned External value. The lambda captures the shared handle (Phase
+      // 3) — a copied NativeFunc stays valid across clear().
+      setFunc(meta.name, [d = desc](QLangContext &c,
+                                    const std::vector<QLangValue> &a) {
+        ExternalRef ref;
+        ref.type = d;
+        ref.owned = d->construct(c, a);
+        ref.expected = d->typeInfo;
+        ref.check = d->typeCheck;
+        return QValue::External(std::move(ref));
       });
     }
     // Seed the type-level value so `T.Constant` compiles: the name becomes
     // a (const) script variable holding a TypeRef. The native table above
     // keeps `T(args)` working; `T = ...` is rejected (const).
-    set(meta.name, QValue::TypeRef(desc.get()), true);
+    set(meta.name, QValue::TypeRef(desc), true);
 
-    m_types.push_back(std::move(desc));
-    return m_types.back().get();
+    return m_pimpl->types.add(std::move(desc));
   }
 
   void QLangContext::registerModule(const std::string &name, const Module &module)
@@ -371,29 +436,32 @@ namespace {
   QLangContext::~QLangContext()
   {
     // Members destroy in reverse declaration order, so m_globals (which owns
-    // the instances) is torn down while m_pimpl is still alive. Releasing an
-    // instance may fire its `__destroy__` finalizer, whose deleter captured
-    // the program's shared_ptr at attach time; runFinalizer would then build
-    // a VM against this half-destroyed context (SIGBUS in adoptGlobals). Flag
-    // the context so runFinalizer skips the dispatch — the context is going
-    // away, so its instances' external resources are released by the host.
+    // the instances) is torn down while m_pimpl and the finalizer queue are
+    // still alive. Releasing an instance fires its shared_ptr deleter, which
+    // now only ENQUEUES the `__destroy__` finalizer (Phase 3) — the queued
+    // entries die with the context undrained, so no VM is ever built against
+    // this half-destroyed context (SIGBUS in adoptGlobals). The flag also
+    // guards processFinalizers() against a drain started just before
+    // destruction.
     m_destroying = true;
   }
 
   QLangValue QLangContext::call(const std::string &name, const std::vector<QLangValue> &args)
   {
+    // Safe point (Phase 3): drain pending instance finalizers first.
+    processFinalizers();
     // Check native funcs first.
     auto it = m_nativeFuncs.find(name);
     if (it != m_nativeFuncs.end())
       return it->second(*this, args);
 
     // Ensure we have a compiled program.
-    if (!m_pimpl->compiled.has_value())
+    if (!m_pimpl->programs.has())
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "no program compiled; call run() first");
 
     // Look up the function by name in the compiled program.
-    const auto &functions = m_pimpl->compiled.value().functions;
+    const auto &functions = m_pimpl->programs.compiled().functions;
     int funcIndex = -1;
     for (int i = static_cast<int>(functions.size()) - 1; i >= 1; --i) {
       if (functions[static_cast<size_t>(i)].name == name) {
@@ -405,14 +473,16 @@ namespace {
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "undefined function '" + name + "'");
 
-    QLangVM vm(m_pimpl->compiled.value(), *this);
+    QLangVM vm(m_pimpl->programs.compiled(), *this);
     return vm.callFunction(funcIndex, args);
   }
 
   QLangValue QLangContext::callClosure(const QLangValue &closure, const std::vector<QLangValue> &args)
   {
+    // Safe point (Phase 3): drain pending instance finalizers first.
+    processFinalizers();
     // Ensure we have a compiled program.
-    if (!m_pimpl->compiled.has_value())
+    if (!m_pimpl->programs.has())
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "no program compiled; call run() first");
 
@@ -421,50 +491,76 @@ namespace {
       throw QLangError(QLangErrorKind::Type, 0, 0,
                        "expected closure value");
 
-    QLangVM vm(m_pimpl->compiled.value(), *this);
+    QLangVM vm(m_pimpl->programs.compiled(), *this);
     return vm.callClosure(closure, args);
   }
 
   std::shared_ptr<const CompiledProgram> QLangContext::liveProgram() const
   {
-    if (!m_pimpl->compiled)
-      return nullptr;
-    // The cached program is the last entry of livePrograms (run() moves the
-    // same shared_ptr into both); share it so finalizer deleters keep the
+    // The cached program is the last entry of the program cache (run() stores
+    // the same shared_ptr in both); share it so finalizer deleters keep the
     // program alive for as long as their instances do (Phase 2).
-    if (m_pimpl->livePrograms.empty())
-      return nullptr;
-    return m_pimpl->livePrograms.back();
+    return m_pimpl->programs.live();
   }
 
-  void QLangContext::runFinalizer(std::map<std::string, QLangValue> *tbl,
-                                  const QLangValue &closure,
-                                  std::shared_ptr<const CompiledProgram> prog)
+  void QLangContext::enqueueFinalizer(TableValue table,
+                                      QLangValue closure,
+                                      std::shared_ptr<const CompiledProgram> prog)
   {
-    // The deleter captured the program's shared_ptr at attach time (Phase 2):
-    // if it is null the context was cleared before the attach — skip the
-    // finalizer rather than dispatch into a dead program. A context that is
-    // mid-destruction must also be skipped: building a VM against it would
-    // touch the half-destroyed global table (SIGBUS in adoptGlobals).
-    if (!prog || m_destroying)
-      return;
-    // Own the table transiently with a no-op deleter so the finalizer body
-    // can read/write `self`; the caller's custom deleter destroys the map
-    // after this returns. The transient ref also keeps the refcount > 0
-    // during the call, so the finalizer cannot recursively re-enter it.
-    QLangValue instance = QLangValue::Table(
-        std::shared_ptr<std::map<std::string, QLangValue>>(
-            tbl, [](std::map<std::string, QLangValue> *) {}));
+    // The deleter may run on any thread and during stack unwinding: lock,
+    // push, and swallow allocation failures (losing a finalizer under OOM
+    // is acceptable; throwing here would abort).
     try {
-      QLangVM vm(*prog, *this);
+      std::lock_guard<std::mutex> lock(m_finalizerMutex);
+      m_finalizerQueue.push_back(
+          FinalizerEntry{std::move(table), std::move(closure), std::move(prog)});
+    } catch (...) {
+    }
+  }
+
+  void QLangContext::processFinalizers()
+  {
+    // Re-entrancy guard: a finalizer that re-enters the context (e.g. via a
+    // native that calls call()) must not start a nested drain — the outer
+    // fixpoint loop below picks up whatever it enqueues.
+    if (m_destroying || m_drainingFinalizers)
+      return;
+    m_drainingFinalizers = true;
+    for (;;) {
+      std::vector<FinalizerEntry> batch;
+      {
+        std::lock_guard<std::mutex> lock(m_finalizerMutex);
+        if (m_finalizerQueue.empty())
+          break;
+        batch.swap(m_finalizerQueue);
+      }
+      for (const auto &entry : batch)
+        runFinalizer(entry);
+    }
+    m_drainingFinalizers = false;
+  }
+
+  void QLangContext::runFinalizer(const FinalizerEntry &entry)
+  {
+    // If the program is null the context was cleared before the attach —
+    // skip the finalizer rather than dispatch into a dead program. A
+    // context that is mid-destruction must also be skipped: building a VM
+    // against it would touch the half-destroyed global table (SIGBUS in
+    // adoptGlobals).
+    if (!entry.prog || m_destroying)
+      return;
+    // The queue entry owns the table, so it stays alive for the whole call
+    // even if the finalizer drops its `self` reference.
+    QLangValue instance = QLangValue::Table(entry.table);
+    try {
+      QLangVM vm(*entry.prog, *this);
       // The finalizer runs in a pushed function frame — the main frame
       // (the only table alias, Phase 2) is never created, so the global
       // table is untouched by the dispatch itself.
-      vm.callClosure(closure, {instance});
-    } catch (const std::exception &) {
-      // Finalizer errors are swallowed: the deleter may run during stack
-      // unwinding, where a rethrow would abort.
+      vm.callClosure(entry.closure, {instance});
     } catch (...) {
+      // Finalizer errors are swallowed: a finalizer must never take down
+      // the drain (the drain may run during clear() or destruction).
     }
   }
 

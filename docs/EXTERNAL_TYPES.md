@@ -79,21 +79,33 @@ All three are **not durable** — the `.qlc` codec emits tag 0 (Nil) for them
 
 ```cpp
 struct ExternalRef {
-  const TypeDescriptor* type;   // the context-owned descriptor
-  std::shared_ptr<void> owned;  // set when the script constructed the object
-  std::weak_ptr<void> borrowed; // set when the engine handed the object over
+  std::shared_ptr<TypeDescriptor> type; // shared handle (Phase 3): outlives clear()
+  std::shared_ptr<void> owned;          // set when the script constructed the object
+  std::weak_ptr<void> borrowed;         // set when the engine handed the object over
+  const std::type_info* expected;       // concrete C++ type (typed handoff; null if unknown)
+  std::function<bool(const void*)> check; // validates the resolved pointer (null if unknown)
 };
 ```
 
 | Source | Lifetime | Reference held by the view |
 |---|---|---|
-| C++ engine handoff (`qval_external_borrowed(type, weak)`) | engine-controlled | `weak_ptr` |
+| C++ engine handoff (`qval_external_borrowed<T>(type, weak)`) | engine-controlled | `weak_ptr` |
 | Script construction (`T(args)` via `QL_CTOR`) | script-controlled | `shared_ptr` |
 
 There is **no copy path**: every `External` value names one C++ object, and a
 script setter write is visible to the engine (single-instance semantics). An
 expired borrow throws `runtime error: object destroyed: <type>` on next
 access.
+
+**Type-validated handoff (Phase 3).** The typed helpers
+`qval_external_owned<T>(type, shared)` / `qval_external_borrowed<T>(type,
+weak)` record the concrete C++ type `T` (`expected` = `&typeid(T)`, `check` =
+a `dynamic_cast` through the polymorphic `QLObject<T>` base). `self()` /
+`selfMut()` validate the resolved pointer against it: a mismatch is a clean
+`type error: external type mismatch: expected <T> for type '<name>'` at first
+use, **not UB** (the old "a wrong `weak_ptr` is UB" is closed — see §10.2).
+The untyped `qval_external(type, …)` factories carry no check (both fields
+null) and are for host code that cannot name the concrete type.
 
 ## 4. Field access — the v1 dispatch paths
 
@@ -105,7 +117,7 @@ for Table, Object (class), External, and TypeRef:
 |---|---|
 | `p.x` (property read) | `TABGET` → `external_ops::getField` — resolves the descriptor's member list; kind 0/1 → `get(self)` (kind 0 = read-write, kind 1 = read-only) |
 | `p.x = v` | `TABPUT` → `external_ops::setField` — kind 0 only; kind 1 → `"... is read-only"`, kind 2 → `"... is a method"` |
-| `p.m(args)` (method call) | compiles to `TABGET` + `CALLCLOS` — the kind-2 member read returns a **`BoundMethod`** value, and `CALLCLOS` (all four exec loops) dispatches it. `ops->callMethod` is **not** called by the VM in v1 (see §9) |
+| `p.m(args)` (method call) | compiles to `TABGET` + `CALLCLOS` — the kind-2 member read returns a **`BoundMethod`** value, and `CALLCLOS` dispatches it. `ops->callMethod` is **not** called by the VM in v1 (see §9) |
 | `f"{p}"` / `str(p)` / `print(p)` | `valueToString` (context-threaded) → `ops->toStr` → the `QL_STR` binding; a type with no `QL_STR` gets a type error |
 | `Point.AnimatedDocks` | `TABGET` on the seeded `TypeRef` variable → `typeref_ops::getField` → the type's enum/flag tables → `Int` |
 
@@ -118,8 +130,8 @@ A method read of an `External` value produces a **`BoundMethod`** value (tag
 21, not durable): `BoundMethodRef { const Member* member; ExternalRef target }`
 — the bound member plus the target view. This **replaces the draft's
 `NativeMethod` function-pointer proposal**: `CALLCLOS` gained a `BoundMethod`
-branch (alongside its `Function`/`Generator` branches, in all four exec
-loops) that invokes `member->invoke(self, ctx, args)`.
+branch (alongside its `Function`/`Generator` branches) that invokes
+`member->invoke(self, ctx, args)`.
 
 - `Member::invoke` is
   `std::function<QLangValue(void*, QLangContext&, const std::vector<QLangValue>&)>`.
@@ -131,16 +143,21 @@ loops) that invokes `member->invoke(self, ctx, args)`.
   are rejected at registration (§11(b)).
 - Dunders: `__str__` via `QL_STR`; **no `__destroy__`/`destroy` hook in v1**
   (plain shared/weak view — §11(d)).
-- Lifetime: `BoundMethodRef::member` points into the context-owned
-  `TypeDescriptor` — stable exactly as long as the `TypeDescriptor*` in the
-  `ExternalRef` (both die in `clear()`). A `BoundMethod` value outliving its
-  context is a host bug, same class as a dangling `ExternalRef`.
+- Lifetime: `BoundMethodRef::member` points into the `TypeDescriptor` named by
+  the target's **shared handle** (Phase 3) — the descriptor outlives
+  `clear()` and any value that names it, so a `BoundMethod` (or `External`)
+  value held by the host stays valid as long as the host (or a script value)
+  holds the handle. A `BoundMethod` whose handle has been dropped everywhere
+  is a host bug (dangling `member`), the same class as a dangling
+  `ExternalRef`.
 
 ## 6. Construction and type-level values
 
 - **`T(args)`** — when `QL_CTOR` is present, `registerType` registers a
   **native function** under the type name that wraps the construct result in
-  an owned `External` value. `let p = Point(1, 2)`.
+  an owned `External` value. `let p = Point(1, 2)`. The constructor native
+  captures the type's **shared handle** (Phase 3), so a copied `NativeFunc`
+  stays valid across `clear()`.
 - **`Type.Constant`** — `registerType` also **seeds the type name as a const
   script variable** holding a `TypeRef` (tag 22). `Point.AnimatedDocks`
   compiles as a const-variable load + `TABGET` and resolves through
@@ -151,8 +168,14 @@ loops) that invokes `member->invoke(self, ctx, args)`.
 - Import shadowing: a same-name script variable is silently overwritten at
   import; a name already taken by a native function is rejected **only** when
   the type also registers a constructor native under that name.
-- `clear()` invalidates all `TypeDescriptor*` (and the seeded variables and
-  constructor natives); host code must re-run `import<T>()` afterwards.
+- `clear()` drops the context's own references — the seeded `TypeRef`
+  variables and the constructor natives are removed, and the type registry
+  releases its handle — but a **shared handle the host (or a script value)
+  still holds stays valid** (Phase 3): the descriptor is reference-counted,
+  so `registerType`/`import<T>()` return a `std::shared_ptr<TypeDescriptor>`
+  that outlives `clear()`. Host code that cached a handle needs no
+  re-import; only the script-visible bindings (seeded vars, ctor natives)
+  must be re-established by re-running `import<T>()`.
 
 ## 7. Boundary conversion
 
@@ -193,8 +216,13 @@ wrappers). `base` is reserved for inheritance (returns null in v1).
 
 1. **`hasMethod`/`callMethod` context wrappers** for the event-handler
    contract (`docs/EVENT_HANDLERS.md`).
-2. **RTTI validation on handoff** — a wrong `weak_ptr` is UB in v1; a
-   `dynamic_cast` check is deferred.
+2. **RTTI validation on handoff** — ✓ **implemented (Phase 3).** The typed
+   handoff helpers (`qval_external_owned<T>` / `qval_external_borrowed<T>`)
+   record the concrete type and `self()`/`selfMut()` validate the resolved
+   pointer with a `dynamic_cast` through the `QLObject<T>` base; a mismatch
+   is a clean `type error: external type mismatch: …` at first use, not UB.
+   The untyped `qval_external(type, …)` factories remain for hosts that cannot
+   name the concrete type (no check).
 3. **Inheritance** — `ObjectOps::base` is reserved; base-chain walk deferred
    to v2.
 4. **Signals** (`Q_SIGNALS`/`emit`/`connect`) — revisit with
@@ -206,17 +234,23 @@ wrappers). `base` is reserved for inheritance (returns null in v1).
 
 ## 11. Implementation status
 
-**Implemented** (2026-10-27). Files: `include/qlang/QLangMeta.h` (macro
-layer), `QLangTypes.h` (`TypeDescriptor`), `QLangValue.h`/`QLangVariant.h`
-(the three value types + `ExternalRef`/`BoundMethodRef`/`TypeRefRef`),
-`QLangContext.h`/`src/QLangContext.cpp` (`registerType`/`import<T>()`,
-validation, TypeRef seeding, constructor native), `src/QLangObjects.cpp`
-(`external_ops`, `typeref_ops`, `getObjectOps` routing), `src/QLangVM.cpp`
-(`CALLCLOS` `BoundMethod` dispatch in all four exec loops; context-threaded
-`valueToString` → `toStr`), `src/QLangBytecodeIO.cpp` (tags 20–22 emit tag 0).
-The **compiler is unchanged** — `T.Constant` compiles as an ordinary
-const-variable load. Test: `examples/test_external.cpp` (ctest `external`,
-24 checks).
+**Implemented** (2026-10-27); **host-API hardening landed in Phase 3**
+(2026-11-03, `docs/plans/architecture-remediation-plan.md`). Files:
+`include/qlang/QLangMeta.h` (macro layer), `QLangTypes.h` (`TypeDescriptor`),
+`QLangValue.h`/`QLangVariant.h` (the three value types +
+`ExternalRef`/`BoundMethodRef`/`TypeRefRef`), `QLangContext.h`/
+`src/QLangContext.cpp` (`registerType`/`import<T>()` returning a
+`std::shared_ptr<TypeDescriptor>`, validation, TypeRef seeding, constructor
+native, the `TypeRegistry` in the Pimpl, the finalizer queue +
+`processFinalizers()`), `src/QLangObjects.cpp` (`external_ops`,
+`typeref_ops`, `getObjectOps` routing), `src/QLangVM.cpp` (`CALLCLOS`
+`BoundMethod` dispatch in the single executor; context-threaded
+`valueToString` → `toStr`; the `release()` builtin; the finalizer-deleter
+enqueue), `src/QLangBytecodeIO.cpp` (tags 20–22 emit tag 0). The **compiler is
+unchanged** — `T.Constant` compiles as an ordinary const-variable load.
+Tests: `tests/unit/test_external.cpp` (ctest `external`, 23 checks) and
+`tests/unit/phase3_api.cpp` (ctest `phase3_api`, 23 checks — stable handles,
+type-mismatch/expired-borrow clean errors, finalizer queue, `release()`).
 
 Deviations from the draft:
 
@@ -233,4 +267,8 @@ Deviations from the draft:
   the resource-teardown hook is deferred. (QLang classes have `__destroy__`;
   external types do not.)
 - **(e) `type(x)` returns the declared name string, not `type_info::name`** —
-  v1 uses no RTTI at all.
+  the type *name* is still the declared string. RTTI entered in Phase 3, but
+  only for **handoff validation** (`typeid(T)` + `dynamic_cast` in the typed
+  `qval_external_*<T>` helpers, §3/§10.2) — it is not used for `type(x)` or
+  for binding identity/layout (those remain the `QL_OBJECT` member-pointer
+  list, (a)).

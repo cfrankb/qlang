@@ -1,8 +1,8 @@
 # Plan: architecture remediation — substrate rewrite (frames, closures, scope, executor)
 
 Status: **in progress** (drafted 2026-11-02). Phase 0 done; Phase 1 done as
-of 2026-11-03 (see Phase 1 status line and the §2 as-of note). Phases 2–5
-pending.
+of 2026-11-03; Phase 2 done as of 2026-11-03 (`7568ed8`); Phase 3 done as of
+2026-11-03 (uncommitted). Phases 4–5 pending.
 Scope: implementation substrate only. **No spec changes, no opcode changes, no
 value-tag changes, no value-representation rewrite, no GC, no JIT, no
 threading model.** The language semantics are sound; the machine under them
@@ -48,17 +48,15 @@ that bumps it.**
 
 ## 2. Defects driving this plan (evidence)
 
-**As-of 2026-11-03 (after Phase 1):** S3 is fixed — generator values are
-per-call instances (`GeneratorState`), two instances of the same generator no
-longer clobber each other, and the function-index-keyed frame map is deleted.
-S1, S2, P1, P2, P3 remain red and are Phase 2 scope (global table / scope
-model); F1 remains red and is Phase 4 scope (`.qlc` encoding). S2 changed
-form: at the base commit it silently returned the caller's register value;
-after Phase 1 it fails at compile time with
-`parse error: cannot call captured function 'f'` (a `global`-captured def-fn
-called from another def-fn has neither a local register nor a capture cell).
-Same root defect (global-capture resolution, F3), different manifestation —
-and arguably the safer failure.
+**As-of 2026-11-03 (after Phase 3):** all Phase 0 regression tests are
+green (`phase0_scope`, `phase0_api`). S1–S3 were fixed by the Phase 1
+substrate (cell captures, single executor, per-call generator instances);
+P1–P4 by the Phase 2 global table (the main frame aliases the table's slots;
+`m_vars`, the start/end sync, and the VM-wide `m_deleted` set are deleted;
+programs are held by `shared_ptr<const CompiledProgram>`); H1–H4 by Phase 3
+(shared type handles + `type_info` validation, finalizer queue, `release()`
+builtin, context split). F1 remains red and is Phase 4 scope (`.qlc`
+encoding); F2–F8 remain and are Phase 4/5 scope.
 
 ### 2.1 Substrate (VM core) — unsound
 

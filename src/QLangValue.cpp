@@ -213,20 +213,32 @@ TypeRefRef &QLangValue::asTypeRef() {
 }
 
 // ExternalRef object resolution: owned.get() if set, else borrowed.lock();
-// an expired borrow means the engine object is gone.
-const void *ExternalRef::self() const {
-  if (owned) return owned.get();
-  if (auto p = borrowed.lock()) return p.get();
-  throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                   std::string("object destroyed: ") + (type ? type->name : "?"));
+// an expired borrow means the engine object is gone. A type check (Phase 3)
+// turns a wrong-pointer handoff into a clean type error instead of UB.
+namespace {
+const void *resolveExternal(const ExternalRef &ref) {
+  const void *p = nullptr;
+  if (ref.owned)
+    p = ref.owned.get();
+  else if (auto b = ref.borrowed.lock())
+    p = b.get();
+  else
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     std::string("object destroyed: ") +
+                         (ref.type ? ref.type->name : "?"));
+  if (ref.check && !ref.check(p))
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     std::string("external type mismatch: expected ") +
+                         (ref.expected ? ref.expected->name() : "?") +
+                         " for type '" + (ref.type ? ref.type->name : "?") +
+                         "'");
+  return p;
+}
 }
 
-void *ExternalRef::selfMut() {
-  if (owned) return owned.get();
-  if (auto p = borrowed.lock()) return p.get();
-  throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                   std::string("object destroyed: ") + (type ? type->name : "?"));
-}
+const void *ExternalRef::self() const { return resolveExternal(*this); }
+
+void *ExternalRef::selfMut() { return const_cast<void *>(resolveExternal(*this)); }
 
 int64_t toInt64(const QLangValue &v) {
   switch (v.type()) {

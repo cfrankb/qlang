@@ -400,7 +400,14 @@ QLangValue callMethod(const QLangValue& obj, const std::string&,
     throw QLangError(QLangErrorKind::Type, 0, 0,
                      "type '" + t.name + "' is not constructible");
   try {
-    return QLangValue::External(&t, t.construct(ctx, args));
+    // Shared handle (Phase 3): the constructed value keeps the descriptor
+    // alive; the type check rides along from the descriptor.
+    ExternalRef ref;
+    ref.type = obj.asTypeRef().type;
+    ref.owned = t.construct(ctx, args);
+    ref.expected = t.typeInfo;
+    ref.check = t.typeCheck;
+    return QLangValue::External(std::move(ref));
   } catch (const QLangError&) {
     throw;
   } catch (const std::exception& e) {
