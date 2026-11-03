@@ -159,6 +159,31 @@ private:
   int emitCmpJumpFalseExpr(const ExprPtr &cond);
   void compileStmt(const StmtPtr &s,
                    std::vector<std::string> *captures = nullptr);
+  // Per-statement compilers (one per StmtKind); compileStmt dispatches to
+  // them after stamping the source position and snapshotting live temps.
+  void compileDeclaration(const StmtPtr &s);
+  void compileConst(const StmtPtr &s);
+  void compileAssignment(const StmtPtr &s);
+  void compileDelete(const StmtPtr &s);
+  void compileFor(const StmtPtr &s);
+  void compileForIn(const StmtPtr &s);
+  void compileWhile(const StmtPtr &s);
+  void compileIf(const StmtPtr &s);
+  void compileGotoIf(const StmtPtr &s);
+  void compileExprStmt(const StmtPtr &s);
+  void compileDef(const StmtPtr &s);
+  void compileArrow(const StmtPtr &s);
+  void compileReturn(const StmtPtr &s);
+  void compileYield(const StmtPtr &s);
+  void compileContinue(const StmtPtr &s);
+  void compileBreak(const StmtPtr &s);
+  void compileLabel(const StmtPtr &s);
+  void compileGoto(const StmtPtr &s);
+  void compileImport(const StmtPtr &s);
+  void compileClass(const StmtPtr &s);
+  void compileEnum(const StmtPtr &s);
+  void compileGlobal(const StmtPtr &s, std::vector<std::string> *captures);
+  void compileSwitch(const StmtPtr &s);
   void compileExpr(const ExprPtr &e, int dest);
   Opcode binOp(const std::string &text) const;
   Opcode unOp(const std::string &text) const;

@@ -1,3 +1,46 @@
+## Round 34 (2026-11-03)
+
+**Phase 4 — `.qlc` format + compiler hygiene** (plan:
+`docs/plans/architecture-remediation-plan.md` §4; uncommitted). No language
+changes, no new opcodes, no value-tag changes. The one and only `.qlc` format
+version bump in the plan lands here (2 → 3). Closes F1–F5 from the plan's
+defect list.
+- **4.1 Explicit on-wire encoding (F1):** writer and reader now emit/read
+  every multi-byte field in explicit little-endian order, byte by byte — no
+  struct `memcpy`, no host-endian `putU32`. Instructions are written field by
+  field (`u16 op, u16 a, i32, u16 line, u16 col`); the raw 12-byte struct is
+  no longer the on-disk encoding. The version is written and validated from a
+  single shared `constexpr kQlcVersion = 3` (`QLangBytecodeIO.h`); the reader
+  accepts v1..v3 (legacy files are byte-identical on little-endian hosts) and
+  rejects anything newer. Non-durable types (Generator/Object/External/
+  BoundMethod/TypeRef): `writeQlc` rejects a program whose constant pool holds
+  one (returns `false`), and the reader rejects a file carrying tags
+  15/16/20/21/22 with a clear `Io` error (never a silent Nil).
+- **4.2 Compiler statement split (F2):** the 1,456-line `compileStmt` switch
+  is split into one private method per `StmtKind` arm, with a dispatch switch
+  at the top. Mechanical; no behavior change.
+- **4.3 Remove auto-capture (F3):** the name-scanning free-variable
+  augmentation is deleted — the parser's explicit capture list is the only
+  capture mechanism. `global` resolves by name against the global table
+  (Phase 2), killing the register-0 fallback. Compile-time tightening: scripts
+  that relied on implicit capture now fail to compile (none did — the parser
+  already required the explicit list).
+- **4.4 Parser depth limit (F4):** a depth counter in the recursive-descent
+  entry points (`parseStatement`/`parseExpression`); past `kMaxParseDepth =
+  256` the parser throws a clean `QLangError(Parse, "nesting too deep")`
+  instead of overflowing the C stack. RAII guard decrements on all paths.
+- **4.5 Constant pool (F5):** the string-key dedup (which serialized every
+  value to a key and roughly doubled pool memory) is dropped — `addConstant`
+  now appends and returns the pool index per literal.
+- **Tests:** `codec_check` updated for v3 (version assertion 2 → 3, the
+  unsupported-version case now uses v4, the `Bin` test-file builder emits
+  explicit little-endian). 85 checks, all green. Full suite green (36/36
+  ctest; 737 counted unit cases unchanged).
+- **Docs:** `docs/SERIALIZATION.md` (header v3, §3 R2 program-vs-value
+  rejection, §3 R4 explicit load-time capture-rebinding rule, §4 version 3 +
+  field-by-field instruction encoding, §5.1 `version <= 3`, §9 malformed
+  suite v4, §10 status). `harness.md` codec line updated to v3.
+
 ## Round 33 (2026-11-03)
 
 **Phase 3 — host API hardening** (plan:

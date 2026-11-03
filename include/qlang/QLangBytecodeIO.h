@@ -13,16 +13,23 @@
 
 namespace qlang {
 
-// QLC1 v1 .qlc codec (docs/SERIALIZATION.md).
+// QLC1 v3 .qlc codec (docs/SERIALIZATION.md).
 //
 // Values are serialized with a 1-byte tag (QLangValue::Type in declaration
-// order, fixed) plus a little-endian payload. Non-durable types (Generator,
-// Object) serialize as Nil (tag 0).
+// order, fixed) plus an explicit little-endian payload. Non-durable types
+// (Generator, Object, External, BoundMethod, TypeRef) are NOT durable:
+// writeQlc rejects a program whose constant pool holds one (returns false)
+// rather than silently remapping it to Nil, and the reader rejects a file
+// carrying their tags.
 //
 // A .qlc file is a compiled program: header + main section + function
 // records + variable map + native-function slots. Native slots store the C++
 // function NAME only; the loading context re-resolves them (a missing name
 // is an error at load time, see QLangContext::loadProgram).
+
+// .qlc format version (docs/SERIALIZATION.md §4). Written by writeQlc and
+// validated (strictly) by readQlc; the docs reference this constant.
+constexpr uint32_t kQlcVersion = 3;
 
 // Serialize one value. Throws QLangError(Io) on stream failure.
 void serializeValue(std::ostream &os, const QLangValue &v);
@@ -31,16 +38,17 @@ void serializeValue(std::ostream &os, const QLangValue &v);
 // tag, or nesting deeper than 64 levels (docs/SERIALIZATION.md §8).
 QLangValue deserializeValue(std::istream &is);
 
-// Write a full program as QLS1 v1. `nativeIds` maps native function name ->
+// Write a full program as QLC1 v3. `nativeIds` maps native function name ->
 // slot index (from QLangCompiler::nativeFuncIds). Returns false on stream
-// failure.
+// failure or when a constant pool holds a non-durable value (F1).
 bool writeQlc(std::ostream &os, const CompiledProgram &prog,
               const std::map<std::string, int> &nativeIds);
 
-// Read a full program from QLS1 v1. On success fills `prog` (nativeFuncs is
+// Read a full program from QLC1 v3. On success fills `prog` (nativeFuncs is
 // left empty) and `nativeSlots` with the (slot, name) pairs to resolve.
 // Returns false (with `err` set) on bad magic, unsupported version,
-// truncation, invalid opcode/tag, or trailing bytes.
+// truncation, invalid opcode/tag, a non-durable value tag, or trailing
+// bytes.
 bool readQlc(std::istream &is, CompiledProgram &prog,
              std::vector<std::pair<int, std::string>> &nativeSlots,
              std::string &err);

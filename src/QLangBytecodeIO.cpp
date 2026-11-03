@@ -32,20 +32,47 @@ constexpr std::size_t kMaxValues = 64 * 1024 * 1024;       // 64 Mi values
 constexpr std::size_t kMaxInstructions = 64 * 1024 * 1024; // 64 Mi instructions
 
 // ---------------------------------------------------------------------------
-// Little-endian writer helpers.
+// Little-endian writer helpers. Every multi-byte field is emitted byte by
+// byte in explicit little-endian order (F1): no struct memcpy, no
+// host-endian assumption.
 // ---------------------------------------------------------------------------
 void putBytes(std::ostream &os, const void *p, size_t n) {
   os.write(static_cast<const char *>(p), static_cast<std::streamsize>(n));
 }
 void putU8(std::ostream &os, uint8_t v) { os.put(static_cast<char>(v)); }
-void putU32(std::ostream &os, uint32_t v) { putBytes(os, &v, 4); }
-void putI32(std::ostream &os, int32_t v) { putBytes(os, &v, 4); }
-void putU64(std::ostream &os, uint64_t v) { putBytes(os, &v, 8); }
-void putI64(std::ostream &os, int64_t v) { putBytes(os, &v, 8); }
-void putF64(std::ostream &os, double v) { putBytes(os, &v, 8); }
+void putU16(std::ostream &os, uint16_t v) {
+  os.put(static_cast<char>(v & 0xFF));
+  os.put(static_cast<char>((v >> 8) & 0xFF));
+}
+void putU32(std::ostream &os, uint32_t v) {
+  os.put(static_cast<char>(v & 0xFF));
+  os.put(static_cast<char>((v >> 8) & 0xFF));
+  os.put(static_cast<char>((v >> 16) & 0xFF));
+  os.put(static_cast<char>((v >> 24) & 0xFF));
+}
+void putI32(std::ostream &os, int32_t v) { putU32(os, static_cast<uint32_t>(v)); }
+void putU64(std::ostream &os, uint64_t v) {
+  for (int i = 0; i < 8; i++)
+    os.put(static_cast<char>((v >> (8 * i)) & 0xFF));
+}
+void putI64(std::ostream &os, int64_t v) { putU64(os, static_cast<uint64_t>(v)); }
+void putF64(std::ostream &os, double v) {
+  uint64_t bits;
+  std::memcpy(&bits, &v, sizeof bits);
+  putU64(os, bits);
+}
 void putStr(std::ostream &os, const std::string &s) {
   putU32(os, static_cast<uint32_t>(s.size()));
   putBytes(os, s.data(), s.size());
+}
+// One instruction, field by field (F1): the raw struct bytes are NOT the
+// on-disk encoding. Wire layout: u16 op, u16 a, i32 i32, u16 line, u16 col.
+void putInstruction(std::ostream &os, const Instruction &ins) {
+  putU16(os, static_cast<uint16_t>(ins.op));
+  putU16(os, static_cast<uint16_t>(ins.a));
+  putI32(os, ins.i32);
+  putU16(os, ins.line);
+  putU16(os, ins.col);
 }
 
 // ---------------------------------------------------------------------------
@@ -68,35 +95,33 @@ struct Reader {
     need(1);
     return static_cast<uint8_t>(buf[pos++]);
   }
+  // Explicit little-endian reads (F1): byte by byte, no host-endian memcpy.
   uint16_t u16() {
     need(2);
-    uint16_t v;
-    std::memcpy(&v, buf.data() + pos, 2);
+    uint16_t v = static_cast<uint16_t>(static_cast<uint8_t>(buf[pos]) |
+                                       (static_cast<uint8_t>(buf[pos + 1]) << 8));
     pos += 2;
     return v;
   }
   int32_t i32() {
     need(4);
-    int32_t v;
-    std::memcpy(&v, buf.data() + pos, 4);
+    uint32_t v = static_cast<uint32_t>(static_cast<uint8_t>(buf[pos])) |
+                 (static_cast<uint32_t>(static_cast<uint8_t>(buf[pos + 1])) << 8) |
+                 (static_cast<uint32_t>(static_cast<uint8_t>(buf[pos + 2])) << 16) |
+                 (static_cast<uint32_t>(static_cast<uint8_t>(buf[pos + 3])) << 24);
     pos += 4;
-    return v;
+    return static_cast<int32_t>(v);
   }
   uint32_t u32() { return static_cast<uint32_t>(i32()); }
   uint64_t u64() {
     need(8);
-    uint64_t v;
-    std::memcpy(&v, buf.data() + pos, 8);
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; i--)
+      v = (v << 8) | static_cast<uint8_t>(buf[pos + i]);
     pos += 8;
     return v;
   }
-  int64_t i64() {
-    need(8);
-    int64_t v;
-    std::memcpy(&v, buf.data() + pos, 8);
-    pos += 8;
-    return v;
-  }
+  int64_t i64() { return static_cast<int64_t>(u64()); }
   double f64() {
     uint64_t bits = u64();
     double d;
@@ -361,9 +386,11 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
         return false;
   // Header.
   putBytes(os, "QLC1", 4);
-  // Format version 2: MOVI opcode (raw 12-byte layout, no new fields). v1
-  // files (no MOVI) still load in a v2 reader.
-  putU32(os, 2); // format version
+  // Format version (F1): written from the single shared constant
+  // kQlcVersion (docs/SERIALIZATION.md §4). v3 makes the on-wire encoding
+  // explicit little-endian, field by field; v1/v2 files (byte-identical on
+  // little-endian hosts) still load in this reader.
+  putU32(os, kQlcVersion); // format version
 
   // Functions (functions[0] is the implicit "main"; the compiler emits it
   // first, so the §4.1 invariant holds by construction).
@@ -379,9 +406,9 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
       putI32(os, cap.reg);
     putU32(os, static_cast<uint32_t>(f.instructions.size()));
     for (const auto &ins : f.instructions)
-      // 12-byte layout, alignment 4, no padding: the raw struct bytes
-      // (little-endian) are the on-disk encoding.
-      putBytes(os, &ins, sizeof(Instruction));
+      // Field by field, explicit little-endian (F1): the raw struct bytes
+      // are NOT the on-disk encoding.
+      putInstruction(os, ins);
     putU32(os, static_cast<uint32_t>(f.constants.size()));
     for (const auto &c : f.constants)
       serializeValue(os, c);
@@ -432,7 +459,9 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       r.fail("bad magic");
     r.pos = 4;
     uint32_t version = r.u32();
-    if (version > 2)
+    // Accept the current version and the legacy v1/v2 files (byte-identical
+    // on little-endian hosts); reject anything newer (F1).
+    if (version > kQlcVersion)
       r.fail("unsupported version");
 
     // 2. Functions.

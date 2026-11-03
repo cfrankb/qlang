@@ -26,6 +26,7 @@ defined against C++20.
 | [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle) | `1eac6a97597fdadac4102b6364613513a4514323bc369d928ca14b95b4562ca6` |
 | [14-scope.md](14-scope.md) | visibility scope. execution context | `ec1eadb21c4716b94590261fec12a16b1f11a715a5bfed53b5ca46232b6a0999` |
 | [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
+| [16-strict_typing.md](16-strict_typing.md) | strict typing |  |
 
 Compliance: see [../compliance/README.md](../compliance/README.md).
 Migration plan: [../plans/spec_migration_plan.md](../plans/spec_migration_plan.md).

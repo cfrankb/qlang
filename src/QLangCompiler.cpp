@@ -958,15 +958,19 @@ int QLangCompiler::buildFunction(const std::string &name,
     if (localVars.count(id)) continue; // locally declared (loop var, local, etc.)
     if (m_regs.count(id)) continue; // already declared in this function
     if (m_userFuncs.count(id)) {
-      // Phase 1: a def function with captures is materialized as a closure
-      // value at def time; a reference from a nested scope must capture the
-      // closure itself so the call goes through its def-time cells.
-      // Capture-free defs are still called statically (CALLFN).
+      // A def function with captures is materialized as a closure value at
+      // def time; a reference from a nested scope must capture the closure
+      // itself so the call goes through its def-time cells. Capture-free defs
+      // are still called statically (CALLFN).
       int fi = m_userFuncs[id];
       // fi is the final program index (main is prepended at 0); m_functions
       // holds user functions only, so it sits at fi-1.
       if (m_functions[static_cast<size_t>(fi) - 1].captures.empty())
         continue;
+      if (std::find(updatedCaptures.begin(), updatedCaptures.end(), id) ==
+          updatedCaptures.end())
+        updatedCaptures.push_back(id);
+      continue;
     }
     if (builtinId(id) >= 0) continue; // builtin
     if (m_nativeFuncIds.count(id)) continue; // native (C++) function
@@ -990,9 +994,11 @@ int QLangCompiler::buildFunction(const std::string &name,
     // Skip top-level globals: they are invisible in function scope unless
     // explicitly imported via `global`.
     if (m_globalVars.count(id)) continue;
-    // This is a free variable from an enclosing function — capture it.
-    if (std::find(updatedCaptures.begin(), updatedCaptures.end(), id) == updatedCaptures.end())
-      updatedCaptures.push_back(id);
+    // F3: implicit capture of an enclosing function's local is removed. The
+    // spec mandates explicit capture lists (arrow closures); a reference to a
+    // name that is not a parameter, local, global const/func, enum, or an
+    // explicitly captured variable is a compile error (raised by regOf in
+    // compileExpr).
   }
 
   // Register the explicit capture list (name -> capture index). Phase 2:
@@ -1138,209 +1144,441 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
     m_protectedTmps.insert(r);
   m_protectStack.push_back(m_protectedTmps);
   switch (s->kind) {
-  case StmtKind::Declaration: {
-    int r = declareVar(s->name, true);
-    if (isIntLiteral(s->value)) {
-      // `local a = 0` -> one MOVI into the target register (SPEC
-      // §bytecodes: MOVI) instead of MOV tmp + MOV.
-      emitImm(Opcode::MOVI, r, s->value->literal.asInt());
-    } else if (!s->value) {
-      // `local z` -> implicit int, default 0 (SPEC §declarations).
-      // A typed valueless decl (`local b:byte`) gets zero of that type via
-      // the CONV emitted below.
-      emitImm(Opcode::MOVI, r, 0);
-    } else {
-      // Compile the RHS directly into the declared register (SPEC
-      // §bytecodes: encoding guidelines — always copy directly to the
-      // final register): no temp, no MOV, no dead nil-clear.
-      compileExpr(s->value, r);
-    }
-    updateVarType(s->name, s->value);
-    // Track generator variables: if RHS calls a generator function, mark LHS.
-    if (s->value && s->value->kind == ExprKind::Call) {
-      auto *e = s->value.get();
-      trace(TRACE_FULL, "[DBG-GENVAR] Tracking gen var '%s' from call to '%s': userFuncs=%d genVars=%d\n",
-            s->name.c_str(), e->callee.c_str(),
-            (int)m_userFuncs.count(e->callee), (int)m_generatorVars.count(e->callee));
-      if (m_userFuncs.count(e->callee) && m_generatorVars.count(e->callee))
-        m_generatorVars.insert(s->name);
-      trace(TRACE_FULL, "[DBG-GENVAR] m_generatorVars after insert: {");
-      for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
-      trace(TRACE_FULL, " }\n");
-    }
-    // Enforce a typed declaration (e.g. local b:byte = 32).
-    if (s->declaredType)
-      emit(Opcode::CONV, r, r, static_cast<int>(*s->declaredType));
-    // Track top-level variable declarations as globals.
-    if (!m_inFunction)
-      m_globalVars.insert(s->name);
-    break;
+  case StmtKind::Declaration: compileDeclaration(s); break;
+  case StmtKind::Const: compileConst(s); break;
+  case StmtKind::Assignment: compileAssignment(s); break;
+  case StmtKind::Delete: compileDelete(s); break;
+  case StmtKind::For: compileFor(s); break;
+  case StmtKind::ForIn: compileForIn(s); break;
+  case StmtKind::While: compileWhile(s); break;
+  case StmtKind::If: compileIf(s); break;
+  case StmtKind::GotoIf: compileGotoIf(s); break;
+  case StmtKind::ExprStmt: compileExprStmt(s); break;
+  case StmtKind::Def: compileDef(s); break;
+  case StmtKind::Arrow: compileArrow(s); break;
+  case StmtKind::Return: compileReturn(s); break;
+  case StmtKind::Yield: compileYield(s); break;
+  case StmtKind::Continue: compileContinue(s); break;
+  case StmtKind::Break: compileBreak(s); break;
+  case StmtKind::Label: compileLabel(s); break;
+  case StmtKind::Goto: compileGoto(s); break;
+  case StmtKind::Import: compileImport(s); break;
+  case StmtKind::Class: compileClass(s); break;
+  case StmtKind::Enum: compileEnum(s); break;
+  case StmtKind::Global: compileGlobal(s, captures); break;
+  case StmtKind::Switch: compileSwitch(s); break;
   }
-  case StmtKind::Const: {
-    int r = declareVar(s->name, true);
-    m_constVars.insert(s->name);
+  // Statement boundary: free temps allocated within this statement.
+  endOfStatement();
+}
+
+void QLangCompiler::compileDeclaration(const StmtPtr &s) {
+  int r = declareVar(s->name, true);
+  if (isIntLiteral(s->value)) {
+    // `local a = 0` -> one MOVI into the target register (SPEC
+    // §bytecodes: MOVI) instead of MOV tmp + MOV.
+    emitImm(Opcode::MOVI, r, s->value->literal.asInt());
+  } else if (!s->value) {
+    // `local z` -> implicit int, default 0 (SPEC §declarations).
+    // A typed valueless decl (`local b:byte`) gets zero of that type via
+    // the CONV emitted below.
+    emitImm(Opcode::MOVI, r, 0);
+  } else {
     // Compile the RHS directly into the declared register (SPEC
     // §bytecodes: encoding guidelines — always copy directly to the
     // final register): no temp, no MOV, no dead nil-clear.
-    if (s->value)
-      compileExpr(s->value, r);
-    else
-      emit(Opcode::MOVC, r, emitConst(QLangValue()));
-    updateVarType(s->name, s->value);
-    // Enforce a typed declaration (e.g. local b:byte = 32).
-    if (s->declaredType)
-      emit(Opcode::CONV, r, r, static_cast<int>(*s->declaredType));
-    // Global consts are visible everywhere.
-    if (!m_inFunction)
-      m_globalVars.insert(s->name);
-    break;
+    compileExpr(s->value, r);
   }
-  case StmtKind::Assignment: {
-    // Bare static member name in a method body of a class with statics:
-    // write through the shared `__statics__` table.
-    if (!s->target && !m_classStaticNames.empty() &&
-        m_classStaticNames.count(s->name)) {
-      int staticsR = staticsTableReg();
-      int keyR = tmpRegister();
-      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(s->name)));
-      int t = tmpRegister();
-      compileExpr(s->assignValue, t);
-      const std::string &op = s->assignOp.text;
-      if (op == "=") {
-        emit(Opcode::TABPUT, staticsR, keyR, t);
-      } else {
-        int cur = tmpRegister();
-        emit(Opcode::TABGET, cur, staticsR, keyR);
-        Opcode opCode = (op == "++") ? Opcode::INC
-                                     : (op == "--") ? Opcode::DEC
-                                                    : binOp(op.substr(0, op.size() - 1));
-        emit(opCode, cur, cur, t);
-        emit(Opcode::TABPUT, staticsR, keyR, cur);
-      }
-      break;
-    }
-    // Direct assignment to a captured variable (write-back / reference).
-    auto cit = m_captureRegs.find(s->name);
-    if (cit != m_captureRegs.end() && !s->target) {
-      const std::string &op = s->assignOp.text;
-      if (op == "=") {
-        int t = tmpRegister();
-        compileExpr(s->assignValue, t);
-        emit(Opcode::REFSTORE, t, cit->second, 0);
-      } else {
-        int cur = tmpRegister();
-        emit(Opcode::REFLOAD, cur, cit->second, 0);
-        Opcode opCode = (op == "++") ? Opcode::INC
-                                     : (op == "--") ? Opcode::DEC
-                                                    : binOp(op.substr(0, op.size() - 1));
-        if ((opCode == Opcode::ADD || opCode == Opcode::SUB) &&
-            isIntLiteral(s->assignValue)) {
-          // `cap += 12` / `cap -= 12` -> ADDI/SUBI in-place (SPEC §bytecodes:
-          // new OpCode addi/subi).
-          emitImm(opCode == Opcode::ADD ? Opcode::ADDI : Opcode::SUBI, cur,
-                  s->assignValue->literal.asInt());
-        } else {
-          int t = tmpRegister();
-          compileExpr(s->assignValue, t);
-          emit(opCode, cur, cur, t);
-        }
-        emit(Opcode::REFSTORE, cur, cit->second, 0);
-      }
-      break;
-    }
-    // Index/member assignment target (e.g. a[i] = v, t.name = v).
-    if (s->target) {
-      compileAssignTarget(s->target, s->assignOp, s->assignValue);
-      break;
-    }
-    int r = regOf(s->name);
-    if (r < 0) {
-      // Bare assignment auto-declares an implicit local, unless it's a captured
-      // global (which should have been declared via `global` first).
-      if (!m_capturedVars.count(s->name))
-        r = declareVar(s->name); // bare assignment auto-declares an implicit local
-    }
-    // Track top-level bare assignments as globals.
-    if (!m_inFunction)
-      m_globalVars.insert(s->name);
-    guardNotConst(s->name, "assignment");
+  updateVarType(s->name, s->value);
+  // Track generator variables: if RHS calls a generator function, mark LHS.
+  if (s->value && s->value->kind == ExprKind::Call) {
+    auto *e = s->value.get();
+    trace(TRACE_FULL, "[DBG-GENVAR] Tracking gen var '%s' from call to '%s': userFuncs=%d genVars=%d\n",
+          s->name.c_str(), e->callee.c_str(),
+          (int)m_userFuncs.count(e->callee), (int)m_generatorVars.count(e->callee));
+    if (m_userFuncs.count(e->callee) && m_generatorVars.count(e->callee))
+      m_generatorVars.insert(s->name);
+    trace(TRACE_FULL, "[DBG-GENVAR] m_generatorVars after insert: {");
+    for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
+    trace(TRACE_FULL, " }\n");
+  }
+  // Enforce a typed declaration (e.g. local b:byte = 32).
+  if (s->declaredType)
+    emit(Opcode::CONV, r, r, static_cast<int>(*s->declaredType));
+  // Track top-level variable declarations as globals.
+  if (!m_inFunction)
+    m_globalVars.insert(s->name);
+}
+
+void QLangCompiler::compileConst(const StmtPtr &s) {
+  int r = declareVar(s->name, true);
+  m_constVars.insert(s->name);
+  // Compile the RHS directly into the declared register (SPEC
+  // §bytecodes: encoding guidelines — always copy directly to the
+  // final register): no temp, no MOV, no dead nil-clear.
+  if (s->value)
+    compileExpr(s->value, r);
+  else
+    emit(Opcode::MOVC, r, emitConst(QLangValue()));
+  updateVarType(s->name, s->value);
+  // Enforce a typed declaration (e.g. local b:byte = 32).
+  if (s->declaredType)
+    emit(Opcode::CONV, r, r, static_cast<int>(*s->declaredType));
+  // Global consts are visible everywhere.
+  if (!m_inFunction)
+    m_globalVars.insert(s->name);
+}
+
+void QLangCompiler::compileAssignment(const StmtPtr &s) {
+  // Bare static member name in a method body of a class with statics:
+  // write through the shared `__statics__` table.
+  if (!s->target && !m_classStaticNames.empty() &&
+      m_classStaticNames.count(s->name)) {
+    int staticsR = staticsTableReg();
+    int keyR = tmpRegister();
+    emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(s->name)));
+    int t = tmpRegister();
+    compileExpr(s->assignValue, t);
     const std::string &op = s->assignOp.text;
-    // Array append: `name += value` where name is an array.
-    if (op == "+=" && m_varTypes[s->name] == QLangValue::Type::Array) {
+    if (op == "=") {
+      emit(Opcode::TABPUT, staticsR, keyR, t);
+    } else {
+      int cur = tmpRegister();
+      emit(Opcode::TABGET, cur, staticsR, keyR);
+      Opcode opCode = (op == "++") ? Opcode::INC
+                                   : (op == "--") ? Opcode::DEC
+                                                  : binOp(op.substr(0, op.size() - 1));
+      emit(opCode, cur, cur, t);
+      emit(Opcode::TABPUT, staticsR, keyR, cur);
+    }
+    return;
+  }
+  // Direct assignment to a captured variable (write-back / reference).
+  auto cit = m_captureRegs.find(s->name);
+  if (cit != m_captureRegs.end() && !s->target) {
+    const std::string &op = s->assignOp.text;
+    if (op == "=") {
       int t = tmpRegister();
       compileExpr(s->assignValue, t);
-      emit(isArrayExpr(s->assignValue) ? Opcode::ARRAPPV : Opcode::ARRAPP,
-           r, t, 0);
-      releaseTemp(t); // dead after the append
-      break;
-    }
-    if (op == "=") {
-      if (isIntLiteral(s->assignValue)) {
-        // `a = 0` -> one MOVI into the target register (SPEC §bytecodes: MOVI).
-        emitImm(Opcode::MOVI, r, s->assignValue->literal.asInt());
-      } else if (foldSelfArith(s->assignValue, s->name, r)) {
-        // `a = a + 1` -> inc a / `a = a - 4` -> subi a, 4 (in place).
-      } else {
-        // Compile the RHS directly into the target register (SPEC
-        // §bytecodes: encoding guidelines — always copy directly to the
-        // final register): no temp, no MOV, no dead nil-clear.
-        compileExpr(s->assignValue, r);
-      }
-      updateVarType(s->name, s->assignValue);
+      emit(Opcode::REFSTORE, t, cit->second, 0);
     } else {
+      int cur = tmpRegister();
+      emit(Opcode::REFLOAD, cur, cit->second, 0);
       Opcode opCode = (op == "++") ? Opcode::INC
                                    : (op == "--") ? Opcode::DEC
                                                   : binOp(op.substr(0, op.size() - 1));
       if ((opCode == Opcode::ADD || opCode == Opcode::SUB) &&
           isIntLiteral(s->assignValue)) {
-        // `a += 12` / `a -= 12` -> ADDI/SUBI in-place (SPEC §bytecodes:
+        // `cap += 12` / `cap -= 12` -> ADDI/SUBI in-place (SPEC §bytecodes:
         // new OpCode addi/subi).
-        emitImm(opCode == Opcode::ADD ? Opcode::ADDI : Opcode::SUBI, r,
+        emitImm(opCode == Opcode::ADD ? Opcode::ADDI : Opcode::SUBI, cur,
                 s->assignValue->literal.asInt());
       } else {
         int t = tmpRegister();
         compileExpr(s->assignValue, t);
-        emit(opCode, r, r, t);
-        releaseTemp(t); // dead after the compound op
+        emit(opCode, cur, cur, t);
       }
+      emit(Opcode::REFSTORE, cur, cit->second, 0);
     }
-    break;
+    return;
   }
-  case StmtKind::Delete: {
-    int r = regOf(s->delName);
-    if (r < 0) {
-      if (m_externalVars.count(s->delName))
-        throw QLangError(QLangErrorKind::Parse, 0, 0,
-                         "cannot delete external variable '" + s->delName + "'");
+  // Index/member assignment target (e.g. a[i] = v, t.name = v).
+  if (s->target) {
+    compileAssignTarget(s->target, s->assignOp, s->assignValue);
+    return;
+  }
+  int r = regOf(s->name);
+  if (r < 0) {
+    // Bare assignment auto-declares an implicit local, unless it's a captured
+    // global (which should have been declared via `global` first).
+    if (!m_capturedVars.count(s->name))
+      r = declareVar(s->name); // bare assignment auto-declares an implicit local
+  }
+  // Track top-level bare assignments as globals.
+  if (!m_inFunction)
+    m_globalVars.insert(s->name);
+  guardNotConst(s->name, "assignment");
+  const std::string &op = s->assignOp.text;
+  // Array append: `name += value` where name is an array.
+  if (op == "+=" && m_varTypes[s->name] == QLangValue::Type::Array) {
+    int t = tmpRegister();
+    compileExpr(s->assignValue, t);
+    emit(isArrayExpr(s->assignValue) ? Opcode::ARRAPPV : Opcode::ARRAPP,
+         r, t, 0);
+    releaseTemp(t); // dead after the append
+    return;
+  }
+  if (op == "=") {
+    if (isIntLiteral(s->assignValue)) {
+      // `a = 0` -> one MOVI into the target register (SPEC §bytecodes: MOVI).
+      emitImm(Opcode::MOVI, r, s->assignValue->literal.asInt());
+    } else if (foldSelfArith(s->assignValue, s->name, r)) {
+      // `a = a + 1` -> inc a / `a = a - 4` -> subi a, 4 (in place).
+    } else {
+      // Compile the RHS directly into the target register (SPEC
+      // §bytecodes: encoding guidelines — always copy directly to the
+      // final register): no temp, no MOV, no dead nil-clear.
+      compileExpr(s->assignValue, r);
+    }
+    updateVarType(s->name, s->assignValue);
+  } else {
+    Opcode opCode = (op == "++") ? Opcode::INC
+                                 : (op == "--") ? Opcode::DEC
+                                                : binOp(op.substr(0, op.size() - 1));
+    if ((opCode == Opcode::ADD || opCode == Opcode::SUB) &&
+        isIntLiteral(s->assignValue)) {
+      // `a += 12` / `a -= 12` -> ADDI/SUBI in-place (SPEC §bytecodes:
+      // new OpCode addi/subi).
+      emitImm(opCode == Opcode::ADD ? Opcode::ADDI : Opcode::SUBI, r,
+              s->assignValue->literal.asInt());
+    } else {
+      int t = tmpRegister();
+      compileExpr(s->assignValue, t);
+      emit(opCode, r, r, t);
+      releaseTemp(t); // dead after the compound op
+    }
+  }
+}
+
+void QLangCompiler::compileDelete(const StmtPtr &s) {
+  int r = regOf(s->delName);
+  if (r < 0) {
+    if (m_externalVars.count(s->delName))
       throw QLangError(QLangErrorKind::Parse, 0, 0,
-                       "delete of undeclared variable '" + s->delName + "'");
-    }
-    emit(Opcode::DELETEx, r);
-    break;
+                       "cannot delete external variable '" + s->delName + "'");
+    throw QLangError(QLangErrorKind::Parse, 0, 0,
+                     "delete of undeclared variable '" + s->delName + "'");
   }
-  case StmtKind::For: {
+  emit(Opcode::DELETEx, r);
+}
+
+void QLangCompiler::compileFor(const StmtPtr &s) {
+  int x = declareVar(s->loopVar);
+  m_blockScopes.emplace_back(); // body is a block scope (SPEC # block scope)
+  int startReg = tmpRegister();
+  compileExpr(s->forStart, startReg);
+  emit(Opcode::MOV, x, startReg);
+  int endReg = tmpRegister();
+  compileExpr(s->forEnd, endReg);
+
+  bool hasStep = s->stepExpr != nullptr;
+  auto stepVal = hasStep ? foldConst(s->stepExpr) : std::nullopt;
+  auto startFold = foldConst(s->forStart);
+  auto endFold = foldConst(s->forEnd);
+  bool boundsFoldable = startFold && endFold;
+  int64_t correctDir = boundsFoldable
+                           ? ((endFold.value() > startFold.value()) ? 1 : -1)
+                           : 0;
+
+  if (hasStep && stepVal && boundsFoldable) {
+    // Constant step + constant bounds: fully resolved at compile time.
+    int64_t sv = *stepVal;
+    if (sv == 0) {
+      // step 0 -> infinite loop, x frozen at start.
+      m_loops.push_back({0, 0});
+      int bodyStart = static_cast<int>(m_code.instructions().size());
+      for (auto &body : s->body)
+        compileStmt(body);
+      int bodyEnd = static_cast<int>(m_code.instructions().size());
+      int incLabel = bodyEnd;
+      emit(Opcode::JMP, bodyStart);
+      int exitLabel = static_cast<int>(m_code.size());
+      for (int j = bodyStart; j < bodyEnd; j++) {
+        auto &ci = m_code.instructions()[j];
+        if (ci.op == Opcode::CONTINUE) patchJump(ci, incLabel);
+        else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
+      }
+      m_loops.pop_back();
+    } else if ((sv > 0) != (correctDir > 0)) {
+      // User step points the wrong way: run the body exactly once.
+      m_loops.push_back({0, 0});
+      int bodyStart = static_cast<int>(m_code.instructions().size());
+      for (auto &body : s->body)
+        compileStmt(body);
+      int bodyEnd = static_cast<int>(m_code.instructions().size());
+      int exitLabel = static_cast<int>(m_code.size());
+      for (int j = bodyStart; j < bodyEnd; j++) {
+        auto &ci = m_code.instructions()[j];
+        if (ci.op == Opcode::CONTINUE) patchJump(ci, exitLabel);
+        else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
+      }
+      m_loops.pop_back();
+    } else {
+      // Guard loop in the natural direction with the user's step.
+      m_loops.push_back({0, 0});
+      int stepReg = tmpRegister();
+      compileExpr(s->stepExpr, stepReg);
+      int guardLabel = static_cast<int>(m_code.size());
+      // QLang ranges are always inclusive: forward LE (x <= end),
+      // backward GE (x >= end). Int-vs-Int, so fused to cmp+j* (SPEC
+      // §bytecodes: alternate conditional jump).
+      Opcode fwdCmp = (correctDir > 0) ? Opcode::LE : Opcode::GE;
+      int jumpFalseIdx = emitCmpJumpFalse(fwdCmp, x, endReg);
+      int bodyStart = static_cast<int>(m_code.instructions().size());
+      for (auto &body : s->body)
+        compileStmt(body);
+      int bodyEnd = static_cast<int>(m_code.instructions().size());
+      int incLabel = bodyEnd;
+      emit(Opcode::ADD, x, x, stepReg);
+      emit(Opcode::JMP, guardLabel);
+      int exitLabel = static_cast<int>(m_code.size());
+      for (int j = bodyStart; j < bodyEnd; j++) {
+        auto &ci = m_code.instructions()[j];
+        if (ci.op == Opcode::CONTINUE) patchJump(ci, incLabel);
+        else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
+      }
+      patchJump(m_code.instructions()[jumpFalseIdx], exitLabel);
+      m_loops.pop_back();
+    }
+  } else {
+    // Runtime path: variable step and/or variable bounds. The loop's natural
+    // direction is sign(end - start), computed at runtime. A zero step is
+    // normalized to that direction's unit step (so a `step 0` loop advances,
+    // matching the spec's for-step semantics). The user step's sign then
+    // selects one of two bodies:
+    //   1. sign(step) == sign(dir)  -> bounded guard loop
+    //   2. otherwise (wrong direction) -> run the body exactly once
+    m_loops.push_back({0, 0});
+
+    int stepReg = tmpRegister();
+    if (hasStep) {
+      compileExpr(s->stepExpr, stepReg);
+    } else {
+      emitImm(Opcode::MOVI, stepReg, 1);
+    }
+    int zeroReg = tmpRegister();
+    emitImm(Opcode::MOVI, zeroReg, 0);
+
+    // direction = (end > start) ? 1 : -1
+    int subReg = tmpRegister();
+    emit(Opcode::SUB, subReg, endReg, startReg);
+    int posReg = tmpRegister();
+    emit(Opcode::GT, posReg, subReg, zeroReg);
+    int dirReg = tmpRegister();
+    emitImm(Opcode::MOVI, dirReg, -1);
+    int dPosLabel = static_cast<int>(m_code.size());
+    emit(Opcode::JMPIFTRUE, posReg, 0);
+    int dDoneLabel = static_cast<int>(m_code.size());
+    emit(Opcode::JMP, 0);
+    patchJump(m_code.instructions()[dPosLabel], dPosLabel + 2);
+    emitImm(Opcode::MOVI, dirReg, 1);
+    patchJump(m_code.instructions()[dDoneLabel], dPosLabel + 3);
+
+    // No explicit step: advance in the loop's natural direction (unit step).
+    // Without this a backward no-step loop would get step +1 vs dir -1 and
+    // take the run-once path.
+    if (!hasStep)
+      emit(Opcode::MOV, stepReg, dirReg);
+
+    // step == 0 -> natural-direction unit step (so a `step 0` loop advances).
+    int zeroCmp = tmpRegister();
+    emit(Opcode::EQ, zeroCmp, stepReg, zeroReg);
+    int zeroStepLabel = static_cast<int>(m_code.size());
+    emit(Opcode::JMPIFFALSE, zeroCmp, 0);      // step != 0 -> skip normalization
+    emit(Opcode::MOV, stepReg, dirReg);        // step == 0 -> step = dir (+1 / -1)
+    patchJump(m_code.instructions()[zeroStepLabel], zeroStepLabel + 2);
+
+    // runtime conditions
+    int posStep = tmpRegister();
+    emit(Opcode::GT, posStep, stepReg, zeroReg);
+    int posDir = tmpRegister();
+    emit(Opcode::GT, posDir, dirReg, zeroReg);
+    int sameSign = tmpRegister();
+    emit(Opcode::EQ, sameSign, posStep, posDir);
+
+    // Decision: sameSign -> guard loop; else fall through to run-once.
+    int guardLabel = static_cast<int>(m_code.size());
+    emit(Opcode::JMPIFTRUE, sameSign, 0);
+
+    // Run-once body (wrong direction): execute exactly once, then exit.
+    emit(Opcode::MOV, x, startReg);
+    int runOnceBodyStart = static_cast<int>(m_code.instructions().size());
+    for (auto &body : s->body)
+      compileStmt(body);
+    int runOnceBodyEnd = static_cast<int>(m_code.instructions().size());
+    int runOnceJmpIdx = static_cast<int>(m_code.size());
+    emit(Opcode::JMP, 0);                 // patched to loopExit below
+    for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
+      auto &ci = m_code.instructions()[j];
+      if (ci.op == Opcode::CONTINUE) patchJump(ci, 0);   // patched below
+      else if (ci.op == Opcode::BREAK) patchJump(ci, 0); // patched below
+    }
+
+    // Guard loop (natural direction, bounded by a guard check). Direction is
+    // fixed for the whole loop, so the direction branch is a one-time decision
+    // that is cheaply re-evaluated each iteration.
+    //   forward (dir > 0):  `to` bound inclusive -> LE guard (x <= end continues)
+    //   backward (dir <= 0): `to` bound inclusive -> GE guard (x >= end continues)
+    int guardLoopStart = static_cast<int>(m_code.size());
+    emit(Opcode::MOV, x, startReg);
+    int guardOnceLabel = static_cast<int>(m_code.size());
+    emit(Opcode::JMPIFTRUE, posDir, 0);          // forward -> LT guard path
+    // Guards are Int-vs-Int: fused to cmp+j* (SPEC §bytecodes: alternate
+    // conditional jump). guardGeIdx/guardFwdIdx point at the CMP; the j* is
+    // at +1 (patched below).
+    int guardGeIdx = static_cast<int>(m_code.size());
+    emitCmpJumpFalse(Opcode::GE, x, endReg);     // backward guard (x >= end)
+    int guardSkipIdx = static_cast<int>(m_code.size());
+    emit(Opcode::JMP, 0);                        // backward -> loop body
+    int guardFwdIdx = static_cast<int>(m_code.size());
+    emitCmpJumpFalse(Opcode::LE, x, endReg);     // forward guard (x <= end)
+    int guardLoopEntry = static_cast<int>(m_code.size());
+    for (auto &body : s->body)
+      compileStmt(body);
+    int guardBodyEnd = static_cast<int>(m_code.instructions().size());
+    emit(Opcode::ADD, x, x, stepReg);
+    emit(Opcode::JMP, guardOnceLabel);           // loop back to direction branch
+    int loopExit = static_cast<int>(m_code.size());
+
+    // Patch the guard loop's branches.
+    patchJump(m_code.instructions()[guardOnceLabel], guardFwdIdx);   // forward -> guard
+    patchJump(m_code.instructions()[guardGeIdx + 1], loopExit);     // backward exit
+    patchJump(m_code.instructions()[guardFwdIdx + 1], loopExit);    // forward exit
+    patchJump(m_code.instructions()[guardSkipIdx], guardLoopEntry); // backward -> body (JMP reads a)
+    for (int j = guardLoopEntry; j < guardBodyEnd; j++) {
+      auto &ci = m_code.instructions()[j];
+      if (ci.op == Opcode::CONTINUE) patchJump(ci, guardBodyEnd);   // -> ADD (still increment)
+      else if (ci.op == Opcode::BREAK) patchJump(ci, loopExit);
+    }
+    // Patch the run-once body to exit (continue/break both leave the loop).
+    patchJump(m_code.instructions()[runOnceJmpIdx], loopExit);
+    for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
+      auto &ci = m_code.instructions()[j];
+      if (ci.op == Opcode::CONTINUE) patchJump(ci, loopExit);
+      else if (ci.op == Opcode::BREAK) patchJump(ci, loopExit);
+    }
+    // Patch the decision jump.
+    patchJump(m_code.instructions()[guardLabel], guardLoopStart);  // sameSign -> guard loop
+    m_loops.pop_back();
+  }
+  popBlockScope();
+}
+
+void QLangCompiler::compileForIn(const StmtPtr &s) {
+  // for i in range(a, b) -> counter loop: i = a; while (i <= b) { ...; ++i }
+  // No array is materialized (spec §range).
+  m_blockScopes.emplace_back(); // body is a block scope (SPEC # block scope)
+  ExprPtr ra, rb;
+  if (isRangeCall(s->forEnd, ra, rb)) {
     int x = declareVar(s->loopVar);
-    m_blockScopes.emplace_back(); // body is a block scope (SPEC # block scope)
     int startReg = tmpRegister();
-    compileExpr(s->forStart, startReg);
+    compileExpr(ra, startReg);
     emit(Opcode::MOV, x, startReg);
     int endReg = tmpRegister();
-    compileExpr(s->forEnd, endReg);
+    compileExpr(rb, endReg);
 
     bool hasStep = s->stepExpr != nullptr;
     auto stepVal = hasStep ? foldConst(s->stepExpr) : std::nullopt;
-    auto startFold = foldConst(s->forStart);
-    auto endFold = foldConst(s->forEnd);
+    auto startFold = foldConst(ra);
+    auto endFold = foldConst(rb);
     bool boundsFoldable = startFold && endFold;
     int64_t correctDir = boundsFoldable
                              ? ((endFold.value() > startFold.value()) ? 1 : -1)
                              : 0;
 
     if (hasStep && stepVal && boundsFoldable) {
-      // Constant step + constant bounds: fully resolved at compile time.
       int64_t sv = *stepVal;
       if (sv == 0) {
-        // step 0 -> infinite loop, x frozen at start.
         m_loops.push_back({0, 0});
         int bodyStart = static_cast<int>(m_code.instructions().size());
         for (auto &body : s->body)
@@ -1356,7 +1594,6 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         }
         m_loops.pop_back();
       } else if ((sv > 0) != (correctDir > 0)) {
-        // User step points the wrong way: run the body exactly once.
         m_loops.push_back({0, 0});
         int bodyStart = static_cast<int>(m_code.instructions().size());
         for (auto &body : s->body)
@@ -1370,23 +1607,21 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         }
         m_loops.pop_back();
       } else {
-        // Guard loop in the natural direction with the user's step.
         m_loops.push_back({0, 0});
         int stepReg = tmpRegister();
         compileExpr(s->stepExpr, stepReg);
         int guardLabel = static_cast<int>(m_code.size());
-        // QLang ranges are always inclusive: forward LE (x <= end),
-        // backward GE (x >= end). Int-vs-Int, so fused to cmp+j* (SPEC
-        // §bytecodes: alternate conditional jump).
-        Opcode fwdCmp = (correctDir > 0) ? Opcode::LE : Opcode::GE;
-        int jumpFalseIdx = emitCmpJumpFalse(fwdCmp, x, endReg);
+        // Int-vs-Int range guard: fused to cmp+j* (SPEC §bytecodes).
+        int jumpFalseIdx =
+            emitCmpJumpFalse(correctDir > 0 ? Opcode::LE : Opcode::GE, x,
+                             endReg);
         int bodyStart = static_cast<int>(m_code.instructions().size());
         for (auto &body : s->body)
           compileStmt(body);
         int bodyEnd = static_cast<int>(m_code.instructions().size());
         int incLabel = bodyEnd;
         emit(Opcode::ADD, x, x, stepReg);
-        emit(Opcode::JMP, guardLabel);
+        emit(Opcode::JMP, guardLabel);           // loop back to the guard
         int exitLabel = static_cast<int>(m_code.size());
         for (int j = bodyStart; j < bodyEnd; j++) {
           auto &ci = m_code.instructions()[j];
@@ -1397,15 +1632,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
         m_loops.pop_back();
       }
     } else {
-      // Runtime path: variable step and/or variable bounds. The loop's natural
-      // direction is sign(end - start), computed at runtime. A zero step is
-      // normalized to that direction's unit step (so a `step 0` loop advances,
-      // matching the spec's for-step semantics). The user step's sign then
-      // selects one of two bodies:
-      //   1. sign(step) == sign(dir)  -> bounded guard loop
-      //   2. otherwise (wrong direction) -> run the body exactly once
       m_loops.push_back({0, 0});
-
       int stepReg = tmpRegister();
       if (hasStep) {
         compileExpr(s->stepExpr, stepReg);
@@ -1414,8 +1641,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       }
       int zeroReg = tmpRegister();
       emitImm(Opcode::MOVI, zeroReg, 0);
-
-      // direction = (end > start) ? 1 : -1
+      // Natural direction from the (runtime) bounds.
       int subReg = tmpRegister();
       emit(Opcode::SUB, subReg, endReg, startReg);
       int posReg = tmpRegister();
@@ -1430,1181 +1656,993 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
       emitImm(Opcode::MOVI, dirReg, 1);
       patchJump(m_code.instructions()[dDoneLabel], dPosLabel + 3);
 
-      // No explicit step: advance in the loop's natural direction (unit step).
-      // Without this a backward no-step loop would get step +1 vs dir -1 and
-      // take the run-once path.
-      if (!hasStep)
-        emit(Opcode::MOV, stepReg, dirReg);
-
-      // step == 0 -> natural-direction unit step (so a `step 0` loop advances).
+      // step == 0 -> infinite loop: body + increment forever, no guard.
       int zeroCmp = tmpRegister();
       emit(Opcode::EQ, zeroCmp, stepReg, zeroReg);
-      int zeroStepLabel = static_cast<int>(m_code.size());
-      emit(Opcode::JMPIFFALSE, zeroCmp, 0);      // step != 0 -> skip normalization
-      emit(Opcode::MOV, stepReg, dirReg);        // step == 0 -> step = dir (+1 / -1)
-      patchJump(m_code.instructions()[zeroStepLabel], zeroStepLabel + 2);
-
-      // runtime conditions
+      int zeroJumpIdx = static_cast<int>(m_code.size());
+      emit(Opcode::JMPIFTRUE, zeroCmp, 0);
+      int infExitLabel = static_cast<int>(m_code.size());
       int posStep = tmpRegister();
       emit(Opcode::GT, posStep, stepReg, zeroReg);
       int posDir = tmpRegister();
       emit(Opcode::GT, posDir, dirReg, zeroReg);
       int sameSign = tmpRegister();
       emit(Opcode::EQ, sameSign, posStep, posDir);
-
-      // Decision: sameSign -> guard loop; else fall through to run-once.
-      int guardLabel = static_cast<int>(m_code.size());
+      int ssJumpIdx = static_cast<int>(m_code.size());
       emit(Opcode::JMPIFTRUE, sameSign, 0);
-
-      // Run-once body (wrong direction): execute exactly once, then exit.
+      // Run-once: step and direction disagree -> body executes a single time.
       emit(Opcode::MOV, x, startReg);
       int runOnceBodyStart = static_cast<int>(m_code.instructions().size());
       for (auto &body : s->body)
         compileStmt(body);
       int runOnceBodyEnd = static_cast<int>(m_code.instructions().size());
-      int runOnceJmpIdx = static_cast<int>(m_code.size());
-      emit(Opcode::JMP, 0);                 // patched to loopExit below
-      for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
-        auto &ci = m_code.instructions()[j];
-        if (ci.op == Opcode::CONTINUE) patchJump(ci, 0);   // patched below
-        else if (ci.op == Opcode::BREAK) patchJump(ci, 0); // patched below
-      }
-
-      // Guard loop (natural direction, bounded by a guard check). Direction is
-      // fixed for the whole loop, so the direction branch is a one-time decision
-      // that is cheaply re-evaluated each iteration.
-      //   forward (dir > 0):  `to` bound inclusive -> LE guard (x <= end continues)
-      //   backward (dir <= 0): `to` bound inclusive -> GE guard (x >= end continues)
-      int guardLoopStart = static_cast<int>(m_code.size());
+      int runOnceExitJmpIdx = static_cast<int>(m_code.size());
+      emit(Opcode::JMP, 0); // placeholder, backpatched to guardExit below
+      // Infinite-loop (step == 0) body: x advances forever, no guard.
+      // Emitted before the guarded loop so the guarded loop's exit
+      // (guardExit) falls past it.
       emit(Opcode::MOV, x, startReg);
-      int guardOnceLabel = static_cast<int>(m_code.size());
-      emit(Opcode::JMPIFTRUE, posDir, 0);          // forward -> LT guard path
-      // Guards are Int-vs-Int: fused to cmp+j* (SPEC §bytecodes: alternate
-      // conditional jump). guardGeIdx/guardFwdIdx point at the CMP; the j* is
-      // at +1 (patched below).
-      int guardGeIdx = static_cast<int>(m_code.size());
-      emitCmpJumpFalse(Opcode::GE, x, endReg);     // backward guard (x >= end)
-      int guardSkipIdx = static_cast<int>(m_code.size());
-      emit(Opcode::JMP, 0);                        // backward -> loop body
-      int guardFwdIdx = static_cast<int>(m_code.size());
-      emitCmpJumpFalse(Opcode::LE, x, endReg);     // forward guard (x <= end)
-      int guardLoopEntry = static_cast<int>(m_code.size());
+      int infBodyStart = static_cast<int>(m_code.instructions().size());
       for (auto &body : s->body)
         compileStmt(body);
-      int guardBodyEnd = static_cast<int>(m_code.instructions().size());
+      int infBodyEnd = static_cast<int>(m_code.instructions().size());
       emit(Opcode::ADD, x, x, stepReg);
-      emit(Opcode::JMP, guardOnceLabel);           // loop back to direction branch
-      int loopExit = static_cast<int>(m_code.size());
-
-      // Patch the guard loop's branches.
-      patchJump(m_code.instructions()[guardOnceLabel], guardFwdIdx);   // forward -> guard
-      patchJump(m_code.instructions()[guardGeIdx + 1], loopExit);     // backward exit
-      patchJump(m_code.instructions()[guardFwdIdx + 1], loopExit);    // forward exit
-      patchJump(m_code.instructions()[guardSkipIdx], guardLoopEntry); // backward -> body (JMP reads a)
-      for (int j = guardLoopEntry; j < guardBodyEnd; j++) {
+      emit(Opcode::JMP, infBodyStart);
+      for (int j = infBodyStart; j < infBodyEnd; j++) {
         auto &ci = m_code.instructions()[j];
-        if (ci.op == Opcode::CONTINUE) patchJump(ci, guardBodyEnd);   // -> ADD (still increment)
-        else if (ci.op == Opcode::BREAK) patchJump(ci, loopExit);
+        if (ci.op == Opcode::CONTINUE) patchJump(ci, infBodyEnd);
+        else if (ci.op == Opcode::BREAK) patchJump(ci, infExitLabel);
       }
-      // Patch the run-once body to exit (continue/break both leave the loop).
-      patchJump(m_code.instructions()[runOnceJmpIdx], loopExit);
+      // Guarded loop: init x once, then re-check the direction-selected guard
+      // every pass (forward: x <= end; backward: x >= end).
+      int guardInit = static_cast<int>(m_code.size());
+      emit(Opcode::MOV, x, startReg);
+      int guardLabel = static_cast<int>(m_code.size());
+      int posDir2 = tmpRegister();
+      emit(Opcode::GT, posDir2, dirReg, zeroReg);
+      int fwdGuardIdx = static_cast<int>(m_code.size());
+      emit(Opcode::JMPIFTRUE, posDir2, 0);
+      // Int-vs-Int range guards: fused to cmp+j* (SPEC §bytecodes). The j*
+      // is the last instruction emitted, so backExitIdx/fwdExitIdx point at
+      // it (patched to guardExit below).
+      emitCmpJumpFalse(Opcode::GE, x, endReg); // backward guard (x >= end)
+      int backExitIdx = static_cast<int>(m_code.size()) - 1;
+      int skipFwdIdx = static_cast<int>(m_code.size());
+      emit(Opcode::JMP, 0);
+      patchJump(m_code.instructions()[fwdGuardIdx], skipFwdIdx + 1);
+      emitCmpJumpFalse(Opcode::LE, x, endReg); // forward guard (x <= end)
+      int fwdExitIdx = static_cast<int>(m_code.size()) - 1;
+      int bodyStart = static_cast<int>(m_code.instructions().size());
+      for (auto &body : s->body)
+        compileStmt(body);
+      int bodyEnd = static_cast<int>(m_code.instructions().size());
+      emit(Opcode::ADD, x, x, stepReg);
+      emit(Opcode::JMP, guardLabel);
+      int guardExit = static_cast<int>(m_code.size());
+      for (int j = bodyStart; j < bodyEnd; j++) {
+        auto &ci = m_code.instructions()[j];
+        if (ci.op == Opcode::CONTINUE) patchJump(ci, bodyEnd); // jump to increment
+        else if (ci.op == Opcode::BREAK) patchJump(ci, guardExit);
+      }
+      patchJump(m_code.instructions()[backExitIdx], guardExit);
+      patchJump(m_code.instructions()[fwdExitIdx], guardExit);
+      patchJump(m_code.instructions()[zeroJumpIdx], infBodyStart);
+      patchJump(m_code.instructions()[ssJumpIdx], guardInit);
+      patchJump(m_code.instructions()[runOnceExitJmpIdx], guardExit);
       for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
         auto &ci = m_code.instructions()[j];
-        if (ci.op == Opcode::CONTINUE) patchJump(ci, loopExit);
-        else if (ci.op == Opcode::BREAK) patchJump(ci, loopExit);
+        if (ci.op == Opcode::CONTINUE) patchJump(ci, guardExit);
+        else if (ci.op == Opcode::BREAK) patchJump(ci, guardExit);
       }
-      // Patch the decision jump.
-      patchJump(m_code.instructions()[guardLabel], guardLoopStart);  // sameSign -> guard loop
       m_loops.pop_back();
     }
     popBlockScope();
-    break;
+    return;
   }
-  case StmtKind::ForIn: {
-    // for i in range(a, b) -> counter loop: i = a; while (i <= b) { ...; ++i }
-    // No array is materialized (spec §range).
-    m_blockScopes.emplace_back(); // body is a block scope (SPEC # block scope)
-    ExprPtr ra, rb;
-    if (isRangeCall(s->forEnd, ra, rb)) {
-      int x = declareVar(s->loopVar);
-      int startReg = tmpRegister();
-      compileExpr(ra, startReg);
-      emit(Opcode::MOV, x, startReg);
-      int endReg = tmpRegister();
-      compileExpr(rb, endReg);
-
-      bool hasStep = s->stepExpr != nullptr;
-      auto stepVal = hasStep ? foldConst(s->stepExpr) : std::nullopt;
-      auto startFold = foldConst(ra);
-      auto endFold = foldConst(rb);
-      bool boundsFoldable = startFold && endFold;
-      int64_t correctDir = boundsFoldable
-                               ? ((endFold.value() > startFold.value()) ? 1 : -1)
-                               : 0;
-
-      if (hasStep && stepVal && boundsFoldable) {
-        int64_t sv = *stepVal;
-        if (sv == 0) {
-          m_loops.push_back({0, 0});
-          int bodyStart = static_cast<int>(m_code.instructions().size());
-          for (auto &body : s->body)
-            compileStmt(body);
-          int bodyEnd = static_cast<int>(m_code.instructions().size());
-          int incLabel = bodyEnd;
-          emit(Opcode::JMP, bodyStart);
-          int exitLabel = static_cast<int>(m_code.size());
-          for (int j = bodyStart; j < bodyEnd; j++) {
-            auto &ci = m_code.instructions()[j];
-            if (ci.op == Opcode::CONTINUE) patchJump(ci, incLabel);
-            else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
-          }
-          m_loops.pop_back();
-        } else if ((sv > 0) != (correctDir > 0)) {
-          m_loops.push_back({0, 0});
-          int bodyStart = static_cast<int>(m_code.instructions().size());
-          for (auto &body : s->body)
-            compileStmt(body);
-          int bodyEnd = static_cast<int>(m_code.instructions().size());
-          int exitLabel = static_cast<int>(m_code.size());
-          for (int j = bodyStart; j < bodyEnd; j++) {
-            auto &ci = m_code.instructions()[j];
-            if (ci.op == Opcode::CONTINUE) patchJump(ci, exitLabel);
-            else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
-          }
-          m_loops.pop_back();
-        } else {
-          m_loops.push_back({0, 0});
-          int stepReg = tmpRegister();
-          compileExpr(s->stepExpr, stepReg);
-          int guardLabel = static_cast<int>(m_code.size());
-          // Int-vs-Int range guard: fused to cmp+j* (SPEC §bytecodes).
-          int jumpFalseIdx =
-              emitCmpJumpFalse(correctDir > 0 ? Opcode::LE : Opcode::GE, x,
-                               endReg);
-          int bodyStart = static_cast<int>(m_code.instructions().size());
-          for (auto &body : s->body)
-            compileStmt(body);
-          int bodyEnd = static_cast<int>(m_code.instructions().size());
-          int incLabel = bodyEnd;
-          emit(Opcode::ADD, x, x, stepReg);
-          emit(Opcode::JMP, guardLabel);           // loop back to the guard
-          int exitLabel = static_cast<int>(m_code.size());
-          for (int j = bodyStart; j < bodyEnd; j++) {
-            auto &ci = m_code.instructions()[j];
-            if (ci.op == Opcode::CONTINUE) patchJump(ci, incLabel);
-            else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
-          }
-          patchJump(m_code.instructions()[jumpFalseIdx], exitLabel);
-          m_loops.pop_back();
-        }
-      } else {
-        m_loops.push_back({0, 0});
-        int stepReg = tmpRegister();
-        if (hasStep) {
-          compileExpr(s->stepExpr, stepReg);
-        } else {
-          emitImm(Opcode::MOVI, stepReg, 1);
-        }
-        int zeroReg = tmpRegister();
-        emitImm(Opcode::MOVI, zeroReg, 0);
-        // Natural direction from the (runtime) bounds.
-        int subReg = tmpRegister();
-        emit(Opcode::SUB, subReg, endReg, startReg);
-        int posReg = tmpRegister();
-        emit(Opcode::GT, posReg, subReg, zeroReg);
-        int dirReg = tmpRegister();
-        emitImm(Opcode::MOVI, dirReg, -1);
-        int dPosLabel = static_cast<int>(m_code.size());
-        emit(Opcode::JMPIFTRUE, posReg, 0);
-        int dDoneLabel = static_cast<int>(m_code.size());
-        emit(Opcode::JMP, 0);
-        patchJump(m_code.instructions()[dPosLabel], dPosLabel + 2);
-        emitImm(Opcode::MOVI, dirReg, 1);
-        patchJump(m_code.instructions()[dDoneLabel], dPosLabel + 3);
-
-        // step == 0 -> infinite loop: body + increment forever, no guard.
-        int zeroCmp = tmpRegister();
-        emit(Opcode::EQ, zeroCmp, stepReg, zeroReg);
-        int zeroJumpIdx = static_cast<int>(m_code.size());
-        emit(Opcode::JMPIFTRUE, zeroCmp, 0);
-        int infExitLabel = static_cast<int>(m_code.size());
-        int posStep = tmpRegister();
-        emit(Opcode::GT, posStep, stepReg, zeroReg);
-        int posDir = tmpRegister();
-        emit(Opcode::GT, posDir, dirReg, zeroReg);
-        int sameSign = tmpRegister();
-        emit(Opcode::EQ, sameSign, posStep, posDir);
-        int ssJumpIdx = static_cast<int>(m_code.size());
-        emit(Opcode::JMPIFTRUE, sameSign, 0);
-        // Run-once: step and direction disagree -> body executes a single time.
-        emit(Opcode::MOV, x, startReg);
-        int runOnceBodyStart = static_cast<int>(m_code.instructions().size());
-        for (auto &body : s->body)
-          compileStmt(body);
-        int runOnceBodyEnd = static_cast<int>(m_code.instructions().size());
-        int runOnceExitJmpIdx = static_cast<int>(m_code.size());
-        emit(Opcode::JMP, 0); // placeholder, backpatched to guardExit below
-        // Infinite-loop (step == 0) body: x advances forever, no guard.
-        // Emitted before the guarded loop so the guarded loop's exit
-        // (guardExit) falls past it.
-        emit(Opcode::MOV, x, startReg);
-        int infBodyStart = static_cast<int>(m_code.instructions().size());
-        for (auto &body : s->body)
-          compileStmt(body);
-        int infBodyEnd = static_cast<int>(m_code.instructions().size());
-        emit(Opcode::ADD, x, x, stepReg);
-        emit(Opcode::JMP, infBodyStart);
-        for (int j = infBodyStart; j < infBodyEnd; j++) {
-          auto &ci = m_code.instructions()[j];
-          if (ci.op == Opcode::CONTINUE) patchJump(ci, infBodyEnd);
-          else if (ci.op == Opcode::BREAK) patchJump(ci, infExitLabel);
-        }
-        // Guarded loop: init x once, then re-check the direction-selected guard
-        // every pass (forward: x <= end; backward: x >= end).
-        int guardInit = static_cast<int>(m_code.size());
-        emit(Opcode::MOV, x, startReg);
-        int guardLabel = static_cast<int>(m_code.size());
-        int posDir2 = tmpRegister();
-        emit(Opcode::GT, posDir2, dirReg, zeroReg);
-        int fwdGuardIdx = static_cast<int>(m_code.size());
-        emit(Opcode::JMPIFTRUE, posDir2, 0);
-        // Int-vs-Int range guards: fused to cmp+j* (SPEC §bytecodes). The j*
-        // is the last instruction emitted, so backExitIdx/fwdExitIdx point at
-        // it (patched to guardExit below).
-        emitCmpJumpFalse(Opcode::GE, x, endReg); // backward guard (x >= end)
-        int backExitIdx = static_cast<int>(m_code.size()) - 1;
-        int skipFwdIdx = static_cast<int>(m_code.size());
-        emit(Opcode::JMP, 0);
-        patchJump(m_code.instructions()[fwdGuardIdx], skipFwdIdx + 1);
-        emitCmpJumpFalse(Opcode::LE, x, endReg); // forward guard (x <= end)
-        int fwdExitIdx = static_cast<int>(m_code.size()) - 1;
-        int bodyStart = static_cast<int>(m_code.instructions().size());
-        for (auto &body : s->body)
-          compileStmt(body);
-        int bodyEnd = static_cast<int>(m_code.instructions().size());
-        emit(Opcode::ADD, x, x, stepReg);
-        emit(Opcode::JMP, guardLabel);
-        int guardExit = static_cast<int>(m_code.size());
-        for (int j = bodyStart; j < bodyEnd; j++) {
-          auto &ci = m_code.instructions()[j];
-          if (ci.op == Opcode::CONTINUE) patchJump(ci, bodyEnd); // jump to increment
-          else if (ci.op == Opcode::BREAK) patchJump(ci, guardExit);
-        }
-        patchJump(m_code.instructions()[backExitIdx], guardExit);
-        patchJump(m_code.instructions()[fwdExitIdx], guardExit);
-        patchJump(m_code.instructions()[zeroJumpIdx], infBodyStart);
-        patchJump(m_code.instructions()[ssJumpIdx], guardInit);
-        patchJump(m_code.instructions()[runOnceExitJmpIdx], guardExit);
-        for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
-          auto &ci = m_code.instructions()[j];
-          if (ci.op == Opcode::CONTINUE) patchJump(ci, guardExit);
-          else if (ci.op == Opcode::BREAK) patchJump(ci, guardExit);
-        }
-        m_loops.pop_back();
-      }
-      popBlockScope();
-      break;
-    }
-    // `step` is only meaningful for numeric ranges, not array/table
-    // iteration (whose stride is fixed at 1). Reject it here.
-    if (s->stepExpr != nullptr) {
-      throw QLangError(
-          QLangErrorKind::Type, 0, 0,
-          "step is not supported over array literals in for-in loops");
-    }
-    // for i in <collection> ... next i : iterate array elements / table keys.
-    int x = declareVar(s->loopVar); // loopVar holds each element/key
-    int idx = tmpRegister();        // index counter
-    emitImm(Opcode::MOVI, idx, 0);
-    int colReg = tmpRegister();
-    compileExpr(s->forEnd, colReg); // load the collection once
-    int lenReg = tmpRegister();
-    emit(Opcode::LEN, lenReg, colReg, 0);
-
-    int testLabel = static_cast<int>(m_code.size());
-    // idx < len(collection): Int-vs-Int, fused to cmp+j* (SPEC §bytecodes).
-    int jumpFalseIdx = emitCmpJumpFalse(Opcode::LT, idx, lenReg);
-    // Assign loopVar = collection[idx] at the top of each iteration.
-    emit(Opcode::SEQGET, x, colReg, idx);
-
-    m_loops.push_back({0, 0});
-    int bodyStart = static_cast<int>(m_code.instructions().size());
-    for (auto &body : s->body)
-      compileStmt(body);
-    int bodyEnd = static_cast<int>(m_code.instructions().size());
-
-    int incLabel = bodyEnd;
-    emit(Opcode::INC, idx, idx);
-    emit(Opcode::JMP, testLabel);
-    int exitLabel = static_cast<int>(m_code.size());
-    patchJump(m_code.instructions()[jumpFalseIdx], exitLabel);
-    for (int j = bodyStart; j < bodyEnd; j++) {
-      auto &ci = m_code.instructions()[j];
-      if (ci.op == Opcode::CONTINUE) patchJump(ci, incLabel);
-      else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
-    }
-    m_loops.pop_back();
-    popBlockScope();
-    break;
+  // `step` is only meaningful for numeric ranges, not array/table
+  // iteration (whose stride is fixed at 1). Reject it here.
+  if (s->stepExpr != nullptr) {
+    throw QLangError(
+        QLangErrorKind::Type, 0, 0,
+        "step is not supported over array literals in for-in loops");
   }
-  case StmtKind::While: {
-    int testLabel = static_cast<int>(m_code.size());
-    // Fused cmp+j* when the condition is an Int-vs-Int comparison (SPEC
-    // §bytecodes: alternate conditional jump); legacy EQ/GT + JMPIFFALSE
-    // otherwise.
-    int jumpFalseIdx = emitCmpJumpFalseExpr(s->cond);
-    if (jumpFalseIdx < 0) {
-      int condReg = tmpRegister();
-      compileExpr(s->cond, condReg);
-      emit(Opcode::JMPIFFALSE, condReg, 0);
-      jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
-    }
+  // for i in <collection> ... next i : iterate array elements / table keys.
+  int x = declareVar(s->loopVar); // loopVar holds each element/key
+  int idx = tmpRegister();        // index counter
+  emitImm(Opcode::MOVI, idx, 0);
+  int colReg = tmpRegister();
+  compileExpr(s->forEnd, colReg); // load the collection once
+  int lenReg = tmpRegister();
+  emit(Opcode::LEN, lenReg, colReg, 0);
 
-    // continue -> re-evaluate the condition (testLabel is known before the body);
-    // break -> exit (post-body), so patch BREAK instructions after the body.
-    m_loops.push_back({testLabel, 0});
-    int bodyStart = static_cast<int>(m_code.instructions().size());
-    m_blockScopes.emplace_back(); // body is a block scope (SPEC # block scope)
-    for (auto &body : s->whileBody)
-      compileStmt(body);
-    popBlockScope();
-    int bodyEnd = static_cast<int>(m_code.instructions().size());
+  int testLabel = static_cast<int>(m_code.size());
+  // idx < len(collection): Int-vs-Int, fused to cmp+j* (SPEC §bytecodes).
+  int jumpFalseIdx = emitCmpJumpFalse(Opcode::LT, idx, lenReg);
+  // Assign loopVar = collection[idx] at the top of each iteration.
+  emit(Opcode::SEQGET, x, colReg, idx);
 
-    emit(Opcode::JMP, testLabel);
-    int exitLabel = static_cast<int>(m_code.size());
-    patchJump(m_code.instructions()[jumpFalseIdx], exitLabel);
-    for (int j = bodyStart; j < bodyEnd; j++)
-      if (m_code.instructions()[j].op == Opcode::BREAK)
-        patchJump(m_code.instructions()[j], exitLabel);
-    m_loops.pop_back();
-    break;
+  m_loops.push_back({0, 0});
+  int bodyStart = static_cast<int>(m_code.instructions().size());
+  for (auto &body : s->body)
+    compileStmt(body);
+  int bodyEnd = static_cast<int>(m_code.instructions().size());
+
+  int incLabel = bodyEnd;
+  emit(Opcode::INC, idx, idx);
+  emit(Opcode::JMP, testLabel);
+  int exitLabel = static_cast<int>(m_code.size());
+  patchJump(m_code.instructions()[jumpFalseIdx], exitLabel);
+  for (int j = bodyStart; j < bodyEnd; j++) {
+    auto &ci = m_code.instructions()[j];
+    if (ci.op == Opcode::CONTINUE) patchJump(ci, incLabel);
+    else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
   }
-  case StmtKind::If: {
-    // Fused cmp+j* when the condition is an Int-vs-Int comparison (SPEC
-    // §bytecodes: alternate conditional jump); legacy EQ/GT + JMPIFFALSE
-    // otherwise.
-    int jumpFalseIdx = emitCmpJumpFalseExpr(s->ifCond);
-    if (jumpFalseIdx < 0) {
-      int condReg = tmpRegister();
-      compileExpr(s->ifCond, condReg);
-      emit(Opcode::JMPIFFALSE, condReg, 0);
-      jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
-    }
+  m_loops.pop_back();
+  popBlockScope();
+}
 
-    m_blockScopes.emplace_back(); // if body is a block scope (SPEC # block scope)
-    for (auto &body : s->ifBody)
-      compileStmt(body);
-    popBlockScope();
-
-    if (!s->elseBody.empty()) {
-      // Emit JMP after if body to skip else body; patch target after else body compiles.
-      emit(Opcode::JMP, 0);
-      int jumpPastIdx = static_cast<int>(m_code.size()) - 1;
-      int elseBodyStart = static_cast<int>(m_code.size());
-      m_blockScopes.emplace_back(); // else body is a separate block scope
-      for (auto &body : s->elseBody)
-        compileStmt(body);
-      popBlockScope();
-      patchJump(m_code.instructions()[jumpPastIdx], static_cast<int>(m_code.size()));
-      patchJump(m_code.instructions()[jumpFalseIdx], elseBodyStart);
-    } else {
-      patchJump(m_code.instructions()[jumpFalseIdx], static_cast<int>(m_code.size()));
-    }
-    break;
-  }
-  case StmtKind::GotoIf: {
+void QLangCompiler::compileWhile(const StmtPtr &s) {
+  int testLabel = static_cast<int>(m_code.size());
+  // Fused cmp+j* when the condition is an Int-vs-Int comparison (SPEC
+  // §bytecodes: alternate conditional jump); legacy EQ/GT + JMPIFFALSE
+  // otherwise.
+  int jumpFalseIdx = emitCmpJumpFalseExpr(s->cond);
+  if (jumpFalseIdx < 0) {
     int condReg = tmpRegister();
-    compileExpr(s->gotoIfCond, condReg);
-    auto lit = m_labels.find(s->gotoIfLabel);
-    if (lit == m_labels.end())
-      throw QLangError(QLangErrorKind::Parse, 0, 0,
-                       "undefined label '" + s->gotoIfLabel + "'");
-    emit(Opcode::JMPIFTRUE, condReg, lit->second);
-    break;
+    compileExpr(s->cond, condReg);
+    emit(Opcode::JMPIFFALSE, condReg, 0);
+    jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
   }
-  case StmtKind::ExprStmt: {
-    // Statement-form prefix/postfix inc/dec on a variable must write back to
-    // that variable's register (e.g. --a, a++). Otherwise the inc/dec result
-    // would land in a throwaway temp and the variable would be unchanged.
-    if (s->value && s->value->kind == ExprKind::Unary &&
-        (s->value->uop.text == "++" || s->value->uop.text == "--")) {
-      const ExprPtr &opnd = s->value->operand;
-      if (opnd && opnd->kind == ExprKind::Variable) {
-        int r = regOf(opnd->name);
-        if (r < 0)
-          throw QLangError(QLangErrorKind::Parse, 0, 0,
-                           "use of undeclared variable '" + opnd->name + "'");
-        guardNotConst(opnd->name, "increment/decrement");
-        emit(s->value->uop.text == "++" ? Opcode::INC : Opcode::DEC, r, r);
-        break;
-      }
-    }
-    int t = tmpRegister();
-    compileExpr(s->value, t);
-    break;
+
+  // continue -> re-evaluate the condition (testLabel is known before the body);
+  // break -> exit (post-body), so patch BREAK instructions after the body.
+  m_loops.push_back({testLabel, 0});
+  int bodyStart = static_cast<int>(m_code.instructions().size());
+  m_blockScopes.emplace_back(); // body is a block scope (SPEC # block scope)
+  for (auto &body : s->whileBody)
+    compileStmt(body);
+  popBlockScope();
+  int bodyEnd = static_cast<int>(m_code.instructions().size());
+
+  emit(Opcode::JMP, testLabel);
+  int exitLabel = static_cast<int>(m_code.size());
+  patchJump(m_code.instructions()[jumpFalseIdx], exitLabel);
+  for (int j = bodyStart; j < bodyEnd; j++)
+    if (m_code.instructions()[j].op == Opcode::BREAK)
+      patchJump(m_code.instructions()[j], exitLabel);
+  m_loops.pop_back();
+}
+
+void QLangCompiler::compileIf(const StmtPtr &s) {
+  // Fused cmp+j* when the condition is an Int-vs-Int comparison (SPEC
+  // §bytecodes: alternate conditional jump); legacy EQ/GT + JMPIFFALSE
+  // otherwise.
+  int jumpFalseIdx = emitCmpJumpFalseExpr(s->ifCond);
+  if (jumpFalseIdx < 0) {
+    int condReg = tmpRegister();
+    compileExpr(s->ifCond, condReg);
+    emit(Opcode::JMPIFFALSE, condReg, 0);
+    jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
   }
-  case StmtKind::Def: {
-    // `def name(params) ... end` (or brace form): a global function.
-    trace(TRACE_FULL, "[DBG-GENVAR] Def stmt for '%s', m_generatorVars={", s->funcName.c_str());
-    for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
-    trace(TRACE_FULL, " }, m_functions.size=%d\n", (int)m_functions.size());
-    int funcIndex = buildFunction(s->funcName, s->params, {}, s->body);
-    m_userFuncs[s->funcName] = funcIndex;
-    // Track generator functions at the outer scope so assignments from them
-    // are recognized as producing generator values.
-    trace(TRACE_FULL, "[DBG-GENVAR] After buildFunction: m_functions.size=%d, back.isGenerator=%d\n",
-          (int)m_functions.size(), m_functions.empty() ? -1 : (int)m_functions.back().isGenerator);
-    if (!m_functions.empty() && m_functions.back().isGenerator)
-      m_generatorVars.insert(s->funcName);
-    trace(TRACE_FULL, "[DBG-GENVAR] After insert: m_generatorVars={");
-    for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
-    trace(TRACE_FULL, " }\n");
-    // Phase 1: a def function with captures is materialized as a closure
-    // value at def time (MAKEFUNC): its cells bind to THIS scope's
-    // registers, so calls from any depth reach the lexically correct
-    // variables (fixes phase0 S2). Calls go through CALLCLOS.
-    // buildFunction just pushed it: it is the last element of m_functions
-    // (the returned funcIndex is the final program index, main prepended at
-    // 0, so it is NOT a valid m_functions index).
-    const Function &built = m_functions.back();
-    if (!built.captures.empty()) {
-      int r = declareVar(s->funcName);
-      auto closure = std::make_shared<Closure>();
-      closure->funcIndex = funcIndex;
-      for (const std::string &cap : built.captureNames) {
-        int reg = regOf(cap);
-        if (reg < 0) {
-          // The capture is itself a free variable of this scope (transitive
-          // capture): load it into a hidden named register so the cell can
-          // alias it for the frame's lifetime.
-          auto cit = m_captureRegs.find(cap);
-          if (cit != m_captureRegs.end()) {
-            reg = declareVar(std::string("__cap_") + cap);
-            emit(Opcode::REFLOAD, reg, cit->second, 0);
-          }
-        }
-        if (reg < 0)
-          reg = 0; // preserve legacy binding for unresolvable names
-        CaptureRef cr;
-        cr.reg = reg;
-        closure->captures.push_back(cr);
-      }
-      int constIdx = emitConst(QLangValue::Function(closure));
-      emit(Opcode::MAKEFUNC, r, constIdx);
-    }
-    break;
+
+  m_blockScopes.emplace_back(); // if body is a block scope (SPEC # block scope)
+  for (auto &body : s->ifBody)
+    compileStmt(body);
+  popBlockScope();
+
+  if (!s->elseBody.empty()) {
+    // Emit JMP after if body to skip else body; patch target after else body compiles.
+    emit(Opcode::JMP, 0);
+    int jumpPastIdx = static_cast<int>(m_code.size()) - 1;
+    int elseBodyStart = static_cast<int>(m_code.size());
+    m_blockScopes.emplace_back(); // else body is a separate block scope
+    for (auto &body : s->elseBody)
+      compileStmt(body);
+    popBlockScope();
+    patchJump(m_code.instructions()[jumpPastIdx], static_cast<int>(m_code.size()));
+    patchJump(m_code.instructions()[jumpFalseIdx], elseBodyStart);
+  } else {
+    patchJump(m_code.instructions()[jumpFalseIdx], static_cast<int>(m_code.size()));
   }
-  case StmtKind::Arrow: {
-    // `local name = (params)[captures] { ... }`: an arrow-closure value.
-    int funcIndex = buildFunction(s->name, s->params, s->captures, s->body);
-    m_closureVars.insert(s->name);
-    m_varTypes[s->name] = QLangValue::Type::Function;
-    // If the closure contains yield (at any nesting depth), mark it as a
-    // generator variable so nested functions emit CALLCLOS for calls to it.
-    for (auto &st : s->body) {
-      if (st && containsYield(st)) {
-        m_generatorVars.insert(s->name);
-        break;
-      }
+}
+
+void QLangCompiler::compileGotoIf(const StmtPtr &s) {
+  int condReg = tmpRegister();
+  compileExpr(s->gotoIfCond, condReg);
+  auto lit = m_labels.find(s->gotoIfLabel);
+  if (lit == m_labels.end())
+    throw QLangError(QLangErrorKind::Parse, 0, 0,
+                     "undefined label '" + s->gotoIfLabel + "'");
+  emit(Opcode::JMPIFTRUE, condReg, lit->second);
+}
+
+void QLangCompiler::compileExprStmt(const StmtPtr &s) {
+  // Statement-form prefix/postfix inc/dec on a variable must write back to
+  // that variable's register (e.g. --a, a++). Otherwise the inc/dec result
+  // would land in a throwaway temp and the variable would be unchanged.
+  if (s->value && s->value->kind == ExprKind::Unary &&
+      (s->value->uop.text == "++" || s->value->uop.text == "--")) {
+    const ExprPtr &opnd = s->value->operand;
+    if (opnd && opnd->kind == ExprKind::Variable) {
+      int r = regOf(opnd->name);
+      if (r < 0)
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "use of undeclared variable '" + opnd->name + "'");
+      guardNotConst(opnd->name, "increment/decrement");
+      emit(s->value->uop.text == "++" ? Opcode::INC : Opcode::DEC, r, r);
+      return;
     }
-    int r = declareVar(s->name);
-    // Constant describing the closure: funcIndex + enclosing capture registers.
+  }
+  int t = tmpRegister();
+  compileExpr(s->value, t);
+}
+
+void QLangCompiler::compileDef(const StmtPtr &s) {
+  // `def name(params) ... end` (or brace form): a global function.
+  trace(TRACE_FULL, "[DBG-GENVAR] Def stmt for '%s', m_generatorVars={", s->funcName.c_str());
+  for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
+  trace(TRACE_FULL, " }, m_functions.size=%d\n", (int)m_functions.size());
+  int funcIndex = buildFunction(s->funcName, s->params, {}, s->body);
+  m_userFuncs[s->funcName] = funcIndex;
+  // Track generator functions at the outer scope so assignments from them
+  // are recognized as producing generator values.
+  trace(TRACE_FULL, "[DBG-GENVAR] After buildFunction: m_functions.size=%d, back.isGenerator=%d\n",
+        (int)m_functions.size(), m_functions.empty() ? -1 : (int)m_functions.back().isGenerator);
+  if (!m_functions.empty() && m_functions.back().isGenerator)
+    m_generatorVars.insert(s->funcName);
+  trace(TRACE_FULL, "[DBG-GENVAR] After insert: m_generatorVars={");
+  for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
+  trace(TRACE_FULL, " }\n");
+  // Phase 1: a def function with captures is materialized as a closure
+  // value at def time (MAKEFUNC): its cells bind to THIS scope's
+  // registers, so calls from any depth reach the lexically correct
+  // variables (fixes phase0 S2). Calls go through CALLCLOS.
+  // buildFunction just pushed it: it is the last element of m_functions
+  // (the returned funcIndex is the final program index, main prepended at
+  // 0, so it is NOT a valid m_functions index).
+  const Function &built = m_functions.back();
+  if (!built.captures.empty()) {
+    int r = declareVar(s->funcName);
     auto closure = std::make_shared<Closure>();
     closure->funcIndex = funcIndex;
-    for (auto &cap : s->captures) {
+    for (const std::string &cap : built.captureNames) {
       int reg = regOf(cap);
+      if (reg < 0) {
+        // The capture is itself a free variable of this scope (transitive
+        // capture): load it into a hidden named register so the cell can
+        // alias it for the frame's lifetime.
+        auto cit = m_captureRegs.find(cap);
+        if (cit != m_captureRegs.end()) {
+          reg = declareVar(std::string("__cap_") + cap);
+          emit(Opcode::REFLOAD, reg, cit->second, 0);
+        }
+      }
       if (reg < 0)
-        throw QLangError(QLangErrorKind::Parse, 0, 0,
-                         "capture of undeclared variable '" + cap + "'");
+        reg = 0; // preserve legacy binding for unresolvable names
       CaptureRef cr;
-      cr.reg = reg; // env/cell filled in by MAKEFUNC at runtime
+      cr.reg = reg;
       closure->captures.push_back(cr);
     }
     int constIdx = emitConst(QLangValue::Function(closure));
-    // Build the closure value directly in the declared register (SPEC
-    // §bytecodes: encoding guidelines — always copy directly to the
-    // final register).
     emit(Opcode::MAKEFUNC, r, constIdx);
-    break;
   }
-  case StmtKind::Return: {
-    // Return value goes into register 0 (the frame's return register).
-    // Compile the expression directly into it (SPEC §bytecodes: encoding
-    // guidelines — always copy directly to the final register).
-    if (s->returnValue) {
-      compileExpr(s->returnValue, 0);
-    } else {
-      emit(Opcode::MOVC, 0, emitConst(QLangValue())); // nil
+}
+
+void QLangCompiler::compileArrow(const StmtPtr &s) {
+  // `local name = (params)[captures] { ... }`: an arrow-closure value.
+  int funcIndex = buildFunction(s->name, s->params, s->captures, s->body);
+  m_closureVars.insert(s->name);
+  m_varTypes[s->name] = QLangValue::Type::Function;
+  // If the closure contains yield (at any nesting depth), mark it as a
+  // generator variable so nested functions emit CALLCLOS for calls to it.
+  for (auto &st : s->body) {
+    if (st && containsYield(st)) {
+      m_generatorVars.insert(s->name);
+      break;
     }
-    emit(Opcode::RETURN, 0);
-    break;
   }
-  case StmtKind::Yield: {
-    // Yield value goes into register 0 (the generator's yield register).
-    // Compile the expression directly into it (SPEC §bytecodes: encoding
-    // guidelines — always copy directly to the final register).
-    if (s->yieldValue) {
-      compileExpr(s->yieldValue, 0);
-    } else {
-      emit(Opcode::MOVC, 0, emitConst(QLangValue())); // nil
-    }
-    emit(Opcode::YIELD, 0);
-    break;
-  }
-  case StmtKind::Continue: {
-    if (m_loops.empty())
+  int r = declareVar(s->name);
+  // Constant describing the closure: funcIndex + enclosing capture registers.
+  auto closure = std::make_shared<Closure>();
+  closure->funcIndex = funcIndex;
+  for (auto &cap : s->captures) {
+    int reg = regOf(cap);
+    if (reg < 0)
       throw QLangError(QLangErrorKind::Parse, 0, 0,
-                       "'continue' outside of a loop");
-    emit(Opcode::CONTINUE, m_loops.back().contAddr);
-    break;
+                       "capture of undeclared variable '" + cap + "'");
+    CaptureRef cr;
+    cr.reg = reg; // env/cell filled in by MAKEFUNC at runtime
+    closure->captures.push_back(cr);
   }
-  case StmtKind::Break: {
-    if (!m_loops.empty()) {
-      emit(Opcode::BREAK, m_loops.back().breakAddr);
-      break;
-    }
-    if (!m_switches.empty()) {
-      // Record this break JMP for later patching once we know the switch end.
-      m_breakJmps.push_back(static_cast<int>(m_code.size()));
-      emit(Opcode::JMP, 0); // placeholder, patched in switch compilation
-      break;
-    }
+  int constIdx = emitConst(QLangValue::Function(closure));
+  // Build the closure value directly in the declared register (SPEC
+  // §bytecodes: encoding guidelines — always copy directly to the
+  // final register).
+  emit(Opcode::MAKEFUNC, r, constIdx);
+}
+
+void QLangCompiler::compileReturn(const StmtPtr &s) {
+  // Return value goes into register 0 (the frame's return register).
+  // Compile the expression directly into it (SPEC §bytecodes: encoding
+  // guidelines — always copy directly to the final register).
+  if (s->returnValue) {
+    compileExpr(s->returnValue, 0);
+  } else {
+    emit(Opcode::MOVC, 0, emitConst(QLangValue())); // nil
+  }
+  emit(Opcode::RETURN, 0);
+}
+
+void QLangCompiler::compileYield(const StmtPtr &s) {
+  // Yield value goes into register 0 (the generator's yield register).
+  // Compile the expression directly into it (SPEC §bytecodes: encoding
+  // guidelines — always copy directly to the final register).
+  if (s->yieldValue) {
+    compileExpr(s->yieldValue, 0);
+  } else {
+    emit(Opcode::MOVC, 0, emitConst(QLangValue())); // nil
+  }
+  emit(Opcode::YIELD, 0);
+}
+
+void QLangCompiler::compileContinue(const StmtPtr &s) {
+  if (m_loops.empty())
     throw QLangError(QLangErrorKind::Parse, 0, 0,
-                     "'break' outside of a loop or switch");
-    break;
+                     "'continue' outside of a loop");
+  emit(Opcode::CONTINUE, m_loops.back().contAddr);
+}
+
+void QLangCompiler::compileBreak(const StmtPtr &s) {
+  if (!m_loops.empty()) {
+    emit(Opcode::BREAK, m_loops.back().breakAddr);
+    return;
   }
-  case StmtKind::Label: {
-    // Record the current instruction index as the target for this label.
-    m_labels[s->labelName] = static_cast<int>(m_code.size());
-    break;
+  if (!m_switches.empty()) {
+    // Record this break JMP for later patching once we know the switch end.
+    m_breakJmps.push_back(static_cast<int>(m_code.size()));
+    emit(Opcode::JMP, 0); // placeholder, patched in switch compilation
+    return;
   }
-  case StmtKind::Goto: {
-    auto lit = m_labels.find(s->gotoLabel);
-    if (lit == m_labels.end())
+  throw QLangError(QLangErrorKind::Parse, 0, 0,
+                   "'break' outside of a loop or switch");
+}
+
+void QLangCompiler::compileLabel(const StmtPtr &s) {
+  // Record the current instruction index as the target for this label.
+  m_labels[s->labelName] = static_cast<int>(m_code.size());
+}
+
+void QLangCompiler::compileGoto(const StmtPtr &s) {
+  auto lit = m_labels.find(s->gotoLabel);
+  if (lit == m_labels.end())
+    throw QLangError(QLangErrorKind::Parse, 0, 0,
+                     "undefined label '" + s->gotoLabel + "'");
+  emit(Opcode::JMP, lit->second);
+}
+
+void QLangCompiler::compileImport(const StmtPtr &s) {
+  // Resolve module functions at compile time and register them as external
+  // funcs in the current scope. Supports:
+  //   import math                          — flat import all
+  //   import math.min                      — flat import single func (legacy)
+  //   import math as m                     — register under alias, flat import all
+  //   from math import *                   — flat import all
+  //   from math import min, max            — flat import specific funcs
+  if (!m_inFunction) {
+    // Find the module.
+    const QLangContext::Module *mod = nullptr;
+    for (const auto &m : m_moduleFuncs) {
+      if (m.name == s->importModule) { mod = &m; break; }
+    }
+    if (!mod)
       throw QLangError(QLangErrorKind::Parse, 0, 0,
-                       "undefined label '" + s->gotoLabel + "'");
-    emit(Opcode::JMP, lit->second);
-    break;
-  }
-  case StmtKind::Import: {
-    // Resolve module functions at compile time and register them as external
-    // funcs in the current scope. Supports:
-    //   import math                          — flat import all
-    //   import math.min                      — flat import single func (legacy)
-    //   import math as m                     — register under alias, flat import all
-    //   from math import *                   — flat import all
-    //   from math import min, max            — flat import specific funcs
-    if (!m_inFunction) {
-      // Find the module.
-      const QLangContext::Module *mod = nullptr;
-      for (const auto &m : m_moduleFuncs) {
-        if (m.name == s->importModule) { mod = &m; break; }
-      }
-      if (!mod)
+                       "undefined module '" + s->importModule + "'");
+
+    // If alias specified, register the module under the alias name.
+    if (!s->importAlias.empty()) {
+      QLangContext::Module aliased;
+      aliased.name = s->importAlias;
+      aliased.funcs = mod->funcs;
+      m_moduleFuncs.push_back(aliased);
+      // Now import from the alias.
+      mod = &m_moduleFuncs.back();
+    }
+
+    // Collect function names to import.
+    std::vector<std::string> names;
+    if (!s->importFunc.empty()) {
+      // Legacy single-function import.
+      auto fit = mod->funcs.find(s->importFunc);
+      if (fit == mod->funcs.end())
         throw QLangError(QLangErrorKind::Parse, 0, 0,
-                         "undefined module '" + s->importModule + "'");
-
-      // If alias specified, register the module under the alias name.
-      if (!s->importAlias.empty()) {
-        QLangContext::Module aliased;
-        aliased.name = s->importAlias;
-        aliased.funcs = mod->funcs;
-        m_moduleFuncs.push_back(aliased);
-        // Now import from the alias.
-        mod = &m_moduleFuncs.back();
-      }
-
-      // Collect function names to import.
-      std::vector<std::string> names;
-      if (!s->importFunc.empty()) {
-        // Legacy single-function import.
-        auto fit = mod->funcs.find(s->importFunc);
-        if (fit == mod->funcs.end())
+                         "undefined function '" + s->importFunc + "' in module '" + s->importModule + "'");
+      names.push_back(s->importFunc);
+    } else if (s->importAll) {
+      // `from math import *` — import all.
+      for (const auto &[fname, func] : mod->funcs)
+        names.push_back(fname);
+    } else if (!s->importFuncs.empty()) {
+      // `from math import min, max` — import specific functions.
+      for (const auto &fname : s->importFuncs) {
+        if (mod->funcs.find(fname) == mod->funcs.end())
           throw QLangError(QLangErrorKind::Parse, 0, 0,
-                           "undefined function '" + s->importFunc + "' in module '" + s->importModule + "'");
-        names.push_back(s->importFunc);
-      } else if (s->importAll) {
-        // `from math import *` — import all.
-        for (const auto &[fname, func] : mod->funcs)
-          names.push_back(fname);
-      } else if (!s->importFuncs.empty()) {
-        // `from math import min, max` — import specific functions.
-        for (const auto &fname : s->importFuncs) {
-          if (mod->funcs.find(fname) == mod->funcs.end())
-            throw QLangError(QLangErrorKind::Parse, 0, 0,
-                             "undefined function '" + fname + "' in module '" + s->importModule + "'");
-          names.push_back(fname);
-        }
-      } else {
-        // `import math` — flat import all (v1).
-        for (const auto &[fname, func] : mod->funcs)
-          names.push_back(fname);
+                           "undefined function '" + fname + "' in module '" + s->importModule + "'");
+        names.push_back(fname);
       }
-
-      // Register each function as an external func in the current scope.
-      for (const auto &fname : names) {
-        int idx = -1 - m_nativeFuncIds[fname];
-        while (m_nativeFuncsResolved.size() <= static_cast<size_t>(idx))
-          m_nativeFuncsResolved.push_back(nullptr);
-        auto it = mod->funcs.find(fname);
-        if (it != mod->funcs.end())
-          m_nativeFuncsResolved[static_cast<size_t>(idx)] = it->second;
-      }
+    } else {
+      // `import math` — flat import all (v1).
+      for (const auto &[fname, func] : mod->funcs)
+        names.push_back(fname);
     }
-    break;
+
+    // Register each function as an external func in the current scope.
+    for (const auto &fname : names) {
+      int idx = -1 - m_nativeFuncIds[fname];
+      while (m_nativeFuncsResolved.size() <= static_cast<size_t>(idx))
+        m_nativeFuncsResolved.push_back(nullptr);
+      auto it = mod->funcs.find(fname);
+      if (it != mod->funcs.end())
+        m_nativeFuncsResolved[static_cast<size_t>(idx)] = it->second;
+    }
   }
-  case StmtKind::Class: {
-    // class Name { fields + methods end }
-    // Compile body into a function that creates the prototype table and returns it.
-    // Store the function index; at construction time we CALLFN it to get the prototype.
-    Bytecode savedCode = m_code;
-    auto savedRegs = m_regs;
-    auto savedConstVars = m_constVars;
-    auto savedVarTypes = m_varTypes;
-    auto savedUserFuncs = m_userFuncs;
-    auto savedClosureVars = m_closureVars;
-    auto savedCaptureRegs = m_captureRegs;
-    auto savedGlobalVars = m_globalVars;
-    auto savedCapturedVars = m_capturedVars;
-    auto savedGeneratorVars = m_generatorVars;
-    int savedNextReg = m_nextReg;
-    auto savedFreeRegs = std::move(m_freeRegs);
-    m_freeRegs.clear(); // fresh register space for the prototype function
-    auto savedLiveTmps = std::move(m_liveTmps);
-    m_liveTmps.clear();
-    auto savedProtectedTmps = std::move(m_protectedTmps);
-    m_protectedTmps.clear();
-    auto savedProtectStack = std::move(m_protectStack);
-    m_protectStack.clear();
-    auto savedSlotRanges = std::move(m_slotRanges);
-    m_slotRanges.clear();
-    auto savedQuarantined = std::move(m_quarantined);
-    m_quarantined.clear();
-    auto savedDeferred = std::move(m_deferred);
-    m_deferred.clear();
-    auto savedNamedRegs = std::move(m_namedRegs);
-    m_namedRegs.clear();
-    auto savedFreeNamedRegs = std::move(m_freeNamedRegs);
-    m_freeNamedRegs.clear();
-    int savedNamedReg = m_nextNamedReg;
-    bool savedInFunction = m_inFunction;
+}
 
-    m_code = Bytecode();
-    m_regs.clear();
-    m_constVars.clear();
-    m_varTypes.clear();
-    m_userFuncs.clear();
-    m_closureVars.clear();
-    m_captureRegs.clear();
-    m_generatorVars.clear();
-    m_globalVars.clear();
-    m_capturedVars.clear();
-    m_labels.clear();
-    m_nextReg = 0;
-    m_inFunction = false;
+void QLangCompiler::compileClass(const StmtPtr &s) {
+  // class Name { fields + methods end }
+  // Compile body into a function that creates the prototype table and returns it.
+  // Store the function index; at construction time we CALLFN it to get the prototype.
+  Bytecode savedCode = m_code;
+  auto savedRegs = m_regs;
+  auto savedConstVars = m_constVars;
+  auto savedVarTypes = m_varTypes;
+  auto savedUserFuncs = m_userFuncs;
+  auto savedClosureVars = m_closureVars;
+  auto savedCaptureRegs = m_captureRegs;
+  auto savedGlobalVars = m_globalVars;
+  auto savedCapturedVars = m_capturedVars;
+  auto savedGeneratorVars = m_generatorVars;
+  int savedNextReg = m_nextReg;
+  auto savedFreeRegs = std::move(m_freeRegs);
+  m_freeRegs.clear(); // fresh register space for the prototype function
+  auto savedLiveTmps = std::move(m_liveTmps);
+  m_liveTmps.clear();
+  auto savedProtectedTmps = std::move(m_protectedTmps);
+  m_protectedTmps.clear();
+  auto savedProtectStack = std::move(m_protectStack);
+  m_protectStack.clear();
+  auto savedSlotRanges = std::move(m_slotRanges);
+  m_slotRanges.clear();
+  auto savedQuarantined = std::move(m_quarantined);
+  m_quarantined.clear();
+  auto savedDeferred = std::move(m_deferred);
+  m_deferred.clear();
+  auto savedNamedRegs = std::move(m_namedRegs);
+  m_namedRegs.clear();
+  auto savedFreeNamedRegs = std::move(m_freeNamedRegs);
+  m_freeNamedRegs.clear();
+  int savedNamedReg = m_nextNamedReg;
+  bool savedInFunction = m_inFunction;
 
-    // Emit: TABCREATE proto, then compile body, then RETURN proto.
-    emit(Opcode::TABCREATE, 0);
-    m_nextReg = 1; // temporaries must not collide with prototype at reg 0
-    m_nextNamedReg = 1;
+  m_code = Bytecode();
+  m_regs.clear();
+  m_constVars.clear();
+  m_varTypes.clear();
+  m_userFuncs.clear();
+  m_closureVars.clear();
+  m_captureRegs.clear();
+  m_generatorVars.clear();
+  m_globalVars.clear();
+  m_capturedVars.clear();
+  m_labels.clear();
+  m_nextReg = 0;
+  m_inFunction = false;
 
-    std::vector<std::string> methodNames;
-    std::unordered_map<std::string, int> methodFuncIndices;
-    // Fixed arity (Phase 4): method name -> declared param count (incl. self).
-    std::unordered_map<std::string, int> methodArities;
-    // Closed field set (Phase 1): declared fields in declaration order.
-    std::vector<std::string> fieldNames;
-    std::unordered_map<std::string, int> fieldIndices;
-    // Const fields (Phase 2): declared fields marked `const` (read-only).
-    std::vector<std::string> constNames;
-    // Field type inference (Phase 5): field name -> type inferred from the
-    // field's default value (name -> type-name string in `__field_types__`).
-    std::unordered_map<std::string, QLangValue::Type> fieldTypes;
-    // Static members (new extension beyond v1). Collected in the loop and
-    // compiled into the shared `__statics__` table AFTER the loop: method
-    // bodies must see the full static name set, so static methods are deferred.
-    std::unordered_set<std::string> allStatics;
-    std::vector<std::pair<std::string, ExprPtr>> staticFieldDecls; // (name, value)
-    std::vector<std::string> staticConstNames;
-    struct StaticMethodDecl {
-      std::string name;
-      std::vector<std::string> params;
-      std::vector<std::string> captures;
-      std::vector<StmtPtr> body;
-      int funcIndex = -1; // filled in the post-loop statics build
-    };
-    std::vector<StaticMethodDecl> staticMethodDecls;
-    for (auto &st : s->classBody) {
-      if (!st->isStatic)
-        continue;
-      if (st->kind == StmtKind::Arrow || st->kind == StmtKind::Assignment ||
-          st->kind == StmtKind::Const)
-        allStatics.insert(st->name);
-    }
-    for (auto &st : s->classBody) {
-      if (st->kind == StmtKind::Assignment || st->kind == StmtKind::Const) {
-        if (st->isStatic) {
-          // Static field: stored in the `__statics__` table, NOT the instance
-          // field schema. Value is compiled in the post-loop statics build.
-          staticFieldDecls.push_back(
-              {st->name, st->kind == StmtKind::Assignment ? st->assignValue
-                                                          : st->value});
-          if (st->kind == StmtKind::Const)
-            staticConstNames.push_back(st->name);
-          continue;
-        }
-        // A field: `name = value` or `const name = value`.
-        int keyR = tmpRegister();
-        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(st->name)));
-        int valR = tmpRegister();
-        compileExpr(st->kind == StmtKind::Assignment ? st->assignValue
-                                                     : st->value,
-                    valR);
-        emit(Opcode::TABPUT, 0, keyR, valR);
-        freeRegister(keyR);
-        freeRegister(valR);
-        // Record the declared field (name -> index) for the closed field set.
-        fieldIndices[st->name] = static_cast<int>(fieldNames.size());
-        fieldNames.push_back(st->name);
+  // Emit: TABCREATE proto, then compile body, then RETURN proto.
+  emit(Opcode::TABCREATE, 0);
+  m_nextReg = 1; // temporaries must not collide with prototype at reg 0
+  m_nextNamedReg = 1;
+
+  std::vector<std::string> methodNames;
+  std::unordered_map<std::string, int> methodFuncIndices;
+  // Fixed arity (Phase 4): method name -> declared param count (incl. self).
+  std::unordered_map<std::string, int> methodArities;
+  // Closed field set (Phase 1): declared fields in declaration order.
+  std::vector<std::string> fieldNames;
+  std::unordered_map<std::string, int> fieldIndices;
+  // Const fields (Phase 2): declared fields marked `const` (read-only).
+  std::vector<std::string> constNames;
+  // Field type inference (Phase 5): field name -> type inferred from the
+  // field's default value (name -> type-name string in `__field_types__`).
+  std::unordered_map<std::string, QLangValue::Type> fieldTypes;
+  // Static members (new extension beyond v1). Collected in the loop and
+  // compiled into the shared `__statics__` table AFTER the loop: method
+  // bodies must see the full static name set, so static methods are deferred.
+  std::unordered_set<std::string> allStatics;
+  std::vector<std::pair<std::string, ExprPtr>> staticFieldDecls; // (name, value)
+  std::vector<std::string> staticConstNames;
+  struct StaticMethodDecl {
+    std::string name;
+    std::vector<std::string> params;
+    std::vector<std::string> captures;
+    std::vector<StmtPtr> body;
+    int funcIndex = -1; // filled in the post-loop statics build
+  };
+  std::vector<StaticMethodDecl> staticMethodDecls;
+  for (auto &st : s->classBody) {
+    if (!st->isStatic)
+      continue;
+    if (st->kind == StmtKind::Arrow || st->kind == StmtKind::Assignment ||
+        st->kind == StmtKind::Const)
+      allStatics.insert(st->name);
+  }
+  for (auto &st : s->classBody) {
+    if (st->kind == StmtKind::Assignment || st->kind == StmtKind::Const) {
+      if (st->isStatic) {
+        // Static field: stored in the `__statics__` table, NOT the instance
+        // field schema. Value is compiled in the post-loop statics build.
+        staticFieldDecls.push_back(
+            {st->name, st->kind == StmtKind::Assignment ? st->assignValue
+                                                        : st->value});
         if (st->kind == StmtKind::Const)
-          constNames.push_back(st->name);
-        // Field type inference (Phase 5): infer the field's type from its
-        // default value. Only constant defaults yield a constraint; a
-        // non-constant (or `nil`) default leaves the field unconstrained.
-        try {
-          QLangValue def =
-              evalConstExpr(st->kind == StmtKind::Assignment ? st->assignValue
-                                                             : st->value);
-          if (def.type() != QLangValue::Type::Nil)
-            fieldTypes[st->name] = def.type();
-        } catch (...) {
-          // Non-constant default: no compile-time type constraint.
-        }
-      } else if (st->kind == StmtKind::Arrow) {
-        if (st->isStatic) {
-          // Static method: compiled (with a hidden anchor param) in the
-          // post-loop statics build, after all static names are known.
-          staticMethodDecls.push_back(
-              {st->name, st->params, st->captures, st->body});
-          continue;
-        }
-        // Instance method: compile now, with the class's static names visible
-        // so the body can reference statics via `self.__statics__`.
-        m_classStaticNames = allStatics;
-        m_inStaticMethod = false;
-        int funcIndex = buildFunction(st->name, st->params, st->captures, st->body);
-        m_classStaticNames.clear();
-        auto closure = std::make_shared<Closure>();
-        closure->funcIndex = funcIndex;
-        int constIdx = emitConst(QLangValue::Function(closure));
-        int keyR = tmpRegister();
-        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(st->name)));
-        int funcR = tmpRegister();
-        emit(Opcode::MAKEFUNC, funcR, constIdx);
-        emit(Opcode::TABPUT, 0, keyR, funcR);
-        freeRegister(keyR);
-        freeRegister(funcR);
-        methodNames.push_back(st->name);
-        methodFuncIndices[st->name] = funcIndex;
-        // Fixed arity (Phase 4): record the declared parameter count
-        // (includes `self`) for call-site checking.
-        methodArities[st->name] = static_cast<int>(st->params.size());
-      } else {
-        compileStmt(st);
+          staticConstNames.push_back(st->name);
+        continue;
       }
+      // A field: `name = value` or `const name = value`.
+      int keyR = tmpRegister();
+      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(st->name)));
+      int valR = tmpRegister();
+      compileExpr(st->kind == StmtKind::Assignment ? st->assignValue
+                                                   : st->value,
+                  valR);
+      emit(Opcode::TABPUT, 0, keyR, valR);
+      freeRegister(keyR);
+      freeRegister(valR);
+      // Record the declared field (name -> index) for the closed field set.
+      fieldIndices[st->name] = static_cast<int>(fieldNames.size());
+      fieldNames.push_back(st->name);
+      if (st->kind == StmtKind::Const)
+        constNames.push_back(st->name);
+      // Field type inference (Phase 5): infer the field's type from its
+      // default value. Only constant defaults yield a constraint; a
+      // non-constant (or `nil`) default leaves the field unconstrained.
+      try {
+        QLangValue def =
+            evalConstExpr(st->kind == StmtKind::Assignment ? st->assignValue
+                                                           : st->value);
+        if (def.type() != QLangValue::Type::Nil)
+          fieldTypes[st->name] = def.type();
+      } catch (...) {
+        // Non-constant default: no compile-time type constraint.
+      }
+    } else if (st->kind == StmtKind::Arrow) {
+      if (st->isStatic) {
+        // Static method: compiled (with a hidden anchor param) in the
+        // post-loop statics build, after all static names are known.
+        staticMethodDecls.push_back(
+            {st->name, st->params, st->captures, st->body});
+        continue;
+      }
+      // Instance method: compile now, with the class's static names visible
+      // so the body can reference statics via `self.__statics__`.
+      m_classStaticNames = allStatics;
+      m_inStaticMethod = false;
+      int funcIndex = buildFunction(st->name, st->params, st->captures, st->body);
+      m_classStaticNames.clear();
+      auto closure = std::make_shared<Closure>();
+      closure->funcIndex = funcIndex;
+      int constIdx = emitConst(QLangValue::Function(closure));
+      int keyR = tmpRegister();
+      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(st->name)));
+      int funcR = tmpRegister();
+      emit(Opcode::MAKEFUNC, funcR, constIdx);
+      emit(Opcode::TABPUT, 0, keyR, funcR);
+      freeRegister(keyR);
+      freeRegister(funcR);
+      methodNames.push_back(st->name);
+      methodFuncIndices[st->name] = funcIndex;
+      // Fixed arity (Phase 4): record the declared parameter count
+      // (includes `self`) for call-site checking.
+      methodArities[st->name] = static_cast<int>(st->params.size());
+    } else {
+      compileStmt(st);
     }
+  }
 
-    // Static members (new extension): build the shared `__statics__` table and
-    // install it into the prototype BEFORE `__fields__` (same metadata-ordering
-    // constraint as `__const_fields__` above). Every instance copies this table
-    // by reference, so instance writes mutate class-level state.
-    if (!staticFieldDecls.empty() || !staticMethodDecls.empty()) {
-      int staticsReg = tmpRegister();
-      emit(Opcode::TABCREATE, staticsReg);
-      for (auto &sf : staticFieldDecls) {
-        int keyR = tmpRegister();
-        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(sf.first)));
-        int valR = tmpRegister();
-        compileExpr(sf.second, valR);
-        emit(Opcode::TABPUT, staticsReg, keyR, valR);
-        freeRegister(keyR);
-        freeRegister(valR);
-      }
-      for (auto &sm : staticMethodDecls) {
-        // Hidden anchor parameter (the `__statics__` table) as param 0, so a
-        // static method needs no self and can read/write statics directly.
-        std::vector<std::string> params = {"__anchor__"};
-        for (auto &p : sm.params)
-          params.push_back(p);
-        m_classStaticNames = allStatics;
-        m_inStaticMethod = true;
-        int funcIndex = buildFunction(sm.name, params, sm.captures, sm.body);
-        m_inStaticMethod = false;
-        m_classStaticNames.clear();
-        sm.funcIndex = funcIndex;
-        auto closure = std::make_shared<Closure>();
-        closure->funcIndex = funcIndex;
-        int constIdx = emitConst(QLangValue::Function(closure));
-        int keyR = tmpRegister();
-        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(sm.name)));
-        int funcR = tmpRegister();
-        emit(Opcode::MAKEFUNC, funcR, constIdx);
-        emit(Opcode::TABPUT, staticsReg, keyR, funcR);
-        freeRegister(keyR);
-        freeRegister(funcR);
-      }
-      // `__static_const__` set (name -> 1) for static const fields, so
-      // SETFIELD can reject assignment to them.
-      if (!staticConstNames.empty()) {
-        int sconstReg = tmpRegister();
-        emit(Opcode::TABCREATE, sconstReg);
-        for (const auto &cn : staticConstNames) {
-          int keyR = tmpRegister();
-          emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(cn)));
-          int valR = tmpRegister();
-          emitImm(Opcode::MOVI, valR, 1);
-          emit(Opcode::TABPUT, sconstReg, keyR, valR);
-          freeRegister(keyR);
-          freeRegister(valR);
-        }
-        int sckeyR = tmpRegister();
-        emit(Opcode::MOVC, sckeyR,
-             emitConst(QLangValue::String("__static_const__")));
-        emit(Opcode::TABPUT, staticsReg, sckeyR, sconstReg);
-        freeRegister(sckeyR);
-        freeRegister(sconstReg);
-      }
-      int skeyR = tmpRegister();
-      emit(Opcode::MOVC, skeyR, emitConst(QLangValue::String("__statics__")));
-      emit(Opcode::TABPUT, 0, skeyR, staticsReg);
-      freeRegister(skeyR);
-      freeRegister(staticsReg);
+  // Static members (new extension): build the shared `__statics__` table and
+  // install it into the prototype BEFORE `__fields__` (same metadata-ordering
+  // constraint as `__const_fields__` above). Every instance copies this table
+  // by reference, so instance writes mutate class-level state.
+  if (!staticFieldDecls.empty() || !staticMethodDecls.empty()) {
+    int staticsReg = tmpRegister();
+    emit(Opcode::TABCREATE, staticsReg);
+    for (auto &sf : staticFieldDecls) {
+      int keyR = tmpRegister();
+      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(sf.first)));
+      int valR = tmpRegister();
+      compileExpr(sf.second, valR);
+      emit(Opcode::TABPUT, staticsReg, keyR, valR);
+      freeRegister(keyR);
+      freeRegister(valR);
     }
-
-    // Const fields (Phase 2): emit `__const_fields__` metadata (name -> 1) into
-    // the prototype BEFORE installing `__fields__`, so the prototype is not yet
-    // a "class instance" (enforcement key present) while metadata is written —
-    // setField would otherwise reject the non-declared metadata key.
-    if (!constNames.empty()) {
-      int cfieldsReg = tmpRegister();
-      emit(Opcode::TABCREATE, cfieldsReg);
-      for (const auto &cn : constNames) {
+    for (auto &sm : staticMethodDecls) {
+      // Hidden anchor parameter (the `__statics__` table) as param 0, so a
+      // static method needs no self and can read/write statics directly.
+      std::vector<std::string> params = {"__anchor__"};
+      for (auto &p : sm.params)
+        params.push_back(p);
+      m_classStaticNames = allStatics;
+      m_inStaticMethod = true;
+      int funcIndex = buildFunction(sm.name, params, sm.captures, sm.body);
+      m_inStaticMethod = false;
+      m_classStaticNames.clear();
+      sm.funcIndex = funcIndex;
+      auto closure = std::make_shared<Closure>();
+      closure->funcIndex = funcIndex;
+      int constIdx = emitConst(QLangValue::Function(closure));
+      int keyR = tmpRegister();
+      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(sm.name)));
+      int funcR = tmpRegister();
+      emit(Opcode::MAKEFUNC, funcR, constIdx);
+      emit(Opcode::TABPUT, staticsReg, keyR, funcR);
+      freeRegister(keyR);
+      freeRegister(funcR);
+    }
+    // `__static_const__` set (name -> 1) for static const fields, so
+    // SETFIELD can reject assignment to them.
+    if (!staticConstNames.empty()) {
+      int sconstReg = tmpRegister();
+      emit(Opcode::TABCREATE, sconstReg);
+      for (const auto &cn : staticConstNames) {
         int keyR = tmpRegister();
         emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(cn)));
         int valR = tmpRegister();
         emitImm(Opcode::MOVI, valR, 1);
-        emit(Opcode::TABPUT, cfieldsReg, keyR, valR);
+        emit(Opcode::TABPUT, sconstReg, keyR, valR);
         freeRegister(keyR);
         freeRegister(valR);
       }
-      int cfkeyR = tmpRegister();
-      emit(Opcode::MOVC, cfkeyR,
-           emitConst(QLangValue::String(kConstFieldMetaKey)));
-      emit(Opcode::TABPUT, 0, cfkeyR, cfieldsReg);
-      freeRegister(cfkeyR);
-      freeRegister(cfieldsReg);
+      int sckeyR = tmpRegister();
+      emit(Opcode::MOVC, sckeyR,
+           emitConst(QLangValue::String("__static_const__")));
+      emit(Opcode::TABPUT, staticsReg, sckeyR, sconstReg);
+      freeRegister(sckeyR);
+      freeRegister(sconstReg);
     }
-
-    // Field types (Phase 5): emit `__field_types__` metadata (name ->
-    // type-name string) into the prototype BEFORE installing `__fields__` for
-    // the same reason as the const-field metadata above.
-    if (!fieldTypes.empty()) {
-      int ftypesReg = tmpRegister();
-      emit(Opcode::TABCREATE, ftypesReg);
-      for (const auto &ft : fieldTypes) {
-        int keyR = tmpRegister();
-        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(ft.first)));
-        int valR = tmpRegister();
-        QLangValue tv(ft.second);
-        emit(Opcode::MOVC, valR, emitConst(QLangValue::String(tv.typeName())));
-        emit(Opcode::TABPUT, ftypesReg, keyR, valR);
-        freeRegister(keyR);
-        freeRegister(valR);
-      }
-      int ftkeyR = tmpRegister();
-      emit(Opcode::MOVC, ftkeyR,
-           emitConst(QLangValue::String(kFieldTypeMetaKey)));
-      emit(Opcode::TABPUT, 0, ftkeyR, ftypesReg);
-      freeRegister(ftkeyR);
-      freeRegister(ftypesReg);
-    }
-
-    // Closed field set (Phase 1): emit `__fields__` metadata (name -> index)
-    // into the prototype table LAST so instances inherit the closed field
-    // schema. Installing `__fields__` is what makes the prototype a "class
-    // instance" for setField/getField enforcement.
-    if (!fieldNames.empty()) {
-      int fieldsReg = tmpRegister();
-      emit(Opcode::TABCREATE, fieldsReg);
-      for (size_t i = 0; i < fieldNames.size(); i++) {
-        int keyR = tmpRegister();
-        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(fieldNames[i])));
-        int valR = tmpRegister();
-        emitImm(Opcode::MOVI, valR, static_cast<int32_t>(i));
-        emit(Opcode::TABPUT, fieldsReg, keyR, valR);
-        freeRegister(keyR);
-        freeRegister(valR);
-      }
-      int fkeyR = tmpRegister();
-      emit(Opcode::MOVC, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));
-      emit(Opcode::TABPUT, 0, fkeyR, fieldsReg);
-      freeRegister(fkeyR);
-      freeRegister(fieldsReg);
-    }
-
-    emit(Opcode::RETURN, 0);
-
-    int prototypeFuncIdx = static_cast<int>(m_functions.size()) + 1; // +1 for mainFn prepend
-    m_functions.emplace_back(Function{
-        s->className + "_prototype", 0, m_nextReg,
-        std::move(m_code.instructions()), std::move(m_code.constants()), {}});
-    m_code = std::move(savedCode);
-    m_regs = std::move(savedRegs);
-    m_constVars = std::move(savedConstVars);
-    m_varTypes = std::move(savedVarTypes);
-    m_userFuncs = std::move(savedUserFuncs);
-    m_closureVars = std::move(savedClosureVars);
-    m_captureRegs = std::move(savedCaptureRegs);
-    m_globalVars = std::move(savedGlobalVars);
-    m_capturedVars = std::move(savedCapturedVars);
-    m_generatorVars = std::move(savedGeneratorVars);
-    m_nextReg = savedNextReg;
-    m_nextNamedReg = savedNamedReg;
-    m_namedRegs = std::move(savedNamedRegs);
-    m_freeNamedRegs = std::move(savedFreeNamedRegs);
-    m_freeRegs = std::move(savedFreeRegs);
-    m_liveTmps = std::move(savedLiveTmps);
-    m_protectedTmps = std::move(savedProtectedTmps);
-    m_slotRanges = std::move(savedSlotRanges);
-    m_quarantined = std::move(savedQuarantined);
-    m_deferred = std::move(savedDeferred);
-    m_protectStack = std::move(savedProtectStack);
-    m_inFunction = savedInFunction;
-
-    ClassRecord rec;
-    rec.prototypeFunc = prototypeFuncIdx;
-    rec.methodNames = std::move(methodNames);
-    rec.methodFuncIndices = std::move(methodFuncIndices);
-    rec.methodArities = std::move(methodArities);
-    rec.fieldNames = std::move(fieldNames);
-    rec.fieldIndices = std::move(fieldIndices);
-    for (const auto &cn : constNames)
-      rec.constFields.insert(cn);
-    rec.fieldTypes = std::move(fieldTypes);
-    // Static members (new extension): recorded so `C::name` codegen and call
-    // sites can resolve them and check arity.
-    for (auto &sf : staticFieldDecls)
-      rec.staticFields.insert(sf.first);
-    for (const auto &cn : staticConstNames)
-      rec.staticConstFields.insert(cn);
-    for (auto &sm : staticMethodDecls) {
-      rec.staticMethodFuncIndices[sm.name] = sm.funcIndex;
-      rec.staticMethodArities[sm.name] = static_cast<int>(sm.params.size());
-    }
-    m_classes[s->className] = std::move(rec);
-    // Cache the prototype table in a hidden variable (`__proto_<Name>`) so
-    // every instance and `C::name` access shares ONE prototype — and with it
-    // the one shared `__statics__` map.
-    int protoVar = declareVar("__proto_" + s->className);
-    emit(Opcode::CALLFN, protoVar, prototypeFuncIdx, 0);
-    break;
+    int skeyR = tmpRegister();
+    emit(Opcode::MOVC, skeyR, emitConst(QLangValue::String("__statics__")));
+    emit(Opcode::TABPUT, 0, skeyR, staticsReg);
+    freeRegister(skeyR);
+    freeRegister(staticsReg);
   }
-  case StmtKind::Enum: {
-    // enum Name[:type] { A, B, C = 100, D } — immutable name -> value table
-    // stored in a hidden variable (like a class prototype). Implied values
-    // are sequential from 0; an explicit `= N` resumes the sequence at N+1.
-    QLangValue::Type baseType = s->enumType.value_or(QLangValue::Type::Int);
-    auto makeValue = [baseType](int64_t v) -> QLangValue {
-      switch (baseType) {
-      case QLangValue::Type::Char: return QLangValue::Char(static_cast<int8_t>(v));
-      case QLangValue::Type::Byte: return QLangValue::Byte(static_cast<uint8_t>(v));
-      case QLangValue::Type::Word: return QLangValue::Word(static_cast<uint16_t>(v));
-      case QLangValue::Type::Short: return QLangValue::Short(static_cast<int16_t>(v));
-      case QLangValue::Type::Unsigned: return QLangValue::Unsigned(static_cast<uint32_t>(v));
-      case QLangValue::Type::Qword: return QLangValue::Qword(static_cast<uint64_t>(v));
-      case QLangValue::Type::Long: return QLangValue::Long(v);
-      default: return QLangValue::Int(static_cast<int32_t>(v));
-      }
-    };
-    std::vector<std::pair<std::string, QLangValue>> members;
-    int64_t nextVal = 0;
-    for (const auto &m : s->enumMembers) {
-      int64_t v = nextVal++;
-      if (m.value) {
-        QLangValue cv = evalConstExpr(m.value);
-        if (cv.type() != QLangValue::Type::Int)
-          throw QLangError(QLangErrorKind::Parse, 0, 0,
-                           "enum member '" + m.name +
-                           "' value must be an integer literal");
-        v = cv.asInt();
-        nextVal = v + 1; // explicit value resumes the implied sequence
-      }
-      members.push_back({m.name, makeValue(v)});
+
+  // Const fields (Phase 2): emit `__const_fields__` metadata (name -> 1) into
+  // the prototype BEFORE installing `__fields__`, so the prototype is not yet
+  // a "class instance" (enforcement key present) while metadata is written —
+  // setField would otherwise reject the non-declared metadata key.
+  if (!constNames.empty()) {
+    int cfieldsReg = tmpRegister();
+    emit(Opcode::TABCREATE, cfieldsReg);
+    for (const auto &cn : constNames) {
+      int keyR = tmpRegister();
+      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(cn)));
+      int valR = tmpRegister();
+      emitImm(Opcode::MOVI, valR, 1);
+      emit(Opcode::TABPUT, cfieldsReg, keyR, valR);
+      freeRegister(keyR);
+      freeRegister(valR);
     }
-    // Redeclaration: a visible same-name enum (any enclosing scope, or a
-    // global enum inside a function) is an error — enums cannot be redefined.
-    const std::string hvar = "__enum_" + s->name;
-    if (regOf(hvar) >= 0 ||
-        (!s->isLocalEnum && m_globalEnums.count(s->name)))
-      throw QLangError(QLangErrorKind::Parse, 0, 0,
-                       "cannot redeclare enum '" + s->name + "'");
-    int r = declareVar(hvar, s->isLocalEnum);
-    TableValue kv = std::make_shared<std::map<std::string, QLangValue>>();
-    for (const auto &m : members)
-      (*kv)[m.first] = m.second;
-    emit(Opcode::MOVC, r, emitConst(QLangValue::Table(kv)));
-    m_enums[s->name] = std::move(members);
-    if (!m_inFunction)
-      m_globalEnums.insert(s->name);
-    break;
+    int cfkeyR = tmpRegister();
+    emit(Opcode::MOVC, cfkeyR,
+         emitConst(QLangValue::String(kConstFieldMetaKey)));
+    emit(Opcode::TABPUT, 0, cfkeyR, cfieldsReg);
+    freeRegister(cfkeyR);
+    freeRegister(cfieldsReg);
   }
-  case StmtKind::Global: {
-    if (!m_inFunction)
-      throw QLangError(QLangErrorKind::Parse, 0, 0,
-                       "'global' is only valid inside a function");
-    for (const auto &name : s->globalNames) {
-      // Allow global to override local declarations — global wins.
-      if (regOf(name) >= 0) {
-        m_regs.erase(name);
-      }
-      if (!m_globalVars.count(name)) {
-        throw QLangError(QLangErrorKind::Parse, 0, 0,
-                         "global variable '" + name + "' is not declared");
-      }
-      // Add to capture list so the VM binds it to the enclosing frame.
-      if (captures && std::find(captures->begin(), captures->end(), name) == captures->end()) {
-        captures->push_back(name);
-      }
-      // Mark as captured so compileExpr routes through m_captureRegs.
-      m_capturedVars.insert(name);
-      // Set up the capture register immediately so subsequent references
-      // compile as REFLOAD/REFSTORE instead of MOV/MOV.
-      // m_captureRegs stores the capture INDEX (0, 1, 2...) for the VM.
-      if (captures) {
-        int captureIdx = static_cast<int>(captures->size()) - 1;
-        m_captureRegs[name] = captureIdx;
-        // Save the caller's register number for later use in fn.captures.
-        m_globalRegMap[name] = m_savedRegs.count(name) ? m_savedRegs[name] : 0;
-      }
+
+  // Field types (Phase 5): emit `__field_types__` metadata (name ->
+  // type-name string) into the prototype BEFORE installing `__fields__` for
+  // the same reason as the const-field metadata above.
+  if (!fieldTypes.empty()) {
+    int ftypesReg = tmpRegister();
+    emit(Opcode::TABCREATE, ftypesReg);
+    for (const auto &ft : fieldTypes) {
+      int keyR = tmpRegister();
+      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(ft.first)));
+      int valR = tmpRegister();
+      QLangValue tv(ft.second);
+      emit(Opcode::MOVC, valR, emitConst(QLangValue::String(tv.typeName())));
+      emit(Opcode::TABPUT, ftypesReg, keyR, valR);
+      freeRegister(keyR);
+      freeRegister(valR);
     }
-    break;
+    int ftkeyR = tmpRegister();
+    emit(Opcode::MOVC, ftkeyR,
+         emitConst(QLangValue::String(kFieldTypeMetaKey)));
+    emit(Opcode::TABPUT, 0, ftkeyR, ftypesReg);
+    freeRegister(ftkeyR);
+    freeRegister(ftypesReg);
   }
-  case StmtKind::Switch: {
-    // Compile the switch expression into a register.
-    int valReg = tmpRegister();
-    compileExpr(s->switchExpr, valReg);
 
-    // Push switch context so `break` inside case bodies jumps here.
-    // We'll patch the exit target after we know where switchEnd is.
-    m_switches.push_back(0); // placeholder, patched later
-
-    // Emit a comparison + conditional-jump chain for each case.
-    // For each case we emit:
-    //   [match check: EQ/IN] -> JMPIFTRUE -> [JMP to skip] -> [case body]
-    // After all cases, compile default, then emit JMP to switch end.
-    // The JMP after each case jumps to the next case's check (or switchEnd for last).
-    std::vector<int> caseMatchStarts; // instruction index of each case's match start (const emit)
-    std::vector<int> caseJmpiIfTrueIdx; // instruction index of each JMPIFTRUE
-    std::vector<int> caseSkipJmpIdx;    // JMP after JMPIFTRUE (skip to next case)
-    std::vector<int> caseExitJmpIdx;    // implicit JMP after case body (exit to switchEnd)
-    std::vector<int> caseBodyStarts;    // instruction index of each case body
-    for (size_t i = 0; i < s->cases.size(); i++) {
-      const auto &sc = s->cases[i];
-      int matchCheckIdx = static_cast<int>(m_code.size());
-      caseMatchStarts.push_back(matchCheckIdx);
-      // Emit the match check for this case.
-      int cmpReg = tmpRegister();
-      if (sc.isIn) {
-        int exprReg = tmpRegister();
-        compileExpr(sc.value, exprReg);
-        emit(Opcode::INx, cmpReg, valReg, exprReg);
-      } else {
-        int exprReg = tmpRegister();
-        compileExpr(sc.value, exprReg);
-        emit(Opcode::EQ, cmpReg, valReg, exprReg);
-      }
-      emit(Opcode::JMPIFTRUE, cmpReg, 0); // target to patch: jump to case body
-      caseJmpiIfTrueIdx.push_back(static_cast<int>(m_code.size()) - 1);
-      // Emit JMP to skip this case body (patched to next case or switchEnd).
-      int skipJmpIdx = static_cast<int>(m_code.size());
-      emit(Opcode::JMP, 0);
-      caseSkipJmpIdx.push_back(skipJmpIdx);
-      // Compile the case body, then emit an implicit JMP to skip remaining cases.
-      caseBodyStarts.push_back(static_cast<int>(m_code.size()));
-      m_blockScopes.emplace_back(); // each case body is a block scope
-      for (auto &body : sc.body) {
-        trace(TRACE_FULL, "[DBG-CASE] Case %zu body stmt kind=%d\n", i, (int)body->kind);
-        if (body->kind == StmtKind::Assignment) {
-          trace(TRACE_FULL, "[DBG-CASE]   Assign op=%s value=", body->assignOp.text.c_str());
-          if (body->assignValue && body->assignValue->kind == ExprKind::Literal)
-            trace(TRACE_FULL, "Literal:%d (type=%d)\n", (int)body->assignValue->literal.asInt(), (int)body->assignValue->literal.type());
-          else
-            trace(TRACE_FULL, "non-literal\n");
-        }
-        compileStmt(body);
-      }
-      popBlockScope();
-      emit(Opcode::JMP, 0); // implicit exit: patched after default compiles
-      caseExitJmpIdx.push_back(static_cast<int>(m_code.size()) - 1);
+  // Closed field set (Phase 1): emit `__fields__` metadata (name -> index)
+  // into the prototype table LAST so instances inherit the closed field
+  // schema. Installing `__fields__` is what makes the prototype a "class
+  // instance" for setField/getField enforcement.
+  if (!fieldNames.empty()) {
+    int fieldsReg = tmpRegister();
+    emit(Opcode::TABCREATE, fieldsReg);
+    for (size_t i = 0; i < fieldNames.size(); i++) {
+      int keyR = tmpRegister();
+      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(fieldNames[i])));
+      int valR = tmpRegister();
+      emitImm(Opcode::MOVI, valR, static_cast<int32_t>(i));
+      emit(Opcode::TABPUT, fieldsReg, keyR, valR);
+      freeRegister(keyR);
+      freeRegister(valR);
     }
-
-    // Compile the default body (if any).
-    int defaultBodyStart = static_cast<int>(m_code.size());
-    m_blockScopes.emplace_back(); // default body is a block scope
-    for (auto &db : s->defaultBody)
-      compileStmt(db);
-    popBlockScope();
-    int defaultBodyEnd = static_cast<int>(m_code.size());
-
-    // Now we know where switchEnd is (after all cases and default).
-    int switchEnd = static_cast<int>(m_code.size());
-    // Update the switch context with the real exit target.
-    m_switches.back() = switchEnd;
-    // Patch any break JMPs that were emitted with placeholder target 0.
-    for (int idx : m_breakJmps) {
-      patchJump(m_code.at(idx), switchEnd);
-    }
-    m_breakJmps.clear();
-
-    // Patch all JMPIFTRUE targets to point at their case body start,
-    // skip-JMP targets to next case (or default body for last),
-    // and exit-JMP targets to switchEnd.
-    for (size_t i = 0; i < s->cases.size(); i++) {
-      patchJump(m_code.at(caseJmpiIfTrueIdx[i]), caseBodyStarts[i]);
-      if (i + 1 < s->cases.size())
-        patchJump(m_code.at(caseSkipJmpIdx[i]), caseMatchStarts[i + 1]);
-      else
-        patchJump(m_code.at(caseSkipJmpIdx[i]), defaultBodyStart);
-      patchJump(m_code.at(caseExitJmpIdx[i]), switchEnd);
-    }
-
-    // Pop switch context after patching is complete.
-    m_switches.pop_back();
-
-    // Debug: dump switch bytecode
-    trace(TRACE_FULL, "[DBG-SW] switchEnd=%d instructions.size()=%zu\n", switchEnd, m_code.instructions().size());
-    for (size_t i = 0; i < m_code.instructions().size(); i++) {
-      auto &inst = m_code.instructions()[i];
-      trace(TRACE_FULL, "[DBG-SW]   [%zu] op=%d a=%d b=%d c=%d\n", i, (int)inst.op, inst.a, inst.b, inst.c);
-    }
-    trace(TRACE_FULL, "[DBG-SW] constants.size()=%zu\n", m_code.constants().size());
-    for (size_t i = 0; i < m_code.constants().size(); i++) {
-      const auto &c = m_code.constants()[i];
-      std::string cv;
-      if (c.type() == QLangValue::Type::Int)
-        cv = std::to_string(c.asInt());
-      else if (c.type() == QLangValue::Type::String)
-        cv = c.asString();
-      else
-        cv = std::string("(type=") + std::to_string((int)c.type()) + ")";
-      trace(TRACE_FULL, "[DBG-SW]   const[%zu] type=%d str=%s\n", i, (int)c.type(), cv.c_str());
-    }
-    break;
+    int fkeyR = tmpRegister();
+    emit(Opcode::MOVC, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));
+    emit(Opcode::TABPUT, 0, fkeyR, fieldsReg);
+    freeRegister(fkeyR);
+    freeRegister(fieldsReg);
   }
+
+  emit(Opcode::RETURN, 0);
+
+  int prototypeFuncIdx = static_cast<int>(m_functions.size()) + 1; // +1 for mainFn prepend
+  m_functions.emplace_back(Function{
+      s->className + "_prototype", 0, m_nextReg,
+      std::move(m_code.instructions()), std::move(m_code.constants()), {}});
+  m_code = std::move(savedCode);
+  m_regs = std::move(savedRegs);
+  m_constVars = std::move(savedConstVars);
+  m_varTypes = std::move(savedVarTypes);
+  m_userFuncs = std::move(savedUserFuncs);
+  m_closureVars = std::move(savedClosureVars);
+  m_captureRegs = std::move(savedCaptureRegs);
+  m_globalVars = std::move(savedGlobalVars);
+  m_capturedVars = std::move(savedCapturedVars);
+  m_generatorVars = std::move(savedGeneratorVars);
+  m_nextReg = savedNextReg;
+  m_nextNamedReg = savedNamedReg;
+  m_namedRegs = std::move(savedNamedRegs);
+  m_freeNamedRegs = std::move(savedFreeNamedRegs);
+  m_freeRegs = std::move(savedFreeRegs);
+  m_liveTmps = std::move(savedLiveTmps);
+  m_protectedTmps = std::move(savedProtectedTmps);
+  m_slotRanges = std::move(savedSlotRanges);
+  m_quarantined = std::move(savedQuarantined);
+  m_deferred = std::move(savedDeferred);
+  m_protectStack = std::move(savedProtectStack);
+  m_inFunction = savedInFunction;
+
+  ClassRecord rec;
+  rec.prototypeFunc = prototypeFuncIdx;
+  rec.methodNames = std::move(methodNames);
+  rec.methodFuncIndices = std::move(methodFuncIndices);
+  rec.methodArities = std::move(methodArities);
+  rec.fieldNames = std::move(fieldNames);
+  rec.fieldIndices = std::move(fieldIndices);
+  for (const auto &cn : constNames)
+    rec.constFields.insert(cn);
+  rec.fieldTypes = std::move(fieldTypes);
+  // Static members (new extension): recorded so `C::name` codegen and call
+  // sites can resolve them and check arity.
+  for (auto &sf : staticFieldDecls)
+    rec.staticFields.insert(sf.first);
+  for (const auto &cn : staticConstNames)
+    rec.staticConstFields.insert(cn);
+  for (auto &sm : staticMethodDecls) {
+    rec.staticMethodFuncIndices[sm.name] = sm.funcIndex;
+    rec.staticMethodArities[sm.name] = static_cast<int>(sm.params.size());
   }
-  // Statement boundary: free temps allocated within this statement.
-  endOfStatement();
+  m_classes[s->className] = std::move(rec);
+  // Cache the prototype table in a hidden variable (`__proto_<Name>`) so
+  // every instance and `C::name` access shares ONE prototype — and with it
+  // the one shared `__statics__` map.
+  int protoVar = declareVar("__proto_" + s->className);
+  emit(Opcode::CALLFN, protoVar, prototypeFuncIdx, 0);
 }
+
+void QLangCompiler::compileEnum(const StmtPtr &s) {
+  // enum Name[:type] { A, B, C = 100, D } — immutable name -> value table
+  // stored in a hidden variable (like a class prototype). Implied values
+  // are sequential from 0; an explicit `= N` resumes the sequence at N+1.
+  QLangValue::Type baseType = s->enumType.value_or(QLangValue::Type::Int);
+  auto makeValue = [baseType](int64_t v) -> QLangValue {
+    switch (baseType) {
+    case QLangValue::Type::Char: return QLangValue::Char(static_cast<int8_t>(v));
+    case QLangValue::Type::Byte: return QLangValue::Byte(static_cast<uint8_t>(v));
+    case QLangValue::Type::Word: return QLangValue::Word(static_cast<uint16_t>(v));
+    case QLangValue::Type::Short: return QLangValue::Short(static_cast<int16_t>(v));
+    case QLangValue::Type::Unsigned: return QLangValue::Unsigned(static_cast<uint32_t>(v));
+    case QLangValue::Type::Qword: return QLangValue::Qword(static_cast<uint64_t>(v));
+    case QLangValue::Type::Long: return QLangValue::Long(v);
+    default: return QLangValue::Int(static_cast<int32_t>(v));
+    }
+  };
+  std::vector<std::pair<std::string, QLangValue>> members;
+  int64_t nextVal = 0;
+  for (const auto &m : s->enumMembers) {
+    int64_t v = nextVal++;
+    if (m.value) {
+      QLangValue cv = evalConstExpr(m.value);
+      if (cv.type() != QLangValue::Type::Int)
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "enum member '" + m.name +
+                         "' value must be an integer literal");
+      v = cv.asInt();
+      nextVal = v + 1; // explicit value resumes the implied sequence
+    }
+    members.push_back({m.name, makeValue(v)});
+  }
+  // Redeclaration: a visible same-name enum (any enclosing scope, or a
+  // global enum inside a function) is an error — enums cannot be redefined.
+  const std::string hvar = "__enum_" + s->name;
+  if (regOf(hvar) >= 0 ||
+      (!s->isLocalEnum && m_globalEnums.count(s->name)))
+    throw QLangError(QLangErrorKind::Parse, 0, 0,
+                     "cannot redeclare enum '" + s->name + "'");
+  int r = declareVar(hvar, s->isLocalEnum);
+  TableValue kv = std::make_shared<std::map<std::string, QLangValue>>();
+  for (const auto &m : members)
+    (*kv)[m.first] = m.second;
+  emit(Opcode::MOVC, r, emitConst(QLangValue::Table(kv)));
+  m_enums[s->name] = std::move(members);
+  if (!m_inFunction)
+    m_globalEnums.insert(s->name);
+}
+
+void QLangCompiler::compileGlobal(const StmtPtr &s, std::vector<std::string> *captures) {
+  if (!m_inFunction)
+    throw QLangError(QLangErrorKind::Parse, 0, 0,
+                     "'global' is only valid inside a function");
+  for (const auto &name : s->globalNames) {
+    // Allow global to override local declarations — global wins.
+    if (regOf(name) >= 0) {
+      m_regs.erase(name);
+    }
+    if (!m_globalVars.count(name)) {
+      throw QLangError(QLangErrorKind::Parse, 0, 0,
+                       "global variable '" + name + "' is not declared");
+    }
+    // Add to capture list so the VM binds it to the enclosing frame.
+    if (captures && std::find(captures->begin(), captures->end(), name) == captures->end()) {
+      captures->push_back(name);
+    }
+    // Mark as captured so compileExpr routes through m_captureRegs.
+    m_capturedVars.insert(name);
+    // Set up the capture register immediately so subsequent references
+    // compile as REFLOAD/REFSTORE instead of MOV/MOV.
+    // m_captureRegs stores the capture INDEX (0, 1, 2...) for the VM.
+    if (captures) {
+      int captureIdx = static_cast<int>(captures->size()) - 1;
+      m_captureRegs[name] = captureIdx;
+      // F3: resolve the global by name against the context's global table
+      // (Phase 2) — no register-0 fallback. The VM's bindCaptures aliases the
+      // table slot directly for globals (env==null), so the capture's `reg`
+      // is the table slot.
+      size_t slot = m_scope ? m_scope->globalSlotOf(name) : SIZE_MAX;
+      if (slot == SIZE_MAX)
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "global variable '" + name +
+                         "' is not in the global table");
+      m_globalRegMap[name] = static_cast<int>(slot);
+    }
+  }
+}
+
+void QLangCompiler::compileSwitch(const StmtPtr &s) {
+  // Compile the switch expression into a register.
+  int valReg = tmpRegister();
+  compileExpr(s->switchExpr, valReg);
+
+  // Push switch context so `break` inside case bodies jumps here.
+  // We'll patch the exit target after we know where switchEnd is.
+  m_switches.push_back(0); // placeholder, patched later
+
+  // Emit a comparison + conditional-jump chain for each case.
+  // For each case we emit:
+  //   [match check: EQ/IN] -> JMPIFTRUE -> [JMP to skip] -> [case body]
+  // After all cases, compile default, then emit JMP to switch end.
+  // The JMP after each case jumps to the next case's check (or switchEnd for last).
+  std::vector<int> caseMatchStarts; // instruction index of each case's match start (const emit)
+  std::vector<int> caseJmpiIfTrueIdx; // instruction index of each JMPIFTRUE
+  std::vector<int> caseSkipJmpIdx;    // JMP after JMPIFTRUE (skip to next case)
+  std::vector<int> caseExitJmpIdx;    // implicit JMP after case body (exit to switchEnd)
+  std::vector<int> caseBodyStarts;    // instruction index of each case body
+  for (size_t i = 0; i < s->cases.size(); i++) {
+    const auto &sc = s->cases[i];
+    int matchCheckIdx = static_cast<int>(m_code.size());
+    caseMatchStarts.push_back(matchCheckIdx);
+    // Emit the match check for this case.
+    int cmpReg = tmpRegister();
+    if (sc.isIn) {
+      int exprReg = tmpRegister();
+      compileExpr(sc.value, exprReg);
+      emit(Opcode::INx, cmpReg, valReg, exprReg);
+    } else {
+      int exprReg = tmpRegister();
+      compileExpr(sc.value, exprReg);
+      emit(Opcode::EQ, cmpReg, valReg, exprReg);
+    }
+    emit(Opcode::JMPIFTRUE, cmpReg, 0); // target to patch: jump to case body
+    caseJmpiIfTrueIdx.push_back(static_cast<int>(m_code.size()) - 1);
+    // Emit JMP to skip this case body (patched to next case or switchEnd).
+    int skipJmpIdx = static_cast<int>(m_code.size());
+    emit(Opcode::JMP, 0);
+    caseSkipJmpIdx.push_back(skipJmpIdx);
+    // Compile the case body, then emit an implicit JMP to skip remaining cases.
+    caseBodyStarts.push_back(static_cast<int>(m_code.size()));
+    m_blockScopes.emplace_back(); // each case body is a block scope
+    for (auto &body : sc.body) {
+      trace(TRACE_FULL, "[DBG-CASE] Case %zu body stmt kind=%d\n", i, (int)body->kind);
+      if (body->kind == StmtKind::Assignment) {
+        trace(TRACE_FULL, "[DBG-CASE]   Assign op=%s value=", body->assignOp.text.c_str());
+        if (body->assignValue && body->assignValue->kind == ExprKind::Literal)
+          trace(TRACE_FULL, "Literal:%d (type=%d)\n", (int)body->assignValue->literal.asInt(), (int)body->assignValue->literal.type());
+        else
+          trace(TRACE_FULL, "non-literal\n");
+      }
+      compileStmt(body);
+    }
+    popBlockScope();
+    emit(Opcode::JMP, 0); // implicit exit: patched after default compiles
+    caseExitJmpIdx.push_back(static_cast<int>(m_code.size()) - 1);
+  }
+
+  // Compile the default body (if any).
+  int defaultBodyStart = static_cast<int>(m_code.size());
+  m_blockScopes.emplace_back(); // default body is a block scope
+  for (auto &db : s->defaultBody)
+    compileStmt(db);
+  popBlockScope();
+  int defaultBodyEnd = static_cast<int>(m_code.size());
+
+  // Now we know where switchEnd is (after all cases and default).
+  int switchEnd = static_cast<int>(m_code.size());
+  // Update the switch context with the real exit target.
+  m_switches.back() = switchEnd;
+  // Patch any break JMPs that were emitted with placeholder target 0.
+  for (int idx : m_breakJmps) {
+    patchJump(m_code.at(idx), switchEnd);
+  }
+  m_breakJmps.clear();
+
+  // Patch all JMPIFTRUE targets to point at their case body start,
+  // skip-JMP targets to next case (or default body for last),
+  // and exit-JMP targets to switchEnd.
+  for (size_t i = 0; i < s->cases.size(); i++) {
+    patchJump(m_code.at(caseJmpiIfTrueIdx[i]), caseBodyStarts[i]);
+    if (i + 1 < s->cases.size())
+      patchJump(m_code.at(caseSkipJmpIdx[i]), caseMatchStarts[i + 1]);
+    else
+      patchJump(m_code.at(caseSkipJmpIdx[i]), defaultBodyStart);
+    patchJump(m_code.at(caseExitJmpIdx[i]), switchEnd);
+  }
+
+  // Pop switch context after patching is complete.
+  m_switches.pop_back();
+
+  // Debug: dump switch bytecode
+  trace(TRACE_FULL, "[DBG-SW] switchEnd=%d instructions.size()=%zu\n", switchEnd, m_code.instructions().size());
+  for (size_t i = 0; i < m_code.instructions().size(); i++) {
+    auto &inst = m_code.instructions()[i];
+    trace(TRACE_FULL, "[DBG-SW]   [%zu] op=%d a=%d b=%d c=%d\n", i, (int)inst.op, inst.a, inst.b, inst.c);
+  }
+  trace(TRACE_FULL, "[DBG-SW] constants.size()=%zu\n", m_code.constants().size());
+  for (size_t i = 0; i < m_code.constants().size(); i++) {
+    const auto &c = m_code.constants()[i];
+    std::string cv;
+    if (c.type() == QLangValue::Type::Int)
+      cv = std::to_string(c.asInt());
+    else if (c.type() == QLangValue::Type::String)
+      cv = c.asString();
+    else
+      cv = std::string("(type=") + std::to_string((int)c.type()) + ")";
+    trace(TRACE_FULL, "[DBG-SW]   const[%zu] type=%d str=%s\n", i, (int)c.type(), cv.c_str());
+  }
+}
+
 
 void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
   if (!e)

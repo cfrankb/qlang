@@ -218,7 +218,7 @@ int main() {
     try {
       ctx.run("local n = 0\n"
               "class D {\n"
-              "  __destroy__ (self) [ ] { n = n + 1 }\n"
+              "  __destroy__ (self) [n] { n = n + 1 }\n"
               "}\n"
               "local a = D()\n"
               "a = nil\n");
@@ -241,7 +241,7 @@ int main() {
     try {
       ctx.run("local n = 0\n"
               "class D {\n"
-              "  __destroy__ (self) [ ] { n = n + 1 }\n"
+              "  __destroy__ (self) [n] { n = n + 1 }\n"
               "}\n"
               "local a = D()\n"
               "a = nil\n");
@@ -264,7 +264,7 @@ int main() {
               "class D {\n"
               "  other = nil\n"
               "  __init__ (self, o) [ ] { self.other = o }\n"
-              "  __destroy__ (self) [ ] { n = n + 1; self.other = nil }\n"
+              "  __destroy__ (self) [n] { n = n + 1; self.other = nil }\n"
               "}\n"
               "local inner = D(nil)\n"
               "local a = D(inner)\n"
@@ -348,7 +348,7 @@ int main() {
     try {
       ctx.run("local n = 0\n"
               "class D {\n"
-              "  __destroy__ (self) [ ] { n = n + 1 }\n"
+              "  __destroy__ (self) [n] { n = n + 1 }\n"
               "}\n"
               "local a = D()\n");
       QValue a = ctx.get("a"); // copy: shared table reference
@@ -379,7 +379,7 @@ int main() {
       });
       ctx.run("local n = 0\n"
               "class D {\n"
-              "  __destroy__ (self) [ ] { n = n + 1; drain() }\n"
+              "  __destroy__ (self) [n] { n = n + 1; drain() }\n"
               "}\n"
               "local a = D()\n"
               "a = nil\n");

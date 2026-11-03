@@ -2,7 +2,8 @@
 
 Status: **in progress** (drafted 2026-11-02). Phase 0 done; Phase 1 done as
 of 2026-11-03; Phase 2 done as of 2026-11-03 (`7568ed8`); Phase 3 done as of
-2026-11-03 (uncommitted). Phases 4–5 pending.
+2026-11-03 (uncommitted); Phase 4 done as of 2026-11-03 (uncommitted).
+Phase 5 pending.
 Scope: implementation substrate only. **No spec changes, no opcode changes, no
 value-tag changes, no value-representation rewrite, no GC, no JIT, no
 threading model.** The language semantics are sound; the machine under them
@@ -48,15 +49,17 @@ that bumps it.**
 
 ## 2. Defects driving this plan (evidence)
 
-**As-of 2026-11-03 (after Phase 3):** all Phase 0 regression tests are
+**As-of 2026-11-03 (after Phase 4):** all Phase 0 regression tests are
 green (`phase0_scope`, `phase0_api`). S1–S3 were fixed by the Phase 1
 substrate (cell captures, single executor, per-call generator instances);
 P1–P4 by the Phase 2 global table (the main frame aliases the table's slots;
 `m_vars`, the start/end sync, and the VM-wide `m_deleted` set are deleted;
 programs are held by `shared_ptr<const CompiledProgram>`); H1–H4 by Phase 3
 (shared type handles + `type_info` validation, finalizer queue, `release()`
-builtin, context split). F1 remains red and is Phase 4 scope (`.qlc`
-encoding); F2–F8 remain and are Phase 4/5 scope.
+builtin, context split); F1–F5 by Phase 4 (explicit little-endian `.qlc`
+encoding with the one and only version bump 2 → 3, non-durable rejection,
+compiler statement split, auto-capture removal, parser depth limit,
+constant-pool dedup dropped). F6–F8 remain and are Phase 5 scope.
 
 ### 2.1 Substrate (VM core) — unsound
 

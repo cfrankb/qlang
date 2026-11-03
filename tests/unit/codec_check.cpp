@@ -241,7 +241,7 @@ static void testProgram() {
 
 // ---------------------------------------------------------------------------
 // MOVI: Int literals must compile to MOVI (immediate in i32, no pool slot);
-// everything else stays in the pool. The v2 format round-trips MOVI
+// everything else stays in the pool. The v3 format round-trips MOVI
 // instruction-for-instruction (testProgram's memcmp covers the encoding).
 // ---------------------------------------------------------------------------
 static CompiledProgram compileSrc(const char *src) {
@@ -297,19 +297,21 @@ static void testMovi() {
         qNoMovi = false;
     check(qNoMovi, "movi: 64-bit literal not MOVI");
 
-    // .qlc written at format version 2; a v1 reader (version <= 1 check)
-    // would reject it, a v2 reader accepts it.
+    // .qlc written at format version 3 (kQlcVersion); a reader that only
+    // accepts <= 2 would reject it, this reader accepts it.
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "movi: writeQlc (v2)");
+    check(writeQlc(os, p, {}), "movi: writeQlc (v3)");
     std::string bytes = os.str();
-    uint32_t version = 0;
-    std::memcpy(&version, bytes.data() + 4, 4);
-    check(version == 2, "movi: format version 2");
+    uint32_t version = static_cast<uint32_t>(static_cast<uint8_t>(bytes[4])) |
+                       (static_cast<uint32_t>(static_cast<uint8_t>(bytes[5])) << 8) |
+                       (static_cast<uint32_t>(static_cast<uint8_t>(bytes[6])) << 16) |
+                       (static_cast<uint32_t>(static_cast<uint8_t>(bytes[7])) << 24);
+    check(version == 3, "movi: format version 3");
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("movi: readQlc v2 (") + err + ")");
+    check(readQlc(is, back, slots, err), std::string("movi: readQlc v3 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -393,15 +395,15 @@ static void testAddi() {
         noAddi = false;
     check(noAddi, "addi: float literal not ADDI");
 
-    // .qlc round-trip of an ADDI program (v2 format).
+    // .qlc round-trip of an ADDI program (v3 format).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "addi: writeQlc (v2)");
+    check(writeQlc(os, p, {}), "addi: writeQlc (v3)");
     std::string bytes = os.str();
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("addi: readQlc v2 (") + err + ")");
+    check(readQlc(is, back, slots, err), std::string("addi: readQlc v3 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -446,15 +448,15 @@ static void testSubi() {
         noSubi = false;
     check(noSubi, "subi: float literal not SUBI");
 
-    // .qlc round-trip of a SUBI program (v2 format).
+    // .qlc round-trip of a SUBI program (v3 format).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "subi: writeQlc (v2)");
+    check(writeQlc(os, p, {}), "subi: writeQlc (v3)");
     std::string bytes = os.str();
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("subi: readQlc v2 (") + err + ")");
+    check(readQlc(is, back, slots, err), std::string("subi: readQlc v3 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -476,7 +478,7 @@ static void testSubi() {
 // CMP/CMPI + j*: an Int-vs-Int (literal) comparison in `if` fuses to
 // cmp/cmpi + a conditional jump (no comparison-result temp, no pool slot for
 // the boolean); non-Int comparisons stay on the legacy EQ/GT + JMPIFFALSE
-// path. The v2 format round-trips the new opcodes instruction-for-instruction.
+// path. The v3 format round-trips the new opcodes instruction-for-instruction.
 // ---------------------------------------------------------------------------
 static bool hasAnyOp(const Function &fn, std::initializer_list<Opcode> ops) {
   for (const auto &i : fn.instructions)
@@ -507,15 +509,15 @@ static void testCmpJump() {
                      Opcode::JG, Opcode::JGE, Opcode::JL, Opcode::JLE}),
           "cmp: float comparison not fused");
 
-    // .qlc round-trip of a fused program (v2 format).
+    // .qlc round-trip of a fused program (v3 format).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "cmp: writeQlc (v2)");
+    check(writeQlc(os, p, {}), "cmp: writeQlc (v3)");
     std::string bytes = os.str();
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("cmp: readQlc v2 (") + err + ")");
+    check(readQlc(is, back, slots, err), std::string("cmp: readQlc v3 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -537,11 +539,22 @@ static void testCmpJump() {
 // Malformed-input suite: each case must fail cleanly, leave the out-params
 // untouched, and say why.
 // ---------------------------------------------------------------------------
+// Test-file builder. Emits explicit little-endian (matching the codec, F1)
+// so the malformed-input suite is host-endian independent.
 struct Bin {
   std::string b;
   void u8(uint8_t v) { b += static_cast<char>(v); }
-  void u16(uint16_t v) { b.append(reinterpret_cast<const char *>(&v), 2); }
-  void i32(int32_t v) { b.append(reinterpret_cast<const char *>(&v), 4); }
+  void u16(uint16_t v) {
+    b += static_cast<char>(v & 0xFF);
+    b += static_cast<char>((v >> 8) & 0xFF);
+  }
+  void i32(int32_t v) {
+    uint32_t u = static_cast<uint32_t>(v);
+    b += static_cast<char>(u & 0xFF);
+    b += static_cast<char>((u >> 8) & 0xFF);
+    b += static_cast<char>((u >> 16) & 0xFF);
+    b += static_cast<char>((u >> 24) & 0xFF);
+  }
   void u32(uint32_t v) { i32(static_cast<int32_t>(v)); }
   void str(const std::string &s) {
     u32(static_cast<uint32_t>(s.size()));
@@ -613,7 +626,7 @@ static void testMalformed() {
   rejects("malformed: bad magic", badMagic);
 
   std::string badVersion = minimalFile();
-  badVersion[4] = 3; // v2 is the current format; v3 must be rejected
+  badVersion[4] = 4; // v3 is the current format; v4 must be rejected
   rejects("malformed: unsupported version", badVersion);
 
   rejects("malformed: truncated", minimalFile().substr(0, 10));

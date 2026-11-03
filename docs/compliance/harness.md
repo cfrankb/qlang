@@ -6,7 +6,7 @@
 - `examples/spec_cast_test.cpp` — 20 cast tests: numeric casts (int/float/byte/word/short/unsigned/qword/char/bool), string casts, invalid collection casts, nested casts, expression-context casts, nil cast. Result: **20 passed, 0 failed.**
 - `examples/gen_test.cpp` — 5 generator tests: basic yield, second yield, exhaustion/EOF, loop accumulate, empty yield, outer variable capture, type check. Result: **5 passed, 0 failed.**
 - `examples/range_check.cpp` — 22 range tests: `for i in range(a,b)` counter loop (sum/count/break/continue), `in range(a,b)` bounds check (inside/low/high/above/below/as-value), `arr = range(a,b)` materialization, for-in array membership, generator range. Result: **22 passed, 0 failed.**
-- `examples/codec_check.cpp` — `.qlc` codec round-trip checks: format version 2, MOVI + ADDI + SUBI + CMP/j* suites (Rounds 30–31), malformed-file guards. Result: **all codec checks passed.**
+- `examples/codec_check.cpp` — `.qlc` codec round-trip checks: format version 3 (explicit little-endian, field-by-field instructions; readers accept v1..v3), MOVI + ADDI + SUBI + CMP/j* suites (Rounds 30–31), malformed-file guards. Result: **all codec checks passed.**
 Compile against the static lib:
 `g++ -std=c++20 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
 Result: **421 passed, 0 failed.** All spec builtins implemented.

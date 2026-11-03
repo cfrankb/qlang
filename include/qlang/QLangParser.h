@@ -303,6 +303,10 @@ private:
 
   std::vector<Token> m_tokens;
   size_t m_pos = 0;
+  // Parse recursion depth (F4): parseStatement/parseExpression are the
+  // mutual-recursion entry points; past kMaxParseDepth the parser throws a
+  // clean error instead of overflowing the C stack.
+  int m_depth = 0;
 };
 
 } // namespace qlang

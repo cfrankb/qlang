@@ -224,7 +224,7 @@ int main() {
   expectVal("compound mul", "local a = 10\na *= 3\nlocal r = a;", "r", 30);
 
   // -- NEW: nested functions --
-  expectVal("nested fn", "def outer(a)\n  def inner(b)\n    return a + b\n  end\n  return inner(10)\nend\nlocal r = outer(5);", "r", 15);
+  expectVal("nested fn", "def outer(a)\n  local inner = (b)[a] { return a + b }\n  return inner(10)\nend\nlocal r = outer(5);", "r", 15);
 
   // -- NEW: let alias for local (spec §55) --
   expectVal("let basic", "let n = 42\nlocal r = n;", "r", 42);
@@ -736,7 +736,7 @@ int main() {
   expectValDrain("destroy: runs once on final release",
             "local n = 0\n"
             "class D {\n"
-            "  __destroy__ (self) [ ] { n = n + 1 }\n"
+            "  __destroy__ (self) [n] { n = n + 1 }\n"
             "}\n"
             "local a = D()\nlocal b = a\na = nil\nb = nil;",
             "n", 1);

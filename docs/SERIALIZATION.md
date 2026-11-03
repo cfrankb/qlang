@@ -1,7 +1,7 @@
 # QLang Serialization / Deserialization Spec
 
-Status: **implemented** — `.qlc` program image (v1)
-Covers: `.qlc` program image (v1) and state snapshot (v2, future)
+Status: **implemented** — `.qlc` program image (v3)
+Covers: `.qlc` program image (v3) and state snapshot (v2, future)
 Reference implementation: `src/QLangBytecodeIO.cpp` (library codec)
 Architecture assessment of this change: [qlc-codec-assessment.md](qlc-codec-assessment.md)
 
@@ -65,24 +65,30 @@ Rules:
 - **R1** New `QLangValue::Type` values are appended at the end of the enum and
   table; existing tags never change meaning.
 - **R2** A value of a non-durable type (Generator, Object, External,
-  BoundMethod, TypeRef) is lossy by design: it round-trips as Nil. The
-  writer MUST NOT emit tags 15, 16, 20, 21, 22; a reader MUST reject a file
-  carrying them. (Tags 17–19 — Eof, Long, Set — are durable and round-trip
-  with their payloads.)
+  BoundMethod, TypeRef) cannot be durably encoded. At the **program** level
+  `writeQlc` rejects a program whose constant pool holds one (returns
+  `false`) rather than silently remapping it to Nil. At the **value** level
+  `serializeValue` is lossy by design and remaps such a value to tag 0 (Nil).
+  The writer MUST NOT emit tags 15, 16, 20, 21, 22; a reader MUST reject a
+  file carrying them with a clear error (never a silent Nil). (Tags 17–19 —
+  Eof, Long, Set — are durable and round-trip with their payloads.)
 - **R3** Table keys are stored in `std::map` (lexicographic) order. Readers
   MUST NOT depend on entry order.
 - **R4** For tag 14, `funcIndex` is an index into the program's function
   array (§4). Capture frame pointers are runtime-only; only register indices
-  are stored. A reader reconstructing a closure starts with null frame
-  pointers (valid only for programs where captures are re-bound at runtime).
+  are stored. **Load-time rule:** a reader reconstructing a closure starts
+  with null frame pointers; the loaded closure is only usable in a context
+  that re-binds those captures to live frames at load/first-call time. A
+  reader that cannot re-bind captures MUST treat a closure with a non-empty
+  capture list as unloadable.
 
-## 4. Program image (magic `QLC1`, version 1)
+## 4. Program image (magic `QLC1`, version 3)
 
 ```
 offset  field            type   notes
 ──────  ───────────────  ─────  ──────────────────────────────────────────
 0       magic            4s     "QLC1"
-4       version          u32    = 1
+4       version          u32    = 3  (kQlcVersion; readers accept 1..3)
 8       funcCount        u32
 …       functions        funcCount × Function
         nativeCount      u32
@@ -103,16 +109,18 @@ i32   registerCount
 u8    isGenerator          (0/1)
 u32   capCount, capCount × i32 reg
 u32   instrCount
-      instrCount × Instruction      // raw 12-byte records
+      instrCount × Instruction      // 12 bytes each, field by field
 u32   constCount, constCount × Value
 ```
 
-`Instruction` is written as its raw 12 bytes (little-endian, no padding —
-`static_assert(sizeof(Instruction) == 12)`):
+`Instruction` is written **field by field**, each multi-byte field in
+explicit little-endian order (the raw struct bytes are *not* the on-disk
+encoding; `static_assert(sizeof(Instruction) == 12)` pins the in-memory
+layout only):
 
 ```
 u16   op
-i16   a
+u16   a
 i32   i32               // combined b/c; jump-family opcodes carry the
                         // 32-bit pc target here (JMP/CONTINUE/BREAK;
                         // JMPIFFALSE/JMPIFTRUE keep the condition in `a`)
@@ -155,8 +163,9 @@ within both sections is unspecified**. Readers MUST NOT depend on it.
 
 ### 5.1 Validation sequence
 
-1. At least 12 bytes present; magic == `QLC1`; `version <= 1` (higher →
-   "unsupported version", never a parse attempt).
+1. At least 12 bytes present; magic == `QLC1`; `version <= 3`
+   (`kQlcVersion`; higher → "unsupported version", never a parse attempt).
+   Legacy v1/v2 files (byte-identical on little-endian hosts) still load.
 2. Every read is bounds-checked. Truncation → `QLangError(Io)` with the byte
    offset where the read failed.
 3. Structural invariants: `funcCount >= 1`, `functions[0].name == "main"`,
@@ -294,8 +303,9 @@ A codec is not "done" until all of these pass:
    byte-identical to direct `ctx.run(source)`.
 3. **Malformed-input suite** (each case → clean `Io` error, no crash, no
    partial out-param): truncated at every section boundary, bad magic,
-   version 2, `op >= kOpcodeCount`, dangling closure index, duplicate native
-   slot, negative count, 100-deep nested array, 70 Mi value count.
+   version 4 (above `kQlcVersion`), `op >= kOpcodeCount`, dangling closure
+   index, duplicate native slot, negative count, 100-deep nested array,
+   70 Mi value count.
 4. **Native mismatch**: program calling an unregistered native → single
    error naming all missing natives.
 5. **(v2) Snapshot/resume**: run a script to a checkpoint, snapshot, restore
@@ -306,9 +316,9 @@ A codec is not "done" until all of these pass:
 | Item | Status |
 |---|---|
 | Value codec (`serializeValue`/`deserializeValue`) | done — matches §3 |
-| Program writer (`writeQlc`, §4 incl. native-slot table) | done |
+| Program writer (`writeQlc`, §4 incl. native-slot table) | done — v3, explicit little-endian, field-by-field instructions |
 | `QLangErrorKind::Io` | done |
-| Reader (`readQlc`, §5.1 invariants) | done |
+| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v1..v3 |
 | App writer (POC `QlcWriter` in `qlang_run.cpp`) | deleted — replaced by `writeQlc` |
 | Tests (`codec_check`: §9 items 1, 3) | done |
 | `QLangContext::loadProgram` / `execute` (§5.2, §9 item 2/4) | not started |

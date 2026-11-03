@@ -2,8 +2,6 @@
 
 #include <cstdint>
 #include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "QLangValue.h"
@@ -11,14 +9,6 @@
 namespace qlang {
 
 class QLangContext; // forward declaration for CompiledProgram::nativeFuncs
-
-// Canonical byte form of a value used as a constant-pool dedup key:
-// same value -> same key, different values -> different keys (type tag +
-// length-prefixed payloads; table entries in key-sorted order; Function
-// closures keyed by funcIndex + capture regs — frame pointers are
-// runtime-only). Generator is not durable and keys as Nil (same rule as the
-// .qlc writer).
-std::string valueKey(const QLangValue &v);
 
 // Built-in function ids shared by the compiler (emits CALL with one of these)
 // and the VM (dispatches on them). Order is stable and used as the operand.
@@ -298,7 +288,7 @@ public:
   std::vector<Instruction> &instructions() { return m_instr; }
   void setInstructions(std::vector<Instruction> instrs) { m_instr = std::move(instrs); }
   const std::vector<QLangValue> &constants() const { return m_consts; }
-  // Replaces the pool; the dedup key map is rebuilt to stay in sync.
+  // Replaces the pool.
   void setConstants(std::vector<QLangValue> consts);
   const std::vector<Function> &functions() const { return m_functions; }
   size_t size() const { return m_instr.size(); }
@@ -313,10 +303,6 @@ public:
 private:
   std::vector<Instruction> m_instr;
   std::vector<QLangValue> m_consts;
-  // Dedup index: serialized-value key -> pool index. Kept in sync with
-  // m_consts by addConstant()/setConstants() so repeated identical
-  // constants reuse one pool slot.
-  std::unordered_map<std::string, int> m_constKeys;
   std::vector<Function> m_functions;
 };
 

@@ -8,6 +8,21 @@
 #include "qlang/QLangErrors.h"
 
 namespace qlang {
+namespace {
+
+// Maximum parse recursion depth (F4): deeply nested input must fail with a
+// clean error instead of overflowing the C stack (DoS surface for an
+// embeddable language).
+constexpr int kMaxParseDepth = 256;
+
+// RAII guard: decrements the parser's depth counter on scope exit, both on
+// normal return and on exception.
+struct ParseDepthGuard {
+  int &depth;
+  ~ParseDepthGuard() { --depth; }
+};
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Construction / token stream helpers
@@ -144,6 +159,13 @@ std::vector<StmtPtr> QLangParser::parseProgram() {
 }
 
 StmtPtr QLangParser::parseStatement() {
+  if (++m_depth > kMaxParseDepth) {
+    const Token &t = current();
+    throw QLangError(QLangErrorKind::Parse, t.line, t.col,
+                     "nesting too deep (max " +
+                         std::to_string(kMaxParseDepth) + ")");
+  }
+  ParseDepthGuard guard{m_depth};
   // Stamp the statement's first-token position so the compiler can carry it
   // into the emitted instructions (SPEC # error reporting).
   const Token &t = current();
@@ -1061,7 +1083,16 @@ StmtPtr QLangParser::parseArrowClosure(const std::string &varName) {
 // Expressions
 // ---------------------------------------------------------------------------
 
-ExprPtr QLangParser::parseExpression() { return parseBinary(1); }
+ExprPtr QLangParser::parseExpression() {
+  if (++m_depth > kMaxParseDepth) {
+    const Token &t = current();
+    throw QLangError(QLangErrorKind::Parse, t.line, t.col,
+                     "nesting too deep (max " +
+                         std::to_string(kMaxParseDepth) + ")");
+  }
+  ParseDepthGuard guard{m_depth};
+  return parseBinary(1);
+}
 
 ExprPtr QLangParser::parseBinary(int minPrec) {
   ExprPtr left = parseUnary();
