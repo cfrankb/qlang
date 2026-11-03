@@ -58,7 +58,7 @@ if i in range (0,10) {
 
 rules
 - step keyword is optional
-- evaluate the relation ship between start and end value
+- evaluate the relationship between start and end value
 - the direction determine the step (+1 or -1)
 - enter the loop once
 - continue to apply step until you are passed the end value

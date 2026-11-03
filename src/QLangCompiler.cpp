@@ -735,6 +735,12 @@ static void collectLocalVars(const StmtPtr &s, std::unordered_set<std::string> &
     for (auto &b : s->whileBody) collectLocalVars(b, locals);
   } else if (s->kind == StmtKind::Def) {
     for (auto &b : s->body) collectLocalVars(b, locals);
+  } else if (s->kind == StmtKind::Arrow) {
+    // `local f = (p)[c] { ... }`: the lambda's name is a local of THIS
+    // function. Without this it is auto-captured as a "free variable",
+    // shifting every capture index (incl. `global` captures) and turning
+    // references to `f` into REFLOADs of the wrong capture slot.
+    locals.insert(s->name);
   }
 }
 

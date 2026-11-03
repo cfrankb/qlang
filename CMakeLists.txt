@@ -128,6 +128,17 @@ add_executable(test_dollar_operator tests/unit/test_dollar_operator.cpp)
 target_link_libraries(test_dollar_operator PRIVATE qlang)
 add_test(NAME test_dollar_operator COMMAND test_dollar_operator)
 
+# Phase 0 red tests (architecture-remediation-plan.md): scope/lifetime/
+# instance defects (S1/S2/S3/P2) and host-API durability defects (P1/P3/F1).
+# Expected to FAIL on the pre-fix tree; each goes green as its phase lands.
+add_executable(phase0_scope tests/unit/phase0_scope.cpp)
+target_link_libraries(phase0_scope PRIVATE qlang)
+add_test(NAME phase0_scope COMMAND phase0_scope)
+
+add_executable(phase0_api tests/unit/phase0_api.cpp)
+target_link_libraries(phase0_api PRIVATE qlang)
+add_test(NAME phase0_api COMMAND phase0_api)
+
 # Script-level regression suite (tests/scripts/). Each .ql script is driven
 # by qlang_run (the smoke-test app); a non-zero exit code fails the suite.
 file(GLOB QL_SCRIPTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/*.ql)

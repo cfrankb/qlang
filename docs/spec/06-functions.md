@@ -76,7 +76,7 @@ func2("Nana", "2003")
 only explicit capture being passed from caller context;
 closure list is mandatory []. closure only available in function scope.
 reference still maintained even after reassignment 
-return value is optiona. defaults to nil
+return value is optional. defaults to nil
 local always apply to the current scope.
 
 functions, lamdas and generators without a return statement will return nil (nil type)

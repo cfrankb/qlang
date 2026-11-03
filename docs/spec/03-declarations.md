@@ -28,7 +28,7 @@ local c = cast<short>(b)   # short (2 bytes)
 local d                    # implicit int. default value 0
 ```
 
-here are some general purpose cases to illustrate how variables and constants are declared and assign.
+here are some general purpose cases to illustrate how variables and constants are declared and assigned.
 
 ```python
 local a1  # default variable type int. default value 0
