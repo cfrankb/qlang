@@ -140,7 +140,7 @@ for future versions. The compiler emits the narrowest signed form whose range fi
 | Form | Layout | Bytes | Range |
 |------|--------|-------|-------|
 | jmp8 (base) | `[op][off8]` | 2 | ±127 |
-| jmp16 (escaped, `e`=0) | `[op\|0x80][0x00][off16]` | 5 | ±32 767 |
+| jmp16 (escaped, `e`=0) | `[op\|0x80][0x00][off16]` | 4 | ±32 767 |
 | jmp32 (escaped, `e`=1) | `[op\|0x80][0x01][off32]` | 6 | ±2 GB |
 
 `off = target_pc − (jump_pc + jump_size)`; VM executes `pc += jump_size + off`. The compiler
@@ -159,12 +159,12 @@ most branches, jmp32 for far targets).
 | `MOVC a, cExt` (idx ≥256) | escaped | 5 | `[MOVC\|80][e=a0,b1][a][cExt:2]` |
 | `MOVI a, i8` (signed, base) | base | 3 | `[MOVI][a][i8:1]` |
 | `MOVI a, i16` (signed) | escaped | 5 | `[MOVI\|80][e=a0,imm5][a][i16:2]` |
-| `MOVI a, i32` (signed) | escaped | 6 | `[MOVI\|80][e=a0,imm6][a][i32:4]` |
+| `MOVI a, i32` (signed) | escaped | 7 | `[MOVI\|80][e=a0,imm6][a][i32:4]` |
 | `ADD a, b, c` (idx ≤255) | base | 4 | `[ADD][a][b][c]` |
 | `JMP` near (±127) | base | 2 | `[JMP][off8:1]` |
-| `JMP` mid (±32 767) | escaped | 5 | `[JMP\|80][0x00][off16:2]` |
+| `JMP` mid (±32 767) | escaped | 4 | `[JMP\|80][0x00][off16:2]` |
 | `JMP` far | escaped | 6 | `[JMP\|80][0x01][off32:4]` |
-| `JE` near / mid / far | base / escaped | 2 / 5 / 6 | as `JMP` |
+| `JE` near / mid / far | base / escaped | 2 / 4 / 6 | as `JMP` |
 
 ---
 

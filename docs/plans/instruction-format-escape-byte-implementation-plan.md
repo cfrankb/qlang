@@ -74,7 +74,7 @@ size_t instructionSize(Opcode op, uint8_t modifier = 0);
 
 // Jump width selection
 size_t minJumpSize(int32_t offset);
-// Returns 2 (jmp8), 5 (jmp16), or 6 (jmp32)
+// Returns 2 (jmp8), 4 (jmp16), or 6 (jmp32)
 
 // Operand width
 size_t registerAddressSize(int32_t index);  // 1 or 2
@@ -139,7 +139,9 @@ Return true for: `MOV, MOVC, MAKEFUNC, MAKEGEN, ADD, SUB, MUL, DIV, MOD, AND, OR
 - `JMPIFFALSE, JMPIFTRUE`: 3 (opcode + 1-byte reg + 1-byte offset)
 
 ### 2e. `escapedInstructionSize(Opcode op, uint8_t modifier)`
-- Jump: `modifier==0` → 5, `modifier==1` → 6, else throw.
+- Jump: `modifier==0` → 4, `modifier==1` → 6, else throw. Conditional jumps
+  (JMPIFFALSE/JMPIFTRUE) add 1 byte for the always-1-byte condition register:
+  5 / 7.
 - Immediate: left form = `modifier & 0x0F`, imm form = `modifier >> 4`.
   - Left size: form 0 → 1, form 1 → 2, else throw.
   - Imm size: form 4 → 1, form 5 → 2, form 6 → 4, else throw.
@@ -153,7 +155,7 @@ Return true for: `MOV, MOVC, MAKEFUNC, MAKEGEN, ADD, SUB, MUL, DIV, MOD, AND, OR
 ### 2f. `minJumpSize(int32_t offset)`
 ```cpp
 if (offset >= -127 && offset <= 127) return 2;
-if (offset >= -32767 && offset <= 32767) return 5;
+if (offset >= -32767 && offset <= 32767) return 4;
 return 6;
 ```
 
@@ -495,9 +497,9 @@ Test `encodeInstruction` / `decodeInstruction` round-trip:
 - Escaped `MOV 1, 300` (2-byte b) → 5 bytes → decode → verify.
 - Base `MOVI 0, 42` → 3 bytes → decode → verify `imm == 42`.
 - Escaped `MOVI 0, 200` (2-byte imm) → 5 bytes → decode → verify.
-- Escaped `MOVI 0, 70000` (4-byte imm) → 6 bytes → decode → verify.
+- Escaped `MOVI 0, 70000` (4-byte imm) → 7 bytes → decode → verify.
 - Base `JMP` offset 5 → 2 bytes → decode → verify `jumpOffset == 5`.
-- Escaped `JMP` offset 500 (jmp16) → 5 bytes → decode → verify.
+- Escaped `JMP` offset 500 (jmp16) → 4 bytes → decode → verify.
 - Escaped `JMP` offset 100000 (jmp32) → 6 bytes → decode → verify.
 - Invalid: truncated buffer → throws.
 - Invalid: reserved imm form 0 → throws.

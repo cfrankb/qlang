@@ -198,7 +198,8 @@ inline constexpr uint8_t kOpcodeMax = 128; // identities 0..127
 
 struct DecodedInstruction {
   Opcode op = Opcode::MOVC;
-  uint8_t modifier = 0;   // 0 = base form; non-zero only when escaped
+  bool escaped = false;   // true when the opcode byte carried the escape bit
+  uint8_t modifier = 0;   // raw modifier byte; meaningful only when escaped
   int32_t a = 0;          // left operand (register or constant index)
   int32_t b = 0;          // right operand (register, constant, or unused)
   int32_t c = 0;          // third operand (register; 3-operand ALU only)
@@ -219,7 +220,7 @@ size_t instructionSize(Opcode op, uint8_t modifier = 0);
 
 // Jump width selection
 size_t minJumpSize(int32_t offset);
-// Returns 2 (jmp8), 5 (jmp16), or 6 (jmp32)
+// Returns 2 (jmp8), 4 (jmp16), or 6 (jmp32)
 
 // Operand width
 size_t registerAddressSize(int32_t index);  // 1 or 2
