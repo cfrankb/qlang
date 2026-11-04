@@ -901,6 +901,24 @@ void QLangVM::adoptGlobals(const CompiledProgram &prog) {
   }
 }
 
+// Resolve a byte-offset pc to an instruction index: the largest index whose
+// offset is <= pc (binary search over fn.instrOffsets). pc is a byte offset
+// in the flat code stream, not an index; fn.loc is parallel to instrOffsets.
+size_t QLangVM::instructionIndexAt(const Function &fn, size_t pc) const {
+  const auto &offs = fn.instrOffsets;
+  if (offs.empty())
+    return 0;
+  size_t lo = 0, hi = offs.size();
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (offs[mid] <= pc)
+      lo = mid + 1;
+    else
+      hi = mid;
+  }
+  return lo - 1;
+}
+
 // Build the execution trace (innermost frame first) from the current frame
 // stack and throw a QLangError carrying it plus the resolved line/col and
 // the owning module name (SPEC # error reporting).
@@ -914,8 +932,9 @@ void QLangVM::vmThrowAt(QLangErrorKind kind, int line, int col,
       const Function &fn =
           m_prog.functions[static_cast<size_t>(fr.funcIndex)];
       int fl = 0;
-      if (fr.pc < static_cast<int>(fn.loc.size()))
-        fl = fn.loc[static_cast<size_t>(fr.pc)].first;
+      size_t idx = instructionIndexAt(fn, fr.pc);
+      if (idx < fn.loc.size())
+        fl = fn.loc[idx].first;
       frames.push_back(QLangFrameRef{fn.name, fl});
     }
     // Default to the innermost frame's resolved position (the failing
@@ -925,7 +944,8 @@ void QLangVM::vmThrowAt(QLangErrorKind kind, int line, int col,
       const Function &fn =
           m_prog.functions[static_cast<size_t>(m_frames[static_cast<size_t>(m_cur)].funcIndex)];
       size_t pc = m_frames[static_cast<size_t>(m_cur)].pc;
-      if (pc < fn.loc.size()) c = fn.loc[pc].second;
+      size_t idx = instructionIndexAt(fn, pc);
+      if (idx < fn.loc.size()) c = fn.loc[idx].second;
     }
   }
   throw QLangError(kind, l, c, msg, m_scope.moduleName(), std::move(frames));
@@ -1566,10 +1586,10 @@ RunResult QLangVM::runFrames() {
     Frame &frame = m_frames[static_cast<size_t>(m_cur)];
     const Function &fn =
         m_prog.functions[static_cast<size_t>(frame.funcIndex)];
-    const auto &instrs = fn.instructions;
+    const auto &code = fn.code;
     const auto &consts = fn.constants;
 
-    if (frame.pc >= instrs.size()) {
+    if (frame.pc >= code.size()) {
       // Fell off the end without an explicit return: unwind with nil.
       // (No scope sync: the main frame aliases the global table — Phase 2.)
       m_returnValue = frame.regs.empty() ? QLangValue() : frame.regs[0];
@@ -1586,18 +1606,25 @@ RunResult QLangVM::runFrames() {
     if (m_scope.step() > m_scope.maxSteps())
       vmThrow(QLangErrorKind::Runtime, "infinite loop (step limit)");
 
-    const Instruction &i = instrs[frame.pc];
+    // Decode the instruction at the current byte offset and advance pc past
+    // it BEFORE execution: jump offsets are relative to the END of the jump
+    // instruction (off = target - (jump_pc + jump_size)), so every pc update
+    // below is a delta from the post-decode position.
+    size_t pc = frame.pc;
+    DecodedInstruction i;
+    decodeInstruction(code.data(), pc, code.size(), i);
+    frame.pc += i.size;
     Opcode op = i.op;
     trace(TRACE_VM_LOOP,
           "[VM] func=%d pc=%zu op=%d a=%d b=%d c=%d\n", frame.funcIndex,
-          frame.pc, (int)op, i.a, i.b, i.c);
+          pc, (int)op, i.a, i.b, i.c);
 
     switch (op) {
     case Opcode::MOVC:
       frame.regs[i.a] = consts[i.b];
       break;
     case Opcode::MOVI:
-      frame.regs[i.a] = QLangValue::Int(i.i32);
+      frame.regs[i.a] = QLangValue::Int(static_cast<int32_t>(i.imm));
       break;
     case Opcode::MOV:
       frame.regs[i.a] = frame.regs[i.b];
@@ -1728,36 +1755,39 @@ RunResult QLangVM::runFrames() {
     case Opcode::CALL: {
       int dest = i.a;
       int argCount = i.c;
+      // Instruction index for this CALL (pc was advanced past it at decode):
+      // maps back to fn.loc for the builtin's error line/col.
+      size_t idx = instructionIndexAt(fn, pc);
       std::vector<QLangValue> callArgs;
       callArgs.reserve(argCount);
       for (int k = 0; k < argCount; k++)
         callArgs.push_back(frame.regs[dest + 1 + k]);
       if (i.b < 0) {
-        int idx = -1 - i.b;
-        if (idx < 0 || idx >= static_cast<int>(m_prog.nativeFuncs.size()))
+        int nativeIdx = -1 - i.b;
+        if (nativeIdx < 0 ||
+            nativeIdx >= static_cast<int>(m_prog.nativeFuncs.size()))
           vmThrow(QLangErrorKind::Runtime, "unknown native function");
-        frame.regs[dest] =
-            m_prog.nativeFuncs[static_cast<size_t>(idx)](m_scope, callArgs);
+        frame.regs[dest] = m_prog.nativeFuncs[static_cast<size_t>(nativeIdx)](
+            m_scope, callArgs);
       } else if (i.b == static_cast<int>(Builtin::Release)) {
         // release(x) mutates the argument register in place (drops the
         // owned shared_ptr); callBuiltin takes const copies, so it is
         // handled here (Phase 3, H2).
         releaseExternal(frame.regs[dest + 1],
-                        frame.pc < fn.loc.size() ? fn.loc[frame.pc].first : 0,
-                        frame.pc < fn.loc.size() ? fn.loc[frame.pc].second : 0,
+                        idx < fn.loc.size() ? fn.loc[idx].first : 0,
+                        idx < fn.loc.size() ? fn.loc[idx].second : 0,
                         this);
         frame.regs[dest] = QLangValue();
       } else {
         frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), callArgs,
                                        m_scope, m_prog,
-                                       frame.pc < fn.loc.size() ? fn.loc[frame.pc].first : 0,
-                                       frame.pc < fn.loc.size() ? fn.loc[frame.pc].second : 0,
+                                       idx < fn.loc.size() ? fn.loc[idx].first : 0,
+                                       idx < fn.loc.size() ? fn.loc[idx].second : 0,
                                        this);
       }
       break;
     }
     case Opcode::CALLFN: {
-      frame.pc += 1;
       pushCall(i.b, frame.regs, i.a, i.a, i.c);
       // Def functions with captures are called through their def-time
       // closure (CALLCLOS); this path serves capture-free defs and, for the
@@ -1776,7 +1806,6 @@ RunResult QLangVM::runFrames() {
         // member on the target object. Args sit at dest+1..dest+argCount
         // (same convention as CALL). selfMut() throws on an expired
         // borrow; C++ exceptions from the binding become runtime errors.
-        frame.pc += 1;
         const auto &bm = cv.asBoundMethod();
         ExternalRef target = bm.target; // copy: selfMut() is non-const
         void *self = target.selfMut();
@@ -1800,7 +1829,6 @@ RunResult QLangVM::runFrames() {
         // before resuming: resumeGenerator pushes a frame, which can
         // reallocate m_frames and invalidate `frame`/`cv`.
         GeneratorState *gs = const_cast<GeneratorState *>(&cv.asGenerator());
-        frame.pc += 1;
         QLangValue result = resumeGenerator(*gs);
         m_frames[static_cast<size_t>(m_cur)].regs[static_cast<size_t>(i.b)] =
             result;
@@ -1812,7 +1840,6 @@ RunResult QLangVM::runFrames() {
       // m_frames, which would dangle `frame`/`cv`. The Closure object itself
       // is heap-owned (shared_ptr), so the reference stays valid.
       const Closure &clos = cv.asFunction();
-      frame.pc += 1;
       // i.b is the result destination AND the arg base (args live at
       // i.b+1..i.b+argc). Normally i.b == i.a, the callee's home register;
       // they differ when the compiler hoisted the callee to a temp to
@@ -1904,7 +1931,8 @@ RunResult QLangVM::runFrames() {
           frame.regs.empty() ? QLangValue() : frame.regs[0];
       int callDest = frame.callDest;
       int funcIndex = frame.funcIndex;
-      size_t resumePc = frame.pc + 1;
+      // pc already points past the YIELD instruction (advanced at decode).
+      size_t resumePc = frame.pc;
       releaseFrame(frame);
       GeneratorState *gs = nullptr;
       if (m_cur >= 1 && callDest >= 0) {
@@ -1939,11 +1967,13 @@ RunResult QLangVM::runFrames() {
     }
     case Opcode::ADDI:
       frame.regs[i.a] = doBinary(Opcode::ADD, frame.regs[i.a],
-                                 QLangValue::Int(i.i32), this);
+                                 QLangValue::Int(static_cast<int32_t>(i.imm)),
+                                 this);
       break;
     case Opcode::SUBI:
       frame.regs[i.a] = doBinary(Opcode::SUB, frame.regs[i.a],
-                                 QLangValue::Int(i.i32), this);
+                                 QLangValue::Int(static_cast<int32_t>(i.imm)),
+                                 this);
       break;
     case Opcode::ADD:
     case Opcode::SUB:
@@ -1971,7 +2001,9 @@ RunResult QLangVM::runFrames() {
       frame.flags = cmpFlags(frame.regs[i.a], frame.regs[i.b], this);
       break;
     case Opcode::CMPI:
-      frame.flags = cmpFlags(frame.regs[i.a], QLangValue::Int(i.i32), this);
+      frame.flags =
+          cmpFlags(frame.regs[i.a], QLangValue::Int(static_cast<int32_t>(i.imm)),
+                   this);
       break;
     case Opcode::JE:
     case Opcode::JNE:
@@ -1980,33 +2012,26 @@ RunResult QLangVM::runFrames() {
     case Opcode::JL:
     case Opcode::JLE:
       if (flagsSatisfied(op, frame.flags))
-        frame.pc = static_cast<size_t>(i.i32);
-      else
-        frame.pc = frame.pc + 1;
+        frame.pc += static_cast<size_t>(i.jumpOffset);
       continue;
     case Opcode::JMP:
-      frame.pc = static_cast<size_t>(i.i32);
+      frame.pc += static_cast<size_t>(i.jumpOffset);
       continue;
     case Opcode::JMPIFTRUE:
       if (isTrue(frame.regs[i.a]))
-        frame.pc = static_cast<size_t>(i.i32);
-      else
-        frame.pc = frame.pc + 1;
+        frame.pc += static_cast<size_t>(i.jumpOffset);
       continue;
     case Opcode::CONTINUE:
-      frame.pc = static_cast<size_t>(i.i32);
+      frame.pc += static_cast<size_t>(i.jumpOffset);
       continue;
     case Opcode::BREAK:
-      frame.pc = static_cast<size_t>(i.i32);
+      frame.pc += static_cast<size_t>(i.jumpOffset);
       continue;
     case Opcode::JMPIFFALSE:
       if (!isTrue(frame.regs[i.a]))
-        frame.pc = static_cast<size_t>(i.i32);
-      else
-        frame.pc = frame.pc + 1;
+        frame.pc += static_cast<size_t>(i.jumpOffset);
       continue;
     }
-    frame.pc += 1;
   }
   return RunResult::Returned; // defensive: the frame stack ran out
 }

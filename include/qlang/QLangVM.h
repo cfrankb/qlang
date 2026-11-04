@@ -196,6 +196,12 @@ public:
   // first.
   void popFrame();
 
+  // Resolve a byte-offset pc to an instruction index: the largest index
+  // whose offset is <= pc (binary search over fn.instrOffsets). fn.loc is
+  // parallel to instrOffsets, so this maps a pc back to its source line/col
+  // for error reporting.
+  size_t instructionIndexAt(const Function &fn, size_t pc) const;
+
   // Bind a compile-time capture spec (env==null, reg set) to live cells;
   // appends the bound refs to `out`. Two kinds (Phase 2):
   //  - GLOBAL: the capture name is a top-level name (in m_prog.vars) — the
