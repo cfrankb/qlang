@@ -152,7 +152,7 @@ proposal
 net saving. -1 constant in pool. -2 Instructions.
 
 
-## new OpCode addi
+## OpCode addi
 
 **Implemented (Round 31, 2026-10-29):** `Opcode::ADDI` appended last in the
 enum (existing `.qlc` opcode numbers unchanged), `usesI32()` covers it, the
@@ -181,9 +181,9 @@ proposed encoding
 
 net savings: -2 instructions
 
-## new OpCode: subi
+##  OpCode: subi
 
-new opcode `subi`
+opcode `subi`
 
 ```
   L26:    n = n - 1
@@ -324,6 +324,13 @@ b = t
 
 don't allocate a new register for `t`
 use a global scratch pad
+
+
+## OpCode nop 
+
+this OpCode takes no action
+
+
 
 ## decompiler mnemonics 
 
@@ -573,6 +580,5 @@ constant in the pool must have unique values. duplicated entries should be folde
 
 ## bytecode serialization
 
+see [SERIALIZATION.md](../SERIALIZATION.md)
 
-see 
-[SERIALIZATION.md](../SERIALIZATION.md)
