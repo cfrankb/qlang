@@ -1,5 +1,10 @@
 # bytecodes
 
+## disassembler
+
+IMPORTANT: every time a change is made to the opcodes or bytecode encoding, always update the disassembler: `examples/qlang_run.cpp`.
+
+
 ## Instruction operand map (8-byte layout)
 
 Implemented in `include/qlang/QLangBytecode.h` (see
@@ -518,6 +523,44 @@ better encoding
 
 ```
 
-# disassembler
 
-IMPORTANT: every time a change is made to the opcodes or bytecode encoding, always update the disassembler: `examples/qlang_run.cpp`.
+## encoding proposal
+
+[docs/plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md)
+
+there should be only one pool of registers and one pool of constants. extended addressing is 2 byte, default addresings is 1 byte. if OpCode top bit is not set then both left and right operand are using 1 byte encoding
+
+127 OpCode limit (hard limit)
+
+```
+top bit of opCode byte is set to denote variants
+
+opCode 1 byte (0-127) are opCode value. if top opCode top bit is set then an extra byte is added next to it .
+extra byte (e):
+- if opCode jmp
+   e = 0 => jmp16 (2 byte) relative address
+   e = 1 => jmp32 (4 byte) relative  address
+- if opCode movi, addi, subi, movc, cmp, cmpi etc
+   bit 0-3 left operand
+      value 0 register 0-255
+      value 1 extended register (2 bytes)
+      value 2 extended register (4 bytes) // future version
+   bit 4-7 right operand
+      if constant (immediate)
+         value 0 => 1 byte   (unsigned)
+         value 1 => 2 bytes  (unsigned)
+         value 2 => 4 bytes  (unsigned)
+         value 3 => 8 bytes  (unsigned)
+         value 4 => 1 byte   (signed)
+         value 5 => 2 bytes  (signed)
+         value 6 => 4 bytes  (signed)
+         value 7 => 8 bytes  (signed)
+      else if register
+        value 0 register 0-255 (1 byte)
+        value 1 extended register (2 bytes)
+        value 2 extended register (4 bytes) // future version
+      else if constant
+        value 0 constant 0-255 (1 byte)
+        value 1 extended constant (2 bytes)
+        value 2 extended constant (4 bytes) // future version
+```

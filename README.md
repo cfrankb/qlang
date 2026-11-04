@@ -10,12 +10,12 @@ injects native functions, and hands script results back to the host.
 
    +------------------------------------+
    |  hitbox editor, tile editor        |
-   |  map editor                        |  <-- The Spatial UI Tools (Qt 6)
+   |  map editor and other tools        |  <-- The Spatial UI Tools (Qt 6)
    +------------------------------------+
                      │
                      ▼ (Generates Assets & Logic Scripts)
    +------------------------------------+
-   |     C++ Runtime / Engine           |  <-- The Core Execution Engine (SDL)
+   |     C++ Runtime / Engine           |  <-- The Core Execution Engine (SDL3)
    |  ┌──────────────────────────────┐  |
    |  │         qlang client         │  |  <-- Embedded Sandbox VM Context
    |  └──────────────────────────────┘  |
