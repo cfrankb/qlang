@@ -66,13 +66,12 @@ void putStr(std::ostream &os, const std::string &s) {
   putBytes(os, s.data(), s.size());
 }
 // One instruction, field by field (F1): the raw struct bytes are NOT the
-// on-disk encoding. Wire layout: u16 op, u16 a, i32 i32, u16 line, u16 col.
+// on-disk encoding. Wire layout: u16 op, u16 a, i32 i32. Source location
+// is written separately in the per-function location section.
 void putInstruction(std::ostream &os, const Instruction &ins) {
   putU16(os, static_cast<uint16_t>(ins.op));
   putU16(os, static_cast<uint16_t>(ins.a));
   putI32(os, ins.i32);
-  putU16(os, ins.line);
-  putU16(os, ins.col);
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +408,12 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
       // Field by field, explicit little-endian (F1): the raw struct bytes
       // are NOT the on-disk encoding.
       putInstruction(os, ins);
+    // Location side-table: one (u16 line, u16 col) per instruction.
+    putU32(os, static_cast<uint32_t>(f.loc.size()));
+    for (const auto &lc : f.loc) {
+      putU16(os, lc.first);
+      putU16(os, lc.second);
+    }
     putU32(os, static_cast<uint32_t>(f.constants.size()));
     for (const auto &c : f.constants)
       serializeValue(os, c);
@@ -502,10 +507,15 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
         ins.op = static_cast<Opcode>(op);
         ins.a = r.u16();
         ins.i32 = r.i32();
-        ins.line = r.u16();
-        ins.col = r.u16();
         fn.instructions.push_back(ins);
       }
+      // Location side-table.
+      uint32_t locCount = r.u32();
+      if (locCount > instrCount)
+        r.fail("location table longer than instruction stream");
+      fn.loc.reserve(locCount);
+      for (uint32_t j = 0; j < locCount; j++)
+        fn.loc.emplace_back(r.u16(), r.u16());
       uint32_t constCount = r.u32();
       fn.constants.reserve(constCount);
       for (uint32_t j = 0; j < constCount; j++)

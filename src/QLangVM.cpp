@@ -914,8 +914,8 @@ void QLangVM::vmThrowAt(QLangErrorKind kind, int line, int col,
       const Function &fn =
           m_prog.functions[static_cast<size_t>(fr.funcIndex)];
       int fl = 0;
-      if (fr.pc < static_cast<int>(fn.instructions.size()))
-        fl = fn.instructions[static_cast<size_t>(fr.pc)].line;
+      if (fr.pc < static_cast<int>(fn.loc.size()))
+        fl = fn.loc[static_cast<size_t>(fr.pc)].first;
       frames.push_back(QLangFrameRef{fn.name, fl});
     }
     // Default to the innermost frame's resolved position (the failing
@@ -925,7 +925,7 @@ void QLangVM::vmThrowAt(QLangErrorKind kind, int line, int col,
       const Function &fn =
           m_prog.functions[static_cast<size_t>(m_frames[static_cast<size_t>(m_cur)].funcIndex)];
       size_t pc = m_frames[static_cast<size_t>(m_cur)].pc;
-      if (pc < fn.instructions.size()) c = fn.instructions[pc].col;
+      if (pc < fn.loc.size()) c = fn.loc[pc].second;
     }
   }
   throw QLangError(kind, l, c, msg, m_scope.moduleName(), std::move(frames));
@@ -1742,11 +1742,17 @@ RunResult QLangVM::runFrames() {
         // release(x) mutates the argument register in place (drops the
         // owned shared_ptr); callBuiltin takes const copies, so it is
         // handled here (Phase 3, H2).
-        releaseExternal(frame.regs[dest + 1], i.line, i.col, this);
+        releaseExternal(frame.regs[dest + 1],
+                        frame.pc < fn.loc.size() ? fn.loc[frame.pc].first : 0,
+                        frame.pc < fn.loc.size() ? fn.loc[frame.pc].second : 0,
+                        this);
         frame.regs[dest] = QLangValue();
       } else {
         frame.regs[dest] = callBuiltin(static_cast<Builtin>(i.b), callArgs,
-                                       m_scope, m_prog, i.line, i.col, this);
+                                       m_scope, m_prog,
+                                       frame.pc < fn.loc.size() ? fn.loc[frame.pc].first : 0,
+                                       frame.pc < fn.loc.size() ? fn.loc[frame.pc].second : 0,
+                                       this);
       }
       break;
     }

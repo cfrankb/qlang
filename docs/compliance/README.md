@@ -1,7 +1,7 @@
 # QLang Compliance — Module Index
 
 Entry point for the compliance reference (migrated from root `SPEC_COMPLIANCE.md`,
-2026-10-29; last audit Round 35, 2026-11-03). Content is verbatim; line refs
+2026-10-29; last audit Round 36, 2026-11-03). Content is verbatim; line refs
 point at the original `SPEC_COMPLIANCE.md`.
 
 Per AGENTS.md, each module tracks the SHA256 of the **specific spec module(s)**

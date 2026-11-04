@@ -241,7 +241,7 @@ static void testProgram() {
 
 // ---------------------------------------------------------------------------
 // MOVI: Int literals must compile to MOVI (immediate in i32, no pool slot);
-// everything else stays in the pool. The v3 format round-trips MOVI
+// everything else stays in the pool. The v4 format round-trips MOVI
 // instruction-for-instruction (testProgram's memcmp covers the encoding).
 // ---------------------------------------------------------------------------
 static CompiledProgram compileSrc(const char *src) {
@@ -297,21 +297,21 @@ static void testMovi() {
         qNoMovi = false;
     check(qNoMovi, "movi: 64-bit literal not MOVI");
 
-    // .qlc written at format version 3 (kQlcVersion); a reader that only
-    // accepts <= 2 would reject it, this reader accepts it.
+    // .qlc written at format version 4 (kQlcVersion); a reader that only
+    // accepts <= 3 would reject it, this reader accepts it.
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "movi: writeQlc (v3)");
+    check(writeQlc(os, p, {}), "movi: writeQlc (v4)");
     std::string bytes = os.str();
     uint32_t version = static_cast<uint32_t>(static_cast<uint8_t>(bytes[4])) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[5])) << 8) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[6])) << 16) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[7])) << 24);
-    check(version == 3, "movi: format version 3");
+    check(version == 4, "movi: format version 4");
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("movi: readQlc v3 (") + err + ")");
+    check(readQlc(is, back, slots, err), std::string("movi: readQlc v4 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -395,15 +395,15 @@ static void testAddi() {
         noAddi = false;
     check(noAddi, "addi: float literal not ADDI");
 
-    // .qlc round-trip of an ADDI program (v3 format).
+    // .qlc round-trip of an ADDI program (v4 format).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "addi: writeQlc (v3)");
+    check(writeQlc(os, p, {}), "addi: writeQlc (v4)");
     std::string bytes = os.str();
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("addi: readQlc v3 (") + err + ")");
+    check(readQlc(is, back, slots, err), std::string("addi: readQlc v4 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -448,15 +448,15 @@ static void testSubi() {
         noSubi = false;
     check(noSubi, "subi: float literal not SUBI");
 
-    // .qlc round-trip of a SUBI program (v3 format).
+    // .qlc round-trip of a SUBI program (v4 format).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "subi: writeQlc (v3)");
+    check(writeQlc(os, p, {}), "subi: writeQlc (v4)");
     std::string bytes = os.str();
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("subi: readQlc v3 (") + err + ")");
+    check(readQlc(is, back, slots, err), std::string("subi: readQlc v4 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -478,7 +478,7 @@ static void testSubi() {
 // CMP/CMPI + j*: an Int-vs-Int (literal) comparison in `if` fuses to
 // cmp/cmpi + a conditional jump (no comparison-result temp, no pool slot for
 // the boolean); non-Int comparisons stay on the legacy EQ/GT + JMPIFFALSE
-// path. The v3 format round-trips the new opcodes instruction-for-instruction.
+// path. The v4 format round-trips the new opcodes instruction-for-instruction.
 // ---------------------------------------------------------------------------
 static bool hasAnyOp(const Function &fn, std::initializer_list<Opcode> ops) {
   for (const auto &i : fn.instructions)
@@ -509,15 +509,15 @@ static void testCmpJump() {
                      Opcode::JG, Opcode::JGE, Opcode::JL, Opcode::JLE}),
           "cmp: float comparison not fused");
 
-    // .qlc round-trip of a fused program (v3 format).
+    // .qlc round-trip of a fused program (v4 format).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "cmp: writeQlc (v3)");
+    check(writeQlc(os, p, {}), "cmp: writeQlc (v4)");
     std::string bytes = os.str();
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("cmp: readQlc v3 (") + err + ")");
+    check(readQlc(is, back, slots, err), std::string("cmp: readQlc v4 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -574,6 +574,7 @@ static std::string minimalFile() {
   f.u8(0);  // isGenerator
   f.u32(0); // captures
   f.u32(0); // instructions
+  f.u32(0); // loc
   f.u32(0); // constants
   f.u32(0); // natives
   f.u32(0); // vars
@@ -607,8 +608,7 @@ static std::string fileWithOneInstr() {
   f.u16(0); // op
   f.u16(0); // a
   f.i32(0); // i32
-  f.u16(0); // line
-  f.u16(0); // col
+  f.u32(0); // loc
   f.u32(0); // constants
   f.u32(0);
   f.u32(0);
@@ -626,7 +626,7 @@ static void testMalformed() {
   rejects("malformed: bad magic", badMagic);
 
   std::string badVersion = minimalFile();
-  badVersion[4] = 4; // v3 is the current format; v4 must be rejected
+  badVersion[4] = 5; // v4 is the current format; v5 must be rejected
   rejects("malformed: unsupported version", badVersion);
 
   rejects("malformed: truncated", minimalFile().substr(0, 10));
@@ -647,7 +647,7 @@ static void testMalformed() {
   rejects("malformed: invalid opcode", badOp);
 
   std::string truncInstr = fileWithOneInstr();
-  truncInstr.resize(truncInstr.size() - 3); // chop the last instruction
+  truncInstr.resize(43); // chop the instruction's i32 field (instr starts at 37)
   rejects("malformed: truncated instruction", truncInstr);
 
   // Dangling closure: pool holds a Function value with funcIndex 5.
@@ -661,6 +661,7 @@ static void testMalformed() {
   dangling.u8(0);
   dangling.u32(0);
   dangling.u32(0);
+  dangling.u32(0); // loc
   dangling.u32(1); // one constant
   dangling.u8(11); // Function
   dangling.i32(5); // funcIndex (only 1 function exists)
@@ -685,6 +686,7 @@ static void testMalformed() {
     f.u32(0);
     f.u32(0);
     f.u32(0);
+    f.u32(0); // loc
     f.u32(2);
     f.i32(slotA);
     f.str(nameA);
@@ -714,6 +716,7 @@ static void testMalformed() {
     f.u8(0);
     f.u32(0);
     f.u32(0);
+    f.u32(0); // loc
     f.u32(1); // one constant
     emit(f);
     f.u32(0);

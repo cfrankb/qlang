@@ -235,6 +235,8 @@ private:
   static bool containsYield(const StmtPtr &s);
 
   Bytecode m_code;
+  // Parallel to m_code: source location (line, col) per instruction.
+  std::vector<std::pair<uint16_t, uint16_t>> m_loc;
   std::vector<StmtPtr> m_program;
   std::unordered_map<std::string, int> m_regs;
   // Block-scope name maps, innermost last. Only explicit `local`/`let`/`const`

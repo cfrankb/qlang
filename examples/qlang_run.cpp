@@ -726,12 +726,12 @@ namespace
       for (size_t j = 0; j < f.instructions.size(); j++)
       {
         const auto &ins = f.instructions[j];
-        if (level >= 2 && ins.line != lastLine && ins.line >= 1 &&
-            static_cast<size_t>(ins.line) <= srcLines.size())
-          //          ss << "  L" << std::right << std::setw(2) << ins.line << ":  "
-          ss << "\n  L" << ins.line << ":  "
-             << srcLines[static_cast<size_t>(ins.line) - 1] << "\n";
-        lastLine = ins.line;
+        const uint16_t insLine = (j < f.loc.size()) ? f.loc[j].first : 0;
+        if (level >= 2 && insLine != lastLine && insLine >= 1 &&
+            static_cast<size_t>(insLine) <= srcLines.size())
+          ss << "\n  L" << insLine << ":  "
+             << srcLines[static_cast<size_t>(insLine) - 1] << "\n";
+        lastLine = insLine;
         // Level 3: append a copy of the referenced constant (operand b is the
         // pool index for MOVC / MAKEFUNC / MAKEGEN).
         std::string constNote;

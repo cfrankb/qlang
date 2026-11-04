@@ -1,6 +1,6 @@
 # bytecodes
 
-## Instruction operand map (12-byte layout)
+## Instruction operand map (8-byte layout)
 
 Implemented in `include/qlang/QLangBytecode.h` (see
 [../plans/qlc-codec-plan.md](../plans/qlc-codec-plan.md)).
@@ -16,7 +16,6 @@ struct Instruction {
     };
     int32_t i32 = 0; // combined b/c for opcodes with a 32-bit parameter
   };
-  uint16_t line, col;
 };
 ```
 
@@ -24,11 +23,15 @@ Note: `b`/`c` are the two 16-bit halves of `i32`; they are declared as an
 anonymous struct inside the union (bare `int16_t b, c` members of a union
 would alias the same storage).
 
-12 bytes, alignment 4, no padding. Rule: any opcode that needs a 32-bit
+8 bytes, alignment 4, no padding. Rule: any opcode that needs a 32-bit
 parameter uses `i32`; all others use `a`/`b`/`c` as `int16_t`. The single
 source of truth is `usesI32(Opcode)` in `QLangBytecode.h`. Current `i32`
 users: `JMP`, `JMPIFFALSE`, `JMPIFTRUE`, `CONTINUE`, `BREAK` (pc targets),
 and `MOVI`/`ADDI` (32-bit integer literal; destination register in `a`).
+
+Source location (line/col) is NOT in the instruction: it lives in the
+parallel `Function::loc` side-table (`std::vector<std::pair<uint16_t,
+uint16_t>>`, one entry per instruction, read only on the error path).
 
 Conventions:
 
@@ -356,7 +359,8 @@ line 0004    cast 02, 03, 0c -->   cast  r2, r3, <whatever 0c presents>
 
 ## separating line/row from bytecode
 
-PROPOSAL. DOT NOT IMPLEMENT
+IMPLEMENTED (2026-11-03, Round 36 — `.qlc` v4; see
+`docs/plans/instruction-format-optimization-plan.md` Phase 1).
 
 ```cpp
 struct Instruction {          // 8 bytes

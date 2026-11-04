@@ -589,11 +589,10 @@ int QLangCompiler::emitConst(const QLangValue &value) {
 
 void QLangCompiler::emit(Opcode op, int a, int b, int c) {
   m_code.add(op, a, b, c);
-  // Stamp the current source position into the instruction so the VM can
+  // Stamp the current source position into the side-table so the VM can
   // resolve pc -> line/col at throw time (SPEC # error reporting).
-  Instruction &inst = m_code.at(m_code.size() - 1);
-  inst.line = m_curLine;
-  inst.col = m_curCol;
+  m_loc.emplace_back(static_cast<uint16_t>(m_curLine),
+                     static_cast<uint16_t>(m_curCol));
 }
 
 void QLangCompiler::emitImm(Opcode op, int a, int32_t imm) {
@@ -602,9 +601,8 @@ void QLangCompiler::emitImm(Opcode op, int a, int32_t imm) {
   inst.a = static_cast<int16_t>(a);
   inst.i32 = imm; // 32-bit literal (MOVI); b/c are don't-cares
   m_code.add(inst);
-  Instruction &last = m_code.at(m_code.size() - 1);
-  last.line = m_curLine;
-  last.col = m_curCol;
+  m_loc.emplace_back(static_cast<uint16_t>(m_curLine),
+                     static_cast<uint16_t>(m_curCol));
 }
 
 // True when e is a Type::Int literal: the only literals eligible for MOVI
@@ -730,6 +728,7 @@ CompiledProgram QLangCompiler::compile() {
   // Register 0 is always live (the implicit final `return regs[0]`).
   mainFn.registerCount = std::max(m_nextReg, 1);
   mainFn.instructions = std::move(mainScratch.instructions());
+  mainFn.loc = std::move(m_loc);
   mainFn.constants = std::move(mainScratch.constants());
 
   CompiledProgram out;
@@ -883,6 +882,8 @@ int QLangCompiler::buildFunction(const std::string &name,
 
   // Save the enclosing function's compilation state.
   Bytecode savedCode = m_code;
+  auto savedLoc = std::move(m_loc);
+  m_loc.clear();
   auto savedRegs = m_regs;
   // Save caller's register mapping for global keyword use.
   m_savedRegs = m_regs;
@@ -1056,6 +1057,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   int funcIndex = static_cast<int>(m_functions.size()) + 1; // +1 for prepended mainFn
   Bytecode fnCode = std::move(m_code);
   fn.instructions = std::move(fnCode.instructions());
+  fn.loc = std::move(m_loc);
   fn.constants = std::move(fnCode.constants());
   // Detect generator: any `yield` statement (at any nesting depth) makes this
   // a generator function.
@@ -1072,6 +1074,7 @@ int QLangCompiler::buildFunction(const std::string &name,
 
   // Restore the enclosing function's compilation state.
   m_code = std::move(savedCode);
+  m_loc = std::move(savedLoc);
   m_regs = std::move(savedRegs);
   m_constVars = std::move(savedConstVars);
   m_enums = std::move(savedEnums);
@@ -2092,6 +2095,8 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
   // Compile body into a function that creates the prototype table and returns it.
   // Store the function index; at construction time we CALLFN it to get the prototype.
   Bytecode savedCode = m_code;
+  auto savedLoc = std::move(m_loc);
+  m_loc.clear();
   auto savedRegs = m_regs;
   auto savedConstVars = m_constVars;
   auto savedVarTypes = m_varTypes;
@@ -2391,8 +2396,10 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
   int prototypeFuncIdx = static_cast<int>(m_functions.size()) + 1; // +1 for mainFn prepend
   m_functions.emplace_back(Function{
       s->className + "_prototype", 0, m_nextReg,
-      std::move(m_code.instructions()), std::move(m_code.constants()), {}});
+      std::move(m_code.instructions()), std::move(m_loc),
+      std::move(m_code.constants()), {}});
   m_code = std::move(savedCode);
+  m_loc = std::move(savedLoc);
   m_regs = std::move(savedRegs);
   m_constVars = std::move(savedConstVars);
   m_varTypes = std::move(savedVarTypes);
@@ -3212,8 +3219,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     }
     emit(Opcode::CALL, dest, funcId, argCount);
     // Propagate source position for runtime error reporting (on the CALL).
-    m_code.at(m_code.size() - 1).line = e->callLine;
-    m_code.at(m_code.size() - 1).col = e->callCol;
+    m_loc.back() = {static_cast<uint16_t>(e->callLine),
+                    static_cast<uint16_t>(e->callCol)};
     // release(x) mutates its argument in place (drops the owned shared_ptr,
     // Phase 3 H2). The argument was compiled into the slot dest+1; write it
     // back to the source variable so the mutation is visible (the slot is a

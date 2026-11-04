@@ -1,7 +1,7 @@
 # QLang Serialization / Deserialization Spec
 
-Status: **implemented** — `.qlc` program image (v3)
-Covers: `.qlc` program image (v3) and state snapshot (v2, future)
+Status: **implemented** — `.qlc` program image (v4)
+Covers: `.qlc` program image (v4) and state snapshot (v2, future)
 Reference implementation: `src/QLangBytecodeIO.cpp` (library codec)
 Architecture assessment of this change: [qlc-codec-assessment.md](qlc-codec-assessment.md)
 
@@ -82,13 +82,13 @@ Rules:
   reader that cannot re-bind captures MUST treat a closure with a non-empty
   capture list as unloadable.
 
-## 4. Program image (magic `QLC1`, version 3)
+## 4. Program image (magic `QLC1`, version 4)
 
 ```
 offset  field            type   notes
 ──────  ───────────────  ─────  ──────────────────────────────────────────
 0       magic            4s     "QLC1"
-4       version          u32    = 3  (kQlcVersion; readers accept 1..3)
+4       version          u32    = 4  (kQlcVersion; readers accept 1..4)
 8       funcCount        u32
 …       functions        funcCount × Function
         nativeCount      u32
@@ -109,13 +109,14 @@ i32   registerCount
 u8    isGenerator          (0/1)
 u32   capCount, capCount × i32 reg
 u32   instrCount
-      instrCount × Instruction      // 12 bytes each, field by field
+      instrCount × Instruction      // 8 bytes each, field by field
+u32   locCount, locCount × (u16 line, u16 col)
 u32   constCount, constCount × Value
 ```
 
 `Instruction` is written **field by field**, each multi-byte field in
 explicit little-endian order (the raw struct bytes are *not* the on-disk
-encoding; `static_assert(sizeof(Instruction) == 12)` pins the in-memory
+encoding; `static_assert(sizeof(Instruction) == 8)` pins the in-memory
 layout only):
 
 ```
@@ -124,15 +125,18 @@ u16   a
 i32   i32               // combined b/c; jump-family opcodes carry the
                         // 32-bit pc target here (JMP/CONTINUE/BREAK;
                         // JMPIFFALSE/JMPIFTRUE keep the condition in `a`)
-u16   line
-u16   col
 ```
+
+The source location is a per-function side table (`loc`), parallel to the
+instruction stream: `locCount` entries of `(u16 line, u16 col)` with
+`locCount <= instrCount` (missing entries mean "no source location").
 
 - `functions[0]` is the implicit `main`. The writer MUST emit it first; the
   reader MUST reject files where `functions[0].name != "main"` or
   `funcCount < 1`.
 - `op` MUST be `< kOpcodeCount`.
-- `line`/`col` are 0-based source positions (0,0 when unknown).
+- `line`/`col` in the loc side table are 0-based source positions (0,0 when
+  unknown).
 
 ### 4.2 NativeSlot
 
@@ -163,7 +167,7 @@ within both sections is unspecified**. Readers MUST NOT depend on it.
 
 ### 5.1 Validation sequence
 
-1. At least 12 bytes present; magic == `QLC1`; `version <= 3`
+1. At least 12 bytes present; magic == `QLC1`; `version <= 4`
    (`kQlcVersion`; higher → "unsupported version", never a parse attempt).
    Legacy v1/v2 files (byte-identical on little-endian hosts) still load.
 2. Every read is bounds-checked. Truncation → `QLangError(Io)` with the byte
@@ -303,7 +307,7 @@ A codec is not "done" until all of these pass:
    byte-identical to direct `ctx.run(source)`.
 3. **Malformed-input suite** (each case → clean `Io` error, no crash, no
    partial out-param): truncated at every section boundary, bad magic,
-   version 4 (above `kQlcVersion`), `op >= kOpcodeCount`, dangling closure
+   version 5 (above `kQlcVersion`), `op >= kOpcodeCount`, dangling closure
    index, duplicate native slot, negative count, 100-deep nested array,
    70 Mi value count.
 4. **Native mismatch**: program calling an unregistered native → single
@@ -316,9 +320,9 @@ A codec is not "done" until all of these pass:
 | Item | Status |
 |---|---|
 | Value codec (`serializeValue`/`deserializeValue`) | done — matches §3 |
-| Program writer (`writeQlc`, §4 incl. native-slot table) | done — v3, explicit little-endian, field-by-field instructions |
+| Program writer (`writeQlc`, §4 incl. native-slot table) | done — v4, explicit little-endian, field-by-field instructions, loc side table |
 | `QLangErrorKind::Io` | done |
-| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v1..v3 |
+| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v1..v4 |
 | App writer (POC `QlcWriter` in `qlang_run.cpp`) | deleted — replaced by `writeQlc` |
 | Tests (`codec_check`: §9 items 1, 3) | done |
 | `QLangContext::loadProgram` / `execute` (§5.2, §9 item 2/4) | not started |

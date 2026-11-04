@@ -223,12 +223,12 @@ inline bool usesI32(Opcode op) {
   }
 }
 
-// A single instruction: 12 bytes, alignment 4, no padding (the union sits at
-// offset 4, so the raw little-endian bytes are the .qlc encoding). Operands
-// are interpreted per-opcode (docs/spec/13-bytecodes.md "Instruction operand
+// A single instruction: 8 bytes, alignment 4, no padding. Operands are
+// interpreted per-opcode (docs/spec/13-bytecodes.md "Instruction operand
 // map"): register indices, constant-pool indices, type ids, and for the
 // jump family a 32-bit pc target in the combined i32 slot (JMP/CONTINUE/
-// BREAK; JMPIFFALSE/JMPIFTRUE keep the condition register in a).
+// BREAK; JMPIFFALSE/JMPIFTRUE keep the condition register in a). Source
+// location (line/col) lives in the parallel Function::loc side-table.
 struct Instruction {
   Opcode op = Opcode::MOVC; // uint16_t
   int16_t a = 0;
@@ -239,10 +239,9 @@ struct Instruction {
     };
     int32_t i32 = 0; // combined b/c for opcodes with 32-bit operands
   };
-  uint16_t line = 0, col = 0;
 };
 
-static_assert(sizeof(Instruction) == 12, "Instruction must be 12 bytes");
+static_assert(sizeof(Instruction) == 8, "Instruction must be 8 bytes");
 
 // A compiled user-defined function: its instruction stream, constant pool, and
 // calling metadata. Index 0 of Bytecode::functions is the implicit "main"
@@ -253,6 +252,9 @@ struct Function {
   int paramCount = 0;
   int registerCount = 0;
   std::vector<Instruction> instructions;
+  // Parallel to instructions: source location (line, col) per instruction.
+  // Empty entries (0,0) mean "no source location". Only read on error.
+  std::vector<std::pair<uint16_t, uint16_t>> loc;
   std::vector<QLangValue> constants;
   // Capture spec for nested `def` functions: each entry maps a captured
   // variable name to the register index in the enclosing frame where its value

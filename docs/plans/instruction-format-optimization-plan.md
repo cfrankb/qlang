@@ -1,6 +1,6 @@
 # Instruction Format Optimization Plan
 
-Status: **proposed** (2026-11-03)
+Status: **Phase 1 done** (2026-11-03, Round 36); Phases 2–4 proposed
 Supersedes: the 12-byte `Instruction` layout in `include/qlang/QLangBytecode.h`
 Reference spec: `docs/spec/13-bytecodes.md` (operand map)
 

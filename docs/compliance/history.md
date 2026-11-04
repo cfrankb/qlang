@@ -1,3 +1,33 @@
+## Round 36 (2026-11-03)
+
+**Instruction format Phase 1 — line/col side-table (12 → 8 B)** (plan:
+`docs/plans/instruction-format-optimization-plan.md` §Phase 1; uncommitted).
+No language changes, no new opcodes. The `.qlc` format bumps 3 → 4.
+- **`Instruction` shrinks 12 → 8 B:** `line`/`col` drop out of the hot-path
+  struct (`static_assert(sizeof(Instruction) == 8)`). The VM decode loop now
+  reads 8 B/instruction (32 per 256 B L1 line, was 21).
+- **`Function::loc` side-table:** `std::vector<std::pair<uint16_t,uint16_t>>`
+  parallel to `instructions`; the compiler stamps it in `emit()`/`emitImm()`
+  (and the CALL-site override), and `buildFunction()`/`compileClass()`
+  save/restore it with the code buffer. The VM's `vmThrowAt()` and the
+  builtin/call throw sites resolve `loc[pc]` only on the error path.
+- **`.qlc` v4:** per-function location section (`u32 locCount` + `locCount ×
+  (u16 line, u16 col)`, `locCount <= instrCount`) after the instruction
+  stream; instructions are 8 B on the wire (`u16 op, u16 a, i32`).
+  `kQlcVersion = 4`; the reader accepts v1..v4.
+- **`examples/qlang_run.cpp`:** `disassemble()` reads `f.loc[j]` (guarded)
+  for the level-2 source-line interleave.
+- **Tests:** `codec_check` raw-file builders gain the loc section; the
+  unsupported-version case now uses v5; the version assertion is 4; the
+  truncated-instruction case chops the i32 field. 85 checks, all green.
+  Full suite green (37/37 ctest; 754 counted unit cases unchanged).
+- **Docs:** `docs/SERIALIZATION.md` (header v4, §4 version 4 + loc side
+  table, §5.1 `version <= 4`, §9 malformed suite v5, §10 status).
+- Open (unchanged): `$$` indirect operator (fully specified, unimplemented),
+  duplicate-declaration warning (deferred pending warning-toggle infra).
+  Phase 2 (8-bit opcode + 8-bit registers, 8 → 4 B) and Phase 3 (universal
+  scratch registers 240–255) remain per the plan.
+
 ## Round 35 (2026-11-03)
 
 **Phase 5 — paper cuts** (plan:
