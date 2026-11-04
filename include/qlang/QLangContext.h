@@ -1,11 +1,13 @@
 #pragma once
 
+#include <cassert>
 #include <cstddef>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -167,6 +169,18 @@ namespace qlang
     void setMaxSteps(std::size_t n) { m_maxSteps = n; }
     std::size_t maxSteps() const { return m_maxSteps; }
 
+    // Step budget (Phase 5, F6): the context owns the CUMULATIVE instruction
+    // counter. Every VM increments it per instruction (via step()) and never
+    // resets it, so the count survives across run()/call()/callClosure()
+    // dispatches — the engine reads stepsUsed() before and after a dispatch
+    // to compute the per-dispatch cost (EVENT_HANDLERS.md §8.1). budget() is
+    // the live limit (== maxSteps()). resetSteps() zeroes the counter for a
+    // host-side budget reset (e.g. per event tick).
+    std::size_t stepsUsed() const { return m_stepsUsed; }
+    std::size_t budget() const { return m_maxSteps; }
+    std::size_t step() { return ++m_stepsUsed; }
+    void resetSteps() { m_stepsUsed = 0; }
+
     // Module registration. A module is a named collection of native functions.
     // Modules are resolved at compile time by `import` statements.
     struct Module
@@ -242,6 +256,14 @@ namespace qlang
     // registry drops only its own reference.
     int m_verboseLevel = 0;
     std::size_t m_maxSteps = 100000; // live infinite-loop guard (see setMaxSteps)
+    std::size_t m_stepsUsed = 0; // cumulative instruction counter (Phase 5, F6)
+    // Threading contract (Phase 5, H5): one context, one thread. The first
+    // use records the owning thread; in debug builds every subsequent use
+    // asserts it is the same thread. `mutable` so const accessors can bind
+    // too. enqueueFinalizer is exempt (the shared_ptr deleter may fire on
+    // any thread, by design).
+    mutable std::thread::id m_thread;
+    void bindThread() const;
     std::vector<Module> m_modules;
     // Set in the destructor before m_globals is torn down: finalizer drains
     // must not build a VM against a half-destroyed context (SIGBUS in

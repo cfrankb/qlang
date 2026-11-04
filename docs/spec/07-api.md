@@ -202,6 +202,55 @@ $ ./vtest prog.lang            # prog.lang: set_verbose(1); print(foo())
 [pushCall] calleeIndex=1 …     # <- stderr: trace, only when level >= 1
 ```
 
+## step budget
+
+The context owns a **cumulative** VM instruction counter (Phase 5, F6). Every
+VM increments it per instruction and never resets it, so the count survives
+across `run()`/`call()`/`callClosure()` dispatches. This makes the
+infinite-loop budget reachable from C++ (the engine's per-dispatch budget,
+`docs/EVENT_HANDLERS.md` §8.1):
+
+```cpp
+std::size_t before = ctx.stepsUsed();   // read the cumulative count
+ctx.call("handler", {args});            // dispatch
+std::size_t cost = ctx.stepsUsed() - before;  // per-dispatch instruction cost
+std::size_t limit = ctx.budget();       // live limit (== ctx.maxSteps())
+ctx.resetSteps();                       // optional host-side budget reset
+```
+
+- `ctx.stepsUsed()` — cumulative instruction count since construction (or the
+  last `resetSteps()`).
+- `ctx.budget()` — the live step limit (== `ctx.maxSteps()`, default 100000).
+- `ctx.step()` — internal: increments and returns the new count (called by
+  the VM per instruction; not for host use).
+- `ctx.resetSteps()` — zeroes the counter (host-side budget reset, e.g. per
+  event tick).
+
+The limit is still enforced by the VM: a runaway loop throws
+`runtime error: infinite loop (step limit)` when the cumulative count exceeds
+`budget()`.
+
+## threading contract
+
+**One context, one thread.** A `QLangContext` is **not** thread-safe: it must
+be created, driven, and destroyed on a **single thread**. The VM is
+single-threaded and not re-entrant (see `docs/EVENT_HANDLERS.md` §8.2); the
+context is the host boundary for that rule.
+
+- The context records the **owning thread** on first use. In **debug builds**
+  (`NDEBUG` undefined) every subsequent use **asserts** it is the same
+  thread; a cross-thread call is a hard failure. In **release builds** the
+  check compiles out (zero cost beyond a thread-id compare).
+- The **one documented exception** is `enqueueFinalizer()`: the instance
+  table's `shared_ptr` deleter may fire on **any** thread (even during stack
+  unwinding) and only **enqueues** `(table, closure, program)` — it never
+  drives the VM. The queue is drained on the owning thread at a safe point
+  (`run()`/`call()`/`callClosure()`, `clear()`, or an explicit
+  `processFinalizers()`).
+- If events arrive from other threads, the **engine marshals** them onto the
+  owning thread before touching the context. No locking is added to the
+  context itself; the contract is "one context, one thread."
+
 ## external types
 
 See [EXTERNAL_TYPES.md](../EXTERNAL_TYPES.md)

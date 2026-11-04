@@ -1,0 +1,19 @@
+# QLang package version file (Phase 5, F7).
+#
+# Generated from this template by configure_file. Implements the
+# AnyNewerVersion compatibility policy: the package is compatible when its
+# version is >= the requested find version. (CMake 4.x on this toolchain does
+# not ship write_basic_package_config_file, so the file is templated by hand.)
+set(PACKAGE_VERSION "@qlang_VERSION@")
+
+if(PACKAGE_FIND_VERSION)
+  set(PACKAGE_VERSION_COMPATIBLE FALSE)
+  if(NOT PACKAGE_VERSION VERSION_LESS PACKAGE_FIND_VERSION)
+    set(PACKAGE_VERSION_COMPATIBLE TRUE)
+  endif()
+  if(PACKAGE_VERSION VERSION_EQUAL PACKAGE_FIND_VERSION)
+    set(PACKAGE_VERSION_EXACT TRUE)
+  endif()
+else()
+  set(PACKAGE_VERSION_COMPATIBLE TRUE)
+endif()

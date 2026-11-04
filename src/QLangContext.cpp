@@ -139,8 +139,26 @@ namespace {
     setFunc("get_max_steps", getMaxStepsFunc);
   }
 
+  // Threading contract (Phase 5, H5): one context, one thread. The first use
+  // records the owning thread; in debug builds (NDEBUG undefined) every
+  // subsequent use asserts it is the same thread. In release builds the
+  // assert compiles out, so this is a zero-cost no-op beyond the id compare.
+  // enqueueFinalizer is deliberately NOT guarded: the instance table's
+  // shared_ptr deleter may fire on any thread (even during unwinding) and
+  // only enqueues — it never drives the VM.
+  void QLangContext::bindThread() const
+  {
+    std::thread::id cur = std::this_thread::get_id();
+    if (m_thread == std::thread::id()) {
+      m_thread = cur;
+      return;
+    }
+    assert(m_thread == cur && "QLangContext used from multiple threads");
+  }
+
   std::vector<StmtPtr> QLangContext::parse(const std::string &source)
   {
+    bindThread();
     QLangLexer lexer(source);
     std::vector<Token> tokens = lexer.tokenize();
     QLangParser parser(std::move(tokens));
@@ -149,6 +167,7 @@ namespace {
 
   void QLangContext::run(const std::string &source)
   {
+    bindThread();
     // Safe point (Phase 3): drain instance finalizers enqueued since the
     // last dispatch before starting a new run.
     processFinalizers();
@@ -215,6 +234,7 @@ namespace {
 
   QLangValue QLangContext::get(const std::string &name) const
   {
+    bindThread();
     if (!hasGlobal(name))
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "undefined variable '" + name + "'");
@@ -223,6 +243,7 @@ namespace {
 
   void QLangContext::set(const std::string &name, const QLangValue &value, const bool isConst)
   {
+    bindThread();
     // Write straight into the table (the main frame aliases it), and
     // revive an erased slot: re-assigning a deleted variable re-creates it.
     std::size_t slot = globalSlotFor(name);
@@ -236,6 +257,7 @@ namespace {
 
   void QLangContext::remove(const std::string &name)
   {
+    bindThread();
     removeGlobal(name);
     m_injectedConsts.erase(name);
   }
@@ -271,6 +293,7 @@ namespace {
 
   std::size_t QLangContext::globalSlotFor(const std::string &name)
   {
+    bindThread();
     auto it = m_globals.names.find(name);
     if (it != m_globals.names.end())
       return it->second;
@@ -298,11 +321,13 @@ namespace {
 
   void QLangContext::eraseGlobalSlot(std::size_t slot)
   {
+    bindThread();
     m_globals.erased.insert(slot);
   }
 
   void QLangContext::removeGlobal(const std::string &name)
   {
+    bindThread();
     auto it = m_globals.names.find(name);
     if (it == m_globals.names.end())
       return;
@@ -314,6 +339,7 @@ namespace {
 
   void QLangContext::clear()
   {
+    bindThread();
     // m_globals first: releasing the instances enqueues `__destroy__`
     // finalizers (Phase 3), which are drained below while livePrograms is
     // still intact (each entry also holds its own program shared_ptr).
@@ -331,11 +357,13 @@ namespace {
 
   void QLangContext::setFunc(const std::string &name, NativeFunc func)
   {
+    bindThread();
     m_nativeFuncs[name] = std::move(func);
   }
 
   std::shared_ptr<TypeDescriptor> QLangContext::registerType(const TypeMeta &meta)
   {
+    bindThread();
     if (meta.name.empty())
       throw QLangError(QLangErrorKind::Type, 0, 0,
                        "external type name is empty");
@@ -401,6 +429,7 @@ namespace {
 
   void QLangContext::registerModule(const std::string &name, const Module &module)
   {
+    bindThread();
     for (const auto &[fname, _] : module.funcs) {
       // Check for name collision with existing native funcs.
       if (m_nativeFuncs.count(fname) && m_nativeFuncs.count(fname) /* already registered */) {
@@ -414,6 +443,7 @@ namespace {
 
   void QLangContext::importModule(const std::string &name, const std::string &alias)
   {
+    bindThread();
     // Find the module by its registered name.
     const Module *found = nullptr;
     for (auto &mod : m_modules) {
@@ -430,6 +460,7 @@ namespace {
 
   void QLangContext::loadBuiltinModules()
   {
+    bindThread();
     registerBuiltinModules(*this);
   }
 
@@ -448,6 +479,7 @@ namespace {
 
   QLangValue QLangContext::call(const std::string &name, const std::vector<QLangValue> &args)
   {
+    bindThread();
     // Safe point (Phase 3): drain pending instance finalizers first.
     processFinalizers();
     // Check native funcs first.
@@ -479,6 +511,7 @@ namespace {
 
   QLangValue QLangContext::callClosure(const QLangValue &closure, const std::vector<QLangValue> &args)
   {
+    bindThread();
     // Safe point (Phase 3): drain pending instance finalizers first.
     processFinalizers();
     // Ensure we have a compiled program.
@@ -520,6 +553,7 @@ namespace {
 
   void QLangContext::processFinalizers()
   {
+    bindThread();
     // Re-entrancy guard: a finalizer that re-enters the context (e.g. via a
     // native that calls call()) must not start a nested drain — the outer
     // fixpoint loop below picks up whatever it enqueues.

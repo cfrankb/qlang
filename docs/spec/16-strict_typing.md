@@ -1,9 +1,25 @@
 # strict typing
 
-will be optional and can be togged on or off at the QLangContext level.
+the enforcement is at the QLangContext level. C++ api to be provided
 
+
+## enforcement levels
+
+|enforcement level||
+|-|-|
+|0|no type checking
+|1|check type if declared|
+|2|enforce type checking and throw an error if type is not declared
+
+nil type is implicit and doesn't need to be declared
+
+when strict typing is on, type declarations are strictly enforced.
+
+type declarations are optional. no enforcement.
+
+## example of regular functions
 ```
-# assuming strict typing is enabled
+# assuming strict typing is level 1
 
 def hello_world(name:str, age:int) {
 }
@@ -26,7 +42,13 @@ def sum_int2int(a:int, b:int) -> int {
     a += b
     # exception: function must return an int
 }
+```
+## lambda examples
 
+```
+let hello_word = (name:str, age:int)[]->str{
+    return f"hello {name}. you are {age} years old"
+}
 ```
 
 ## rules

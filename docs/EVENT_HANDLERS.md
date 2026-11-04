@@ -231,17 +231,22 @@ without a guard. The containment is a **step budget** around every
 
 - The language has `while` / `for` with no built-in iteration guard, so an
   infinite loop is **syntactically possible**.
-- It is **practically contained**: the engine records the VM step count at
-  dispatch start and compares it in the loop; a `while true {}` in a handler
-  exhausts the budget and is **killed with a clean, bounded error** — a
-  recoverable event, not a hang.
-- This reuses the VM's **existing step counter** (already tracked for `.qls`
-  snapshot/resume, `docs/SERIALIZATION.md` §7). The event-handler focus makes
-  the budget a **complete** containment: guard the one dispatch boundary
-  instead of the whole runtime.
+- It is **practically contained**: the engine records the step count at
+  dispatch start and compares it after the call; a `while true {}` in a
+  handler exhausts the budget and is **killed with a clean, bounded error** —
+  a recoverable event, not a hang.
+- The step counter is **owned by the `QLangContext` and reachable from C++**
+  (Phase 5, F6). It is **cumulative** — every VM increments it per
+  instruction and never resets it, so the count survives across
+  `run()`/`call()`/`callClosure()` dispatches. The host reads
+  `ctx.stepsUsed()` before and after a dispatch to compute the per-dispatch
+  cost, and `ctx.budget()` (== `ctx.maxSteps()`) for the live limit.
+  `ctx.resetSteps()` zeroes the counter for a host-side budget reset (e.g.
+  per event tick). The event-handler focus makes the budget a **complete**
+  containment: guard the one dispatch boundary instead of the whole runtime.
 - **Caveat:** the budget bounds **VM instructions, not wall time.** A loop
-  spinning on a *blocking native call* does not advance the VM counter, so
-  the budget will not fire. Bounding blocking calls is the engine's separate
+  spinning on a *blocking native call* does not advance the counter, so the
+  budget will not fire. Bounding blocking calls is the engine's separate
   responsibility.
 - **This is a rule the engine must implement**, not an inherent property.
   Without it, the clean call surface is equally a clean hang surface. The

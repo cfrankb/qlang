@@ -69,6 +69,8 @@ step 0 creates an infinite loop similar to while true {}
 
 infinite loops are not valid. implement a timeout guard that result in a runtime exception. make the message concise so that tracking the bug will be easier.
 
+the guard rail exists on per loop basis and not as global counter since the sum of all loops will eventually trip the guard rail.
+
 ```python
 # range keyword has different encoding based on context
 

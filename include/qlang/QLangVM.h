@@ -174,7 +174,6 @@ public:
   std::deque<Frame> m_frames;
   int m_cur = -1;
   QLangValue m_returnValue; // result handed back to the caller of a call
-  size_t m_steps = 0;
   // Re-entrancy guard for displayString: an `__str__` that displays `self`
   // must not recurse — the nested call skips `__str__` and falls back.
   bool m_inDisplayString = false;

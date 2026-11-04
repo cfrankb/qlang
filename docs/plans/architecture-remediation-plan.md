@@ -1,9 +1,9 @@
 # Plan: architecture remediation — substrate rewrite (frames, closures, scope, executor)
 
-Status: **in progress** (drafted 2026-11-02). Phase 0 done; Phase 1 done as
+Status: **complete** (drafted 2026-11-02). Phase 0 done; Phase 1 done as
 of 2026-11-03; Phase 2 done as of 2026-11-03 (`7568ed8`); Phase 3 done as of
-2026-11-03 (uncommitted); Phase 4 done as of 2026-11-03 (uncommitted).
-Phase 5 pending.
+2026-11-03 (uncommitted); Phase 4 done as of 2026-11-03 (uncommitted);
+Phase 5 done as of 2026-11-03 (uncommitted; Round 35).
 Scope: implementation substrate only. **No spec changes, no opcode changes, no
 value-tag changes, no value-representation rewrite, no GC, no JIT, no
 threading model.** The language semantics are sound; the machine under them

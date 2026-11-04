@@ -1580,7 +1580,10 @@ RunResult QLangVM::runFrames() {
       continue;
     }
 
-    if (++m_steps > m_scope.maxSteps())
+    // The step counter lives on the context (Phase 5, F6): it accumulates
+    // across dispatches and is never reset by the VM, so the host can read
+    // stepsUsed() before/after a call to compute the per-dispatch cost.
+    if (m_scope.step() > m_scope.maxSteps())
       vmThrow(QLangErrorKind::Runtime, "infinite loop (step limit)");
 
     const Instruction &i = instrs[frame.pc];

@@ -1,0 +1,13 @@
+@PACKAGE_INIT@
+
+# QLang package config (Phase 5, F7).
+#
+# Provides the `qlang::qlang` target (the static library) and the public
+# headers under <prefix>/include/qlang. Usage:
+#
+#   find_package(qlang REQUIRED)
+#   target_link_libraries(app PRIVATE qlang::qlang)
+
+include("${CMAKE_CURRENT_LIST_DIR}/qlangTargets.cmake")
+
+check_required_components(qlang)

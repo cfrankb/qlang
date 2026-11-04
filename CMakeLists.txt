@@ -34,10 +34,59 @@ add_library(qlang
   src/QLangModules.cpp
   src/QLangObjects.cpp
 )
-target_include_directories(qlang PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+# BUILD_INTERFACE/INSTALL_INTERFACE so install(EXPORT) does not embed a
+# source-tree path (Phase 5, F7): consumers of the installed package get
+# <prefix>/include.
+target_include_directories(qlang
+  PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+)
 
 target_compile_options(qlang PRIVATE
   $<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-Wall -Wextra>
+)
+
+# Install + export rules (Phase 5, F7): embedding no longer requires a source
+# build. `find_package(qlang)` resolves the `qlang::qlang` target, the static
+# library, and the public headers.
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
+set(qlang_VERSION 0.5.0)
+
+install(TARGETS qlang
+  EXPORT qlangTargets
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+  RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/qlang
+  DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
+  FILES_MATCHING PATTERN "*.h"
+)
+install(EXPORT qlangTargets
+  FILE qlangTargets.cmake
+  NAMESPACE qlang::
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/qlang
+)
+
+# find_package(qlang) support: generate qlangConfig.cmake from the template.
+configure_package_config_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/qlangConfig.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/qlangConfig.cmake
+  INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/qlang
+)
+# CMake 4.x on this toolchain does not ship write_basic_package_config_file,
+# so the version file is templated by hand (AnyNewerVersion policy).
+configure_file(
+  ${CMAKE_CURRENT_SOURCE_DIR}/cmake/qlangConfigVersion.cmake.in
+  ${CMAKE_CURRENT_BINARY_DIR}/qlangConfigVersion.cmake
+  @ONLY
+)
+install(FILES
+  ${CMAKE_CURRENT_BINARY_DIR}/qlangConfig.cmake
+  ${CMAKE_CURRENT_BINARY_DIR}/qlangConfigVersion.cmake
+  DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/qlang
 )
 
 # Example program that exercises the interpreter.
@@ -155,12 +204,39 @@ add_executable(phase3_api tests/unit/phase3_api.cpp)
 target_link_libraries(phase3_api PRIVATE qlang)
 add_test(NAME phase3_api COMMAND phase3_api)
 
+# Phase 5 tests (architecture-remediation-plan.md): paper cuts — the
+# context-owned cumulative step budget (stepsUsed/budget/step/resetSteps)
+# and the one-context-one-thread contract.
+add_executable(phase5_api tests/unit/phase5_api.cpp)
+target_link_libraries(phase5_api PRIVATE qlang)
+add_test(NAME phase5_api COMMAND phase5_api)
+
 # Script-level regression suite (tests/scripts/). Each .ql script is driven
 # by qlang_run (the smoke-test app); a non-zero exit code fails the suite.
-file(GLOB QL_SCRIPTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/*.ql)
+# Explicit list (Phase 5, F7) — no file(GLOB), so a new script is a deliberate
+# CMake edit, not a silent pickup.
+set(QL_SCRIPTS
+  cmp.ql
+  cast.ql
+  encode_repro.ql
+  helpers.ql
+  hello.ql
+  len.ql
+  money.ql
+  moneyv2.ql
+  perf_stress.ql
+  test_assert.ql
+  test_assert2.ql
+  test_cast.ql
+  test_cast2.ql
+  test_minmax.ql
+  test_minmax2.ql
+  type.ql
+)
 foreach(ql_script IN LISTS QL_SCRIPTS)
   get_filename_component(ql_name ${ql_script} NAME_WE)
-  add_test(NAME script_${ql_name} COMMAND qlang_run ${ql_script})
+  add_test(NAME script_${ql_name}
+           COMMAND qlang_run ${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/${ql_script})
 endforeach()
 
 # Performance baseline harness (SPEC # performance tests): median-of-5 per

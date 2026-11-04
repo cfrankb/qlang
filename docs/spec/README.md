@@ -17,7 +17,7 @@ defined against C++20.
 | [04-control-flow.md](04-control-flow.md) | conditions, range, switch, loops, label/goto | `b5dc9fbaa96ef4441f36f2d64682dcfd062932a3b00948579a3ca87ae15766e8` |
 | [05-operators.md](05-operators.md) | operators incl. `?`, `<`/`>`, `**`, cast, `==`/`!=`, `$`, `$$` | `42975989e813699bfcdb62bba4037115d05ff186f5cac679af50013ef24ec685` |
 | [06-functions.md](06-functions.md) | built-in functions, qlang native functions, C++ API | `0060c47c03d579c793e216f9815753ca2c4f58659d682cd159ae1fec0848265d` |
-| [07-api.md](07-api.md) | module registration, QLang import syntax, `ctx.clear()`, verbose level | `e638b7aaa1e540ab0571c09fae9a33c1773c852b08029c78ef8444247a47e79d` |
+| [07-api.md](07-api.md) | module registration, QLang import syntax, `ctx.clear()`, verbose level, step budget, threading contract | `f7c9932f5e7a4e2160310848c92bf5c2809b0a1a093e82521ebf5e525762b133` |
 | [08-generators.md](08-generators.md) | generators, PROTOTYPE 1, Syntax, EOF sentinel | `a99107445f3850d8b600e84cf5d0e5860babc4173cda0e2a183debab0123200d` |
 | [09-modules.md](09-modules.md) | internal modules, import statement, math module | `a3b3bec108d7482541448e27e31222dca58a8c1c588dded12ce26dfe6fb5bebf` |
 | [10-classes.md](10-classes.md) | user-defined classes, `static`, `::`, restrictions | `67ab74fb80ed191a63eac7f68ba787896aef2ff1c953d1627fac28b0ba854beb` |

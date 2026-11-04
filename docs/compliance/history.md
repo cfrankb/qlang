@@ -1,3 +1,42 @@
+## Round 35 (2026-11-03)
+
+**Phase 5 — paper cuts** (plan:
+`docs/plans/architecture-remediation-plan.md` §5; uncommitted). No language
+changes, no new opcodes, no `.qlc` format change. Closes F6, H5, F7 from the
+plan's defect list — the final phase of the remediation plan.
+- **5.1 Step budget on the context (F6):** the instruction counter moves from
+  the per-VM `m_steps` (reset on every dispatch) to the context —
+  `QLangContext::stepsUsed()` (cumulative), `budget()` (the live `maxSteps`
+  cap), `step()` (increment, checked once in the single dispatch loop),
+  `resetSteps()`. The VM no longer owns a counter, so the host can read
+  `stepsUsed()` before/after a call to compute per-dispatch cost.
+  `EVENT_HANDLERS.md` §8.1 rewritten to the context-owned story.
+- **5.2 Threading contract (H5):** "one context, one thread" — the context
+  binds the creating thread's `std::thread::id` and a debug-build `assert`
+  fires on cross-thread use (compiles out under `NDEBUG`). Every public
+  entry point calls `bindThread()`; `enqueueFinalizer()` is exempt (the
+  deleter may fire on any thread). Documented in `docs/spec/07-api.md`
+  (new "threading contract" section). No threading model built.
+- **5.3 CMake install/export (F7):** `install(TARGETS qlang EXPORT
+  qlangTargets)` + headers + `qlangTargets.cmake` (namespace `qlang::`) +
+  `qlangConfig.cmake` / `qlangConfigVersion.cmake` (hand-written version
+  file — CMake 4.4.3 lacks `write_basic_package_config_file`);
+  `target_include_directories` uses `$<BUILD_INTERFACE:…>` /
+  `$<INSTALL_INTERFACE:include>`. Embedders can now `find_package(qlang)`
+  against an install tree (verified with a consumer project). `file(GLOB)`
+  for the `.ql` regressions replaced with an explicit 16-entry list.
+- **Tests:** new `tests/unit/phase5_api.cpp` (17 checks, S1–S7: fresh
+  `stepsUsed()==0`, accumulation across dispatches (no reset), per-dispatch
+  cost via `call()` > 0 and stable, `budget()` == `maxSteps()` (default
+  100000, tracks `setMaxSteps`), `resetSteps()` zeroes, runaway loop →
+  `Runtime` "step limit", `set_max_steps()` from QLang sets `budget()`).
+  ctest 36 → 37 entries; counted unit cases 737 → 754. Full suite green
+  (37/37).
+- **Docs:** `docs/spec/07-api.md` gains "step budget" + "threading contract"
+  sections (new hash `f7c9932f…`); `docs/EVENT_HANDLERS.md` §8.1.
+- Open (unchanged): `$$` indirect operator (fully specified, unimplemented),
+  duplicate-declaration warning (deferred pending warning-toggle infra).
+
 ## Round 34 (2026-11-03)
 
 **Phase 4 — `.qlc` format + compiler hygiene** (plan:
