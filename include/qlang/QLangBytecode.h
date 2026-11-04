@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -39,7 +40,7 @@ enum class Builtin : int {
 // Register-machine opcodes. This is a small register VM: each script variable
 // maps to a register, and arithmetic/comparison results are written to a
 // register. Constants live in a separate pool and are loaded with MOVC.
-enum class Opcode : uint16_t {
+enum class Opcode : uint8_t {
   // Data movement
   MOVC, // r[a] = constants[b]
   MOV,   // r[a] = r[b]
@@ -190,58 +191,46 @@ enum class Opcode : uint16_t {
   JGE,  // if flags == (GR|EQ)       pc = i32
   JL,   // if flags == LT            pc = i32
   JLE,  // if flags == (LT|EQ)       pc = i32
-
-  kOpcodeCount // sentinel: not a real opcode; valid ops are < kOpcodeCount
 };
 
-// True when the opcode carries a 32-bit parameter in the combined b/c slot
-// (Instruction::i32) instead of int16_t a/b/c. Single source of truth shared
-// by the compiler (emit/backpatch), the VM (decode), the disassembler, and
-// the .qlc codec. Currently: the jump family (pc can exceed 32,767) and
-// MOVI/ADDI (32-bit integer literal in i32, destination register in a).
-inline bool usesI32(Opcode op) {
-  switch (op) {
-  case Opcode::JMP:
-  case Opcode::JMPIFFALSE:
-  case Opcode::JMPIFTRUE:
-  case Opcode::CONTINUE:
-  case Opcode::BREAK:
-  case Opcode::MOVI:
-  case Opcode::ADDI:
-  case Opcode::SUBI:
-  case Opcode::CMPI: // 32-bit Int literal in i32 (register in a)
-  case Opcode::JE:
-  case Opcode::JNE:
-  case Opcode::JG:
-  case Opcode::JGE:
-  case Opcode::JL:
-  case Opcode::JLE: // pc target in i32
-    return true;
-  case Opcode::kOpcodeCount:
-  default:
-    return false;
-  }
-}
+inline constexpr uint8_t kOpcodeEscape = 0x80;
+inline constexpr uint8_t kOpcodeMax = 128; // identities 0..127
 
-// A single instruction: 8 bytes, alignment 4, no padding. Operands are
-// interpreted per-opcode (docs/spec/13-bytecodes.md "Instruction operand
-// map"): register indices, constant-pool indices, type ids, and for the
-// jump family a 32-bit pc target in the combined i32 slot (JMP/CONTINUE/
-// BREAK; JMPIFFALSE/JMPIFTRUE keep the condition register in a). Source
-// location (line/col) lives in the parallel Function::loc side-table.
-struct Instruction {
-  Opcode op = Opcode::MOVC; // uint16_t
-  int16_t a = 0;
-  union {
-    struct {
-      int16_t b;
-      int16_t c;
-    };
-    int32_t i32 = 0; // combined b/c for opcodes with 32-bit operands
-  };
+struct DecodedInstruction {
+  Opcode op = Opcode::MOVC;
+  uint8_t modifier = 0;   // 0 = base form; non-zero only when escaped
+  int32_t a = 0;          // left operand (register or constant index)
+  int32_t b = 0;          // right operand (register, constant, or unused)
+  int32_t c = 0;          // third operand (register; 3-operand ALU only)
+  int64_t imm = 0;        // signed immediate (MOVI/ADDI/SUBI/CMPI)
+  int32_t jumpOffset = 0; // relative offset for jump opcodes
+  size_t size = 0;        // total byte size of this instruction in the stream
 };
 
-static_assert(sizeof(Instruction) == 8, "Instruction must be 8 bytes");
+// Class predicates
+bool isJumpOpcode(Opcode op);
+bool isImmediateOpcode(Opcode op);
+bool isRegConstOpcode(Opcode op);
+
+// Size computation
+size_t baseInstructionSize(Opcode op);
+size_t escapedInstructionSize(Opcode op, uint8_t modifier);
+size_t instructionSize(Opcode op, uint8_t modifier = 0);
+
+// Jump width selection
+size_t minJumpSize(int32_t offset);
+// Returns 2 (jmp8), 5 (jmp16), or 6 (jmp32)
+
+// Operand width
+size_t registerAddressSize(int32_t index);  // 1 or 2
+size_t constantAddressSize(int32_t index);  // 1 or 2
+
+// Encode one instruction into a byte buffer
+void encodeInstruction(std::vector<uint8_t>& out, const DecodedInstruction& in);
+
+// Decode one instruction from a byte buffer at position pc
+void decodeInstruction(const uint8_t* code, size_t pc, size_t codeSize,
+                       DecodedInstruction& out);
 
 // A compiled user-defined function: its instruction stream, constant pool, and
 // calling metadata. Index 0 of Bytecode::functions is the implicit "main"
@@ -251,8 +240,9 @@ struct Function {
   std::string name;
   int paramCount = 0;
   int registerCount = 0;
-  std::vector<Instruction> instructions;
-  // Parallel to instructions: source location (line, col) per instruction.
+  std::vector<uint8_t> code;                    // flat byte stream
+  std::vector<size_t> instrOffsets;             // byte offset of each instruction
+  // Parallel to instrOffsets: source location (line, col) per instruction.
   // Empty entries (0,0) mean "no source location". Only read on error.
   std::vector<std::pair<uint16_t, uint16_t>> loc;
   std::vector<QLangValue> constants;
@@ -273,9 +263,6 @@ struct Function {
 // The compiled program: an instruction stream plus a constant pool.
 class Bytecode {
 public:
-  void add(const Instruction &inst);
-  void add(Opcode op, int a = 0, int b = 0, int c = 0);
-
   // Append a constant, returning its pool index.
   int addConstant(QLangValue value);
 
@@ -283,27 +270,25 @@ public:
   // caller fills in the name/paramCount/registerCount; this appends the
   // instruction stream and constant pool and returns the new function index.
   int addFunction(const std::string &name, int paramCount, int registerCount,
-                  std::vector<Instruction> instrs,
+                  std::vector<uint8_t> code,
+                  std::vector<size_t> instrOffsets,
                   std::vector<QLangValue> constants);
 
-  const std::vector<Instruction> &instructions() const { return m_instr; }
-  std::vector<Instruction> &instructions() { return m_instr; }
-  void setInstructions(std::vector<Instruction> instrs) { m_instr = std::move(instrs); }
   const std::vector<QLangValue> &constants() const { return m_consts; }
   // Replaces the pool.
   void setConstants(std::vector<QLangValue> consts);
   const std::vector<Function> &functions() const { return m_functions; }
-  size_t size() const { return m_instr.size(); }
+  size_t size() const { return m_code.size(); }
 
-  // Mutable access to instruction i (used to patch jump targets after a
-  // forward reference is resolved).
-  Instruction &at(size_t i) { return m_instr[i]; }
+  const std::vector<uint8_t>& code() const { return m_code; }
+  std::vector<uint8_t>& code() { return m_code; }
+  void setCode(std::vector<uint8_t> c) { m_code = std::move(c); }
 
   // Human-readable opcode mnemonic (for dumping/debugging).
   static const char *name(Opcode op);
 
 private:
-  std::vector<Instruction> m_instr;
+  std::vector<uint8_t> m_code;
   std::vector<QLangValue> m_consts;
   std::vector<Function> m_functions;
 };

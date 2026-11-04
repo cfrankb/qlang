@@ -5,10 +5,183 @@
 #include <iostream>
 #include <optional>
 #include <stdexcept>
+#include <vector>
 
 #include "qlang/QLangErrors.h"
 
 namespace qlang {
+
+// ---------------------------------------------------------------------------
+// Raw instruction emitter: accumulates instructions in a vector, then
+// encodes them into the flat byte stream at finish() time.
+// ---------------------------------------------------------------------------
+struct RawInstr {
+  Opcode op;
+  int32_t a = 0, b = 0, c = 0;
+  int64_t imm = 0;
+  int32_t jumpTarget = -1; // instruction index; -1 = not a jump
+  uint16_t line = 0, col = 0;
+};
+
+struct FnEmitter {
+  std::vector<RawInstr> raw;
+  std::vector<QLangValue> consts;
+
+  size_t size() const { return raw.size(); }
+
+  size_t emit(Opcode op, int32_t a = 0, int32_t b = 0, int32_t c = 0,
+              int64_t imm = 0, uint16_t line = 0, uint16_t col = 0) {
+    raw.push_back(RawInstr{op, a, b, c, imm, -1, line, col});
+    return raw.size() - 1;
+  }
+
+  size_t emitJump(Opcode op, int32_t target, int32_t a = 0,
+                  uint16_t line = 0, uint16_t col = 0) {
+    raw.push_back(RawInstr{op, a, 0, 0, 0, target, line, col});
+    return raw.size() - 1;
+  }
+
+  void patchJump(size_t idx, int32_t target) { raw[idx].jumpTarget = target; }
+
+  int addConst(QLangValue v) {
+    int idx = static_cast<int>(consts.size());
+    consts.push_back(std::move(v));
+    return idx;
+  }
+
+  void finish(Function &fn) {
+    // Validate jump targets
+    for (size_t i = 0; i < raw.size(); i++) {
+      if (raw[i].jumpTarget >= 0 &&
+          raw[i].jumpTarget >= static_cast<int32_t>(raw.size()))
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "invalid jump target in emitter");
+    }
+
+    // Compute initial sizes
+    std::vector<size_t> sizes(raw.size());
+    for (size_t i = 0; i < raw.size(); i++) {
+      if (raw[i].jumpTarget >= 0) {
+        sizes[i] = 6; // assume jmp32 initially
+      } else {
+        sizes[i] = computeBaseSize(raw[i]);
+      }
+    }
+
+    // Compute offsets
+    std::vector<size_t> offsets(raw.size());
+    size_t pos = 0;
+    for (size_t i = 0; i < raw.size(); i++) {
+      offsets[i] = pos;
+      pos += sizes[i];
+    }
+
+    // Fixpoint loop for jump widths (max 4 iterations)
+    for (int iter = 0; iter < 4; iter++) {
+      bool changed = false;
+      for (size_t i = 0; i < raw.size(); i++) {
+        if (raw[i].jumpTarget >= 0) {
+          int32_t offset = static_cast<int32_t>(offsets[raw[i].jumpTarget]) -
+                           static_cast<int32_t>(offsets[i] + sizes[i]);
+          size_t newSize = minJumpSize(offset);
+          if (newSize != sizes[i]) {
+            sizes[i] = newSize;
+            changed = true;
+          }
+        }
+      }
+      if (!changed) break;
+      pos = 0;
+      for (size_t i = 0; i < raw.size(); i++) {
+        offsets[i] = pos;
+        pos += sizes[i];
+      }
+    }
+
+    // Encode
+    fn.code.resize(pos);
+    for (size_t i = 0; i < raw.size(); i++) {
+      DecodedInstruction di;
+      di.op = raw[i].op;
+      di.a = raw[i].a;
+      di.b = raw[i].b;
+      di.c = raw[i].c;
+      di.imm = raw[i].imm;
+      di.modifier = 0;
+      if (raw[i].jumpTarget >= 0) {
+        di.jumpOffset = static_cast<int32_t>(offsets[raw[i].jumpTarget]) -
+                        static_cast<int32_t>(offsets[i] + sizes[i]);
+        if (sizes[i] == 2)
+          di.modifier = 0; // base
+        else if (sizes[i] == 5)
+          di.modifier = 0; // escaped jmp16
+        else
+          di.modifier = 1; // escaped jmp32
+      } else {
+        di.modifier = computeModifier(raw[i]);
+      }
+      di.size = sizes[i];
+      // Encode at the correct position
+      size_t oldSize = fn.code.size();
+      encodeInstruction(fn.code, di);
+      // encodeInstruction appends; we need it at offsets[i]
+      // Since we encode in order, this is fine.
+    }
+
+    fn.instrOffsets = std::move(offsets);
+    fn.loc.resize(raw.size());
+    for (size_t i = 0; i < raw.size(); i++)
+      fn.loc[i] = {raw[i].line, raw[i].col};
+    fn.constants = std::move(consts);
+  }
+
+private:
+  static size_t computeBaseSize(const RawInstr &r) {
+    if (isJumpOpcode(r.op))
+      return 2; // base jump: op + 1-byte offset (or op + reg + offset for cond)
+    if (isImmediateOpcode(r.op))
+      return 3; // base imm: op + reg + 1-byte imm
+    size_t n = 1; // opcode
+    if (r.op == Opcode::NEG || r.op == Opcode::NOT || r.op == Opcode::INC ||
+        r.op == Opcode::DEC || r.op == Opcode::EVALKEY ||
+        r.op == Opcode::DELETEx || r.op == Opcode::TABCREATE ||
+        r.op == Opcode::TABFINALIZE || r.op == Opcode::RETURN ||
+        r.op == Opcode::YIELD)
+      n = 2;
+    else if (r.op == Opcode::MOV || r.op == Opcode::MOVC ||
+             r.op == Opcode::MAKEFUNC || r.op == Opcode::MAKEGEN ||
+             r.op == Opcode::REFLOAD || r.op == Opcode::REFSTORE ||
+             r.op == Opcode::CMP || r.op == Opcode::ARRAPP ||
+             r.op == Opcode::ARRLEN || r.op == Opcode::LEN ||
+             r.op == Opcode::SEQGET || r.op == Opcode::ARRAPPV)
+      n = 3;
+    else
+      n = 4;
+    return n;
+  }
+
+  static uint8_t computeModifier(const RawInstr &r) {
+    if (isImmediateOpcode(r.op)) {
+      uint8_t leftForm = (r.a > 255) ? 1 : 0;
+      uint8_t immForm;
+      if (r.imm >= -128 && r.imm <= 127)
+        immForm = 4;
+      else if (r.imm >= -32768 && r.imm <= 32767)
+        immForm = 5;
+      else
+        immForm = 6;
+      if (leftForm == 0 && immForm == 4)
+        return 0; // base form
+      return static_cast<uint8_t>((immForm << 4) | leftForm);
+    }
+    // RegConst
+    uint8_t leftForm = (r.a > 255) ? 1 : 0;
+    uint8_t rightForm = (r.b > 255) ? 1 : 0;
+    if (leftForm == 0 && rightForm == 0)
+      return 0; // base form
+    return static_cast<uint8_t>((rightForm << 4) | leftForm);
+  }
+};
 
 // Reserved prototype/instance key holding the closed-field schema: a table
 // mapping each declared field name to its index (Phase 1). The prototype
@@ -39,9 +212,10 @@ static bool isArrayExpr(const ExprPtr &e) {
 static bool isIntLiteral(const ExprPtr &e);
 static std::optional<int32_t> foldNegLiteral(const ExprPtr &e);
 
-// Backpatch a jump-family instruction's 32-bit pc target: it lives in the
-// combined i32 slot (usesI32 in QLangBytecode.h), not in a/b.
-static void patchJump(Instruction &ins, int target) { ins.i32 = target; }
+// Backpatch a jump-family instruction's target in the emitter.
+static void patchJump(FnEmitter &em, size_t idx, int target) {
+  em.patchJump(idx, target);
+}
 
 // True when e is a call to the builtin range(a, b) with exactly two arguments.
 // On success, outStart/outEnd are set to the two argument expressions so the
@@ -588,21 +762,15 @@ int QLangCompiler::emitConst(const QLangValue &value) {
 }
 
 void QLangCompiler::emit(Opcode op, int a, int b, int c) {
-  m_code.add(op, a, b, c);
-  // Stamp the current source position into the side-table so the VM can
-  // resolve pc -> line/col at throw time (SPEC # error reporting).
-  m_loc.emplace_back(static_cast<uint16_t>(m_curLine),
-                     static_cast<uint16_t>(m_curCol));
+  m_emitter.emit(op, a, b, c, 0,
+                 static_cast<uint16_t>(m_curLine),
+                 static_cast<uint16_t>(m_curCol));
 }
 
 void QLangCompiler::emitImm(Opcode op, int a, int32_t imm) {
-  Instruction inst;
-  inst.op = op;
-  inst.a = static_cast<int16_t>(a);
-  inst.i32 = imm; // 32-bit literal (MOVI); b/c are don't-cares
-  m_code.add(inst);
-  m_loc.emplace_back(static_cast<uint16_t>(m_curLine),
-                     static_cast<uint16_t>(m_curCol));
+  m_emitter.emit(op, a, 0, 0, imm,
+                 static_cast<uint16_t>(m_curLine),
+                 static_cast<uint16_t>(m_curCol));
 }
 
 // True when e is a Type::Int literal: the only literals eligible for MOVI
