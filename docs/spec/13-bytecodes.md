@@ -90,7 +90,7 @@ Conventions:
 | JL | — | — | — | pc target | jump when LT only (`a < b`) |
 | JLE | — | — | — | pc target | jump when LT or EQ (`a <= b`) |
 
-## new opcode: MOVI
+## opcode: MOVI
 
 **Implemented (Round 30, 2026-10-29):** `Opcode::MOVI` appended last in the
 enum (existing `.qlc` opcode numbers unchanged), `usesI32()` covers it, the
@@ -300,7 +300,7 @@ OpCode `jge` and `jle` work exactly like `jg` and `jl`.
   00b3  divi         0d, 10i    ; r13 = r13 / 10
 ```
 
-## new OpCode: swap
+## OpCode: swap
 
 this OpCode will swap register[Instruction.a] and register[Instruction.b]
 
@@ -513,3 +513,7 @@ better encoding
   002e  add          03, 03, 16 ; r3 = r3 + r22                  
 
 ```
+
+# disassembler
+
+IMPORTANT: every time a change is made to the opcodes or bytecode encoding, always update the disassembler: `examples/qlang_run.cpp`.
