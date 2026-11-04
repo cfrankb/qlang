@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "QLangValue.h"
@@ -10,6 +11,14 @@
 namespace qlang {
 
 class QLangContext; // forward declaration for CompiledProgram::nativeFuncs
+
+// Canonical serialized key of a value, used as the constant-pool dedup index
+// (SPEC §bytecodes "constant pool": unique values, duplicates folded).
+// Value types key structurally (recursively); Function keys on its compile
+// time spec (funcIndex + capture regs — cells bind at MAKEFUNC time); the
+// remaining reference types (Generator, Object, External, BoundMethod,
+// TypeRef) key by identity so distinct objects never collide.
+std::string valueKey(const QLangValue &v);
 
 // Built-in function ids shared by the compiler (emits CALL with one of these)
 // and the VM (dispatches on them). Order is stable and used as the operand.
@@ -293,6 +302,10 @@ public:
 private:
   std::vector<uint8_t> m_code;
   std::vector<QLangValue> m_consts;
+  // Dedup index: serialized-value key -> pool index. Kept in sync with
+  // m_consts by addConstant()/setConstants() so repeated identical
+  // constants reuse one pool slot.
+  std::unordered_map<std::string, int> m_constKeys;
   std::vector<Function> m_functions;
 };
 

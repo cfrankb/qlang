@@ -73,6 +73,9 @@ struct RawInstr {
 struct FnEmitter {
   std::vector<RawInstr> raw;
   std::vector<QLangValue> consts;
+  // Dedup index: serialized-value key -> pool index (SPEC §bytecodes
+  // "constant pool": unique values, duplicates folded into a single entry).
+  std::unordered_map<std::string, int> constKeys;
 
   size_t size() const { return raw.size(); }
 
@@ -101,7 +104,12 @@ struct FnEmitter {
   }
 
   int addConst(QLangValue v) {
+    std::string key = valueKey(v);
+    auto it = constKeys.find(key);
+    if (it != constKeys.end())
+      return it->second; // dedup: identical value already in the pool
     int idx = static_cast<int>(consts.size());
+    constKeys.emplace(std::move(key), idx);
     consts.push_back(std::move(v));
     return idx;
   }

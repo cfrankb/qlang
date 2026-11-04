@@ -1,3 +1,36 @@
+## Round 38 (2026-11-04)
+
+**Constant-pool dedup restored** (SPEC §bytecodes `## constant pool`: "constant
+in the pool must have unique values. duplicated entries should be folded into a
+single one."). The pre-Phase-4 dedup was dropped during the per-function
+`FnEmitter` refactor; this round recovers it from git history and adapts it to
+the current architecture. No language changes, no new opcodes, no `.qlc`
+format change (v5).
+- **`valueKey(QLangValue)`** (free function, `QLangBytecode.cpp`): canonical
+  byte-string key — a type byte + payload. Value types key structurally
+  (recursively: scalars by bits, String/Blob by len+bytes, Array/Set by
+  len+subkeys, Table by size+key-sorted entries+subkeys); `Function` keys on
+  its compile-time spec (funcIndex + capture regs — cells bind at MAKEFUNC
+  time); the remaining reference types (Generator, Object, External,
+  BoundMethod, TypeRef) key by **identity** (pointer) so distinct objects never
+  collide. (The old version remapped those to Nil — a latent collision — fixed
+  here.)
+- **`Bytecode::addConstant`/`setConstants`** (`QLangBytecode.cpp`): keep a
+  `std::unordered_map<std::string,int> m_constKeys` (key → pool index) in sync
+  with `m_consts`; `addConstant` returns the existing index on a key hit,
+  `setConstants` rebuilds the map.
+- **`FnEmitter::addConst`** (`QLangCompiler.h`): the per-function emitter dedups
+  the same way via its own `constKeys` map before `finish()` moves `consts` →
+  `fn.constants`, so each function's pool holds unique values.
+- **Tests:** 11 new `codec_check` pool-dedup cases — repeated strings/nil/
+  floats/bools/arrays fold to the right unique count, no-duplicate scans over
+  the pools, folded scalars + arrays load correctly at runtime, and a real
+  program (def + string concat) is duplicate-free across all function pools.
+  Full suite green (41/41 ctest; 806 counted unit cases).
+- **Docs:** `status.md` §bytecodes gains the constant-pool row; the
+  "Current Status" tally is corrected to include `encoding_test` (41) and the
+  19 script regressions (was 754/16 — both under-counted vs `tests.md`).
+
 ## Round 37 (2026-11-04)
 
 **Instruction format — escape-byte encoding (flat byte stream)** (plan:

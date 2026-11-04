@@ -533,6 +533,102 @@ static void testCmpJump() {
 }
 
 // ---------------------------------------------------------------------------
+// Constant pool dedup (SPEC §bytecodes "constant pool"): constants in the
+// pool must have unique values; duplicated entries fold into a single one.
+// ---------------------------------------------------------------------------
+static bool poolHasDuplicates(const Function &fn) {
+  for (size_t i = 0; i < fn.constants.size(); i++)
+    for (size_t j = i + 1; j < fn.constants.size(); j++)
+      if (valueEq(fn.constants[i], fn.constants[j]))
+        return true;
+  return false;
+}
+
+static int poolCountType(const Function &fn, QLangValue::Type t) {
+  int n = 0;
+  for (const auto &c : fn.constants)
+    if (c.type() == t)
+      n++;
+  return n;
+}
+
+static void testPoolDedup() {
+  try {
+    // Repeated string literals -> one pool entry.
+    CompiledProgram p = compileSrc(
+        "local a = \"hello\"\n"
+        "local b = \"hello\"\n"
+        "local c = \"world\"\n");
+    check(poolCountType(p.functions[0], QLangValue::Type::String) == 2,
+          "pool-dedup: repeated strings fold (2 unique, not 3)");
+    check(!poolHasDuplicates(p.functions[0]),
+          "pool-dedup: no duplicate pool entries (strings)");
+
+    // Repeated nil -> one pool entry (call-scratch clears, one per call).
+    CompiledProgram pn = compileSrc(
+        "def f(x) { return x }\n"
+        "f(1.5 + 2.5)\n"
+        "f(3.5 + 4.5)\n");
+    check(poolCountType(pn.functions[0], QLangValue::Type::Nil) == 1,
+          "pool-dedup: repeated nil folds to one entry");
+
+    // Repeated float/bool literals -> one entry each; distinct values stay.
+    CompiledProgram pf = compileSrc(
+        "local a = 1.5\n"
+        "local b = 1.5\n"
+        "local c = 2.5\n"
+        "local d = true\n"
+        "local e = true\n"
+        "local f = false\n");
+    check(poolCountType(pf.functions[0], QLangValue::Type::Float) == 2,
+          "pool-dedup: repeated floats fold (2 unique, not 3)");
+    check(poolCountType(pf.functions[0], QLangValue::Type::Bool) == 2,
+          "pool-dedup: repeated bools fold (2 unique, not 3)");
+    check(!poolHasDuplicates(pf.functions[0]),
+          "pool-dedup: no duplicate pool entries (float/bool)");
+
+    // Nested collections: identical array literals fold, distinct do not.
+    CompiledProgram pa = compileSrc(
+        "local a = [1.5, \"x\"]\n"
+        "local b = [1.5, \"x\"]\n"
+        "local c = [1.5, \"y\"]\n");
+    check(poolCountType(pa.functions[0], QLangValue::Type::Array) == 2,
+          "pool-dedup: identical arrays fold (2 unique, not 3)");
+    check(!poolHasDuplicates(pa.functions[0]),
+          "pool-dedup: no duplicate pool entries (arrays)");
+
+    // Behavior unchanged: the folded pool loads the right values.
+    QLangContext ctx;
+    ctx.run("local a = \"hello\"\n"
+            "local b = \"hello\"\n"
+            "local c = 1.5\n"
+            "local d = 1.5\n"
+            "local e = [1.5, \"x\"]\n"
+            "local f = [1.5, \"x\"]\n");
+    check(ctx.get("a").asString() == "hello" &&
+              ctx.get("b").asString() == "hello" &&
+              ctx.get("c").asFloat() == 1.5 &&
+              ctx.get("d").asFloat() == 1.5,
+          "pool-dedup: folded scalars load correctly");
+    check(valueEq(ctx.get("e"), ctx.get("f")),
+          "pool-dedup: folded arrays load correctly");
+
+    // A real program (functions + class metadata) stays duplicate-free.
+    CompiledProgram pr = compileSrc(
+        "def greet(name) { return \"hi \" + name }\n"
+        "local x = greet(\"bob\")\n"
+        "local y = greet(\"bob\")\n"
+        "println(x)\n");
+    bool allClean = true;
+    for (const auto &fn : pr.functions)
+      allClean = allClean && !poolHasDuplicates(fn);
+    check(allClean, "pool-dedup: no duplicates in any function pool");
+  } catch (const QLangError &e) {
+    check(false, std::string("pool-dedup: ") + e.what());
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Malformed-input suite: each case must fail cleanly, leave the out-params
 // untouched, and say why.
 // ---------------------------------------------------------------------------
@@ -788,6 +884,7 @@ int main() {
   testAddi();
   testSubi();
   testCmpJump();
+  testPoolDedup();
   testMalformed();
   std::cout << (fails == 0 ? "all codec checks passed\n"
                            : "codec checks FAILED\n");

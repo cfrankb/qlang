@@ -55,7 +55,7 @@ Unit (20):
 | `range` | `range_check` | `tests/unit/range_check.cpp` | 22 passed |
 | `class_str` | `class_str_test` | `tests/unit/class_str_test.cpp` | 13 passed |
 | `class_static` | `class_static_test` | `tests/unit/class_static_test.cpp` | 17 passed |
-| `codec` | `codec_check` | `tests/unit/codec_check.cpp` | 85 checks passed |
+| `codec` | `codec_check` | `tests/unit/codec_check.cpp` | 96 checks passed |
 | `encoding` | `encoding_test` | `tests/unit/encoding_test.cpp` | 41 checks passed |
 | `external` | `test_external` | `tests/unit/test_external.cpp` | 23 checks passed |
 | `test_inject` | `test_inject` | `tests/unit/test_inject.cpp` | `ALL PASS` |
@@ -66,7 +66,7 @@ Unit (20):
 | `phase3_api` | `phase3_api` | `tests/unit/phase3_api.cpp` | 23 checks (handles, type-mismatch, finalizer queue, `release()`) |
 | `phase5_api` | `phase5_api` | `tests/unit/phase5_api.cpp` | 17 checks (step budget, threading contract) |
 
-Counted unit cases: **795** (463+33+20+7+5+22+13+17+23+8+85+41+8+3+7+23+17), plus
+Counted unit cases: **806** (463+33+20+7+5+22+13+17+23+8+96+41+8+3+7+23+17), plus
 the three `ALL PASS` gate suites (`test_native`, `test_call`, `test_inject`).
 
 Script (19): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by

@@ -555,17 +555,162 @@ void decodeInstruction(const uint8_t *code, size_t pc, size_t codeSize,
 }
 
 // ---------------------------------------------------------------------------
+// Constant-pool dedup key (SPEC §bytecodes "constant pool": unique values,
+// duplicates folded into a single entry)
+// ---------------------------------------------------------------------------
+
+std::string valueKey(const QLangValue &v) {
+  std::string k;
+  auto push = [&k](const void *p, size_t n) { k.append(static_cast<const char *>(p), n); };
+  auto pushU32 = [&push](uint32_t x) { push(&x, sizeof x); };
+  auto pushI32 = [&push](int32_t x) { push(&x, sizeof x); };
+  auto pushU64 = [&push](uint64_t x) { push(&x, sizeof x); };
+
+  using T = QLangValue::Type;
+  T t = v.type();
+  k.push_back(static_cast<char>(static_cast<uint8_t>(t)));
+  switch (t) {
+  case T::Nil:
+  case T::Eof:
+    break;
+  case T::Bool:
+  case T::Int:
+    pushI32(v.asInt());
+    break;
+  case T::Char:
+    pushI32(v.asChar());
+    break;
+  case T::Short:
+    pushI32(v.asShort());
+    break;
+  case T::Byte:
+    k.push_back(static_cast<char>(v.asByte()));
+    break;
+  case T::Word:
+    pushU32(v.asWord());
+    break;
+  case T::Unsigned:
+    pushU32(v.asUnsigned());
+    break;
+  case T::Qword:
+    pushU64(v.asQword());
+    break;
+  case T::Long:
+    pushU64(static_cast<uint64_t>(v.asLong()));
+    break;
+  case T::Float:
+  {
+    // Bit-exact: equal doubles always key identically.
+    uint64_t bits;
+    std::memcpy(&bits, &v.asFloat(), sizeof bits);
+    pushU64(bits);
+    break;
+  }
+  case T::String:
+  {
+    pushU32(static_cast<uint32_t>(v.asString().size()));
+    k.append(v.asString());
+    break;
+  }
+  case T::Blob:
+  {
+    const auto &b = v.asBlob();
+    pushU32(static_cast<uint32_t>(b.size()));
+    push(b.data(), b.size());
+    break;
+  }
+  case T::Array:
+  case T::Set:
+  {
+    const auto &a = v.asArray();
+    pushU32(static_cast<uint32_t>(a.size()));
+    for (const auto &e : a) {
+      std::string sub = valueKey(e);
+      pushU32(static_cast<uint32_t>(sub.size()));
+      k.append(sub);
+    }
+    break;
+  }
+  case T::Table:
+  {
+    const auto &tab = v.asTable();
+    pushU32(static_cast<uint32_t>(tab->size()));
+    for (const auto &[keyName, val] : *tab) { // std::map: key-sorted order
+      pushU32(static_cast<uint32_t>(keyName.size()));
+      k.append(keyName);
+      std::string sub = valueKey(val);
+      pushU32(static_cast<uint32_t>(sub.size()));
+      k.append(sub);
+    }
+    break;
+  }
+  case T::Function:
+  {
+    // Compile-time spec: the pool closure's cells bind at MAKEFUNC time, so
+    // funcIndex + capture regs fully determine the value.
+    const auto &c = v.asFunction();
+    pushI32(c.funcIndex);
+    pushU32(static_cast<uint32_t>(c.captures.size()));
+    for (const auto &cap : c.captures)
+      pushI32(cap.reg);
+    break;
+  }
+  case T::Generator:
+  case T::Object:
+  case T::External:
+  case T::BoundMethod:
+  case T::TypeRef:
+  {
+    // Reference identity: distinct objects never fold.
+    const void *id = nullptr;
+    switch (t) {
+    case T::Generator:
+      id = &v.asGenerator();
+      break;
+    case T::Object:
+      id = v.asObject().get();
+      break;
+    case T::External:
+      id = v.asExternal().owned.get() != nullptr
+               ? v.asExternal().owned.get()
+               : v.asExternal().type.get();
+      break;
+    case T::BoundMethod:
+      id = v.asBoundMethod().member;
+      break;
+    case T::TypeRef:
+      id = v.asTypeRef().type.get();
+      break;
+    default:
+      break;
+    }
+    pushU64(reinterpret_cast<uint64_t>(id));
+    break;
+  }
+  }
+  return k;
+}
+
+// ---------------------------------------------------------------------------
 // Bytecode class methods
 // ---------------------------------------------------------------------------
 
 int Bytecode::addConstant(QLangValue value) {
+  std::string key = valueKey(value);
+  auto it = m_constKeys.find(key);
+  if (it != m_constKeys.end())
+    return it->second; // dedup: identical value already in the pool
   int idx = static_cast<int>(m_consts.size());
   m_consts.push_back(std::move(value));
+  m_constKeys.emplace(std::move(key), idx);
   return idx;
 }
 
 void Bytecode::setConstants(std::vector<QLangValue> consts) {
   m_consts = std::move(consts);
+  m_constKeys.clear();
+  for (size_t i = 0; i < m_consts.size(); i++)
+    m_constKeys.emplace(valueKey(m_consts[i]), static_cast<int>(i));
 }
 
 int Bytecode::addFunction(const std::string &name, int paramCount,
