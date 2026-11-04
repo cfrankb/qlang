@@ -13,175 +13,140 @@ namespace qlang {
 
 // ---------------------------------------------------------------------------
 // Raw instruction emitter: accumulates instructions in a vector, then
-// encodes them into the flat byte stream at finish() time.
+// encodes them into the flat byte stream at finish() time. (The struct
+// itself lives in QLangCompiler.h so QLangCompiler can hold one by value.)
 // ---------------------------------------------------------------------------
-struct RawInstr {
-  Opcode op;
-  int32_t a = 0, b = 0, c = 0;
-  int64_t imm = 0;
-  int32_t jumpTarget = -1; // instruction index; -1 = not a jump
-  uint16_t line = 0, col = 0;
-};
-
-struct FnEmitter {
-  std::vector<RawInstr> raw;
-  std::vector<QLangValue> consts;
-
-  size_t size() const { return raw.size(); }
-
-  size_t emit(Opcode op, int32_t a = 0, int32_t b = 0, int32_t c = 0,
-              int64_t imm = 0, uint16_t line = 0, uint16_t col = 0) {
-    raw.push_back(RawInstr{op, a, b, c, imm, -1, line, col});
-    return raw.size() - 1;
+void FnEmitter::finish(Function &fn) {
+  // Validate jump targets.
+  for (size_t i = 0; i < raw.size(); i++) {
+    if (raw[i].jumpTarget >= 0 &&
+        raw[i].jumpTarget >= static_cast<int32_t>(raw.size()))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "invalid jump target in emitter");
   }
 
-  size_t emitJump(Opcode op, int32_t target, int32_t a = 0,
-                  uint16_t line = 0, uint16_t col = 0) {
-    raw.push_back(RawInstr{op, a, 0, 0, 0, target, line, col});
-    return raw.size() - 1;
+  // Initial sizes: jumps assume the widest form (jmp32, plus a condition
+  // register for JMPIFFALSE/JMPIFTRUE); everything else uses the size of
+  // the form its operands/immediate actually require (base or escaped).
+  std::vector<size_t> sizes(raw.size());
+  for (size_t i = 0; i < raw.size(); i++) {
+    if (raw[i].jumpTarget >= 0)
+      sizes[i] = isConditionalJumpOpcode(raw[i].op) ? 7 : 6;
+    else
+      sizes[i] = instructionSize(raw[i].op, computeModifier(raw[i]));
   }
 
-  void patchJump(size_t idx, int32_t target) { raw[idx].jumpTarget = target; }
-
-  int addConst(QLangValue v) {
-    int idx = static_cast<int>(consts.size());
-    consts.push_back(std::move(v));
-    return idx;
-  }
-
-  void finish(Function &fn) {
-    // Validate jump targets
-    for (size_t i = 0; i < raw.size(); i++) {
-      if (raw[i].jumpTarget >= 0 &&
-          raw[i].jumpTarget >= static_cast<int32_t>(raw.size()))
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                         "invalid jump target in emitter");
-    }
-
-    // Compute initial sizes
-    std::vector<size_t> sizes(raw.size());
-    for (size_t i = 0; i < raw.size(); i++) {
-      if (raw[i].jumpTarget >= 0) {
-        sizes[i] = 6; // assume jmp32 initially
-      } else {
-        sizes[i] = computeBaseSize(raw[i]);
-      }
-    }
-
-    // Compute offsets
-    std::vector<size_t> offsets(raw.size());
+  auto recomputeOffsets = [&]() {
+    std::vector<size_t> off(raw.size());
     size_t pos = 0;
     for (size_t i = 0; i < raw.size(); i++) {
-      offsets[i] = pos;
+      off[i] = pos;
       pos += sizes[i];
     }
+    return off;
+  };
 
-    // Fixpoint loop for jump widths (max 4 iterations)
-    for (int iter = 0; iter < 4; iter++) {
-      bool changed = false;
-      for (size_t i = 0; i < raw.size(); i++) {
-        if (raw[i].jumpTarget >= 0) {
-          int32_t offset = static_cast<int32_t>(offsets[raw[i].jumpTarget]) -
-                           static_cast<int32_t>(offsets[i] + sizes[i]);
-          size_t newSize = minJumpSize(offset);
-          if (newSize != sizes[i]) {
-            sizes[i] = newSize;
-            changed = true;
-          }
-        }
-      }
-      if (!changed) break;
-      pos = 0;
-      for (size_t i = 0; i < raw.size(); i++) {
-        offsets[i] = pos;
-        pos += sizes[i];
-      }
-    }
-
-    // Encode
-    fn.code.resize(pos);
+  // Fixpoint: set each jump to the narrowest form that fits the current
+  // offsets; shrinking/growing shifts later offsets, so iterate until
+  // stable.
+  std::vector<size_t> offsets = recomputeOffsets();
+  for (int iter = 0; iter < 32; iter++) {
+    bool changed = false;
     for (size_t i = 0; i < raw.size(); i++) {
-      DecodedInstruction di;
-      di.op = raw[i].op;
-      di.a = raw[i].a;
-      di.b = raw[i].b;
-      di.c = raw[i].c;
-      di.imm = raw[i].imm;
-      di.modifier = 0;
-      if (raw[i].jumpTarget >= 0) {
-        di.jumpOffset = static_cast<int32_t>(offsets[raw[i].jumpTarget]) -
-                        static_cast<int32_t>(offsets[i] + sizes[i]);
-        if (sizes[i] == 2)
-          di.modifier = 0; // base
-        else if (sizes[i] == 5)
-          di.modifier = 0; // escaped jmp16
-        else
-          di.modifier = 1; // escaped jmp32
-      } else {
-        di.modifier = computeModifier(raw[i]);
+      if (raw[i].jumpTarget < 0) continue;
+      int32_t offset = static_cast<int32_t>(offsets[raw[i].jumpTarget]) -
+                       static_cast<int32_t>(offsets[i] + sizes[i]);
+      size_t newSize = minJumpSize(offset) +
+                       (isConditionalJumpOpcode(raw[i].op) ? 1 : 0);
+      if (newSize != sizes[i]) {
+        sizes[i] = newSize;
+        changed = true;
       }
-      di.size = sizes[i];
-      // Encode at the correct position
-      size_t oldSize = fn.code.size();
-      encodeInstruction(fn.code, di);
-      // encodeInstruction appends; we need it at offsets[i]
-      // Since we encode in order, this is fine.
     }
-
-    fn.instrOffsets = std::move(offsets);
-    fn.loc.resize(raw.size());
-    for (size_t i = 0; i < raw.size(); i++)
-      fn.loc[i] = {raw[i].line, raw[i].col};
-    fn.constants = std::move(consts);
+    if (!changed) break;
+    offsets = recomputeOffsets();
   }
 
-private:
-  static size_t computeBaseSize(const RawInstr &r) {
-    if (isJumpOpcode(r.op))
-      return 2; // base jump: op + 1-byte offset (or op + reg + offset for cond)
-    if (isImmediateOpcode(r.op))
-      return 3; // base imm: op + reg + 1-byte imm
-    size_t n = 1; // opcode
-    if (r.op == Opcode::NEG || r.op == Opcode::NOT || r.op == Opcode::INC ||
-        r.op == Opcode::DEC || r.op == Opcode::EVALKEY ||
-        r.op == Opcode::DELETEx || r.op == Opcode::TABCREATE ||
-        r.op == Opcode::TABFINALIZE || r.op == Opcode::RETURN ||
-        r.op == Opcode::YIELD)
-      n = 2;
-    else if (r.op == Opcode::MOV || r.op == Opcode::MOVC ||
-             r.op == Opcode::MAKEFUNC || r.op == Opcode::MAKEGEN ||
-             r.op == Opcode::REFLOAD || r.op == Opcode::REFSTORE ||
-             r.op == Opcode::CMP || r.op == Opcode::ARRAPP ||
-             r.op == Opcode::ARRLEN || r.op == Opcode::LEN ||
-             r.op == Opcode::SEQGET || r.op == Opcode::ARRAPPV)
-      n = 3;
-    else
-      n = 4;
-    return n;
+  // Post-loop validation: every jump offset must fit in its chosen width
+  // (a safety net for a non-converging fixpoint).
+  for (size_t i = 0; i < raw.size(); i++) {
+    if (raw[i].jumpTarget < 0) continue;
+    int32_t offset = static_cast<int32_t>(offsets[raw[i].jumpTarget]) -
+                     static_cast<int32_t>(offsets[i] + sizes[i]);
+    size_t offWidth = sizes[i] - (isConditionalJumpOpcode(raw[i].op) ? 1 : 0);
+    if (offWidth == 1 && (offset < -127 || offset > 127))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "jump offset does not fit (emitter fixpoint failed)");
+    if (offWidth == 2 && (offset < -32767 || offset > 32767))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "jump offset does not fit (emitter fixpoint failed)");
   }
 
-  static uint8_t computeModifier(const RawInstr &r) {
-    if (isImmediateOpcode(r.op)) {
-      uint8_t leftForm = (r.a > 255) ? 1 : 0;
-      uint8_t immForm;
-      if (r.imm >= -128 && r.imm <= 127)
-        immForm = 4;
-      else if (r.imm >= -32768 && r.imm <= 32767)
-        immForm = 5;
-      else
-        immForm = 6;
-      if (leftForm == 0 && immForm == 4)
-        return 0; // base form
-      return static_cast<uint8_t>((immForm << 4) | leftForm);
+  // Encode in order.
+  fn.code.clear();
+  for (size_t i = 0; i < raw.size(); i++) {
+    DecodedInstruction di;
+    di.op = raw[i].op;
+    di.a = raw[i].a;
+    di.b = raw[i].b;
+    di.c = raw[i].c;
+    di.imm = raw[i].imm;
+    di.size = sizes[i];
+    if (raw[i].jumpTarget >= 0) {
+      di.jumpOffset = static_cast<int32_t>(offsets[raw[i].jumpTarget]) -
+                      static_cast<int32_t>(offsets[i] + sizes[i]);
+      di.escaped = sizes[i] > baseInstructionSize(raw[i].op);
+      di.modifier = (sizes[i] >= 6) ? 1 : 0;
+    } else {
+      di.modifier = computeModifier(raw[i]);
+      di.escaped = di.modifier != 0;
     }
-    // RegConst
+    encodeInstruction(fn.code, di);
+  }
+
+  fn.instrOffsets = std::move(offsets);
+  fn.loc.resize(raw.size());
+  for (size_t i = 0; i < raw.size(); i++)
+    fn.loc[i] = {raw[i].line, raw[i].col};
+  fn.constants = std::move(consts);
+}
+
+uint8_t FnEmitter::computeModifier(const RawInstr &r) {
+  if (isImmediateOpcode(r.op)) {
+    if (r.a < 0 || r.a > 65535)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "register index out of range");
+    if (r.imm < INT32_MIN || r.imm > INT32_MAX)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "immediate out of int32 range");
     uint8_t leftForm = (r.a > 255) ? 1 : 0;
-    uint8_t rightForm = (r.b > 255) ? 1 : 0;
-    if (leftForm == 0 && rightForm == 0)
+    uint8_t immForm;
+    if (r.imm >= -128 && r.imm <= 127)
+      immForm = 4;
+    else if (r.imm >= -32768 && r.imm <= 32767)
+      immForm = 5;
+    else
+      immForm = 6;
+    if (leftForm == 0 && immForm == 4)
       return 0; // base form
-    return static_cast<uint8_t>((rightForm << 4) | leftForm);
+    return static_cast<uint8_t>((immForm << 4) | leftForm);
   }
-};
+  // RegConst
+  if (r.a < 0 || r.a > 65535)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "register index out of range");
+  if (r.b < 0 || r.b > 65535)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "register index out of range");
+  if (r.c < 0 || r.c > 255)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "third operand must be a 1-byte register");
+  uint8_t leftForm = (r.a > 255) ? 1 : 0;
+  uint8_t rightForm = (r.b > 255) ? 1 : 0;
+  if (leftForm == 0 && rightForm == 0)
+    return 0; // base form
+  return static_cast<uint8_t>((rightForm << 4) | leftForm);
+}
 
 // Reserved prototype/instance key holding the closed-field schema: a table
 // mapping each declared field name to its index (Phase 1). The prototype
@@ -211,11 +176,6 @@ static bool isArrayExpr(const ExprPtr &e) {
 // helpers below (inPlaceReg/foldSelfArith/compileArgsToSlots).
 static bool isIntLiteral(const ExprPtr &e);
 static std::optional<int32_t> foldNegLiteral(const ExprPtr &e);
-
-// Backpatch a jump-family instruction's target in the emitter.
-static void patchJump(FnEmitter &em, size_t idx, int target) {
-  em.patchJump(idx, target);
-}
 
 // True when e is a call to the builtin range(a, b) with exactly two arguments.
 // On success, outStart/outEnd are set to the two argument expressions so the
@@ -748,7 +708,7 @@ void QLangCompiler::compileArgsToSlots(const std::vector<ExprPtr> &args,
 }
 
 int QLangCompiler::emitConst(const QLangValue &value) {
-  int idx = m_code.addConstant(value);
+  int idx = m_emitter.addConst(value);
   std::string valStr;
   if (value.type() == QLangValue::Type::Int)
     valStr = std::to_string(value.asInt());
@@ -757,14 +717,26 @@ int QLangCompiler::emitConst(const QLangValue &value) {
   else
     valStr = std::string("(type=") + std::to_string((int)value.type()) + ")";
   trace(TRACE_FULL, "[DBG-CONST] Adding constant type=%d value=%s -> index=%d (pool size=%zu)\n",
-        (int)value.type(), valStr.c_str(), idx, m_code.constants().size());
+        (int)value.type(), valStr.c_str(), idx, m_emitter.consts.size());
   return idx;
 }
 
 void QLangCompiler::emit(Opcode op, int a, int b, int c) {
-  m_emitter.emit(op, a, b, c, 0,
-                 static_cast<uint16_t>(m_curLine),
-                 static_cast<uint16_t>(m_curCol));
+  uint16_t line = static_cast<uint16_t>(m_curLine);
+  uint16_t col = static_cast<uint16_t>(m_curCol);
+  if (isJumpOpcode(op)) {
+    // JMPIFFALSE/JMPIFTRUE carry the condition register in `a` and the
+    // target in `b`; every other jump carries the target in `a`.
+    int32_t target = a;
+    int32_t cond = 0;
+    if (op == Opcode::JMPIFFALSE || op == Opcode::JMPIFTRUE) {
+      cond = a;
+      target = b;
+    }
+    m_emitter.emitJump(op, target, cond, line, col);
+    return;
+  }
+  m_emitter.emit(op, a, b, c, 0, line, col);
 }
 
 void QLangCompiler::emitImm(Opcode op, int a, int32_t imm) {
@@ -821,8 +793,9 @@ static Opcode cmpJumpIfFalse(Opcode rel) {
 
 int QLangCompiler::emitCmpJumpFalse(Opcode rel, int ra, int rb) {
   emit(Opcode::CMP, ra, rb);
-  emitImm(cmpJumpIfFalse(rel), 0, 0); // j* target in i32, patched by caller
-  return static_cast<int>(m_code.size()) - 1;
+  // Flag jump (JE/JNE/JG/JGE/JL/JLE): target in `a`, patched by caller.
+  emit(cmpJumpIfFalse(rel), 0, 0, 0);
+  return static_cast<int>(m_emitter.size()) - 1;
 }
 
 int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
@@ -851,8 +824,9 @@ int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
   int jumpIdx;
   if (isIntLiteral(cond->right)) {
     emitImm(Opcode::CMPI, ra, cond->right->literal.asInt());
-    emitImm(cmpJumpIfFalse(rel), 0, 0);
-    jumpIdx = static_cast<int>(m_code.size()) - 1;
+    // Flag jump (JE/JNE/JG/JGE/JL/JLE): target in `a`, patched by caller.
+    emit(cmpJumpIfFalse(rel), 0, 0, 0);
+    jumpIdx = static_cast<int>(m_emitter.size()) - 1;
   } else {
     int rb = inPlaceReg(cond->right);
     bool rbTmp = false;
@@ -888,30 +862,26 @@ CompiledProgram QLangCompiler::compile() {
   // Implicit `return nil` at the end of the main program.
   emit(Opcode::RETURN, 0);
 
-  // Wrap the main scratch stream into functions[0].
-  Bytecode mainScratch = std::move(m_code);
+  // Wrap the main stream into functions[0].
   Function mainFn;
   mainFn.name = "main";
   mainFn.paramCount = 0;
   // Register 0 is always live (the implicit final `return regs[0]`).
   mainFn.registerCount = std::max(m_nextReg, 1);
-  mainFn.instructions = std::move(mainScratch.instructions());
-  mainFn.loc = std::move(m_loc);
-  mainFn.constants = std::move(mainScratch.constants());
+  m_emitter.finish(mainFn);
 
   CompiledProgram out;
   out.functions.push_back(std::move(mainFn));
   for (auto &fn : m_functions)
     out.functions.push_back(std::move(fn));
 
-
   Bytecode outCode;
-  outCode.setInstructions(out.functions[0].instructions);
+  outCode.setCode(out.functions[0].code);
   outCode.setConstants(out.functions[0].constants);
   // Copy (not move) so out.functions retains its instruction streams for the VM.
   for (auto &fn : out.functions)
     outCode.addFunction(fn.name, fn.paramCount, fn.registerCount,
-                        fn.instructions, fn.constants);
+                        fn.code, fn.instrOffsets, fn.constants);
   out.code = std::move(outCode);
   buildRegisterReport(); // before m_regs moves out (names are read from it)
   out.vars = std::move(m_regs);
@@ -1049,9 +1019,7 @@ int QLangCompiler::buildFunction(const std::string &name,
     collectLocalVars(s, localVars);
 
   // Save the enclosing function's compilation state.
-  Bytecode savedCode = m_code;
-  auto savedLoc = std::move(m_loc);
-  m_loc.clear();
+  FnEmitter savedEmitter = std::move(m_emitter);
   auto savedRegs = m_regs;
   // Save caller's register mapping for global keyword use.
   m_savedRegs = m_regs;
@@ -1088,8 +1056,8 @@ int QLangCompiler::buildFunction(const std::string &name,
 
   // Fresh function context: params occupy registers 0..paramCount-1 and must
   // reserve those registers so temporaries never collide with a parameter.
-  trace(TRACE_FULL, "[DBG-BF] Resetting m_code (buildFunction for '%s') this=%p\n", name.c_str(), (void*)this);
-  m_code = Bytecode();
+  trace(TRACE_FULL, "[DBG-BF] Resetting emitter (buildFunction for '%s') this=%p\n", name.c_str(), (void*)this);
+  m_emitter = FnEmitter();
   m_regs.clear();
   // Keep m_constVars and m_userFuncs populated so global consts and
   // user-defined functions remain visible inside function bodies.
@@ -1223,10 +1191,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   }
 
   int funcIndex = static_cast<int>(m_functions.size()) + 1; // +1 for prepended mainFn
-  Bytecode fnCode = std::move(m_code);
-  fn.instructions = std::move(fnCode.instructions());
-  fn.loc = std::move(m_loc);
-  fn.constants = std::move(fnCode.constants());
+  m_emitter.finish(fn);
   // Detect generator: any `yield` statement (at any nesting depth) makes this
   // a generator function.
   for (auto &s : body) {
@@ -1241,8 +1206,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_functions.push_back(std::move(fn));
 
   // Restore the enclosing function's compilation state.
-  m_code = std::move(savedCode);
-  m_loc = std::move(savedLoc);
+  m_emitter = std::move(savedEmitter);
   m_regs = std::move(savedRegs);
   m_constVars = std::move(savedConstVars);
   m_enums = std::move(savedEnums);
@@ -1270,7 +1234,7 @@ int QLangCompiler::buildFunction(const std::string &name,
 
   // Emit generator closure constant into the MAIN bytecode (not the temporary
   // function bytecode that was just moved into fn). MAKEGEN in compileExpr
-  // references constants in the current m_code.
+  // references constants in the current emitter.
   if (fn.isGenerator) {
     auto closure = std::make_shared<Closure>();
     closure->funcIndex = funcIndex;
@@ -1547,31 +1511,31 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     if (sv == 0) {
       // step 0 -> infinite loop, x frozen at start.
       m_loops.push_back({0, 0});
-      int bodyStart = static_cast<int>(m_code.instructions().size());
+      int bodyStart = static_cast<int>(m_emitter.size());
       for (auto &body : s->body)
         compileStmt(body);
-      int bodyEnd = static_cast<int>(m_code.instructions().size());
+      int bodyEnd = static_cast<int>(m_emitter.size());
       int incLabel = bodyEnd;
       emit(Opcode::JMP, bodyStart);
-      int exitLabel = static_cast<int>(m_code.size());
+      int exitLabel = static_cast<int>(m_emitter.size());
       for (int j = bodyStart; j < bodyEnd; j++) {
-        auto &ci = m_code.instructions()[j];
-        if (ci.op == Opcode::CONTINUE) patchJump(ci, incLabel);
-        else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
+        auto &ci = m_emitter.raw[j];
+        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, incLabel);
+        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
       }
       m_loops.pop_back();
     } else if ((sv > 0) != (correctDir > 0)) {
       // User step points the wrong way: run the body exactly once.
       m_loops.push_back({0, 0});
-      int bodyStart = static_cast<int>(m_code.instructions().size());
+      int bodyStart = static_cast<int>(m_emitter.size());
       for (auto &body : s->body)
         compileStmt(body);
-      int bodyEnd = static_cast<int>(m_code.instructions().size());
-      int exitLabel = static_cast<int>(m_code.size());
+      int bodyEnd = static_cast<int>(m_emitter.size());
+      int exitLabel = static_cast<int>(m_emitter.size());
       for (int j = bodyStart; j < bodyEnd; j++) {
-        auto &ci = m_code.instructions()[j];
-        if (ci.op == Opcode::CONTINUE) patchJump(ci, exitLabel);
-        else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
+        auto &ci = m_emitter.raw[j];
+        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, exitLabel);
+        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
       }
       m_loops.pop_back();
     } else {
@@ -1579,26 +1543,26 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
       m_loops.push_back({0, 0});
       int stepReg = tmpRegister();
       compileExpr(s->stepExpr, stepReg);
-      int guardLabel = static_cast<int>(m_code.size());
+      int guardLabel = static_cast<int>(m_emitter.size());
       // QLang ranges are always inclusive: forward LE (x <= end),
       // backward GE (x >= end). Int-vs-Int, so fused to cmp+j* (SPEC
       // §bytecodes: alternate conditional jump).
       Opcode fwdCmp = (correctDir > 0) ? Opcode::LE : Opcode::GE;
       int jumpFalseIdx = emitCmpJumpFalse(fwdCmp, x, endReg);
-      int bodyStart = static_cast<int>(m_code.instructions().size());
+      int bodyStart = static_cast<int>(m_emitter.size());
       for (auto &body : s->body)
         compileStmt(body);
-      int bodyEnd = static_cast<int>(m_code.instructions().size());
+      int bodyEnd = static_cast<int>(m_emitter.size());
       int incLabel = bodyEnd;
       emit(Opcode::ADD, x, x, stepReg);
       emit(Opcode::JMP, guardLabel);
-      int exitLabel = static_cast<int>(m_code.size());
+      int exitLabel = static_cast<int>(m_emitter.size());
       for (int j = bodyStart; j < bodyEnd; j++) {
-        auto &ci = m_code.instructions()[j];
-        if (ci.op == Opcode::CONTINUE) patchJump(ci, incLabel);
-        else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
+        auto &ci = m_emitter.raw[j];
+        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, incLabel);
+        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
       }
-      patchJump(m_code.instructions()[jumpFalseIdx], exitLabel);
+      m_emitter.patchJump(jumpFalseIdx, exitLabel);
       m_loops.pop_back();
     }
   } else {
@@ -1627,13 +1591,13 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     emit(Opcode::GT, posReg, subReg, zeroReg);
     int dirReg = tmpRegister();
     emitImm(Opcode::MOVI, dirReg, -1);
-    int dPosLabel = static_cast<int>(m_code.size());
+    int dPosLabel = static_cast<int>(m_emitter.size());
     emit(Opcode::JMPIFTRUE, posReg, 0);
-    int dDoneLabel = static_cast<int>(m_code.size());
+    int dDoneLabel = static_cast<int>(m_emitter.size());
     emit(Opcode::JMP, 0);
-    patchJump(m_code.instructions()[dPosLabel], dPosLabel + 2);
+    m_emitter.patchJump(dPosLabel, dPosLabel + 2);
     emitImm(Opcode::MOVI, dirReg, 1);
-    patchJump(m_code.instructions()[dDoneLabel], dPosLabel + 3);
+    m_emitter.patchJump(dDoneLabel, dPosLabel + 3);
 
     // No explicit step: advance in the loop's natural direction (unit step).
     // Without this a backward no-step loop would get step +1 vs dir -1 and
@@ -1644,10 +1608,10 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     // step == 0 -> natural-direction unit step (so a `step 0` loop advances).
     int zeroCmp = tmpRegister();
     emit(Opcode::EQ, zeroCmp, stepReg, zeroReg);
-    int zeroStepLabel = static_cast<int>(m_code.size());
+    int zeroStepLabel = static_cast<int>(m_emitter.size());
     emit(Opcode::JMPIFFALSE, zeroCmp, 0);      // step != 0 -> skip normalization
     emit(Opcode::MOV, stepReg, dirReg);        // step == 0 -> step = dir (+1 / -1)
-    patchJump(m_code.instructions()[zeroStepLabel], zeroStepLabel + 2);
+    m_emitter.patchJump(zeroStepLabel, zeroStepLabel + 2);
 
     // runtime conditions
     int posStep = tmpRegister();
@@ -1658,21 +1622,21 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     emit(Opcode::EQ, sameSign, posStep, posDir);
 
     // Decision: sameSign -> guard loop; else fall through to run-once.
-    int guardLabel = static_cast<int>(m_code.size());
+    int guardLabel = static_cast<int>(m_emitter.size());
     emit(Opcode::JMPIFTRUE, sameSign, 0);
 
     // Run-once body (wrong direction): execute exactly once, then exit.
     emit(Opcode::MOV, x, startReg);
-    int runOnceBodyStart = static_cast<int>(m_code.instructions().size());
+    int runOnceBodyStart = static_cast<int>(m_emitter.size());
     for (auto &body : s->body)
       compileStmt(body);
-    int runOnceBodyEnd = static_cast<int>(m_code.instructions().size());
-    int runOnceJmpIdx = static_cast<int>(m_code.size());
+    int runOnceBodyEnd = static_cast<int>(m_emitter.size());
+    int runOnceJmpIdx = static_cast<int>(m_emitter.size());
     emit(Opcode::JMP, 0);                 // patched to loopExit below
     for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
-      auto &ci = m_code.instructions()[j];
-      if (ci.op == Opcode::CONTINUE) patchJump(ci, 0);   // patched below
-      else if (ci.op == Opcode::BREAK) patchJump(ci, 0); // patched below
+      auto &ci = m_emitter.raw[j];
+      if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, 0);   // patched below
+      else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, 0); // patched below
     }
 
     // Guard loop (natural direction, bounded by a guard check). Direction is
@@ -1680,46 +1644,46 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     // that is cheaply re-evaluated each iteration.
     //   forward (dir > 0):  `to` bound inclusive -> LE guard (x <= end continues)
     //   backward (dir <= 0): `to` bound inclusive -> GE guard (x >= end continues)
-    int guardLoopStart = static_cast<int>(m_code.size());
+    int guardLoopStart = static_cast<int>(m_emitter.size());
     emit(Opcode::MOV, x, startReg);
-    int guardOnceLabel = static_cast<int>(m_code.size());
+    int guardOnceLabel = static_cast<int>(m_emitter.size());
     emit(Opcode::JMPIFTRUE, posDir, 0);          // forward -> LT guard path
     // Guards are Int-vs-Int: fused to cmp+j* (SPEC §bytecodes: alternate
     // conditional jump). guardGeIdx/guardFwdIdx point at the CMP; the j* is
     // at +1 (patched below).
-    int guardGeIdx = static_cast<int>(m_code.size());
+    int guardGeIdx = static_cast<int>(m_emitter.size());
     emitCmpJumpFalse(Opcode::GE, x, endReg);     // backward guard (x >= end)
-    int guardSkipIdx = static_cast<int>(m_code.size());
+    int guardSkipIdx = static_cast<int>(m_emitter.size());
     emit(Opcode::JMP, 0);                        // backward -> loop body
-    int guardFwdIdx = static_cast<int>(m_code.size());
+    int guardFwdIdx = static_cast<int>(m_emitter.size());
     emitCmpJumpFalse(Opcode::LE, x, endReg);     // forward guard (x <= end)
-    int guardLoopEntry = static_cast<int>(m_code.size());
+    int guardLoopEntry = static_cast<int>(m_emitter.size());
     for (auto &body : s->body)
       compileStmt(body);
-    int guardBodyEnd = static_cast<int>(m_code.instructions().size());
+    int guardBodyEnd = static_cast<int>(m_emitter.size());
     emit(Opcode::ADD, x, x, stepReg);
     emit(Opcode::JMP, guardOnceLabel);           // loop back to direction branch
-    int loopExit = static_cast<int>(m_code.size());
+    int loopExit = static_cast<int>(m_emitter.size());
 
     // Patch the guard loop's branches.
-    patchJump(m_code.instructions()[guardOnceLabel], guardFwdIdx);   // forward -> guard
-    patchJump(m_code.instructions()[guardGeIdx + 1], loopExit);     // backward exit
-    patchJump(m_code.instructions()[guardFwdIdx + 1], loopExit);    // forward exit
-    patchJump(m_code.instructions()[guardSkipIdx], guardLoopEntry); // backward -> body (JMP reads a)
+    m_emitter.patchJump(guardOnceLabel, guardFwdIdx);   // forward -> guard
+    m_emitter.patchJump(guardGeIdx + 1, loopExit);     // backward exit
+    m_emitter.patchJump(guardFwdIdx + 1, loopExit);    // forward exit
+    m_emitter.patchJump(guardSkipIdx, guardLoopEntry); // backward -> body (JMP reads a)
     for (int j = guardLoopEntry; j < guardBodyEnd; j++) {
-      auto &ci = m_code.instructions()[j];
-      if (ci.op == Opcode::CONTINUE) patchJump(ci, guardBodyEnd);   // -> ADD (still increment)
-      else if (ci.op == Opcode::BREAK) patchJump(ci, loopExit);
+      auto &ci = m_emitter.raw[j];
+      if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, guardBodyEnd);   // -> ADD (still increment)
+      else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
     }
     // Patch the run-once body to exit (continue/break both leave the loop).
-    patchJump(m_code.instructions()[runOnceJmpIdx], loopExit);
+    m_emitter.patchJump(runOnceJmpIdx, loopExit);
     for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
-      auto &ci = m_code.instructions()[j];
-      if (ci.op == Opcode::CONTINUE) patchJump(ci, loopExit);
-      else if (ci.op == Opcode::BREAK) patchJump(ci, loopExit);
+      auto &ci = m_emitter.raw[j];
+      if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, loopExit);
+      else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
     }
     // Patch the decision jump.
-    patchJump(m_code.instructions()[guardLabel], guardLoopStart);  // sameSign -> guard loop
+    m_emitter.patchJump(guardLabel, guardLoopStart);  // sameSign -> guard loop
     m_loops.pop_back();
   }
   popBlockScope();
@@ -1751,55 +1715,55 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
       int64_t sv = *stepVal;
       if (sv == 0) {
         m_loops.push_back({0, 0});
-        int bodyStart = static_cast<int>(m_code.instructions().size());
+        int bodyStart = static_cast<int>(m_emitter.size());
         for (auto &body : s->body)
           compileStmt(body);
-        int bodyEnd = static_cast<int>(m_code.instructions().size());
+        int bodyEnd = static_cast<int>(m_emitter.size());
         int incLabel = bodyEnd;
         emit(Opcode::JMP, bodyStart);
-        int exitLabel = static_cast<int>(m_code.size());
+        int exitLabel = static_cast<int>(m_emitter.size());
         for (int j = bodyStart; j < bodyEnd; j++) {
-          auto &ci = m_code.instructions()[j];
-          if (ci.op == Opcode::CONTINUE) patchJump(ci, incLabel);
-          else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
+          auto &ci = m_emitter.raw[j];
+          if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, incLabel);
+          else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
         }
         m_loops.pop_back();
       } else if ((sv > 0) != (correctDir > 0)) {
         m_loops.push_back({0, 0});
-        int bodyStart = static_cast<int>(m_code.instructions().size());
+        int bodyStart = static_cast<int>(m_emitter.size());
         for (auto &body : s->body)
           compileStmt(body);
-        int bodyEnd = static_cast<int>(m_code.instructions().size());
-        int exitLabel = static_cast<int>(m_code.size());
+        int bodyEnd = static_cast<int>(m_emitter.size());
+        int exitLabel = static_cast<int>(m_emitter.size());
         for (int j = bodyStart; j < bodyEnd; j++) {
-          auto &ci = m_code.instructions()[j];
-          if (ci.op == Opcode::CONTINUE) patchJump(ci, exitLabel);
-          else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
+          auto &ci = m_emitter.raw[j];
+          if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, exitLabel);
+          else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
         }
         m_loops.pop_back();
       } else {
         m_loops.push_back({0, 0});
         int stepReg = tmpRegister();
         compileExpr(s->stepExpr, stepReg);
-        int guardLabel = static_cast<int>(m_code.size());
+        int guardLabel = static_cast<int>(m_emitter.size());
         // Int-vs-Int range guard: fused to cmp+j* (SPEC §bytecodes).
         int jumpFalseIdx =
             emitCmpJumpFalse(correctDir > 0 ? Opcode::LE : Opcode::GE, x,
                              endReg);
-        int bodyStart = static_cast<int>(m_code.instructions().size());
+        int bodyStart = static_cast<int>(m_emitter.size());
         for (auto &body : s->body)
           compileStmt(body);
-        int bodyEnd = static_cast<int>(m_code.instructions().size());
+        int bodyEnd = static_cast<int>(m_emitter.size());
         int incLabel = bodyEnd;
         emit(Opcode::ADD, x, x, stepReg);
         emit(Opcode::JMP, guardLabel);           // loop back to the guard
-        int exitLabel = static_cast<int>(m_code.size());
+        int exitLabel = static_cast<int>(m_emitter.size());
         for (int j = bodyStart; j < bodyEnd; j++) {
-          auto &ci = m_code.instructions()[j];
-          if (ci.op == Opcode::CONTINUE) patchJump(ci, incLabel);
-          else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
+          auto &ci = m_emitter.raw[j];
+          if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, incLabel);
+          else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
         }
-        patchJump(m_code.instructions()[jumpFalseIdx], exitLabel);
+        m_emitter.patchJump(jumpFalseIdx, exitLabel);
         m_loops.pop_back();
       }
     } else {
@@ -1819,91 +1783,91 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
       emit(Opcode::GT, posReg, subReg, zeroReg);
       int dirReg = tmpRegister();
       emitImm(Opcode::MOVI, dirReg, -1);
-      int dPosLabel = static_cast<int>(m_code.size());
+      int dPosLabel = static_cast<int>(m_emitter.size());
       emit(Opcode::JMPIFTRUE, posReg, 0);
-      int dDoneLabel = static_cast<int>(m_code.size());
+      int dDoneLabel = static_cast<int>(m_emitter.size());
       emit(Opcode::JMP, 0);
-      patchJump(m_code.instructions()[dPosLabel], dPosLabel + 2);
+      m_emitter.patchJump(dPosLabel, dPosLabel + 2);
       emitImm(Opcode::MOVI, dirReg, 1);
-      patchJump(m_code.instructions()[dDoneLabel], dPosLabel + 3);
+      m_emitter.patchJump(dDoneLabel, dPosLabel + 3);
 
       // step == 0 -> infinite loop: body + increment forever, no guard.
       int zeroCmp = tmpRegister();
       emit(Opcode::EQ, zeroCmp, stepReg, zeroReg);
-      int zeroJumpIdx = static_cast<int>(m_code.size());
+      int zeroJumpIdx = static_cast<int>(m_emitter.size());
       emit(Opcode::JMPIFTRUE, zeroCmp, 0);
-      int infExitLabel = static_cast<int>(m_code.size());
+      int infExitLabel = static_cast<int>(m_emitter.size());
       int posStep = tmpRegister();
       emit(Opcode::GT, posStep, stepReg, zeroReg);
       int posDir = tmpRegister();
       emit(Opcode::GT, posDir, dirReg, zeroReg);
       int sameSign = tmpRegister();
       emit(Opcode::EQ, sameSign, posStep, posDir);
-      int ssJumpIdx = static_cast<int>(m_code.size());
+      int ssJumpIdx = static_cast<int>(m_emitter.size());
       emit(Opcode::JMPIFTRUE, sameSign, 0);
       // Run-once: step and direction disagree -> body executes a single time.
       emit(Opcode::MOV, x, startReg);
-      int runOnceBodyStart = static_cast<int>(m_code.instructions().size());
+      int runOnceBodyStart = static_cast<int>(m_emitter.size());
       for (auto &body : s->body)
         compileStmt(body);
-      int runOnceBodyEnd = static_cast<int>(m_code.instructions().size());
-      int runOnceExitJmpIdx = static_cast<int>(m_code.size());
+      int runOnceBodyEnd = static_cast<int>(m_emitter.size());
+      int runOnceExitJmpIdx = static_cast<int>(m_emitter.size());
       emit(Opcode::JMP, 0); // placeholder, backpatched to guardExit below
       // Infinite-loop (step == 0) body: x advances forever, no guard.
       // Emitted before the guarded loop so the guarded loop's exit
       // (guardExit) falls past it.
       emit(Opcode::MOV, x, startReg);
-      int infBodyStart = static_cast<int>(m_code.instructions().size());
+      int infBodyStart = static_cast<int>(m_emitter.size());
       for (auto &body : s->body)
         compileStmt(body);
-      int infBodyEnd = static_cast<int>(m_code.instructions().size());
+      int infBodyEnd = static_cast<int>(m_emitter.size());
       emit(Opcode::ADD, x, x, stepReg);
       emit(Opcode::JMP, infBodyStart);
       for (int j = infBodyStart; j < infBodyEnd; j++) {
-        auto &ci = m_code.instructions()[j];
-        if (ci.op == Opcode::CONTINUE) patchJump(ci, infBodyEnd);
-        else if (ci.op == Opcode::BREAK) patchJump(ci, infExitLabel);
+        auto &ci = m_emitter.raw[j];
+        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, infBodyEnd);
+        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, infExitLabel);
       }
       // Guarded loop: init x once, then re-check the direction-selected guard
       // every pass (forward: x <= end; backward: x >= end).
-      int guardInit = static_cast<int>(m_code.size());
+      int guardInit = static_cast<int>(m_emitter.size());
       emit(Opcode::MOV, x, startReg);
-      int guardLabel = static_cast<int>(m_code.size());
+      int guardLabel = static_cast<int>(m_emitter.size());
       int posDir2 = tmpRegister();
       emit(Opcode::GT, posDir2, dirReg, zeroReg);
-      int fwdGuardIdx = static_cast<int>(m_code.size());
+      int fwdGuardIdx = static_cast<int>(m_emitter.size());
       emit(Opcode::JMPIFTRUE, posDir2, 0);
       // Int-vs-Int range guards: fused to cmp+j* (SPEC §bytecodes). The j*
       // is the last instruction emitted, so backExitIdx/fwdExitIdx point at
       // it (patched to guardExit below).
       emitCmpJumpFalse(Opcode::GE, x, endReg); // backward guard (x >= end)
-      int backExitIdx = static_cast<int>(m_code.size()) - 1;
-      int skipFwdIdx = static_cast<int>(m_code.size());
+      int backExitIdx = static_cast<int>(m_emitter.size()) - 1;
+      int skipFwdIdx = static_cast<int>(m_emitter.size());
       emit(Opcode::JMP, 0);
-      patchJump(m_code.instructions()[fwdGuardIdx], skipFwdIdx + 1);
+      m_emitter.patchJump(fwdGuardIdx, skipFwdIdx + 1);
       emitCmpJumpFalse(Opcode::LE, x, endReg); // forward guard (x <= end)
-      int fwdExitIdx = static_cast<int>(m_code.size()) - 1;
-      int bodyStart = static_cast<int>(m_code.instructions().size());
+      int fwdExitIdx = static_cast<int>(m_emitter.size()) - 1;
+      int bodyStart = static_cast<int>(m_emitter.size());
       for (auto &body : s->body)
         compileStmt(body);
-      int bodyEnd = static_cast<int>(m_code.instructions().size());
+      int bodyEnd = static_cast<int>(m_emitter.size());
       emit(Opcode::ADD, x, x, stepReg);
       emit(Opcode::JMP, guardLabel);
-      int guardExit = static_cast<int>(m_code.size());
+      int guardExit = static_cast<int>(m_emitter.size());
       for (int j = bodyStart; j < bodyEnd; j++) {
-        auto &ci = m_code.instructions()[j];
-        if (ci.op == Opcode::CONTINUE) patchJump(ci, bodyEnd); // jump to increment
-        else if (ci.op == Opcode::BREAK) patchJump(ci, guardExit);
+        auto &ci = m_emitter.raw[j];
+        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, bodyEnd); // jump to increment
+        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, guardExit);
       }
-      patchJump(m_code.instructions()[backExitIdx], guardExit);
-      patchJump(m_code.instructions()[fwdExitIdx], guardExit);
-      patchJump(m_code.instructions()[zeroJumpIdx], infBodyStart);
-      patchJump(m_code.instructions()[ssJumpIdx], guardInit);
-      patchJump(m_code.instructions()[runOnceExitJmpIdx], guardExit);
+      m_emitter.patchJump(backExitIdx, guardExit);
+      m_emitter.patchJump(fwdExitIdx, guardExit);
+      m_emitter.patchJump(zeroJumpIdx, infBodyStart);
+      m_emitter.patchJump(ssJumpIdx, guardInit);
+      m_emitter.patchJump(runOnceExitJmpIdx, guardExit);
       for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
-        auto &ci = m_code.instructions()[j];
-        if (ci.op == Opcode::CONTINUE) patchJump(ci, guardExit);
-        else if (ci.op == Opcode::BREAK) patchJump(ci, guardExit);
+        auto &ci = m_emitter.raw[j];
+        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, guardExit);
+        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, guardExit);
       }
       m_loops.pop_back();
     }
@@ -1926,34 +1890,34 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
   int lenReg = tmpRegister();
   emit(Opcode::LEN, lenReg, colReg, 0);
 
-  int testLabel = static_cast<int>(m_code.size());
+  int testLabel = static_cast<int>(m_emitter.size());
   // idx < len(collection): Int-vs-Int, fused to cmp+j* (SPEC §bytecodes).
   int jumpFalseIdx = emitCmpJumpFalse(Opcode::LT, idx, lenReg);
   // Assign loopVar = collection[idx] at the top of each iteration.
   emit(Opcode::SEQGET, x, colReg, idx);
 
   m_loops.push_back({0, 0});
-  int bodyStart = static_cast<int>(m_code.instructions().size());
+  int bodyStart = static_cast<int>(m_emitter.size());
   for (auto &body : s->body)
     compileStmt(body);
-  int bodyEnd = static_cast<int>(m_code.instructions().size());
+  int bodyEnd = static_cast<int>(m_emitter.size());
 
   int incLabel = bodyEnd;
   emit(Opcode::INC, idx, idx);
   emit(Opcode::JMP, testLabel);
-  int exitLabel = static_cast<int>(m_code.size());
-  patchJump(m_code.instructions()[jumpFalseIdx], exitLabel);
+  int exitLabel = static_cast<int>(m_emitter.size());
+  m_emitter.patchJump(jumpFalseIdx, exitLabel);
   for (int j = bodyStart; j < bodyEnd; j++) {
-    auto &ci = m_code.instructions()[j];
-    if (ci.op == Opcode::CONTINUE) patchJump(ci, incLabel);
-    else if (ci.op == Opcode::BREAK) patchJump(ci, exitLabel);
+    auto &ci = m_emitter.raw[j];
+    if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, incLabel);
+    else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
   }
   m_loops.pop_back();
   popBlockScope();
 }
 
 void QLangCompiler::compileWhile(const StmtPtr &s) {
-  int testLabel = static_cast<int>(m_code.size());
+  int testLabel = static_cast<int>(m_emitter.size());
   // Fused cmp+j* when the condition is an Int-vs-Int comparison (SPEC
   // §bytecodes: alternate conditional jump); legacy EQ/GT + JMPIFFALSE
   // otherwise.
@@ -1962,25 +1926,25 @@ void QLangCompiler::compileWhile(const StmtPtr &s) {
     int condReg = tmpRegister();
     compileExpr(s->cond, condReg);
     emit(Opcode::JMPIFFALSE, condReg, 0);
-    jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+    jumpFalseIdx = static_cast<int>(m_emitter.size()) - 1;
   }
 
   // continue -> re-evaluate the condition (testLabel is known before the body);
   // break -> exit (post-body), so patch BREAK instructions after the body.
   m_loops.push_back({testLabel, 0});
-  int bodyStart = static_cast<int>(m_code.instructions().size());
+  int bodyStart = static_cast<int>(m_emitter.size());
   m_blockScopes.emplace_back(); // body is a block scope (SPEC # block scope)
   for (auto &body : s->whileBody)
     compileStmt(body);
   popBlockScope();
-  int bodyEnd = static_cast<int>(m_code.instructions().size());
+  int bodyEnd = static_cast<int>(m_emitter.size());
 
   emit(Opcode::JMP, testLabel);
-  int exitLabel = static_cast<int>(m_code.size());
-  patchJump(m_code.instructions()[jumpFalseIdx], exitLabel);
+  int exitLabel = static_cast<int>(m_emitter.size());
+  m_emitter.patchJump(jumpFalseIdx, exitLabel);
   for (int j = bodyStart; j < bodyEnd; j++)
-    if (m_code.instructions()[j].op == Opcode::BREAK)
-      patchJump(m_code.instructions()[j], exitLabel);
+    if (m_emitter.raw[j].op == Opcode::BREAK)
+      m_emitter.patchJump(j, exitLabel);
   m_loops.pop_back();
 }
 
@@ -1993,7 +1957,7 @@ void QLangCompiler::compileIf(const StmtPtr &s) {
     int condReg = tmpRegister();
     compileExpr(s->ifCond, condReg);
     emit(Opcode::JMPIFFALSE, condReg, 0);
-    jumpFalseIdx = static_cast<int>(m_code.size()) - 1;
+    jumpFalseIdx = static_cast<int>(m_emitter.size()) - 1;
   }
 
   m_blockScopes.emplace_back(); // if body is a block scope (SPEC # block scope)
@@ -2004,16 +1968,16 @@ void QLangCompiler::compileIf(const StmtPtr &s) {
   if (!s->elseBody.empty()) {
     // Emit JMP after if body to skip else body; patch target after else body compiles.
     emit(Opcode::JMP, 0);
-    int jumpPastIdx = static_cast<int>(m_code.size()) - 1;
-    int elseBodyStart = static_cast<int>(m_code.size());
+    int jumpPastIdx = static_cast<int>(m_emitter.size()) - 1;
+    int elseBodyStart = static_cast<int>(m_emitter.size());
     m_blockScopes.emplace_back(); // else body is a separate block scope
     for (auto &body : s->elseBody)
       compileStmt(body);
     popBlockScope();
-    patchJump(m_code.instructions()[jumpPastIdx], static_cast<int>(m_code.size()));
-    patchJump(m_code.instructions()[jumpFalseIdx], elseBodyStart);
+    m_emitter.patchJump(jumpPastIdx, static_cast<int>(m_emitter.size()));
+    m_emitter.patchJump(jumpFalseIdx, elseBodyStart);
   } else {
-    patchJump(m_code.instructions()[jumpFalseIdx], static_cast<int>(m_code.size()));
+    m_emitter.patchJump(jumpFalseIdx, static_cast<int>(m_emitter.size()));
   }
 }
 
@@ -2170,7 +2134,7 @@ void QLangCompiler::compileBreak(const StmtPtr &s) {
   }
   if (!m_switches.empty()) {
     // Record this break JMP for later patching once we know the switch end.
-    m_breakJmps.push_back(static_cast<int>(m_code.size()));
+    m_breakJmps.push_back(static_cast<int>(m_emitter.size()));
     emit(Opcode::JMP, 0); // placeholder, patched in switch compilation
     return;
   }
@@ -2180,7 +2144,7 @@ void QLangCompiler::compileBreak(const StmtPtr &s) {
 
 void QLangCompiler::compileLabel(const StmtPtr &s) {
   // Record the current instruction index as the target for this label.
-  m_labels[s->labelName] = static_cast<int>(m_code.size());
+  m_labels[s->labelName] = static_cast<int>(m_emitter.size());
 }
 
 void QLangCompiler::compileGoto(const StmtPtr &s) {
@@ -2262,9 +2226,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
   // class Name { fields + methods end }
   // Compile body into a function that creates the prototype table and returns it.
   // Store the function index; at construction time we CALLFN it to get the prototype.
-  Bytecode savedCode = m_code;
-  auto savedLoc = std::move(m_loc);
-  m_loc.clear();
+  FnEmitter savedEmitter = std::move(m_emitter);
   auto savedRegs = m_regs;
   auto savedConstVars = m_constVars;
   auto savedVarTypes = m_varTypes;
@@ -2296,7 +2258,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
   int savedNamedReg = m_nextNamedReg;
   bool savedInFunction = m_inFunction;
 
-  m_code = Bytecode();
+  m_emitter = FnEmitter();
   m_regs.clear();
   m_constVars.clear();
   m_varTypes.clear();
@@ -2562,12 +2524,13 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
   emit(Opcode::RETURN, 0);
 
   int prototypeFuncIdx = static_cast<int>(m_functions.size()) + 1; // +1 for mainFn prepend
-  m_functions.emplace_back(Function{
-      s->className + "_prototype", 0, m_nextReg,
-      std::move(m_code.instructions()), std::move(m_loc),
-      std::move(m_code.constants()), {}});
-  m_code = std::move(savedCode);
-  m_loc = std::move(savedLoc);
+  Function protoFn;
+  protoFn.name = s->className + "_prototype";
+  protoFn.paramCount = 0;
+  protoFn.registerCount = m_nextReg;
+  m_emitter.finish(protoFn);
+  m_functions.push_back(std::move(protoFn));
+  m_emitter = std::move(savedEmitter);
   m_regs = std::move(savedRegs);
   m_constVars = std::move(savedConstVars);
   m_varTypes = std::move(savedVarTypes);
@@ -2727,7 +2690,7 @@ void QLangCompiler::compileSwitch(const StmtPtr &s) {
   std::vector<int> caseBodyStarts;    // instruction index of each case body
   for (size_t i = 0; i < s->cases.size(); i++) {
     const auto &sc = s->cases[i];
-    int matchCheckIdx = static_cast<int>(m_code.size());
+    int matchCheckIdx = static_cast<int>(m_emitter.size());
     caseMatchStarts.push_back(matchCheckIdx);
     // Emit the match check for this case.
     int cmpReg = tmpRegister();
@@ -2741,13 +2704,13 @@ void QLangCompiler::compileSwitch(const StmtPtr &s) {
       emit(Opcode::EQ, cmpReg, valReg, exprReg);
     }
     emit(Opcode::JMPIFTRUE, cmpReg, 0); // target to patch: jump to case body
-    caseJmpiIfTrueIdx.push_back(static_cast<int>(m_code.size()) - 1);
+    caseJmpiIfTrueIdx.push_back(static_cast<int>(m_emitter.size()) - 1);
     // Emit JMP to skip this case body (patched to next case or switchEnd).
-    int skipJmpIdx = static_cast<int>(m_code.size());
+    int skipJmpIdx = static_cast<int>(m_emitter.size());
     emit(Opcode::JMP, 0);
     caseSkipJmpIdx.push_back(skipJmpIdx);
     // Compile the case body, then emit an implicit JMP to skip remaining cases.
-    caseBodyStarts.push_back(static_cast<int>(m_code.size()));
+    caseBodyStarts.push_back(static_cast<int>(m_emitter.size()));
     m_blockScopes.emplace_back(); // each case body is a block scope
     for (auto &body : sc.body) {
       trace(TRACE_FULL, "[DBG-CASE] Case %zu body stmt kind=%d\n", i, (int)body->kind);
@@ -2762,24 +2725,24 @@ void QLangCompiler::compileSwitch(const StmtPtr &s) {
     }
     popBlockScope();
     emit(Opcode::JMP, 0); // implicit exit: patched after default compiles
-    caseExitJmpIdx.push_back(static_cast<int>(m_code.size()) - 1);
+    caseExitJmpIdx.push_back(static_cast<int>(m_emitter.size()) - 1);
   }
 
   // Compile the default body (if any).
-  int defaultBodyStart = static_cast<int>(m_code.size());
+  int defaultBodyStart = static_cast<int>(m_emitter.size());
   m_blockScopes.emplace_back(); // default body is a block scope
   for (auto &db : s->defaultBody)
     compileStmt(db);
   popBlockScope();
-  int defaultBodyEnd = static_cast<int>(m_code.size());
+  int defaultBodyEnd = static_cast<int>(m_emitter.size());
 
   // Now we know where switchEnd is (after all cases and default).
-  int switchEnd = static_cast<int>(m_code.size());
+  int switchEnd = static_cast<int>(m_emitter.size());
   // Update the switch context with the real exit target.
   m_switches.back() = switchEnd;
   // Patch any break JMPs that were emitted with placeholder target 0.
   for (int idx : m_breakJmps) {
-    patchJump(m_code.at(idx), switchEnd);
+    m_emitter.patchJump(idx, switchEnd);
   }
   m_breakJmps.clear();
 
@@ -2787,26 +2750,26 @@ void QLangCompiler::compileSwitch(const StmtPtr &s) {
   // skip-JMP targets to next case (or default body for last),
   // and exit-JMP targets to switchEnd.
   for (size_t i = 0; i < s->cases.size(); i++) {
-    patchJump(m_code.at(caseJmpiIfTrueIdx[i]), caseBodyStarts[i]);
+    m_emitter.patchJump(caseJmpiIfTrueIdx[i], caseBodyStarts[i]);
     if (i + 1 < s->cases.size())
-      patchJump(m_code.at(caseSkipJmpIdx[i]), caseMatchStarts[i + 1]);
+      m_emitter.patchJump(caseSkipJmpIdx[i], caseMatchStarts[i + 1]);
     else
-      patchJump(m_code.at(caseSkipJmpIdx[i]), defaultBodyStart);
-    patchJump(m_code.at(caseExitJmpIdx[i]), switchEnd);
+      m_emitter.patchJump(caseSkipJmpIdx[i], defaultBodyStart);
+    m_emitter.patchJump(caseExitJmpIdx[i], switchEnd);
   }
 
   // Pop switch context after patching is complete.
   m_switches.pop_back();
 
   // Debug: dump switch bytecode
-  trace(TRACE_FULL, "[DBG-SW] switchEnd=%d instructions.size()=%zu\n", switchEnd, m_code.instructions().size());
-  for (size_t i = 0; i < m_code.instructions().size(); i++) {
-    auto &inst = m_code.instructions()[i];
+  trace(TRACE_FULL, "[DBG-SW] switchEnd=%d instructions.size()=%zu\n", switchEnd, m_emitter.size());
+  for (size_t i = 0; i < m_emitter.size(); i++) {
+    const auto &inst = m_emitter.raw[i];
     trace(TRACE_FULL, "[DBG-SW]   [%zu] op=%d a=%d b=%d c=%d\n", i, (int)inst.op, inst.a, inst.b, inst.c);
   }
-  trace(TRACE_FULL, "[DBG-SW] constants.size()=%zu\n", m_code.constants().size());
-  for (size_t i = 0; i < m_code.constants().size(); i++) {
-    const auto &c = m_code.constants()[i];
+  trace(TRACE_FULL, "[DBG-SW] constants.size()=%zu\n", m_emitter.consts.size());
+  for (size_t i = 0; i < m_emitter.consts.size(); i++) {
+    const auto &c = m_emitter.consts[i];
     std::string cv;
     if (c.type() == QLangValue::Type::Int)
       cv = std::to_string(c.asInt());
@@ -2974,7 +2937,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
   case ExprKind::Call: {
     int argCount = static_cast<int>(e->args.size());
     trace(TRACE_FRAME, "[DBG-CALL] Entering call expr for '%s' with %d args\n", e->callee.c_str(), argCount);
-    trace(TRACE_FULL, "[DBG-CALL] &m_code=%p m_code.size=%zu\n", (void*)&m_code, m_code.instructions().size());
+    trace(TRACE_FULL, "[DBG-CALL] &m_emitter=%p m_emitter.size=%zu\n", (void*)&m_emitter, m_emitter.size());
     // Reserve one extra slot: method/constructor calls shift args up by one
     // (self/anchor), so their live slots reach dest+argCount+1. Must happen
     // BEFORE any arg register is allocated, or it would take a slot register.
@@ -3288,7 +3251,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // finalizers need the true final release; same pattern as the MAKEGEN
       // arg-register clearing above).
       {
-        int nilC = m_code.addConstant(QLangValue());
+        int nilC = m_emitter.addConst(QLangValue());
         for (int j = 0; j < newArgCount; j++)
           emit(Opcode::MOVC, newArgBase + j, nilC, 0);
       }
@@ -3305,7 +3268,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         emit(Opcode::MAKEGEN, dest, constIdx, argCount);
         // Clear arg regs so they don't leak into the next instruction.
         for (int j = 0; j < argCount; j++)
-          emit(Opcode::MOVC, argBase + j, m_code.addConstant(QLangValue()), 0);
+          emit(Opcode::MOVC, argBase + j, m_emitter.addConst(QLangValue()), 0);
       } else if (!m_functions[static_cast<size_t>(fi) - 1].captures.empty()) {
         // Phase 1: def function with captures — the closure value (cells
         // bound at def time) is the name's value in this scope; dispatch
@@ -3387,8 +3350,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     }
     emit(Opcode::CALL, dest, funcId, argCount);
     // Propagate source position for runtime error reporting (on the CALL).
-    m_loc.back() = {static_cast<uint16_t>(e->callLine),
-                    static_cast<uint16_t>(e->callCol)};
+    m_emitter.setLastLoc(static_cast<uint16_t>(e->callLine),
+                         static_cast<uint16_t>(e->callCol));
     // release(x) mutates its argument in place (drops the owned shared_ptr,
     // Phase 3 H2). The argument was compiled into the slot dest+1; write it
     // back to the source variable so the mutation is visible (the slot is a

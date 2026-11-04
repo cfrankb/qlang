@@ -56,6 +56,70 @@ struct RegisterReport {
   std::vector<std::pair<int, int>> slotRanges; // active call-arg slot ranges
 };
 
+// One unencoded instruction in the per-function raw stream. Jump targets
+// are instruction indices (not byte offsets); finish() resolves them to
+// relative byte offsets and picks the narrowest jump width.
+struct RawInstr {
+  Opcode op;
+  int32_t a = 0, b = 0, c = 0;
+  int64_t imm = 0;
+  int32_t jumpTarget = -1; // instruction index; -1 = not a jump
+  uint16_t line = 0, col = 0;
+};
+
+// Per-function raw instruction emitter: accumulates unencoded instructions
+// and encodes them into the flat byte stream at finish() time (defined in
+// QLangCompiler.cpp).
+struct FnEmitter {
+  std::vector<RawInstr> raw;
+  std::vector<QLangValue> consts;
+
+  size_t size() const { return raw.size(); }
+
+  size_t emit(Opcode op, int32_t a = 0, int32_t b = 0, int32_t c = 0,
+              int64_t imm = 0, uint16_t line = 0, uint16_t col = 0) {
+    raw.push_back(RawInstr{op, a, b, c, imm, -1, line, col});
+    return raw.size() - 1;
+  }
+
+  size_t emitJump(Opcode op, int32_t target, int32_t a = 0,
+                  uint16_t line = 0, uint16_t col = 0) {
+    raw.push_back(RawInstr{op, a, 0, 0, 0, target, line, col});
+    return raw.size() - 1;
+  }
+
+  void patchJump(size_t idx, int32_t target) { raw[idx].jumpTarget = target; }
+
+  // Stamp the source location of the most recently emitted instruction.
+  // Used to attach a call site's line/col to a CALL that was emitted before
+  // its arguments were compiled.
+  void setLastLoc(uint16_t line, uint16_t col) {
+    if (!raw.empty()) {
+      raw.back().line = line;
+      raw.back().col = col;
+    }
+  }
+
+  int addConst(QLangValue v) {
+    int idx = static_cast<int>(consts.size());
+    consts.push_back(std::move(v));
+    return idx;
+  }
+
+  // Encode all accumulated instructions into fn's flat byte stream, filling
+  // fn.code, fn.instrOffsets, fn.loc, and fn.constants.
+  void finish(Function &fn);
+
+private:
+  static bool isConditionalJumpOpcode(Opcode op) {
+    return op == Opcode::JMPIFFALSE || op == Opcode::JMPIFTRUE;
+  }
+
+  // Pick the modifier byte (and base vs escaped form) for a non-jump
+  // instruction from its operand widths and immediate range.
+  static uint8_t computeModifier(const RawInstr &r);
+};
+
 // Walks a parsed AST and emits register-machine bytecode. Each script variable
 // is assigned a stable register; control flow is lowered to jumps.
 class QLangCompiler {
@@ -234,9 +298,9 @@ private:
   // Recursively check if a statement (or any of its children) contains a yield.
   static bool containsYield(const StmtPtr &s);
 
-  Bytecode m_code;
-  // Parallel to m_code: source location (line, col) per instruction.
-  std::vector<std::pair<uint16_t, uint16_t>> m_loc;
+  // Active per-function raw instruction emitter (defined above; finish()
+  // and computeModifier() are implemented in QLangCompiler.cpp).
+  FnEmitter m_emitter;
   std::vector<StmtPtr> m_program;
   std::unordered_map<std::string, int> m_regs;
   // Block-scope name maps, innermost last. Only explicit `local`/`let`/`const`
