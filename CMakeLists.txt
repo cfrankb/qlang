@@ -160,6 +160,12 @@ add_executable(codec_check tests/unit/codec_check.cpp)
 target_link_libraries(codec_check PRIVATE qlang)
 add_test(NAME codec COMMAND codec_check)
 
+# Escape-byte instruction encoding/decoding round-trip + invalid-input tests
+# (docs/plans/instruction-format-escape-byte-implementation-plan.md Step 7b).
+add_executable(encoding_test tests/unit/encoding_test.cpp)
+target_link_libraries(encoding_test PRIVATE qlang)
+add_test(NAME encoding COMMAND encoding_test)
+
 # External C++ types (docs/EXTERNAL_TYPES.md): public-member setters,
 # read-only computed props, methods (incl. BoundMethod extraction), enum
 # constants, str, handoff integrity, registration-time validation.
@@ -219,8 +225,11 @@ set(QL_SCRIPTS
   cmp.ql
   cast.ql
   encode_repro.ql
+  ext_consts.ql
+  ext_regs.ql
   helpers.ql
   hello.ql
+  jump_widths.ql
   len.ql
   money.ql
   moneyv2.ql

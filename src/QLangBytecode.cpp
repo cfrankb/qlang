@@ -10,6 +10,10 @@ namespace qlang {
 // Class predicates
 // ---------------------------------------------------------------------------
 
+bool isValidOpcode(Opcode op) {
+  return static_cast<uint8_t>(op) < kOpcodeUsedCount;
+}
+
 bool isJumpOpcode(Opcode op) {
   switch (op) {
   case Opcode::JMP:
@@ -69,11 +73,8 @@ static size_t baseOperandCount(Opcode op) {
     return 2; // reg + imm
   // 1-operand
   switch (op) {
-  case Opcode::NEG:
-  case Opcode::NOT:
   case Opcode::INC:
   case Opcode::DEC:
-  case Opcode::EVALKEY:
   case Opcode::DELETEx:
   case Opcode::TABCREATE:
   case Opcode::TABFINALIZE:
@@ -81,23 +82,28 @@ static size_t baseOperandCount(Opcode op) {
   case Opcode::YIELD:
     return 1;
   }
-  // 2-operand
+  // 2-operand (NEG/NOT/EVALKEY are r[a] = op(r[b]): the compiler emits them
+  // with a=dest, b=src, so both operands must be stored). MAKEGEN and SEQGET
+  // are 3-operand (MAKEGEN: c=argCount; SEQGET: c=index) and fall through to
+  // the default below.
   switch (op) {
   case Opcode::MOV:
   case Opcode::MOVC:
   case Opcode::MAKEFUNC:
-  case Opcode::MAKEGEN:
   case Opcode::REFLOAD:
   case Opcode::REFSTORE:
   case Opcode::CMP:
   case Opcode::ARRAPP:
   case Opcode::ARRLEN:
   case Opcode::LEN:
-  case Opcode::SEQGET:
   case Opcode::ARRAPPV:
+  case Opcode::NEG:
+  case Opcode::NOT:
+  case Opcode::EVALKEY:
     return 2;
   }
-  // 3-operand (default)
+  // 3-operand (default): ADD..INx, CONV, CAST, ARRGET/ARRPUT, TABGET/TABPUT,
+  // INDGET/INDPUT, CALL/CALLFN/CALLCLOS, MAKEGEN (c=argCount), SEQGET (c=index).
   return 3;
 }
 
@@ -126,6 +132,19 @@ size_t escapedInstructionSize(Opcode op, uint8_t modifier) {
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "invalid immediate escape modifier");
     return 2 + leftSize + immSize;
+  }
+  // CALL: b is a signed 16-bit function ID (negative = native, index =
+  // -1 - b; non-negative = builtin), not a register/constant index. It is
+  // always escaped; the modifier's right field is fixed to 2 (the signed
+  // 16-bit form) and the left field selects the `a` register width.
+  if (op == Opcode::CALL) {
+    uint8_t leftForm = modifier & 0x0F;
+    uint8_t rightForm = modifier >> 4;
+    size_t leftSize = (leftForm == 0) ? 1 : (leftForm == 1) ? 2 : 0;
+    if (leftSize == 0 || rightForm != 2)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "invalid CALL escape modifier");
+    return 2 + leftSize + 2 + 1; // op+mod + a + b(2) + c(1)
   }
   // RegConst
   uint8_t leftForm = modifier & 0x0F;
@@ -286,6 +305,34 @@ void encodeInstruction(std::vector<uint8_t> &out, const DecodedInstruction &in) 
     return;
   }
 
+  // CALL: a = result register, b = signed 16-bit function ID, c = arg count.
+  if (in.op == Opcode::CALL) {
+    if (!in.escaped)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "CALL must be escaped (signed function ID)");
+    uint8_t leftForm = in.modifier & 0x0F;
+    if (in.modifier >> 4 != 2)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "invalid CALL escape modifier");
+    if (leftForm == 0) {
+      if (in.a < 0 || in.a > 255)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "operand index out of range");
+      out.push_back(static_cast<uint8_t>(in.a));
+    } else {
+      writeIndex(out, in.a);
+    }
+    if (in.b < INT16_MIN || in.b > INT16_MAX)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "function ID out of range");
+    writeU16LE(out, static_cast<uint16_t>(static_cast<int16_t>(in.b)));
+    if (in.c < 0 || in.c > 255)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "argument count out of range");
+    out.push_back(static_cast<uint8_t>(in.c));
+    return;
+  }
+
   // RegConst
   size_t n = baseOperandCount(in.op);
   if (!in.escaped) {
@@ -431,6 +478,32 @@ void decodeInstruction(const uint8_t *code, size_t pc, size_t codeSize,
       throw QLangError(QLangErrorKind::Io, 0, 0,
                        "invalid immediate escape modifier");
     }
+    out.size = pos - pc;
+    return;
+  }
+
+  // CALL: a = result register, b = signed 16-bit function ID, c = arg count.
+  if (out.op == Opcode::CALL) {
+    if (!out.escaped)
+      throw QLangError(QLangErrorKind::Io, 0, 0, "CALL must be escaped");
+    uint8_t leftForm = out.modifier & 0x0F;
+    if (out.modifier >> 4 != 2)
+      throw QLangError(QLangErrorKind::Io, 0, 0,
+                       "invalid CALL escape modifier");
+    if (leftForm == 0) {
+      if (pos >= codeSize)
+        throw QLangError(QLangErrorKind::Io, 0, 0, "truncated operand");
+      out.a = code[pos++];
+    } else {
+      out.a = static_cast<uint32_t>(readULE(code, pos, 2, codeSize));
+      pos += 2;
+    }
+    out.b = static_cast<int16_t>(
+        static_cast<uint16_t>(readULE(code, pos, 2, codeSize)));
+    pos += 2;
+    if (pos >= codeSize)
+      throw QLangError(QLangErrorKind::Io, 0, 0, "truncated operand");
+    out.c = code[pos++];
     out.size = pos - pc;
     return;
   }

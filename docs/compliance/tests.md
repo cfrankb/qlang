@@ -9,24 +9,27 @@ Phases 0–5, not from the legacy monolith.
 
 | Requirement (15-tests.md) | Status | Evidence |
 |---|---|---|
-| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (19 C++ harnesses), `tests/scripts/` (16 `.ql`), `tests/perf/`; `examples/` holds demos only — `hello.cpp` (smoke app) + `qlang_run.cpp` (runner) |
+| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (20 C++ harnesses), `tests/scripts/` (19 `.ql`), `tests/perf/`; `examples/` holds demos only — `hello.cpp` (smoke app) + `qlang_run.cpp` (runner) |
 | Tests run after every task (regression gate) | ✓ | ctest is the gate (AGENTS.md "Build & test"); CI on every push to `main` |
-| Regression tests exist | ✓ | 16 script regressions (`script_*`, driven by `qlang_run`) + all 19 unit suites |
-| Unit tests exist (features + edge cases) | ✓ | 19 unit suites — see ctest matrix below |
+| Regression tests exist | ✓ | 19 script regressions (`script_*`, driven by `qlang_run`) + all 20 unit suites |
+| Unit tests exist (features + edge cases) | ✓ | 20 unit suites — see ctest matrix below |
 | Performance tests: immutable baseline for parser/compiler/execution time, logged and compared | ✓ | `tests/perf/perf_bench.cpp` + committed `tests/perf/baseline.json`; ctest `perf` gate (±20% / 0.5 ms) |
 | GitHub CI: library + smoke app + test suite against `msvc`, `g++`, `mingw`, `wasm`, `clang` | ✓ | three workflows, per the spec's "three separate ci/cd yaml" — see CI matrix |
 | Running on C++20 | ✓ | `CMAKE_CXX_STANDARD 20` (root `CMakeLists.txt`) |
 
-### Layout (verified 2026-11-02)
+### Layout (verified 2026-11-04)
 
 ```
 tests/
   unit/     spec_check.cpp spec_check2.cpp spec_cast_test.cpp gen_test.cpp
-            range_check.cpp codec_check.cpp class_str_test.cpp class_static_test.cpp
+            range_check.cpp codec_check.cpp encoding_test.cpp
+            class_str_test.cpp class_static_test.cpp
             test_module.cpp test_external.cpp test_inject.cpp test_dollar_operator.cpp
             test_native.cpp test_call.cpp
             phase0_scope.cpp phase0_api.cpp phase2_scope.cpp phase3_api.cpp
-  scripts/  cast.ql cmp.ql encode_repro.ql hello.ql helpers.ql len.ql money.ql
+            phase5_api.cpp
+  scripts/  cast.ql cmp.ql encode_repro.ql ext_consts.ql ext_regs.ql
+            hello.ql helpers.ql jump_widths.ql len.ql money.ql
             moneyv2.ql perf_stress.ql test_assert.ql test_assert2.ql test_cast.ql
             test_cast2.ql test_minmax.ql test_minmax2.ql type.ql
   perf/     perf_bench.cpp baseline.json
@@ -35,9 +38,9 @@ tests/
 `examples/` retains only real demos: `hello.cpp` (smoke app) and `qlang_run.cpp`
 (script runner / smoke-test app).
 
-### ctest matrix — 36 entries (36/36 green, 2026-11-03)
+### ctest matrix — 41 entries (41/41 green, 2026-11-04)
 
-Unit (19):
+Unit (20):
 
 | ctest | binary | source | result |
 |---|---|---|---|
@@ -53,6 +56,7 @@ Unit (19):
 | `class_str` | `class_str_test` | `tests/unit/class_str_test.cpp` | 13 passed |
 | `class_static` | `class_static_test` | `tests/unit/class_static_test.cpp` | 17 passed |
 | `codec` | `codec_check` | `tests/unit/codec_check.cpp` | 85 checks passed |
+| `encoding` | `encoding_test` | `tests/unit/encoding_test.cpp` | 41 checks passed |
 | `external` | `test_external` | `tests/unit/test_external.cpp` | 23 checks passed |
 | `test_inject` | `test_inject` | `tests/unit/test_inject.cpp` | `ALL PASS` |
 | `test_dollar_operator` | `test_dollar_operator` | `tests/unit/test_dollar_operator.cpp` | 8 passed |
@@ -60,14 +64,16 @@ Unit (19):
 | `phase0_api` | `phase0_api` | `tests/unit/phase0_api.cpp` | 3 checks (P1/P3/F1 API regressions) |
 | `phase2_scope` | `phase2_scope` | `tests/unit/phase2_scope.cpp` | 7 checks (global-table scope) |
 | `phase3_api` | `phase3_api` | `tests/unit/phase3_api.cpp` | 23 checks (handles, type-mismatch, finalizer queue, `release()`) |
+| `phase5_api` | `phase5_api` | `tests/unit/phase5_api.cpp` | 17 checks (step budget, threading contract) |
 
-Counted unit cases: **737** (463+33+20+7+5+22+13+17+23+8+85+8+3+7+23), plus
+Counted unit cases: **795** (463+33+20+7+5+22+13+17+23+8+85+41+8+3+7+23+17), plus
 the three `ALL PASS` gate suites (`test_native`, `test_call`, `test_inject`).
 
-Script (16): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
-`qlang_run` (non-zero exit = fail): `cast`, `cmp`, `encode_repro`, `hello`,
-`helpers`, `len`, `money`, `moneyv2`, `perf_stress`, `test_assert`,
-`test_assert2`, `test_cast`, `test_cast2`, `test_minmax`, `test_minmax2`, `type`.
+Script (19): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
+`qlang_run` (non-zero exit = fail): `cast`, `cmp`, `encode_repro`, `ext_consts`,
+`ext_regs`, `hello`, `helpers`, `jump_widths`, `len`, `money`, `moneyv2`,
+`perf_stress`, `test_assert`, `test_assert2`, `test_cast`, `test_cast2`,
+`test_minmax`, `test_minmax2`, `type`.
 
 Perf (1): `perf` — `perf_bench` compared against `baseline.json` (below).
 

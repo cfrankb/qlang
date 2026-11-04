@@ -1,11 +1,15 @@
-// qlang_run — small driver that runs a .ql (QLang) script with a selectable
-// diagnostic trace level, optional stage timing, and bytecode output.
+// qlang_run — small driver that runs a .ql (QLang) script or a .qlc
+// (compiled QLC1 v5 image) with a selectable diagnostic trace level,
+// optional stage timing, and bytecode output.
 //
 //   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>]
-//             [--asm <file.qla>] [--asm-level <0-5>] [--rotate] file.ql
+//             [--asm <file.qla>] [--asm-level <0-5>] [--rotate]
+//             file.ql | file.qlc
 //
-// The app drives the pipeline directly (parse -> compile -> execute) so it
-// can time each stage and hand the compiled program to the .qlc writer.
+// A .ql input drives the pipeline directly (parse -> compile -> execute) so
+// the app can time each stage and hand the compiled program to the .qlc
+// writer. A .qlc input (QLC1 magic) is loaded with readQlc, its native
+// functions are re-bound by name, and the image is executed as-is.
 // Trace output goes to stderr; profile output goes to stderr and, when a
 // .qla listing is requested, is appended to that file as well. The script's
 // own program output (print/println) goes to stdout and is never affected.
@@ -51,9 +55,9 @@ namespace
 
   void printHelp(const char *prog)
   {
-    std::cout << "Run a QLang (.ql) script.\n"
+    std::cout << "Run a QLang (.ql) script or a compiled .qlc image (QLC1 v5).\n"
               << "\n"
-              << "usage: " << prog << " [options] <file.ql>\n"
+              << "usage: " << prog << " [options] <file.ql|file.qlc>\n"
               << "\n"
               << "options:\n"
               << "  --trace-level <n>   diagnostic verbosity (stderr):\n"
@@ -233,8 +237,8 @@ namespace
   }
 
   // Pseudo-mnemonic: the register-level meaning of one instruction (level 4),
-  // e.g. "r1 = pool[0]" for `const 1 0 0`.
-  std::string pseudoText(const CompiledProgram &prog, const Instruction &ins)
+  // e.g. "r1 = pool[0]" for `movc 1 0`.
+  std::string pseudoText(const CompiledProgram &prog, const DecodedInstruction &ins)
   {
     std::ostringstream ss;
     auto rn = [](int r)
@@ -262,8 +266,6 @@ namespace
     {
       ss << rn(ins.a) << " = (" << rn(ins.b) << " " << op << " " << rn(ins.c) << ")";
     };
-    char pc[32];
-    snprintf(pc, sizeof(pc), "%.4x", ins.i32);
 
     switch (ins.op)
     {
@@ -274,10 +276,10 @@ namespace
       ss << rn(ins.a) << " = " << rn(ins.b);
       break;
     case Opcode::MOVI:
-      ss << rn(ins.a) << " = " << ins.i32;
+      ss << rn(ins.a) << " = " << ins.imm;
       break;
     case Opcode::ADDI:
-      ss << rn(ins.a) << " = " << rn(ins.a) << " + " << ins.i32;
+      ss << rn(ins.a) << " = " << rn(ins.a) << " + " << ins.imm;
       break;
     case Opcode::CONV:
       ss << rn(ins.a) << " = convert(" << rn(ins.b) << ", " << type(ins.c) << ")";
@@ -407,19 +409,19 @@ namespace
     case Opcode::JGE:
     case Opcode::JG:
     case Opcode::JL:
-      ss << "pc = " << pc; // ins.i32;
+      ss << "pc += " << ins.jumpOffset;
       break;
     case Opcode::JMPIFFALSE:
-      ss << "if !truth(" << rn(ins.a) << ") pc = " << pc; // ins.i32;
+      ss << "if !truth(" << rn(ins.a) << ") pc += " << ins.jumpOffset;
       break;
     case Opcode::JMPIFTRUE:
-      ss << "if truth(" << rn(ins.a) << ") pc = " << pc; // ins.i32;
+      ss << "if truth(" << rn(ins.a) << ") pc += " << ins.jumpOffset;
       break;
     case Opcode::CMP:
       ss << "cmp r" << ins.a << ", r" << ins.b;
       break;
     case Opcode::CMPI:
-      ss << "cmpi r" << ins.a << ", r" << ins.i32;
+      ss << "cmpi r" << ins.a << ", " << ins.imm;
       break;
     case Opcode::CALLFN:
     {
@@ -454,73 +456,16 @@ namespace
     return ss.str();
   }
 
-  // Which operands are meaningful per opcode; the rest are omitted from the
-  // listing. Bits: 1=a, 2=b, 4=c, 8=combined i32 (jump targets). Default:
-  // a/b/c. (Matches the operand semantics in QLangBytecode.h, e.g.
-  // ARRAPP/CALLCLOS skip b.)
-  enum
-  {
-    A = 1,
-    B = 2,
-    C = 4,
-    I32 = 8
-  };
-
-  int operandMask(Opcode op)
-  {
-    switch (op)
-    {
-    case Opcode::INC:
-    case Opcode::DEC:
-    case Opcode::DELETEx:
-    case Opcode::TABCREATE:
-    case Opcode::TABFINALIZE:
-    case Opcode::RETURN:
-    case Opcode::JMPIFFALSE: // condition in a; target is the i32 slot
-    case Opcode::JMPIFTRUE:  // condition in a; target is the i32 slot
-      return A + I32;
-    case Opcode::JE:  // condition in a; target is the i32 slot
-    case Opcode::JG:  // condition in a; target is the i32 slot
-    case Opcode::JGE: // condition in a; target is the i32 slot
-    case Opcode::JL:  // condition in a; target is the i32 slot
-    case Opcode::JLE: // condition in a; target is the i32 slot
-    case Opcode::JNE: // condition in a; target is the i32 slot
-      return I32;
-    case Opcode::JMP: // 32-bit pc target in the combined i32 slot
-    case Opcode::CONTINUE:
-    case Opcode::BREAK:
-      return I32;
-    case Opcode::MOVC:
-    case Opcode::MOV:
-    case Opcode::NEG:
-    case Opcode::NOT:
-    case Opcode::ARRAPPV:
-    case Opcode::ARRLEN:
-    case Opcode::LEN:
-    case Opcode::EVALKEY:
-    case Opcode::MAKEFUNC:
-    case Opcode::MAKEGEN:
-    case Opcode::REFLOAD:
-    case Opcode::REFSTORE:
-    case Opcode::CMP:
-    case Opcode::CMPI:
-      return A + B;
-    case Opcode::ARRAPP:
-      return A + B; // base and value
-    case Opcode::CALLCLOS:
-      return A + C; // a and c only
-    default:
-      return A + B + C;
-    }
-  }
-
-  // Comma-separated operands, skipping unused ones; b is decimal when
-  // negative (native-call index, -1 - id).
-  std::string operandText(const Instruction &ins)
+  // Comma-separated operands for one decoded instruction. Registers and
+  // pool indices are hex (negative b is decimal: native-call index,
+  // -1 - id); immediates are decimal; jumps show the signed relative
+  // offset plus the absolute target byte offset. Escaped forms are
+  // prefixed with the modifier byte (e=0xNN).
+  std::string operandText(const DecodedInstruction &ins, size_t at)
   {
     auto fmt = [](int v)
     {
-      char b[8];
+      char b[12];
       std::snprintf(b, sizeof b, v < 0 ? "%d" : "%.2x", v);
       return std::string(b);
     };
@@ -531,23 +476,68 @@ namespace
         s += ", ";
       s += fmt(v);
     };
-    const int m = operandMask(ins.op);
-    if (m & A)
-      add(ins.a);
-    if (ins.op == Opcode::MOVI || ins.op == Opcode::ADDI)
+    if (ins.escaped)
     {
-      // 32-bit literal: decimal + 'i' (the b/c halves are its raw encoding).
-      if (!s.empty())
-        s += ", ";
-      s += std::to_string(ins.i32) + "i";
+      char m[8];
+      std::snprintf(m, sizeof m, "e=0x%02x", ins.modifier);
+      s += m;
+    }
+    if (isJumpOpcode(ins.op))
+    {
+      if (ins.op == Opcode::JMPIFFALSE || ins.op == Opcode::JMPIFTRUE)
+        add(ins.a);
+      add(ins.jumpOffset);
+      char t[16];
+      std::snprintf(t, sizeof t, " -> %.4x",
+                    static_cast<unsigned>(at + ins.size + ins.jumpOffset));
+      s += t;
       return s;
     }
-    if (m & B)
+    if (isImmediateOpcode(ins.op))
+    {
+      add(ins.a);
+      if (!s.empty())
+        s += ", ";
+      s += std::to_string(ins.imm);
+      return s;
+    }
+    switch (ins.op)
+    {
+    case Opcode::INC:
+    case Opcode::DEC:
+    case Opcode::DELETEx:
+    case Opcode::TABCREATE:
+    case Opcode::TABFINALIZE:
+    case Opcode::RETURN:
+      add(ins.a);
+      break;
+    case Opcode::NEG:
+    case Opcode::NOT:
+    case Opcode::EVALKEY:
+    case Opcode::MOV:
+    case Opcode::MOVC:
+    case Opcode::MAKEFUNC:
+    case Opcode::MAKEGEN:
+    case Opcode::REFLOAD:
+    case Opcode::REFSTORE:
+    case Opcode::CMP:
+    case Opcode::ARRAPP:
+    case Opcode::ARRAPPV:
+    case Opcode::ARRLEN:
+    case Opcode::LEN:
+      add(ins.a);
       add(ins.b);
-    if (m & C)
+      break;
+    case Opcode::CALLCLOS:
+      add(ins.a);
       add(ins.c);
-    if (m & I32)
-      add(ins.i32);
+      break;
+    default:
+      add(ins.a);
+      add(ins.b);
+      add(ins.c);
+      break;
+    }
     return s;
   }
 
@@ -679,13 +669,20 @@ namespace
       ss << "QLang disassembly (v1)\n";
       ss << "registers: " << prog.registerCount << "\n\n";
     }
-    // Level 4: widest pseudo-mnemonic in the whole listing, so the "; ..."
-    // and "# ..." columns align on every line.
+    // Widest operand text and (level 4) pseudo-mnemonic in the whole
+    // listing, so the operand, "; ...", and "# ..." columns align on
+    // every line.
+    size_t maxOperand = 0;
     size_t maxPseudo = 0;
-    if (level >= 4)
-      for (const auto &fn : prog.functions)
-        for (const auto &k : fn.instructions)
+    for (const auto &fn : prog.functions)
+      for (size_t j = 0; j < fn.instrOffsets.size(); j++)
+      {
+        DecodedInstruction k;
+        decodeInstruction(fn.code.data(), fn.instrOffsets[j], fn.code.size(), k);
+        maxOperand = std::max(maxOperand, operandText(k, fn.instrOffsets[j]).size());
+        if (level >= 4)
           maxPseudo = std::max(maxPseudo, pseudoText(prog, k).size());
+      }
     for (size_t i = 0; i < prog.functions.size(); i++)
     {
       const auto &f = prog.functions[i];
@@ -723,9 +720,10 @@ namespace
         ss << "function #" << i << " '" << f.name << "':\n";
 
       int lastLine = -1;
-      for (size_t j = 0; j < f.instructions.size(); j++)
+      for (size_t j = 0; j < f.instrOffsets.size(); j++)
       {
-        const auto &ins = f.instructions[j];
+        DecodedInstruction ins;
+        decodeInstruction(f.code.data(), f.instrOffsets[j], f.code.size(), ins);
         const uint16_t insLine = (j < f.loc.size()) ? f.loc[j].first : 0;
         if (level >= 2 && insLine != lastLine && insLine >= 1 &&
             static_cast<size_t>(insLine) <= srcLines.size())
@@ -777,7 +775,7 @@ namespace
           }
         }
         char addr[32];
-        snprintf(addr, sizeof(addr), "%.4x", static_cast<unsigned>(j));
+        snprintf(addr, sizeof(addr), "%.4x", static_cast<unsigned>(f.instrOffsets[j]));
 
         // Level 4: pseudo-mnemonic (register-level meaning), padded so the
         // trailing "#" note starts in the same column on every line.
@@ -791,7 +789,7 @@ namespace
         const std::string note = constNote.empty() ? std::string() : "  # " + constNote;
         ss << "  " << std::setw(4) << addr
            << "  " << std::left << std::setw(11) << Bytecode::name(ins.op)
-           << "  " << std::setw(10) << operandText(ins)
+           << "  " << std::setw(10) << operandText(ins, f.instrOffsets[j])
            << pseudo << note << "\n";
       }
       ss << "\n";
@@ -1072,69 +1070,125 @@ int main(int argc, char **argv)
   QLangContext ctx;
   ctx.setVerboseLevel(traceLevel);
 
-  // --- Parse ---
-  const auto t0 = Clock::now();
-  std::vector<StmtPtr> program;
-  try
-  {
-    program = ctx.parse(source);
-  }
-  catch (const QLangError &e)
-  {
-    std::fprintf(stderr, "%s: %s: %s\n", kAppName, file.c_str(), e.what());
-    return 3;
-  }
-  const size_t stmtCount = program.size();
-  const auto t1 = Clock::now();
-
-  // --- Compile ---
-  QLangCompiler compiler(std::move(program), &ctx);
-  // The app never injects host constants (ctx.set(name, value, true)), so the
-  // external-const set is empty.
-  compiler.addExternalConsts({});
-  std::unordered_set<std::string> nativeNames;
-  for (const auto &[name, _] : ctx.nativeFuncs())
-    nativeNames.insert(name);
-  compiler.addExternalFuncs(nativeNames);
-  compiler.addModules(ctx.modules());
-
+  // --- Load (.qlc) or parse + compile (.ql) ---
+  // A .qlc file is a compiled program (QLC1 v5, docs/SERIALIZATION.md):
+  // read it back and re-bind its native functions by name.
+  const bool isQlc = source.size() >= 4 && source.compare(0, 4, "QLC1") == 0;
   CompiledProgram compiled;
-  try
+  std::map<std::string, int> nativeIds; // name -> negative opcode id
+  // Copied out of the compiler (which is scoped to the parse/compile branch)
+  // so the pointer stays valid for the disassembly below.
+  RegisterReport reportStorage;
+  const RegisterReport *report = nullptr;
+  size_t stmtCount = 0;
+  const auto t0 = Clock::now();
+  auto t1 = t0; // parse/compile boundary (== t0 for .qlc input)
+  if (isQlc)
   {
-    compiled = compiler.compile();
-  }
-  catch (const QLangError &e)
-  {
-    std::fprintf(stderr, "%s: %s: %s\n", kAppName, file.c_str(), e.what());
-    return 3;
-  }
-  // Wire native functions exactly as QLangContext::run() does.
-  for (const auto &[name, func] : ctx.nativeFuncs())
-  {
-    auto it = compiler.nativeFuncIds().find(name);
-    if (it != compiler.nativeFuncIds().end())
+    std::istringstream is(source, std::ios::binary);
+    std::vector<std::pair<int, std::string>> nativeSlots;
+    std::string err;
+    if (!readQlc(is, compiled, nativeSlots, err))
     {
-      int idx = -1 - it->second;
-      while (compiled.nativeFuncs.size() <= static_cast<size_t>(idx))
+      std::fprintf(stderr, "%s: %s: %s\n", kAppName, file.c_str(), err.c_str());
+      return 3;
+    }
+    // The file stores native function NAMES only; re-resolve them against
+    // this context's natives and module functions (a missing name is a
+    // load-time error).
+    for (const auto &[slot, name] : nativeSlots)
+    {
+      nativeIds[name] = -1 - slot;
+      QLangContext::NativeFunc fn;
+      const auto it = ctx.nativeFuncs().find(name);
+      if (it != ctx.nativeFuncs().end())
+        fn = it->second;
+      else
+        for (const auto &mod : ctx.modules())
+        {
+          const auto mit = mod.funcs.find(name);
+          if (mit != mod.funcs.end())
+          {
+            fn = mit->second;
+            break;
+          }
+        }
+      if (!fn)
+      {
+        std::fprintf(stderr, "%s: %s: unknown native function '%s'\n",
+                     kAppName, file.c_str(), name.c_str());
+        return 3;
+      }
+      while (compiled.nativeFuncs.size() <= static_cast<size_t>(slot))
         compiled.nativeFuncs.push_back(nullptr);
-      compiled.nativeFuncs[static_cast<size_t>(idx)] = func;
+      compiled.nativeFuncs[static_cast<size_t>(slot)] = fn;
     }
   }
-  const auto &resolved = compiler.nativeFuncsResolved();
-  for (size_t i = 0; i < resolved.size(); i++)
+  else
   {
-    while (compiled.nativeFuncs.size() <= i)
-      compiled.nativeFuncs.push_back(nullptr);
-    if (resolved[i])
-      compiled.nativeFuncs[i] = resolved[i];
+    // --- Parse ---
+    std::vector<StmtPtr> program;
+    try
+    {
+      program = ctx.parse(source);
+    }
+    catch (const QLangError &e)
+    {
+      std::fprintf(stderr, "%s: %s: %s\n", kAppName, file.c_str(), e.what());
+      return 3;
+    }
+    stmtCount = program.size();
+    t1 = Clock::now();
+
+    // --- Compile ---
+    QLangCompiler compiler(std::move(program), &ctx);
+    // The app never injects host constants (ctx.set(name, value, true)), so
+    // the external-const set is empty.
+    compiler.addExternalConsts({});
+    std::unordered_set<std::string> nativeNames;
+    for (const auto &[name, _] : ctx.nativeFuncs())
+      nativeNames.insert(name);
+    compiler.addExternalFuncs(nativeNames);
+    compiler.addModules(ctx.modules());
+
+    try
+    {
+      compiled = compiler.compile();
+    }
+    catch (const QLangError &e)
+    {
+      std::fprintf(stderr, "%s: %s: %s\n", kAppName, file.c_str(), e.what());
+      return 3;
+    }
+    // Wire native functions exactly as QLangContext::run() does.
+    for (const auto &[name, func] : ctx.nativeFuncs())
+    {
+      auto it = compiler.nativeFuncIds().find(name);
+      if (it != compiler.nativeFuncIds().end())
+      {
+        int idx = -1 - it->second;
+        while (compiled.nativeFuncs.size() <= static_cast<size_t>(idx))
+          compiled.nativeFuncs.push_back(nullptr);
+        compiled.nativeFuncs[static_cast<size_t>(idx)] = func;
+      }
+    }
+    const auto &resolved = compiler.nativeFuncsResolved();
+    for (size_t i = 0; i < resolved.size(); i++)
+    {
+      while (compiled.nativeFuncs.size() <= i)
+        compiled.nativeFuncs.push_back(nullptr);
+      if (resolved[i])
+        compiled.nativeFuncs[i] = resolved[i];
+    }
+    nativeIds.insert(compiler.nativeFuncIds().begin(), compiler.nativeFuncIds().end());
+    reportStorage = compiler.registerReport();
+    report = &reportStorage;
   }
   const auto t2 = Clock::now();
 
   // --- Bytecode output ---
   if (!output.empty())
   {
-    std::map<std::string, int> nativeIds(compiler.nativeFuncIds().begin(),
-                                         compiler.nativeFuncIds().end());
     size_t written = 0;
     if (!writeBytecode(compiled, nativeIds, output, written))
     {
@@ -1148,15 +1202,17 @@ int main(int argc, char **argv)
   // --- Disassembly output ---
   if (!asmOut.empty())
   {
+    // .qlc input has no source text: level 2 source interleaving is simply
+    // skipped, and the register breakdown (level 5) is unavailable.
     std::vector<std::string> srcLines;
+    if (!isQlc)
     {
       std::istringstream ls(source);
       std::string line;
       while (std::getline(ls, line))
         srcLines.push_back(line);
     }
-    const std::string text = disassemble(compiled, srcLines, asmLevel,
-                                         &compiler.registerReport());
+    const std::string text = disassemble(compiled, srcLines, asmLevel, report);
     std::ofstream out(asmOut, std::ios::trunc);
     if (!out)
     {
@@ -1176,7 +1232,7 @@ int main(int argc, char **argv)
   // --- Execute ---
   const size_t instrCount = compiled.functions.empty()
                                 ? 0
-                                : compiled.functions[0].instructions.size();
+                                : compiled.functions[0].instrOffsets.size();
   QLangVM vm(compiled, ctx);
   const auto t3 = Clock::now();
   try

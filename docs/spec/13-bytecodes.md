@@ -555,6 +555,8 @@ extra byte (e):
          value 5 => 2 bytes  (signed)
          value 6 => 4 bytes  (signed)
          value 7 => 8 bytes  (signed)
+         value 8 => 8 bytes  (float) // future version
+         value 9 => 1 byte   (bool)  // future version
       else if register
         value 0 register 0-255 (1 byte)
         value 1 extended register (2 bytes)
@@ -564,3 +566,13 @@ extra byte (e):
         value 1 extended constant (2 bytes)
         value 2 extended constant (4 bytes) // future version
 ```
+
+## constant pool
+
+constant in the pool must have unique values. duplicated entries should be folded into a single one.
+
+## bytecode serialization
+
+
+see 
+[SERIALIZATION.md](../SERIALIZATION.md)

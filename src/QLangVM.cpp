@@ -902,8 +902,11 @@ void QLangVM::adoptGlobals(const CompiledProgram &prog) {
 }
 
 // Resolve a byte-offset pc to an instruction index: the largest index whose
-// offset is <= pc (binary search over fn.instrOffsets). pc is a byte offset
-// in the flat code stream, not an index; fn.loc is parallel to instrOffsets.
+// offset is < pc (binary search over fn.instrOffsets). pc is a byte offset in
+// the flat code stream, not an index; fn.loc is parallel to instrOffsets. The
+// VM advances frame.pc past the current instruction before executing it, so on
+// a fault pc points one-past the failing instruction's end — the failing
+// instruction is the last one whose offset is strictly < pc.
 size_t QLangVM::instructionIndexAt(const Function &fn, size_t pc) const {
   const auto &offs = fn.instrOffsets;
   if (offs.empty())
@@ -911,12 +914,12 @@ size_t QLangVM::instructionIndexAt(const Function &fn, size_t pc) const {
   size_t lo = 0, hi = offs.size();
   while (lo < hi) {
     size_t mid = lo + (hi - lo) / 2;
-    if (offs[mid] <= pc)
+    if (offs[mid] < pc)
       lo = mid + 1;
     else
       hi = mid;
   }
-  return lo - 1;
+  return (lo > 0) ? lo - 1 : 0;
 }
 
 // Build the execution trace (innermost frame first) from the current frame
@@ -1636,10 +1639,12 @@ RunResult QLangVM::runFrames() {
       frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this);
       break;
     case Opcode::INC:
-      frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this);
+      // In-place on r[a] (1-operand: only `a` is stored in the stream).
+      frame.regs[i.a] = doUnary(i.op, frame.regs[i.a], this);
       break;
     case Opcode::DEC:
-      frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this);
+      // In-place on r[a] (1-operand: only `a` is stored in the stream).
+      frame.regs[i.a] = doUnary(i.op, frame.regs[i.a], this);
       break;
     case Opcode::EVALKEY:
       frame.regs[i.a] = doUnary(i.op, frame.regs[i.b], this);

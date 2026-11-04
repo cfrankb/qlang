@@ -110,24 +110,31 @@ static void printStmt(const StmtPtr &s, int indent)
 
 static void dumpBytecode(const CompiledProgram &cp)
 {
-  const auto &ins = cp.code.instructions();
-  const auto &consts = cp.code.constants();
-  std::cout << "\nBytecode (" << ins.size() << " instructions, "
+  if (cp.functions.empty())
+  {
+    std::cout << "\nBytecode (no functions):\n";
+    return;
+  }
+  const auto &fn = cp.functions[0]; // main
+  const auto &consts = fn.constants;
+  std::cout << "\nBytecode (" << fn.instrOffsets.size() << " instructions, "
             << cp.registerCount << " registers, " << consts.size()
             << " constants):\n";
-  for (size_t i = 0; i < ins.size(); i++)
+  for (size_t i = 0; i < fn.instrOffsets.size(); i++)
   {
-    std::cout << "  " << i << ": " << Bytecode::name(ins[i].op);
-    if (ins[i].op == Opcode::MOVC)
-      std::cout << " r[" << ins[i].a << "] = const[" << ins[i].b << "] ("
-                << consts[ins[i].b].typeName() << ")";
-    else if (ins[i].op == Opcode::JMP)
-      std::cout << " -> " << ins[i].a;
-    else if (ins[i].op == Opcode::JMPIFFALSE)
-      std::cout << " r[" << ins[i].a << "] -> " << ins[i].b;
+    DecodedInstruction ins;
+    decodeInstruction(fn.code.data(), fn.instrOffsets[i], fn.code.size(), ins);
+    std::cout << "  " << i << ": " << Bytecode::name(ins.op);
+    if (ins.op == Opcode::MOVC)
+      std::cout << " r[" << ins.a << "] = const[" << ins.b << "] ("
+                << consts[ins.b].typeName() << ")";
+    else if (isJumpOpcode(ins.op))
+      std::cout << " -> " << ins.jumpOffset;
+    else if (isImmediateOpcode(ins.op))
+      std::cout << " r[" << ins.a << "] imm=" << ins.imm;
     else
-      std::cout << " r[" << ins[i].a << "] r[" << ins[i].b << "] r["
-                << ins[i].c << "]";
+      std::cout << " r[" << ins.a << "] r[" << ins.b << "] r["
+                << ins.c << "]";
     std::cout << "\n";
   }
   std::cout << "\nConstants:\n";

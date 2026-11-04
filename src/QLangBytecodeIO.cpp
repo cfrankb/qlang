@@ -65,14 +65,6 @@ void putStr(std::ostream &os, const std::string &s) {
   putU32(os, static_cast<uint32_t>(s.size()));
   putBytes(os, s.data(), s.size());
 }
-// One instruction, field by field (F1): the raw struct bytes are NOT the
-// on-disk encoding. Wire layout: u16 op, u16 a, i32 i32. Source location
-// is written separately in the per-function location section.
-void putInstruction(std::ostream &os, const Instruction &ins) {
-  putU16(os, static_cast<uint16_t>(ins.op));
-  putU16(os, static_cast<uint16_t>(ins.a));
-  putI32(os, ins.i32);
-}
 
 // ---------------------------------------------------------------------------
 // Bounds-checked reader over an in-memory buffer. Every failure throws
@@ -386,9 +378,9 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
   // Header.
   putBytes(os, "QLC1", 4);
   // Format version (F1): written from the single shared constant
-  // kQlcVersion (docs/SERIALIZATION.md §4). v3 makes the on-wire encoding
-  // explicit little-endian, field by field; v1/v2 files (byte-identical on
-  // little-endian hosts) still load in this reader.
+  // kQlcVersion (docs/SERIALIZATION.md §4). v5 is the escape-byte
+  // instruction format (flat per-function code stream + offset table);
+  // the reader accepts v5 only.
   putU32(os, kQlcVersion); // format version
 
   // Functions (functions[0] is the implicit "main"; the compiler emits it
@@ -403,12 +395,17 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
     putU32(os, static_cast<uint32_t>(f.captures.size()));
     for (const auto &cap : f.captures)
       putI32(os, cap.reg);
-    putU32(os, static_cast<uint32_t>(f.instructions.size()));
-    for (const auto &ins : f.instructions)
-      // Field by field, explicit little-endian (F1): the raw struct bytes
-      // are NOT the on-disk encoding.
-      putInstruction(os, ins);
-    // Location side-table: one (u16 line, u16 col) per instruction.
+    // Instruction byte stream (escape-byte format, docs/SERIALIZATION.md
+    // §4.1): the raw per-function code blob, verbatim.
+    putU32(os, static_cast<uint32_t>(f.code.size()));
+    putBytes(os, f.code.data(), f.code.size());
+    // Instruction offset table: byte offset of each instruction in the
+    // stream (strictly increasing).
+    putU32(os, static_cast<uint32_t>(f.instrOffsets.size()));
+    for (size_t off : f.instrOffsets)
+      putU32(os, static_cast<uint32_t>(off));
+    // Location side-table: one (u16 line, u16 col) per instruction,
+    // parallel to the offset table.
     putU32(os, static_cast<uint32_t>(f.loc.size()));
     for (const auto &lc : f.loc) {
       putU16(os, lc.first);
@@ -464,9 +461,9 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       r.fail("bad magic");
     r.pos = 4;
     uint32_t version = r.u32();
-    // Accept the current version and the legacy v1/v2 files (byte-identical
-    // on little-endian hosts); reject anything newer (F1).
-    if (version > kQlcVersion)
+    // v5 only: legacy v1-v4 files (fixed 8-byte instructions) and anything
+    // newer are rejected (F1).
+    if (version != kQlcVersion)
       r.fail("unsupported version");
 
     // 2. Functions.
@@ -494,28 +491,56 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
         ref.reg = r.i32();
         fn.captures.push_back(ref);
       }
-      uint32_t instrCount = r.u32();
-      totalInstrs += instrCount;
+      // Instruction byte stream (v5 escape-byte format).
+      uint32_t codeSize = r.u32();
+      // Max instruction is 7 bytes (escaped 3-operand with 2-byte operands).
+      if (static_cast<size_t>(codeSize) > kMaxInstructions * 7)
+        r.fail("code stream too large");
+      fn.code.resize(codeSize);
+      for (uint32_t j = 0; j < codeSize; j++)
+        fn.code[j] = r.u8();
+      // Instruction offset table (strictly increasing).
+      uint32_t offCount = r.u32();
+      totalInstrs += offCount;
       if (totalInstrs > kMaxInstructions)
         r.fail("too many instructions");
-      fn.instructions.reserve(instrCount);
-      for (uint32_t j = 0; j < instrCount; j++) {
-        uint16_t op = r.u16();
-        if (op >= static_cast<uint16_t>(Opcode::kOpcodeCount))
-          r.fail("invalid opcode");
-        Instruction ins;
-        ins.op = static_cast<Opcode>(op);
-        ins.a = r.u16();
-        ins.i32 = r.i32();
-        fn.instructions.push_back(ins);
+      fn.instrOffsets.resize(offCount);
+      for (uint32_t j = 0; j < offCount; j++) {
+        uint32_t off = r.u32();
+        if (off >= codeSize)
+          r.fail("instruction offset beyond code stream");
+        if (j > 0 && off <= fn.instrOffsets[j - 1])
+          r.fail("instruction offsets not strictly increasing");
+        fn.instrOffsets[j] = off;
       }
-      // Location side-table.
+      // Location side-table: parallel to the offset table.
       uint32_t locCount = r.u32();
-      if (locCount > instrCount)
-        r.fail("location table longer than instruction stream");
+      if (locCount != offCount)
+        r.fail("location table not parallel to instruction offsets");
       fn.loc.reserve(locCount);
       for (uint32_t j = 0; j < locCount; j++)
         fn.loc.emplace_back(r.u16(), r.u16());
+      // Decode every instruction: catches truncation, invalid escape
+      // modifiers, and unknown opcode identities; the stream must be
+      // exactly tiled by the decoded instructions.
+      size_t lastEnd = 0;
+      for (size_t j = 0; j < fn.instrOffsets.size(); j++) {
+        DecodedInstruction di;
+        try {
+          decodeInstruction(fn.code.data(), fn.instrOffsets[j], codeSize, di);
+        } catch (const QLangError &e) {
+          r.fail(std::string("invalid instruction: ") + e.message());
+        }
+        if (!isValidOpcode(di.op))
+          r.fail("invalid opcode");
+        lastEnd = fn.instrOffsets[j] + di.size;
+        if (lastEnd > codeSize)
+          r.fail("instruction overruns code stream");
+        if (j + 1 < fn.instrOffsets.size() && lastEnd > fn.instrOffsets[j + 1])
+          r.fail("instruction overruns next offset");
+      }
+      if (lastEnd != codeSize)
+        r.fail("code stream has trailing bytes");
       uint32_t constCount = r.u32();
       fn.constants.reserve(constCount);
       for (uint32_t j = 0; j < constCount; j++)

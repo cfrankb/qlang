@@ -222,12 +222,9 @@ static void testProgram() {
               a.registerCount == b.registerCount &&
               a.isGenerator == b.isGenerator &&
               a.captures.size() == b.captures.size() &&
-              a.instructions.size() == b.instructions.size();
+              a.code == b.code && a.instrOffsets == b.instrOffsets;
       for (size_t k = 0; fnsOk && k < a.captures.size(); k++)
         fnsOk = a.captures[k].reg == b.captures[k].reg;
-      for (size_t j = 0; fnsOk && j < a.instructions.size(); j++)
-        fnsOk = std::memcmp(&a.instructions[j], &b.instructions[j],
-                            sizeof(Instruction)) == 0;
       fnsOk = fnsOk && a.constants.size() == b.constants.size();
       for (size_t j = 0; fnsOk && j < a.constants.size(); j++)
         fnsOk = valueEq(a.constants[j], b.constants[j]);
@@ -240,9 +237,9 @@ static void testProgram() {
 }
 
 // ---------------------------------------------------------------------------
-// MOVI: Int literals must compile to MOVI (immediate in i32, no pool slot);
-// everything else stays in the pool. The v4 format round-trips MOVI
-// instruction-for-instruction (testProgram's memcmp covers the encoding).
+// MOVI: Int literals must compile to MOVI (signed immediate, no pool slot);
+// everything else stays in the pool. The v5 format round-trips MOVI
+// instruction-for-instruction (testProgram's code/offset comparison covers it).
 // ---------------------------------------------------------------------------
 static CompiledProgram compileSrc(const char *src) {
   QLangContext ctx;
@@ -251,9 +248,21 @@ static CompiledProgram compileSrc(const char *src) {
   return compiler.compile();
 }
 
+// Decode every instruction in a function's v5 code stream.
+static std::vector<DecodedInstruction> decodeAll(const Function &fn) {
+  std::vector<DecodedInstruction> out;
+  out.reserve(fn.instrOffsets.size());
+  for (size_t j = 0; j < fn.instrOffsets.size(); j++) {
+    DecodedInstruction di;
+    decodeInstruction(fn.code.data(), fn.instrOffsets[j], fn.code.size(), di);
+    out.push_back(di);
+  }
+  return out;
+}
+
 static bool hasMovi(const Function &fn, int32_t imm) {
-  for (const auto &i : fn.instructions)
-    if (i.op == Opcode::MOVI && i.i32 == imm)
+  for (const auto &i : decodeAll(fn))
+    if (i.op == Opcode::MOVI && i.imm == imm)
       return true;
   return false;
 }
@@ -276,7 +285,7 @@ static void testMovi() {
     CompiledProgram pb = compileSrc("local b = true\n");
     bool noMovi = true;
     bool poolHasBool = false;
-    for (const auto &i : pb.functions[0].instructions)
+    for (const auto &i : decodeAll(pb.functions[0]))
       if (i.op == Opcode::MOVI)
         noMovi = false;
     for (const auto &c : pb.functions[0].constants)
@@ -292,35 +301,32 @@ static void testMovi() {
     // 64-bit literal (Qword) -> pool, no MOVI.
     CompiledProgram pq = compileSrc("local q = 9223372036854775807\n");
     bool qNoMovi = true;
-    for (const auto &i : pq.functions[0].instructions)
+    for (const auto &i : decodeAll(pq.functions[0]))
       if (i.op == Opcode::MOVI)
         qNoMovi = false;
     check(qNoMovi, "movi: 64-bit literal not MOVI");
 
-    // .qlc written at format version 4 (kQlcVersion); a reader that only
-    // accepts <= 3 would reject it, this reader accepts it.
+    // .qlc written at format version 5 (kQlcVersion); the reader accepts v5
+    // only (v1-v4 and v6+ are rejected).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "movi: writeQlc (v4)");
+    check(writeQlc(os, p, {}), "movi: writeQlc (v5)");
     std::string bytes = os.str();
     uint32_t version = static_cast<uint32_t>(static_cast<uint8_t>(bytes[4])) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[5])) << 8) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[6])) << 16) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[7])) << 24);
-    check(version == 4, "movi: format version 4");
+    check(version == 5, "movi: format version 5");
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("movi: readQlc v4 (") + err + ")");
+    check(readQlc(is, back, slots, err), std::string("movi: readQlc v5 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
         const auto &a = p.functions[0];
         const auto &b = back.functions[0];
-        same = a.instructions.size() == b.instructions.size();
-        for (size_t j = 0; same && j < a.instructions.size(); j++)
-          same = std::memcmp(&a.instructions[j], &b.instructions[j],
-                             sizeof(Instruction)) == 0;
+        same = a.code == b.code && a.instrOffsets == b.instrOffsets;
       }
       check(same, "movi: round-trip instruction equality");
     }
@@ -369,13 +375,13 @@ static void testCompilerMovi() {
 }
 
 // ---------------------------------------------------------------------------
-// ADDI: compound `+=` with an Int-literal RHS compiles to ADDI (immediate in
-// i32, no pool slot); non-Int RHS stays pooled + ADD. The v2 format
-// round-trips ADDI instruction-for-instruction (memcmp covers the encoding).
+// ADDI: compound `+=` with an Int-literal RHS compiles to ADDI (signed
+// immediate, no pool slot); non-Int RHS stays pooled + ADD. The v5 format
+// round-trips ADDI instruction-for-instruction (code/offset comparison).
 // ---------------------------------------------------------------------------
 static bool hasAddi(const Function &fn, int32_t imm) {
-  for (const auto &i : fn.instructions)
-    if (i.op == Opcode::ADDI && i.i32 == imm)
+  for (const auto &i : decodeAll(fn))
+    if (i.op == Opcode::ADDI && i.imm == imm)
       return true;
   return false;
 }
@@ -390,29 +396,26 @@ static void testAddi() {
     // Float literal RHS -> stays pooled + ADD, no ADDI.
     CompiledProgram pf = compileSrc("local f = 1.5\nf += 1.5\n");
     bool noAddi = true;
-    for (const auto &i : pf.functions[0].instructions)
+    for (const auto &i : decodeAll(pf.functions[0]))
       if (i.op == Opcode::ADDI)
         noAddi = false;
     check(noAddi, "addi: float literal not ADDI");
 
-    // .qlc round-trip of an ADDI program (v4 format).
+    // .qlc round-trip of an ADDI program (v5 format).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "addi: writeQlc (v4)");
+    check(writeQlc(os, p, {}), "addi: writeQlc (v5)");
     std::string bytes = os.str();
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("addi: readQlc v4 (") + err + ")");
+    check(readQlc(is, back, slots, err), std::string("addi: readQlc v5 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
         const auto &a = p.functions[0];
         const auto &b = back.functions[0];
-        same = a.instructions.size() == b.instructions.size();
-        for (size_t j = 0; same && j < a.instructions.size(); j++)
-          same = std::memcmp(&a.instructions[j], &b.instructions[j],
-                             sizeof(Instruction)) == 0;
+        same = a.code == b.code && a.instrOffsets == b.instrOffsets;
       }
       check(same, "addi: round-trip instruction equality");
     }
@@ -422,13 +425,13 @@ static void testAddi() {
 }
 
 // ---------------------------------------------------------------------------
-// SUBI: compound `-=` with an Int-literal RHS compiles to SUBI (immediate in
-// i32, no pool slot); non-Int RHS stays pooled + SUB. The v2 format
-// round-trips SUBI instruction-for-instruction (memcmp covers the encoding).
+// SUBI: compound `-=` with an Int-literal RHS compiles to SUBI (signed
+// immediate, no pool slot); non-Int RHS stays pooled + SUB. The v5 format
+// round-trips SUBI instruction-for-instruction (code/offset comparison).
 // ---------------------------------------------------------------------------
 static bool hasSubi(const Function &fn, int32_t imm) {
-  for (const auto &i : fn.instructions)
-    if (i.op == Opcode::SUBI && i.i32 == imm)
+  for (const auto &i : decodeAll(fn))
+    if (i.op == Opcode::SUBI && i.imm == imm)
       return true;
   return false;
 }
@@ -443,29 +446,26 @@ static void testSubi() {
     // Float literal RHS -> stays pooled + SUB, no SUBI.
     CompiledProgram pf = compileSrc("local f = 1.5\nf -= 1.5\n");
     bool noSubi = true;
-    for (const auto &i : pf.functions[0].instructions)
+    for (const auto &i : decodeAll(pf.functions[0]))
       if (i.op == Opcode::SUBI)
         noSubi = false;
     check(noSubi, "subi: float literal not SUBI");
 
-    // .qlc round-trip of a SUBI program (v4 format).
+    // .qlc round-trip of a SUBI program (v5 format).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "subi: writeQlc (v4)");
+    check(writeQlc(os, p, {}), "subi: writeQlc (v5)");
     std::string bytes = os.str();
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("subi: readQlc v4 (") + err + ")");
+    check(readQlc(is, back, slots, err), std::string("subi: readQlc v5 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
         const auto &a = p.functions[0];
         const auto &b = back.functions[0];
-        same = a.instructions.size() == b.instructions.size();
-        for (size_t j = 0; same && j < a.instructions.size(); j++)
-          same = std::memcmp(&a.instructions[j], &b.instructions[j],
-                             sizeof(Instruction)) == 0;
+        same = a.code == b.code && a.instrOffsets == b.instrOffsets;
       }
       check(same, "subi: round-trip instruction equality");
     }
@@ -478,10 +478,10 @@ static void testSubi() {
 // CMP/CMPI + j*: an Int-vs-Int (literal) comparison in `if` fuses to
 // cmp/cmpi + a conditional jump (no comparison-result temp, no pool slot for
 // the boolean); non-Int comparisons stay on the legacy EQ/GT + JMPIFFALSE
-// path. The v4 format round-trips the new opcodes instruction-for-instruction.
+// path. The v5 format round-trips the new opcodes instruction-for-instruction.
 // ---------------------------------------------------------------------------
 static bool hasAnyOp(const Function &fn, std::initializer_list<Opcode> ops) {
-  for (const auto &i : fn.instructions)
+  for (const auto &i : decodeAll(fn))
     for (Opcode o : ops)
       if (i.op == o)
         return true;
@@ -509,24 +509,21 @@ static void testCmpJump() {
                      Opcode::JG, Opcode::JGE, Opcode::JL, Opcode::JLE}),
           "cmp: float comparison not fused");
 
-    // .qlc round-trip of a fused program (v4 format).
+    // .qlc round-trip of a fused program (v5 format).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "cmp: writeQlc (v4)");
+    check(writeQlc(os, p, {}), "cmp: writeQlc (v5)");
     std::string bytes = os.str();
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("cmp: readQlc v4 (") + err + ")");
+    check(readQlc(is, back, slots, err), std::string("cmp: readQlc v5 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
         const auto &a = p.functions[0];
         const auto &b = back.functions[0];
-        same = a.instructions.size() == b.instructions.size();
-        for (size_t j = 0; same && j < a.instructions.size(); j++)
-          same = std::memcmp(&a.instructions[j], &b.instructions[j],
-                             sizeof(Instruction)) == 0;
+        same = a.code == b.code && a.instrOffsets == b.instrOffsets;
       }
       check(same, "cmp: round-trip instruction equality");
     }
@@ -563,18 +560,20 @@ struct Bin {
 };
 
 // A valid file: one empty "main" function, no natives/vars, 1 register.
+// v5 layout: code blob (empty) + offset table (empty) + loc table (empty).
 static std::string minimalFile() {
   Bin f;
   f.b += "QLC1";
-  f.u32(1);
+  f.u32(5); // version
   f.u32(1); // funcCount
   f.str("main");
   f.i32(0); // paramCount
   f.i32(1); // registerCount
   f.u8(0);  // isGenerator
   f.u32(0); // captures
-  f.u32(0); // instructions
-  f.u32(0); // loc
+  f.u32(0); // codeSize (empty code stream)
+  f.u32(0); // offCount (no instructions)
+  f.u32(0); // locCount
   f.u32(0); // constants
   f.u32(0); // natives
   f.u32(0); // vars
@@ -593,27 +592,33 @@ static void rejects(const std::string &name, const std::string &bytes) {
   check(!ok && !err.empty() && prog.registerCount == -42, name);
 }
 
-// Valid file variant with one i16-operand instruction (op MOVC, a=0 b=0 c=0).
+// Valid file variant with one 3-operand instruction (op ADD, a=0 b=0 c=0):
+// a 4-byte code blob + a one-entry offset table + a one-entry loc table.
 static std::string fileWithOneInstr() {
   Bin f;
   f.b += "QLC1";
-  f.u32(1);
-  f.u32(1);
+  f.u32(5); // version
+  f.u32(1); // funcCount
   f.str("main");
-  f.i32(0);
-  f.i32(1);
-  f.u8(0);
-  f.u32(0);
-  f.u32(1); // one instruction
-  f.u16(0); // op
-  f.u16(0); // a
-  f.i32(0); // i32
-  f.u32(0); // loc
+  f.i32(0); // paramCount
+  f.i32(1); // registerCount
+  f.u8(0);  // isGenerator
+  f.u32(0); // captures
+  f.u32(4); // codeSize
+  f.u8(6);  // op = ADD
+  f.u8(0);  // a
+  f.u8(0);  // b
+  f.u8(0);  // c
+  f.u32(1); // offCount
+  f.u32(0); // offset[0]
+  f.u32(1); // locCount
+  f.u16(0); // line
+  f.u16(0); // col
   f.u32(0); // constants
-  f.u32(0);
-  f.u32(0);
-  f.u32(0);
-  f.i32(1);
+  f.u32(0); // natives
+  f.u32(0); // vars
+  f.u32(0); // constVars
+  f.i32(1); // registerCount
   return f.b;
 }
 
@@ -626,7 +631,7 @@ static void testMalformed() {
   rejects("malformed: bad magic", badMagic);
 
   std::string badVersion = minimalFile();
-  badVersion[4] = 5; // v4 is the current format; v5 must be rejected
+  badVersion[4] = 4; // v5 is the current format; v4 must be rejected
   rejects("malformed: unsupported version", badVersion);
 
   rejects("malformed: truncated", minimalFile().substr(0, 10));
@@ -640,28 +645,52 @@ static void testMalformed() {
   rejects("malformed: functions[0] not 'main'", notMain);
 
   std::string badOp = fileWithOneInstr();
-  // The single instruction starts at byte 37 (header + function metadata);
-  // set its op to 0x01FF, which is beyond kOpcodeCount.
-  badOp[37] = 0xFF;
-  badOp[38] = 0x01;
+  // The single instruction's opcode byte is at byte 37 (header + function
+  // metadata + codeSize). Set it to 69: a valid 7-bit identity that is not a
+  // defined opcode (kOpcodeUsedCount == 68). It decodes as a 4-byte 3-operand
+  // form, then fails isValidOpcode.
+  badOp[37] = 69;
   rejects("malformed: invalid opcode", badOp);
 
-  std::string truncInstr = fileWithOneInstr();
-  truncInstr.resize(43); // chop the instruction's i32 field (instr starts at 37)
-  rejects("malformed: truncated instruction", truncInstr);
+  // Truncated instruction: codeSize=3, but the ADD at offset 0 needs 4 bytes.
+  Bin truncInstr;
+  truncInstr.b += "QLC1";
+  truncInstr.u32(5);
+  truncInstr.u32(1);
+  truncInstr.str("main");
+  truncInstr.i32(0);
+  truncInstr.i32(1);
+  truncInstr.u8(0);
+  truncInstr.u32(0);
+  truncInstr.u32(3); // codeSize = 3 (too short for a 4-byte ADD)
+  truncInstr.u8(6);  // op = ADD
+  truncInstr.u8(0);  // a
+  truncInstr.u8(0);  // b
+  truncInstr.u32(1); // offCount
+  truncInstr.u32(0); // offset[0]
+  truncInstr.u32(1); // locCount
+  truncInstr.u16(0);
+  truncInstr.u16(0);
+  truncInstr.u32(0); // constants
+  truncInstr.u32(0); // natives
+  truncInstr.u32(0); // vars
+  truncInstr.u32(0); // constVars
+  truncInstr.i32(1);
+  rejects("malformed: truncated instruction", truncInstr.b);
 
   // Dangling closure: pool holds a Function value with funcIndex 5.
   Bin dangling;
   dangling.b += "QLC1";
-  dangling.u32(1);
+  dangling.u32(5);
   dangling.u32(1);
   dangling.str("main");
   dangling.i32(0);
   dangling.i32(1);
   dangling.u8(0);
-  dangling.u32(0);
-  dangling.u32(0);
-  dangling.u32(0); // loc
+  dangling.u32(0); // captures
+  dangling.u32(0); // codeSize
+  dangling.u32(0); // offCount
+  dangling.u32(0); // locCount
   dangling.u32(1); // one constant
   dangling.u8(11); // Function
   dangling.i32(5); // funcIndex (only 1 function exists)
@@ -677,17 +706,18 @@ static void testMalformed() {
                         const char *nameB) {
     Bin f;
     f.b += "QLC1";
-    f.u32(1);
+    f.u32(5);
     f.u32(1);
     f.str("main");
     f.i32(0);
     f.i32(1);
     f.u8(0);
-    f.u32(0);
-    f.u32(0);
-    f.u32(0);
-    f.u32(0); // loc
-    f.u32(2);
+    f.u32(0); // captures
+    f.u32(0); // codeSize
+    f.u32(0); // offCount
+    f.u32(0); // locCount
+    f.u32(0); // constants
+    f.u32(2); // natives
     f.i32(slotA);
     f.str(nameA);
     f.i32(slotB);
@@ -708,15 +738,16 @@ static void testMalformed() {
   auto valueFile = [&](std::function<void(Bin &)> emit) {
     Bin f;
     f.b += "QLC1";
-    f.u32(1);
+    f.u32(5);
     f.u32(1);
     f.str("main");
     f.i32(0);
     f.i32(1);
     f.u8(0);
-    f.u32(0);
-    f.u32(0);
-    f.u32(0); // loc
+    f.u32(0); // captures
+    f.u32(0); // codeSize
+    f.u32(0); // offCount
+    f.u32(0); // locCount
     f.u32(1); // one constant
     emit(f);
     f.u32(0);

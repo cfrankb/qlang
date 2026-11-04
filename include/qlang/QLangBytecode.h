@@ -195,6 +195,7 @@ enum class Opcode : uint8_t {
 
 inline constexpr uint8_t kOpcodeEscape = 0x80;
 inline constexpr uint8_t kOpcodeMax = 128; // identities 0..127
+inline constexpr uint8_t kOpcodeUsedCount = 68; // defined identities 0..67
 
 struct DecodedInstruction {
   Opcode op = Opcode::MOVC;
@@ -209,6 +210,7 @@ struct DecodedInstruction {
 };
 
 // Class predicates
+bool isValidOpcode(Opcode op);
 bool isJumpOpcode(Opcode op);
 bool isImmediateOpcode(Opcode op);
 bool isRegConstOpcode(Opcode op);

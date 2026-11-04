@@ -1,3 +1,49 @@
+## Round 37 (2026-11-04)
+
+**Instruction format — escape-byte encoding (flat byte stream)** (plan:
+`docs/plans/instruction-format-escape-byte-implementation-plan.md`; design:
+`docs/plans/instruction-format-escape-byte-plan.md`). No language changes, no
+new opcodes (68 of 128 identities used). The `.qlc` format bumps 4 → 5 and
+**drops support for v1–v4** (v5-only reader, per user direction).
+- **Flat byte stream:** the fixed 8-byte `Instruction` struct is deleted.
+  `Function` now stores `std::vector<uint8_t> code` + `std::vector<size_t>
+  instrOffsets` (byte offset of each instruction); `loc` stays parallel to
+  `instrOffsets`. `Bytecode` wraps the byte buffer. `usesI32()` removed.
+- **Escape-byte opcode:** opcode byte bit7 = escape flag, bits0–6 = identity
+  (128 base ops). The base (no-escape) form is uniformly 1-byte operands:
+  register/pool index 1 byte, immediate 1-byte signed Int (−128..127), jump
+  `jmp8` 1-byte relative. The escaped form adds a modifier byte `e` that
+  widens operands: 2-byte reg/pool, 2/4-byte signed immediate, `jmp16`
+  (e=0) / `jmp32` (e=1). Jumps are three-tier relative (`jmp8`/`jmp16`/
+  `jmp32`); the compiler picks the narrowest that fits via iterative
+  backpatch. Single register pool + single constant pool (index 0–255 → 1
+  byte, 256–65535 → 2 bytes; no cap, no spill path).
+- **Compiler:** per-function `FnEmitter` raw-instruction buffer; `finish()`
+  computes sizes, `instrOffsets`, the jump-width fixpoint, and encodes into
+  `fn.code`. `buildFunction`/`compileClass` save/restore the emitter.
+- **VM:** byte-offset PC; `decodeInstruction` per step; `instructionIndexAt`
+  (binary search over `instrOffsets`) resolves line/col on the error path.
+- **Codec v5 (v5-only):** `kQlcVersion = 5`; writer emits the per-function
+  code blob + `instrOffsets`; reader reads the blob + offsets and validates
+  (loc size == offset count, strictly increasing offsets, every instruction
+  decodes, last instruction ends exactly at `code.size()`). **v1–v4 files are
+  rejected** (the legacy fixed-width read path is removed).
+- **Disassembler + dump:** `examples/qlang_run.cpp` `disassemble()` iterates
+  `instrOffsets` and decodes; `examples/hello.cpp` `dumpBytecode` updated.
+- **Tests:** `codec_check` rewritten for v5 (version assertion 5, v4 now
+  rejected, blob/offset round-trip). Step 7 stress tests landed:
+  `tests/unit/encoding_test.cpp` (41 checks: base/escaped round-trips for
+  MOV/MOVI/JMP/ADD, truncated-buffer and reserved-modifier rejection, size
+  helpers) + `tests/scripts/ext_regs.ql` (258 locals, 2-byte register
+  encoding), `tests/scripts/ext_consts.ql` (258 string constants, 2-byte
+  constant encoding), `tests/scripts/jump_widths.ql` (jmp8/jmp16/jmp32 all
+  exercised). Full suite green (41/41 ctest; 795 counted unit cases).
+- **Docs:** `docs/SERIALIZATION.md` rewritten to v5 (v5-only reader);
+  `docs/spec/13-bytecodes.md` gains a "constant pool" (unique values, dedup)
+  + "bytecode serialization" (→ SERIALIZATION.md) section.
+- Open (unchanged): `$$` indirect operator (fully specified, unimplemented),
+  duplicate-declaration warning (deferred pending warning-toggle infra).
+
 ## Round 36 (2026-11-03)
 
 **Instruction format Phase 1 — line/col side-table (12 → 8 B)** (plan:

@@ -112,6 +112,22 @@ void FnEmitter::finish(Function &fn) {
 }
 
 uint8_t FnEmitter::computeModifier(const RawInstr &r) {
+  // CALL: b is a signed 16-bit function ID (negative = native, index =
+  // -1 - b; non-negative = builtin), not a register. Always escaped with the
+  // right field fixed to 2 (signed 16-bit form).
+  if (r.op == Opcode::CALL) {
+    if (r.a < 0 || r.a > 65535)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "register index out of range");
+    if (r.b < INT16_MIN || r.b > INT16_MAX)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "function ID out of range");
+    if (r.c < 0 || r.c > 255)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "argument count out of range");
+    uint8_t leftForm = (r.a > 255) ? 1 : 0;
+    return static_cast<uint8_t>((2 << 4) | leftForm);
+  }
   if (isImmediateOpcode(r.op)) {
     if (r.a < 0 || r.a > 65535)
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
