@@ -19,6 +19,7 @@
 |isset(var)| return true if variable, array index or table field exists. otherwise returns false
 |join(separator, arr)| join the array element using separator
 |assert(bool, str)| if bool is false thrown an exception using text provided by str
+|deepcopy(var)| return an independent recursive copy of the variable|
 
 
 ```python
@@ -30,6 +31,58 @@ a = [1,2,3,4,5]
 b = slice(a, 0, 2)
 # b = [1,2]
 ```
+
+
+### deepcopy
+
+`deepcopy(x)` returns an independent copy of `x`. it is the only way to detach
+a non-primitive: assignment and call arguments share, see
+[01-types.md](01-types.md) `## value semantics`.
+
+|input|result|
+|-|-|
+|nil, bool, numbers|a copy of the value|
+|string|a copy of the bytes (strings are always copied, never shared)|
+|array, set|a new container, every element deep-copied|
+|table|a new table, every value deep-copied|
+|class instance|a new instance of the same class, see [10-classes.md](10-classes.md) `## deepcopy`|
+|closure, generator|the same handle (shared, never copied)|
+|external object, bound method, type reference|the same handle (shared, never copied)|
+
+closures, generators and external references carry live state or view a C++
+object. copying them would duplicate state that cannot be duplicated, so
+`deepcopy` returns the original handle.
+
+```python
+a = [1, 2, 3]
+b = deepcopy(a)
+a[] = 4
+println(str(b))        # expected: [1, 2, 3]      (b is independent)
+println(str(a))        # expected: [1, 2, 3, 4]
+
+s = [1, 2]
+t = s                  # shared: assignment does not copy
+t[] = 9
+println(str(s))        # expected: [1, 2, 9]      (t and s are the same array)
+
+u = deepcopy(s)        # independent copy
+u[] = 7
+println(str(s))        # expected: [1, 2, 9]      (s unaffected)
+
+tbl = {name = "x", tags = ["a"]}
+v = deepcopy(tbl)
+tbl.tags = ["a", "b"]
+println(str(v.tags))   # expected: ["a"]          (nested value copied, not shared)
+```
+
+- the copy is **recursive**: containers nested at any depth are copied.
+- **cycles are preserved**: a value that transitively contains itself is
+  copied once and the copy refers to its own copy, not to the original. the
+  copy terminates.
+- `deepcopy` never mutates its argument.
+- exactly one argument. `deepcopy()` and `deepcopy(a, b)` are compile errors.
+- primitives and strings are already copied, `deepcopy` of them is legal and
+  returns an equal value.
 
 
 ## functions (qlang native)

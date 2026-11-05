@@ -97,6 +97,7 @@ Conventions:
 | JGE | — | — | — | pc target | jump when GT or EQ (`a >= b`) |
 | JL | — | — | — | pc target | jump when LT only (`a < b`) |
 | JLE | — | — | — | pc target | jump when LT or EQ (`a <= b`) |
+| DEEPCOPY | dest reg | src reg | — | | `r[a] = deepcopy(r[b])`; **proposed** — not yet implemented |
 
 ## opcode: MOVI
 
@@ -329,6 +330,24 @@ use a global scratch pad
 ## OpCode nop 
 
 this OpCode takes no action
+
+
+## OpCode deepcopy
+
+**Proposed** — not yet implemented. Plan: `docs/plans/deepcopy-plan.md`.
+
+`deepcopy a, b` — `r[a] = deep copy of r[b]`. two register operands, no i32
+slot (same shape as `mov`). appended last in the opcode enum so existing `.qlc`
+opcode numbers stay valid.
+
+the compiler lowers a `deepcopy(x)` call **directly** to this opcode: the
+argument is compiled into `b` and the result is written straight into the
+destination register. no `call`, no argument staging in `r[a+1..a+c]` — the
+encoding guidelines ask for copying directly to the final register and for
+avoiding temporaries.
+
+the copy semantics (what is copied, what stays shared, how cycles behave) are
+defined in [06-functions.md](06-functions.md) `### deepcopy`.
 
 
 

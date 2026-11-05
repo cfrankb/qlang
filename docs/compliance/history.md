@@ -1,3 +1,49 @@
+## Round 42 (2026-11-05)
+
+**`deepcopy` specified** (docs only — no code change). The feature was adopted
+in `docs/plans/deepcopy-plan.md` (2026-11-01) but the spec only carried the two
+encoding-guideline bullets (`13-bytecodes.md`); it now defines the language
+feature.
+- `01-types.md`: new `## value semantics` — primitives and `string` are copied;
+  `array`/`set`/`table`/`blob`/class instances are **shared** on assignment and
+  on call; a deep copy is always explicit.
+- `06-functions.md`: `deepcopy(var)` row in the built-in table + `### deepcopy`
+  — per-type result table (containers recursed; closures, generators, external
+  objects, bound methods and type refs return the same handle), recursion,
+  cycle preservation, never mutates the argument, fixed arity, examples.
+- `10-classes.md`: new `## deepcopy` — class/method table shared, data fields
+  recursed, function/closure/generator/external fields shared, const rules and
+  finalization unchanged, `__deepcopy__()` override.
+- `13-bytecodes.md`: `DEEPCOPY` operand-map row + `## OpCode deepcopy`
+  (`r[a] = deepcopy(r[b])`, two register operands, appended last, lowered
+  directly — no `call`, no `r[a+1..a+c]` staging), marked **Proposed — not yet
+  implemented**.
+- **New gap** tracked in `status.md` Open Items. The spec also turns current
+  behavior into a documented deviation: `array`/`set`/`blob` are value-backed
+  (`QLangVariant`), so they deep-copy on every move/call instead of sharing.
+  `table`/object/closure/external (pointer-backed) and `string` (copied) already
+  conform.
+- **Examples validated against the engine.** The first draft used syntax the
+  engine rejects (`a[1][0] = 99`, `v.tags[] = "b"`, `println("{s[0]}")`); the
+  block now uses only forms `qlang_run` accepts (`a[] = v` append, `t.field = v`,
+  `str(...)`), and was executed to confirm it parses.
+- **Plan doc** `missing-features-plan.md`: inventory row **A4**, new
+  `### Phase 5 — deepcopy + value semantics` (structural phase renumbered to
+  Phase 6), dependency edges (Phase 1 additive → Phase 2 breaking → Phase 3
+  hook). `deepcopy-plan.md` Phase 1 corrected to current facts: single executor
+  (`runFrames`, one switch — the "four dispatch loops" note is stale),
+  `kOpcodeUsedCount` 70 → 71, `Builtin` enum is `ToStr=0…Release=20` so
+  `Deepcopy` = 21, plus the `baseOperandCount()` two-operand registration.
+- **Found while validating (not fixed here):** array **index assignment**
+  `ab[0] = 55` — spec'd in `03-declarations.md`, marked implemented in
+  `status.md` — is a compile error (`unsupported operator ''`).
+  `QLangCompiler::compileAssignTarget()` does an unconditional
+  read-modify-write for a non-empty subscript, so `op.text == "="` reaches
+  `binOp("")`. `ab[0] += 5` (compound) works. `status.md` line 107 is wrong.
+- No implementation, no opcode, no test changes. Suite re-run unchanged
+  (`ctest`: 42/42); spec hashes re-verified for `01-types`, `06-functions`,
+  `10-classes`, `13-bytecodes`.
+
 ## Round 41 (2026-11-05)
 
 **Enum C++ injection API implemented** (`missing-features-plan.md` C2; spec

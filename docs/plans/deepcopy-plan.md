@@ -132,18 +132,21 @@ Pure addition: no existing behavior changes. `deepcopy` works on top of the
 current storage (it copies payloads directly, pointer- or value-backed).
 
 1. **Opcode** — append `DEEPCOPY` before `kOpcodeCount` in
-   `include/qlang/QLangBytecode.h` (`Opcode` enum; ~68 ops today). Two
+   `include/qlang/QLangBytecode.h` (`Opcode` enum; `kOpcodeUsedCount` is 70
+   today, identities 0–69, last = `EMIT`). Two
    register operands (`a` = dest, `b` = src), register-register like `MOV` —
-   **no** `usesI32()` entry (precedent: `CMP`).
+   **no** `usesI32()` entry (precedent: `CMP`). Add it to the two-operand list
+   in `baseOperandCount()` (`src/QLangBytecode.cpp`).
 2. **VM** — implement `QLangValue deepCopyValue(const QLangValue&,
    std::unordered_map<const void*, QLangValue>&)` in `src/QLangVM.cpp`
    (or a small `QLangDeepCopy.cpp` unit) covering every variant alternative
    per the table above, with the identity map for cycles. `DEEPCOPY` handler:
-   `regs[a] = deepCopyValue(regs[b], seen)`. Land in **all four** dispatch
-   loops (`run`, `runFrames`, and the two in `callFunction` — see
-   `external-modules-plan.md` Background for the four sites).
+   `regs[a] = deepCopyValue(regs[b], seen)`. **One** dispatch site: the tree
+   has a single executor (`QLangVM::runFrames()`, one switch) since Remediation
+   Phase 1 — the "four exec loops" note in `external-modules-plan.md` is stale.
 3. **Builtin** — add `Deepcopy` to the `Builtin` enum
-   (`include/qlang/QLangBytecode.h:25`, currently `ToStr=0…Set=19`); register
+   (`include/qlang/QLangBytecode.h`, currently `ToStr=0…Release=20`, so
+   `Deepcopy` = 21); register
    the name in `QLangCompiler::builtinId()` (`src/QLangCompiler.cpp`, ~3056);
    the disassembler `builtinName()` (`examples/qlang_run.cpp`).
 4. **Compiler lowering** — a `deepcopy(x)` call lowers **directly to

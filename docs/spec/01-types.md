@@ -38,6 +38,33 @@ SPEC.md is a living document.
 **NOTES**: type `dword` is another alias for `unsigned` both are 32bits (4 bytes) unsigned int (uint32_t). the original documentation was in error when `dword` was used  for `8 bytes`.
 
 
+## value semantics
+
+types are either **primitives** (fixed size, fit in a register pair) or
+**non-primitives** (containers, class instances, external references).
+
+|kind|assignment|call argument|how to get an independent copy|
+|-|-|-|-|
+|primitives (char, byte, word, short, int, unsigned, dword, long, qword, float, bool)|copied|copied|implicit|
+|string|copied|copied|implicit|
+|array, set, table, blob, class instance|**shared**|**shared**|explicit: `deepcopy()`|
+
+- non-primitives are passed by pointer. assigning or passing one never copies
+  its contents, both names refer to the same value. mutating through one name
+  is visible through the other.
+- `string` is the exception: it is immutable, so it is copied and never shared.
+  copying an immutable value has no observable effect.
+- a deep copy is always **explicit**. there is no implicit deep copy anywhere,
+  not on assignment, not on call, not on return.
+- `deepcopy(x)` returns an independent recursive copy, see
+  [06-functions.md](06-functions.md) `### deepcopy`.
+- **implementation status**: `table`, class instances, closures and external
+  references already share. `array`, `set` and `blob` are still **copied** on
+  assignment and on call, and `deepcopy` is not yet implemented — tracked in
+  `docs/compliance/status.md` (Open Items), plan
+  `docs/plans/deepcopy-plan.md` (Phase 1 builtin, Phase 2 share-by-default).
+
+
 ## strings
 
 string are zero terminated arrays of bytes.

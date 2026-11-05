@@ -146,6 +146,24 @@ v1 classes have no static members (see `## v1 restrictions`).
   engine owns, and the script holds a weak reference to handed-in objects
   (`docs/EXTERNAL_TYPES.md` §3).
 
+## deepcopy
+
+`deepcopy(obj)` returns an independent instance of the same class
+([06-functions.md](06-functions.md) `### deepcopy`).
+
+- the class itself (field layout, method table) is **shared**, never copied —
+  the copy is the same class and `type()` of both is the class name.
+- data fields (numbers, strings, arrays, sets, tables, nested instances) are
+  deep-copied.
+- fields holding a function, closure, generator, or external reference are
+  **shared**: the copy keeps the same handle.
+- `const` fields are copied with their values; the copy enforces the same
+  const rules.
+- the original is untouched and its reference count is unchanged; the copy is a
+  new instance with its own count and its own `__destroy__` finalization.
+- a class may override the default by defining `__deepcopy__()`. it runs on
+  the original, returns the new instance, and may throw to refuse the copy.
+
 ## type identity
 
 - `type(x)` returns the class name string for an instance

@@ -15,6 +15,7 @@ subi plans in `docs/plans/archive/`).
 | A1 | `nop` opcode | `13-bytecodes.md` `## OpCode nop` | trivial |
 | A2 | `?` ternary operator | `05-operators.md` `## operator ?` | small |
 | A3 | `$$` indirect access operator | `05-operators.md` `## operator $$` | large |
+| A4 | `deepcopy` builtin + share-by-default value semantics | `01-types.md` `## value semantics`, `06-functions.md` `### deepcopy`, `10-classes.md` `## deepcopy`, `13-bytecodes.md` `## OpCode deepcopy` | medium (additive) + large (breaking storage change); detailed plan: `deepcopy-plan.md` |
 
 ### B. Foundations (block other work)
 
@@ -170,7 +171,30 @@ subi plans in `docs/plans/archive/`).
     enum-typed property binding that carries the enum table) before
     implementation. Effort: small–medium once designed.
 
-### Phase 5 — Structural (only if a spec decision changes)
+### Phase 5 — `deepcopy` + value semantics (A4)
+
+12. **A4 `deepcopy`** — **specified 2026-11-05** (`01-types.md`
+    `## value semantics`, `06-functions.md` `### deepcopy`, `10-classes.md`
+    `## deepcopy`, `13-bytecodes.md` `## OpCode deepcopy`).
+    **Full plan: `docs/plans/deepcopy-plan.md`** (adopted 2026-11-01; Option A —
+    a `deepcopy(x)` builtin mirroring Python `copy.deepcopy`).
+    - **Phase 1 (additive, low risk)** — `deepcopy` builtin + `DEEPCOPY`
+      opcode (append last, `kOpcodeUsedCount` 70 → 71, `.qlc` stays v5; two
+      register operands, no i32 slot — same shape as `mov`); recursive
+      `deepCopyValue` with an identity map so cycles terminate and are
+      preserved; closures/generators/external/bound/typeref share the handle;
+      the compiler lowers `deepcopy(x)` directly to the opcode. Single executor
+      (`runFrames`) — the plan's "all four dispatch loops" note is stale.
+    - **Phase 2 (breaking)** — pointer-back `array`/`set`/`blob` so assignment
+      and call arguments **share** (spec `01-types.md` `## value semantics`).
+      Today they are value-backed, so every `MOV` and call argument deep-copies
+      them — a deviation from the spec the moment the spec text landed.
+    - **Phase 3** — `__deepcopy__` hook (`10-classes.md` `## deepcopy`).
+    - **Phase 4** — migration note (scripts that need an independent copy must
+      now call `deepcopy`).
+    Effort: Phase 1 ~2–3 days; Phase 2 large (storage change, code-wide).
+
+### Phase 6 — Structural (only if a spec decision changes)
 
 - Table key insertion order (would require reworking `TableValue`
   code-wide) — **not planned**: spec says implementation-defined.
@@ -338,7 +362,10 @@ API definition ──> C2 (enum injection)
 spec writing ──> C5 (inheritance)
 draft finalization ──> C6 (signals)
 design decision ──> C7 (enum-name string form)
+A4 Phase 1 (deepcopy builtin, additive) ──> A4 Phase 2 (share-by-default storage, breaking)
+A4 Phase 1 ──> A4 Phase 3 (__deepcopy__ hook)
 A1, A2, A3, C3: independent of each other
+A4 Phase 1: independent (pure addition); A4 Phase 2 is breaking → standalone round
 ```
 
 ## Conventions (per AGENTS.md)
