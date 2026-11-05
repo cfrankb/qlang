@@ -11,7 +11,7 @@ Commits: `ce31e3c` (value types + boundaries), `a93e58e` (declarative meta +
 emscripten/WASM.** Four of the five were verified by actually compiling (and,
 for the two native ones, running) a smoke test that exercises every macro.
 MSVC is not installed in the build environment, so it is addressed by removing
-exactly the two non-standard constructs it is known to reject; a `cl /std:c++20`
+exactly the constructs it is known to reject; a `cl /std:c++20`
 compile on a Windows box would close the last cell.
 
 ## Compatibility matrix
@@ -22,15 +22,15 @@ compile on a Windows box would close the last cell.
 | **Clang** | 22.1.8 | ✅ verified | compiles **and runs** the smoke test ("all checks passed") |
 | **MinGW** (`x86_64-w64-mingw32-g++`) | 16.2.0 (GCC) | ✅ verified | compiles to object |
 | **emscripten / WASM** (`em++`) | 6.0.9 | ✅ verified | compiles to object |
-| **MSVC** | via CI: VS 2022 on `windows-latest` (19.51.36260) | ⚠️ reasoned → pending first green CI run | both incompatibilities removed; CI gate added (`.github/workflows/ci-msvc.yml`) |
+| **MSVC** | via CI: VS 2022 on `windows-latest` (19.51.36260) | ⚠️ compiled clean, **link** blocked on a third construct (fixed, pending the next CI run) | first CI run: every target **compiled**; only `signal_test` failed to link (`LNK2019` on the declared-only signal function) — construct 3 below removed |
 
 Everything in the header is **standard C++20** (CRTP, qualified
 pointers-to-member, `std::variant`, templates, lambdas, `std::function`,
-`std::pair` brace-init) except for **two** constructs, both of which MSVC's
-conforming preprocessor / front-end lacks. Both are now gone from the
-functional code path.
+`std::pair` brace-init) except for **three** constructs, each of which a
+conforming front-end (in practice: MSVC) rejects or mis-handles. All three are
+now gone from the functional code path.
 
-## The two non-standard constructs (and the fix for each)
+## The three non-standard constructs (and the fix for each)
 
 ### 1. `__PRETTY_FUNCTION__` → `QL_PRETTY_FUNCTION`
 
@@ -99,6 +99,55 @@ expanded by a normal (non-pasting) argument pass before it is pasted.
 A dead, GCC-format-specific helper (`meta_detail::enumName()`, never called)
 was removed as part of this work.
 
+### 3. odr-use of the declared-only signal function → `decltype` (MSVC `LNK2019`)
+
+Found by the **first MSVC CI run**, not by reasoning: every target compiled, and
+only `signal_test` failed to link.
+
+`QL_SIGNAL` originally formed a member pointer like every other entry macro:
+
+```cpp
+#define QL_SIGNAL(name) qlang::meta_detail::signal(#name, &SelfType::name)
+```
+
+A signal's member function is **declared, never defined**
+([spec/17-signals.md](spec/17-signals.md)) — only its signature is needed, to
+type-check `emit` arguments. But forming `&SelfType::levelChanged` **odr-uses**
+the function, which requires a definition to exist. GCC and Clang discard the
+unused address before the link step; MSVC keeps the reference:
+
+```
+signal_test.obj : error LNK2019: unresolved external symbol
+  "public: void __cdecl Sensor::levelChanged(int)" (?levelChanged@Sensor@@QEAAXH@Z)
+  referenced in function "... QLangContext::import<Sensor>(void)"
+```
+
+**Fix:** name the *type* instead of the value — `decltype(&SelfType::name)` is an
+unevaluated context and therefore does not odr-use the function:
+
+```cpp
+#define QL_SIGNAL(name) \
+  qlang::meta_detail::signal<decltype(&SelfType::name)>(#name)
+```
+
+`meta_detail::SignalArgs<Sig>` strips the member-pointer type back to its
+parameter pack (non-const and `const` specializations; the primary template
+carries a `static_assert`, so a data member or a non-member name fails to
+compile with a readable message instead of a template wall), and `signal_args`
+builds the same one-`arg_check<A>`-per-parameter list as before. Behaviour is
+unchanged on every compiler; only the mechanism of obtaining the signature
+changed.
+
+Reproducing it **without a Windows box** — the reference is visible in the object
+file when the optimiser does not discard it:
+
+```sh
+g++ -std=c++20 -Iinclude -O0 -c tests/unit/signal_test.cpp -o /tmp/st.o
+nm -C /tmp/st.o | grep levelChanged
+# old header:  U Sensor::levelChanged(int)   U DupSig::levelChanged(int)
+# new header:  (no output) — same check with clang++ and the mingw cross
+```
+
 ## Key design finding: the plan's member-pointer mechanism was not implementable
 
 This is the most important non-obvious finding from building the header, and it
@@ -141,6 +190,11 @@ Related: the plan assumed `__CLASS__` was the portable way to get the type name;
 in fact `__CLASS__` is an **MSVC-only** extension. The function-string approach
 above is the portable one.
 
+`QL_SIGNAL` is the one binding line that does **not** form a member pointer: it
+needs only the signature, and `decltype(&SelfType::name)` yields the
+member-function *type* without the odr-use that `&SelfType::name` would impose
+(construct 3 above).
+
 ## How to re-verify
 
 ```sh
@@ -161,6 +215,11 @@ read-only property, a method, a 3-value `QL_ENUM`, a `QL_STR`, and a `QL_CTOR`,
 then `import<Point>()`s it and asserts: the type name round-trips, property
 get/set closures work, the method invokes, enum values are correct, and a
 duplicate type name is rejected by `registerType`.
+
+`QL_SIGNAL` is **not** in the smoke test — it is exercised by
+`tests/unit/signal_test.cpp`, which every CI job builds and links (the MSVC job
+is what caught construct 3, a *link*-level defect a compile-only smoke test
+cannot see).
 
 ## CI matrix (GitHub Actions)
 
@@ -197,11 +256,13 @@ MSVC job details (the cell this document tracks):
 
 ## Open item
 
-- **MSVC compile-test — CI gate added.** The two known MSVC
-  incompatibilities are removed and the rest is standard C++20, but MSVC
-  is not present in the local environment. `.github/workflows/ci-msvc.yml`
-  builds every `CMakeLists.txt` target with the latest hosted MSVC and
-  runs the full `ctest` suite on every push to `main` (dormant until the
-  branch rename). On the **first green run**, flip the MSVC matrix row to
-  ✅ verified and record the exact compiler version from the *Show
+- **MSVC — first CI run done; awaiting the next one.** The gate
+  (`.github/workflows/ci-msvc.yml`) has now run: **every target compiled**
+  with the hosted VS 2022 toolset, and the only failure was a **link** error
+  in `signal_test` — construct 3 above, invisible to a compile-only check and
+  to GCC/Clang, which discard the unused member pointer. It is removed; the
+  local `nm` check above reproduces it on Linux. The rest is standard C++20,
+  but MSVC is not present in the local environment, so the cell stays
+  reasoned until CI is green: on the **first green run**, flip the MSVC matrix
+  row to ✅ verified and record the exact compiler version from the *Show
   compiler version* step log.

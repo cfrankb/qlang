@@ -28,8 +28,11 @@ struct Sensor : qlang::QLObject<Sensor> {
 
 - a signal is a name + typed argument list; it has no body and is **not a
   method** — `sensor.levelChanged(1)` is a type error.
-- `QL_SIGNAL` takes the member function pointer `&SelfType::levelChanged`;
-  parameter types are deduced exactly as for `QL_INVOKABLE`.
+- `QL_SIGNAL` names the member function's **type** (`decltype(&SelfType::levelChanged)`)
+  and never forms a pointer to it: the function has no definition, so taking
+  its address would require one (MSVC reports the missing definition as an
+  unresolved external). Parameter types are deduced exactly as for
+  `QL_INVOKABLE`.
 - no `Q_SIGNALS` section marker: every `QL_` line is self-describing
   (deviation from Qt; consistent with the no-MOC meta model).
 - a signal name clashing with a property/method name of the same type, or a

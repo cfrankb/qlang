@@ -1,3 +1,51 @@
+## Round 47 (2026-11-05)
+
+**`QL_SIGNAL` obtains its signature without odr-using the signal function.**
+MSVC CI link failure (`signal_test`: `LNK2019`). **Header-only
+(`include/qlang/QLangMeta.h`) + docs — no language, opcode, `.qlc`, or test
+change.**
+
+- **Symptom (first MSVC CI run).** Every target **compiled**; only
+  `signal_test` failed to *link*: `unresolved external symbol
+  "public: void __cdecl Sensor::levelChanged(int)"` (and the same for `DupSig`),
+  each "referenced in function … `QLangContext::import<Sensor>(void)`".
+- **Cause.** `QL_SIGNAL(name)` expanded to
+  `meta_detail::signal(#name, &SelfType::name)`. Forming the member pointer
+  **odr-uses** the function, and a signal's member function is by design
+  *declared, never defined* (`docs/spec/17-signals.md`) — only its signature is
+  used, to type-check `emit` arguments. GCC and Clang discard the unused address
+  before the link step, so the missing definition is invisible on Linux; MSVC
+  keeps the reference. `Clash::level` (declared *and* defined, for the
+  property/method-clash test) linked, which is why exactly two symbols were
+  reported.
+- **Fix.** Name the **type**, not the value:
+  `QL_SIGNAL(name)` → `meta_detail::signal<decltype(&SelfType::name)>(#name)`.
+  `decltype`'s operand is unevaluated, so there is no odr-use.
+  `meta_detail::SignalArgs<Sig>` strips the member-pointer type back to its
+  parameter pack (non-const + `const` specializations; the primary template
+  carries a `static_assert`, so a data member or a non-member name now fails
+  with "QL_SIGNAL requires the name of a member function" instead of a template
+  wall); `signal_args` builds the identical one-`arg_check<A>`-per-parameter
+  list through `index_sequence` / `tuple_element_t`. The two
+  `signal(const char*, R (T::*)(A...))` overloads are gone, so the hazardous
+  form cannot be reached again. `<tuple>` added to the includes.
+- **Reproduced without Windows.** The reference survives in the object file when
+  the optimiser does not discard it: `g++ -std=c++20 -Iinclude -O0 -c
+  tests/unit/signal_test.cpp` then `nm -C … | grep levelChanged` → `U
+  Sensor::levelChanged(int)` + `U DupSig::levelChanged(int)` with the old header,
+  **no output** with the new one (same check with `clang++` and
+  `x86_64-w64-mingw32-g++`). A compile-only smoke test cannot see this class of
+  defect — the MSVC job *links*, which is what caught it.
+- **Docs.** `docs/spec/17-signals.md`: the "`QL_SIGNAL` takes the member function
+  pointer `&SelfType::levelChanged`" bullet corrected to the type-only form (the
+  spec described the mechanism, not just the behaviour).
+  `docs/COMPILER_PORTABILITY.md`: construct **3** added (odr-use → `LNK2019`),
+  matrix row + Open item updated to "compiled clean, link blocked, fixed", plus a
+  note that `QL_SIGNAL` is covered by `signal_test`, not the macro smoke test.
+- **Verification.** `cmake --build build` clean; `ctest` **45/45** green
+  (`signal` 18 checks; tally unchanged at 966 counted unit cases). Hashes
+  re-recorded after the suites were green.
+
 ## Round 46 (2026-11-05)
 
 **Documentation hash gate; tracking hygiene.**
