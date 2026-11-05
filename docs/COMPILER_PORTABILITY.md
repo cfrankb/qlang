@@ -224,10 +224,10 @@ cannot see).
 ## CI matrix (GitHub Actions)
 
 Since MSVC (and the wider toolchain matrix) cannot be covered in the local
-build environment, the matrix cells are gated by three workflows, all
-triggered **only on push to `main`** (placeholder — the repo branch is
-renamed from `master` before CI goes live; no PR, tag, or other-branch
-triggers by design):
+build environment, the matrix cells are gated by three workflows, triggered
+**only on push** (placeholder — the repo branch is renamed from `master` before
+CI goes live; no PR, tag, or other-branch triggers by design): `ci.yml` and
+`ci-wasm.yml` on `main`, `ci-msvc.yml` still on `master` (Round 48):
 
 - `.github/workflows/ci.yml` — native matrix, all on `ubuntu-latest`:
   **gxx** (system g++), **clang** (clang++), **mingw** (mingw-w64 cross,
@@ -248,21 +248,31 @@ MSVC job details (the cell this document tracks):
 - **Build:** `cmake --build build --config Release --parallel` — *all*
   targets in the root `CMakeLists.txt`, so a new target is covered
   automatically.
-- **Test:** `ctest --test-dir build -C Release --output-on-failure`
-  (28 entries: 13 unit + 15 script).
+- **Test:** `ctest --test-dir build -C Release -E perf --output-on-failure`
+  (43 of the 45 entries — `-E perf` is a regex, so it drops `perf` **and**
+  `script_perf_stress`; the perf gate is calibrated for g++/Linux and runs only
+  in the gxx job).
+- **Checkout line endings:** the runner image sets `core.autocrlf=true` in git's
+  system config, so `actions/checkout` would rewrite every text file to CRLF.
+  `.gitattributes` (`* text=auto eol=lf`, binaries declared `binary`) keeps the
+  checkout byte-identical to the committed blobs — without it the `doc_hashes`
+  entry fails with all 24 module hashes "stale" (Round 48).
 - **Version capture:** the *Show compiler version* step prints `cl /?`
   and records the exact "C/C++ Optimizing Compiler Version" in the step
   output. That number is the one to fill into the matrix row above.
 
 ## Open item
 
-- **MSVC — first CI run done; awaiting the next one.** The gate
-  (`.github/workflows/ci-msvc.yml`) has now run: **every target compiled**
-  with the hosted VS 2022 toolset, and the only failure was a **link** error
-  in `signal_test` — construct 3 above, invisible to a compile-only check and
-  to GCC/Clang, which discard the unused member pointer. It is removed; the
-  local `nm` check above reproduces it on Linux. The rest is standard C++20,
-  but MSVC is not present in the local environment, so the cell stays
-  reasoned until CI is green: on the **first green run**, flip the MSVC matrix
-  row to ✅ verified and record the exact compiler version from the *Show
-  compiler version* step log.
+- **MSVC — two CI runs done; awaiting the third.** Run 1
+  (`.github/workflows/ci-msvc.yml`): **every target compiled** with the hosted
+  VS 2022 toolset and the only failure was a **link** error in `signal_test` —
+  construct 3 above, invisible to a compile-only check and to GCC/Clang, which
+  discard the unused member pointer. It is removed; the local `nm` check above
+  reproduces it on Linux. Run 2: everything compiled **and** linked and the
+  suite ran — 42/43 passed, the single failure being `doc_hashes`, i.e. **not a
+  compiler defect** but the CRLF checkout described above (fixed by
+  `.gitattributes` + the LF-normalized hash). The rest is standard C++20, but
+  MSVC is not present in the local environment, so the cell stays reasoned
+  until CI is green: on the **first green run**, flip the MSVC matrix row to ✅
+  verified and record the exact compiler version from the *Show compiler
+  version* step log.

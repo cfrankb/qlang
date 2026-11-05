@@ -1,3 +1,88 @@
+## Round 49 (2026-11-05)
+
+**`doc_hashes` made optional (drift reported, not failed) + manual re-record
+script.** `cmake/check_doc_hashes.cmake`, `CMakeLists.txt`,
+`update-doc-hashes.sh` (new). **Tooling only — no source, test-source, or
+spec-module change.**
+
+- **Why.** Round 48 removed the *false* failure, but the gate still stopped a CI
+  job for what is a documentation-hygiene defect: a stale SHA256 row says
+  nothing about the build. The check keeps running everywhere and keeps printing
+  the full report; it just no longer decides the job.
+- **Warn-only by default.** The entry now runs the gate with
+  `-DDOCS_HASH_WARN_ONLY=ON` and declares
+  `set_tests_properties(doc_hashes PROPERTIES SKIP_REGULAR_EXPRESSION
+  "QLANG_DOC_HASH_DRIFT")`, so ctest prints **Skipped** (and the summary counts
+  it as skipped) instead of Failed. `-DQLANG_DOC_HASHES_STRICT=ON` — the
+  repository's first `option()` — registers the entry without the flag,
+  restoring the hard failure.
+- **Why a marker instead of an exit code.** CMake script mode cannot exit with a
+  chosen status: `message(FATAL_ERROR)` always exits 1 and there is no `quit()`
+  command (verified with CMake 4.4). The report therefore carries the literal
+  `QLANG_DOC_HASH_DRIFT` token and ctest maps *that* to Skipped — so a genuine
+  gate error (missing `docs/`, bad `QLANG_SOURCE_DIR`) keeps failing, unlike
+  `SKIP_RETURN_CODE 1`, which would have swallowed it. Precedent for skipping
+  rather than failing: `perf` and its `SKIP_RETURN_CODE 77`.
+- **`update-doc-hashes.sh` (repository root).** The manual step, so the re-record
+  is one command instead of a remembered `cmake -D… -P …` invocation: no argument
+  re-records only the stale rows and prints the resulting README diff; `--check`
+  verifies and exits 1 on drift without writing. Style follows `build.sh`
+  (`set -euo pipefail`, `cd "$(dirname "$0")"`, `case` dispatch, exit 2 on bad
+  usage). It needs the executable bit (`chmod +x update-doc-hashes.sh`, or run
+  it as `bash update-doc-hashes.sh`) — the sandbox denies `chmod`.
+- **Verification.** Drift probe (append a line to `docs/compliance/coverage.md`):
+  default `ctest -R doc_hashes` → *"did not run: 45 - doc_hashes (Skipped)"*,
+  job green; `-DQLANG_DOC_HASHES_STRICT=ON` in a separate build dir → **Failed**;
+  `./update-doc-hashes.sh` → exactly one row rewritten; `--check` → exit 1 with
+  the report, exit 0 once current. Clean tree: `cmake --build build` clean and
+  `ctest --test-dir build` **45/45** (the entry *passes* when the rows are
+  current — Skipped only appears with drift). Probe files restored, hashes
+  re-recorded after the suites were green.
+
+## Round 48 (2026-11-05)
+
+**`doc_hashes` failed only on the MSVC job: a CRLF checkout invalidates every
+recorded hash.** `.gitattributes` (new) + `cmake/check_doc_hashes.cmake`.
+**Tooling only — no source, test-source, or spec-module change.**
+
+- **Symptom (second MSVC CI run).** Build clean, `ctest -E perf` → **42/43
+  passed**, the single failure `doc_hashes`; the same commit passes on Linux
+  (`git worktree add … HEAD` → `24 modules verified`). The 43 vs 45 entry count
+  is not a missing Windows test: `-E perf` is a *regex*, so it drops `perf` and
+  `script_perf_stress` (45 − 2 = 43, reproduced locally).
+- **Cause.** The gate hashed the bytes on disk (`file(SHA256)`). GitHub's
+  `windows-latest` image sets `core.autocrlf=true` in git's system config, so
+  `actions/checkout@v4` materialises every `.md` with CRLF while the committed
+  blobs are LF — all 24 recorded SHA256 drift at once, and no other test reads
+  document bytes, which is why it was the only failure. Reproduced without
+  Windows: `git -c core.autocrlf=true clone` of this repo → `file
+  docs/spec/01-types.md` says "with CRLF line terminators" and the gate reports
+  `24 stale SHA256`.
+- **Fix 1 — `.gitattributes`.** `* text=auto eol=lf`, plus explicit `binary`
+  entries for images and compiled artifacts (`*.png`, `*.qlc`, `*.qla`,
+  object/library/executable types) because `eol=` implies "text" and would
+  corrupt binaries on commit. Checkouts are byte-identical on every platform, so
+  a recorded hash still equals `sha256sum` of the file on disk. No tracked file
+  contains CR, so no renormalization commit is required. Verified: cloning the
+  pinned tree with `core.autocrlf=true` yields LF `.md` files and a
+  byte-identical `docs/images/*.png`.
+- **Fix 2 — hash the committed content, not the working tree.** The gate now
+  reads the module, `string(REPLACE "\r\n" "\n")`, and hashes with
+  `string(SHA256)`, so a clone that predates `.gitattributes` (or overrides it
+  locally) still gets a true answer instead of a false drift report. Recorded
+  hashes are unchanged — they were always LF hashes.
+- **Docs drift found while verifying.** `docs/compliance/tests.md` claimed "All
+  workflows trigger on push to `main` only", but `.github/workflows/ci-msvc.yml`
+  triggers on `master` (the branch rename is still pending, per the workflow
+  comments). The CI matrix row now records the difference; the workflow files
+  are unchanged.
+- **Verification.** `cmake -B build && cmake --build build` clean; `ctest
+  --test-dir build` **45/45** green (tally unchanged: 966 counted unit cases +
+  20 script regressions + `perf` + `doc_hashes`). The gate was exercised three
+  ways: LF tree → 24 verified; CRLF copy of `docs/` → 24 verified (the
+  normalisation); CRLF copy with the normalisation removed → 24 stale, i.e. the
+  original CI failure. Hashes re-recorded only after the suites were green.
+
 ## Round 47 (2026-11-05)
 
 **`QL_SIGNAL` obtains its signature without odr-using the signal function.**

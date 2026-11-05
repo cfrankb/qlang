@@ -82,10 +82,19 @@ Perf (1): `perf` — `perf_bench` compared against `baseline.json` (below).
 Docs (1): `doc_hashes` — `cmake -P cmake/check_doc_hashes.cmake` (script mode,
 no binary): every SHA256 recorded in `docs/spec/README.md` and
 `docs/compliance/README.md` must match its module, every module must have a
-row, and no row may name a deleted file (24 modules). Re-record after a
-verified doc edit with
-`cmake -DQLANG_SOURCE_DIR=<src> -DDOCS_HASH_UPDATE=ON -P cmake/check_doc_hashes.cmake`
-(Round 46).
+row, and no row may name a deleted file (24 modules). The hash is taken over
+**LF-normalized** content, so a working tree with CRLF line endings (Windows +
+`core.autocrlf=true`) is not reported as drift; `.gitattributes` pins `eol=lf`
+so a normal checkout matches the recorded hash byte for byte (Round 48).
+Re-record after a verified doc edit with `./update-doc-hashes.sh` (`--check`
+verifies without writing anything) (Round 49).
+**Optional by default:** the entry runs the gate with
+`-DDOCS_HASH_WARN_ONLY=ON` and declares `SKIP_REGULAR_EXPRESSION
+QLANG_DOC_HASH_DRIFT`, so drift is printed in full and ctest reports **Skipped**
+rather than Failed — a stale doc row cannot break a CI job, while a broken gate
+(missing `docs/`, bad source dir) carries no marker and still fails.
+`-DQLANG_DOC_HASHES_STRICT=ON` restores the hard failure, as does running the
+gate or `./update-doc-hashes.sh --check` directly (Round 49).
 
 ### Performance baseline
 
@@ -124,7 +133,16 @@ verified doc edit with
 | `.github/workflows/ci-msvc.yml` | MSVC x64 (VS 2022) | windows-latest | full build + ctest (`-E perf`); "Show compiler version" step feeds `docs/COMPILER_PORTABILITY.md` |
 | `.github/workflows/ci-wasm.yml` | emscripten (emcc/em++) | ubuntu-latest | build `qlang` + `qlang_example` (`-sALLOW_MEMORY_GROWTH -fexceptions`); smoke via `node build/qlang_example.js`; full ctest not applicable (no filesystem in wasm) |
 
-All workflows trigger on push to `main` only.
+Triggers: `ci.yml` and `ci-wasm.yml` on push to `main`; `ci-msvc.yml` on push to
+`master` (the branch rename is still pending — Round 48).
+
+`-E perf` is a **regex**, so the clang and MSVC jobs run 43 of the 45 entries: it
+drops `perf` **and** `script_perf_stress`.
+
+The `windows-latest` image sets `core.autocrlf=true` in git's system config, so
+`actions/checkout` would rewrite every text file to CRLF; `.gitattributes`
+(`* text=auto eol=lf`) keeps the checkout byte-identical to the committed blobs,
+which is what `doc_hashes` compares against (Round 48).
 
 ### Open items / limitations
 

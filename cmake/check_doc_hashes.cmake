@@ -13,8 +13,16 @@
 #   cmake -DQLANG_SOURCE_DIR=<src> -P cmake/check_doc_hashes.cmake
 #   cmake -DQLANG_SOURCE_DIR=<src> -DDOCS_HASH_UPDATE=ON \
 #         -P cmake/check_doc_hashes.cmake
+#   cmake -DQLANG_SOURCE_DIR=<src> -DDOCS_HASH_WARN_ONLY=ON \
+#         -P cmake/check_doc_hashes.cmake
 #
 # QLANG_SOURCE_DIR defaults to the parent of this script's directory.
+# ./update-doc-hashes.sh (repository root) wraps the first two.
+#
+# DOCS_HASH_WARN_ONLY=ON keeps the drift report but labels it
+# QLANG_DOC_HASH_DRIFT, which the `doc_hashes` ctest entry maps to "Skipped"
+# (SKIP_REGULAR_EXPRESSION) so documentation drift cannot fail a CI job;
+# configure with -DQLANG_DOC_HASHES_STRICT=ON to make it fail again.
 #
 # DOCS_HASH_UPDATE=ON rewrites the recorded hashes in place and never fails on
 # drift (that is its job). Per AGENTS.md, never run it before the suites are
@@ -23,6 +31,14 @@
 # Registered as the `doc_hashes` ctest entry (see CMakeLists.txt). Uses
 # file(GLOB) deliberately — an untracked new module must fail the gate, which
 # is the opposite of the explicit-list rule used for test sources.
+#
+# Line endings: the hash is taken over LF-normalized content, because it
+# identifies the committed bytes, not the working-tree materialization. A
+# Windows checkout with core.autocrlf=true (the default on GitHub's
+# windows-latest image) rewrites every .md to CRLF, which would otherwise
+# report all modules as stale. .gitattributes pins eol=lf so a normal checkout
+# matches the recorded hash byte for byte; the normalization here keeps the gate
+# honest for clones that predate it or override it locally.
 #
 # CMake regex notes: `.` matches a newline and `{n}` repetition is unreliable,
 # so rows are matched one line at a time (file(STRINGS)) with `[0-9a-f]+` plus
@@ -102,7 +118,10 @@ macro(_qlh_check_index _qlh_index _qlh_dir)
     endif()
 
     list(FIND _qlh_names "${_qlh_name}" _qlh_pos)
-    file(SHA256 "${_qlh_mod}" _qlh_actual)
+    # LF-normalized hash of the module (see the note at the top of this file).
+    file(READ "${_qlh_mod}" _qlh_bytes)
+    string(REPLACE "\r\n" "\n" _qlh_bytes "${_qlh_bytes}")
+    string(SHA256 _qlh_actual "${_qlh_bytes}")
 
     if(_qlh_pos EQUAL -1)
       list(APPEND _qlh_missing
@@ -181,9 +200,23 @@ endif()
 
 if(_qlh_problems)
   list(JOIN _qlh_problems "\n  " _qlh_report)
+  if(DOCS_HASH_WARN_ONLY)
+    # Non-fatal mode, used by the `doc_hashes` ctest entry: the report carries
+    # the QLANG_DOC_HASH_DRIFT marker and CMakeLists.txt registers that marker
+    # as the test's SKIP_REGULAR_EXPRESSION, so ctest prints "Skipped" instead
+    # of "Failed". Script mode cannot exit with a chosen code (FATAL_ERROR
+    # always exits 1), which is why the marker is in the text, not the status.
+    # A real error (missing docs/, bad QLANG_SOURCE_DIR) carries no marker and
+    # still fails. Configure with -DQLANG_DOC_HASHES_STRICT=ON to make drift
+    # fail the test again.
+    set(_qlh_head
+        "QLANG_DOC_HASH_DRIFT: doc hash check found drift (warn-only run: reported, not fatal)")
+  else()
+    set(_qlh_head "doc hash check failed")
+  endif()
   message(FATAL_ERROR
-          "doc hash check failed:\n  ${_qlh_report}\n"
+          "${_qlh_head}:\n  ${_qlh_report}\n"
           "After the suites are green, re-record with:\n"
-          "  cmake -DQLANG_SOURCE_DIR=${QLANG_SOURCE_DIR} -DDOCS_HASH_UPDATE=ON "
-          "-P cmake/check_doc_hashes.cmake")
+          "  ./update-doc-hashes.sh   (or: cmake -DQLANG_SOURCE_DIR=${QLANG_SOURCE_DIR} "
+          "-DDOCS_HASH_UPDATE=ON -P cmake/check_doc_hashes.cmake)")
 endif()
