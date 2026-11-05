@@ -1,3 +1,47 @@
+## Round 44 (2026-11-05)
+
+**deepcopy Phase 3 — `__deepcopy__` override.**
+Plan `docs/plans/deepcopy-plan.md` Phase 3; spec `10-classes.md` `## deepcopy`
+("a class may override the default by defining `__deepcopy__()`").
+
+- **Hook dispatch.** `deepCopyValue` moved from the anonymous namespace to
+  `QLangVM::deepCopyValue` — the override is a QLang method, so dispatching it
+  needs the VM call path (open decision #3: instance-table resolution, not an
+  `ObjectOps` entry). In the `Table` case, **after** the cycle check: resolve
+  `__deepcopy__`, require `Type::Function`, invoke it on the **original**
+  (`callClosure(hook, {v})` — the same self-as-sole-arg shape as `__str__` in
+  `displayString` and `__destroy__` in `runFinalizer`); its return value IS
+  the copy; a throwing hook propagates (refuse the copy). The result is
+  registered in `seen`, so two references to one hooked original share ONE
+  copy and the hook runs once. Nested instances inside a default copy
+  dispatch their own hooks.
+- **Guards.** A hook must return a distinct instance or throw: returning nil
+  or a non-table is a runtime error (`__deepcopy__ must return an instance,
+  got T`); returning the original handle is a runtime error (`__deepcopy__
+  must return a new instance, not self`).
+- **Re-entrancy.** `m_deepCopyHooked` (per-payload set, RAII-cleared on a
+  throwing hook): a hook that deep-copies `self` re-enters on the same
+  payload, the nested call skips the hook and takes the default field copy —
+  `def __deepcopy__() { return deepcopy(self) }` terminates. Per-payload (not
+  a bool like `displayString`), so other objects copied inside a hook still
+  dispatch their own hooks.
+- **`attachFinalizer` idempotent.** The wrapping deleter became the named
+  `FinalizerDeleter` struct; a table already carrying it is left alone
+  (`std::get_deleter`). Without the guard, a hook returning an instance the
+  constructor already registered would be wrapped twice — two control blocks,
+  `__destroy__` enqueued twice. The copy of a plain `__destroy__` instance
+  still gets its own registration (DEEPCOPY handler unchanged).
+- **Known limitation (pre-existing, out of scope).** Class names do not
+  resolve inside method bodies (`unknown function 'Point'`), so a hook cannot
+  construct a fresh instance of its own class; it returns a hand-built table
+  or a pre-built instance (a global capture — captures alias the global slot,
+  so no closure→instance cycle forms).
+- **Tests.** `spec_check2` 499 → 512 (+13: hook return used, original
+  untouched, returns self / nil error, throws to refuse, `deepcopy(self)`
+  terminates, nested hook, hook once per shared original + result shared,
+  copy finalizes independently, hook result finalized exactly once). Full
+  `ctest` 44/44 green.
+
 ## Round 43 (2026-11-05)
 
 **deepcopy Phase 2 — `array` / `set` / `blob` share by default** (**breaking**).

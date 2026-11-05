@@ -5,6 +5,7 @@
 #include <deque>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -115,12 +116,25 @@ std::string valueToString(const QLangValue &v, QLangContext &ctx) {
 // clear(), or an explicit processFinalizers()). No-op for plain tables and
 // instances without `__destroy__`.
 //
-// Ownership subtlety: `shared_ptr(raw, deleter)` would create a SECOND
+// Ownership subtlety: `shared_ptr(raw, deleter)` creates a SECOND
 // control block; the original shared_ptr (still in `v`) would then free
 // the map as soon as it is overwritten, dangling the wrapped pointer.
 // Instead the wrapped deleter captures a copy of the original
-// shared_ptr and moves it into the queue — the map is freed exactly once,
+// shared_ptr and hands it to the queue — the map is freed exactly once,
 // when the drained finalizer entry is destroyed.
+//
+// The deleter is a NAMED type so `attachFinalizer` can recognise its own
+// registration with std::get_deleter (see below).
+struct FinalizerDeleter {
+  QLangContext *scope;
+  QLangValue closure;
+  std::shared_ptr<const CompiledProgram> prog;
+  TableValue orig;
+  void operator()(std::map<std::string, QLangValue> *) const {
+    scope->enqueueFinalizer(orig, closure, prog);
+  }
+};
+
 static void attachFinalizer(QLangValue &v, QLangContext &scope) {
   if (v.type() != QLangValue::Type::Table)
     return;
@@ -128,123 +142,19 @@ static void attachFinalizer(QLangValue &v, QLangContext &scope) {
   auto dit = tbl.find("__destroy__");
   if (dit == tbl.end() || dit->second.type() != QLangValue::Type::Function)
     return;
+  // Idempotent: a table already carrying the registration keeps it. Wrapping
+  // twice would build a second control block whose deleter enqueues the first,
+  // so `__destroy__` would run once per attach — SPEC §classes "runs exactly
+  // once". This is the normal path for a `__deepcopy__` override that returns
+  // an instance built by the class constructor (which emitted TABFINALIZE).
+  if (std::get_deleter<FinalizerDeleter>(v.asTable()))
+    return;
   QLangValue closure = dit->second; // keep the method alive in the deleter
   auto prog = scope.liveProgram(); // keeps the program alive until release
-  auto orig = v.asTable(); // second reference to the original control block
   auto wrapped = std::shared_ptr<std::map<std::string, QLangValue>>(
-      v.asTable().get(),
-      [&scope, closure, prog, orig](std::map<std::string, QLangValue> *) mutable {
-        // `orig` is the last reference to the original control block; moving
-        // it into the queue keeps the map alive until the drain runs the
-        // finalizer. enqueueFinalizer never throws (deleter-safe).
-        scope.enqueueFinalizer(std::move(orig), closure, prog);
-      });
+      v.asTable().get(), FinalizerDeleter{&scope, std::move(closure), prog,
+                                          v.asTable()});
   v = QLangValue::Table(wrapped);
-}
-
-// deepcopy(x) (SPEC §functions "deepcopy", plan docs/plans/deepcopy-plan.md):
-// an independent recursive copy of `v`. Primitives and the immutable string
-// are copied by value; arrays/sets/blobs/tables build new payloads and
-// recurse; class instances (tables stamped with `__class__`) share the
-// class-level meta keys and every function value, copying only the data
-// fields. Closures, generators, ObjectDescriptors and the external views
-// carry live state or view a C++ object: the SAME handle comes back.
-// `seen` maps an already-copied payload address to its copy so a value that
-// transitively contains itself terminates and the cycle is preserved in the
-// result. Since Phase 2 every container — array, set, blob and table — is
-// pointer-backed, so all four are keyable; a self-referencing array
-// (`a[] = a`) now round-trips as a cycle instead of recursing forever.
-static QLangValue deepCopyValue(
-    const QLangValue &v, std::unordered_map<const void *, QLangValue> &seen) {
-  using Type = QLangValue::Type;
-  switch (v.type()) {
-  // Value-backed payloads: the variant copy IS the deep copy (string is the
-  // spec's deliberate exception — copied, never shared).
-  case Type::Nil:
-  case Type::Eof:
-  case Type::Bool:
-  case Type::Char:
-  case Type::Byte:
-  case Type::Word:
-  case Type::Short:
-  case Type::Int:
-  case Type::Unsigned:
-  case Type::Qword:
-  case Type::Long:
-  case Type::Float:
-  case Type::String:
-    return v;
-  case Type::Blob: {
-    // Bytes only — nothing nested to recurse into, but the payload is shared
-    // storage now, so the copy must be a new buffer.
-    const auto &src = v.asBlob();
-    if (!src)
-      return v;
-    auto sit = seen.find(src.get());
-    if (sit != seen.end())
-      return sit->second;
-    auto copy = std::make_shared<std::vector<uint8_t>>(*src);
-    QLangValue out = QLangValue::Blob(std::move(copy));
-    seen[src.get()] = out;
-    return out;
-  }
-  case Type::Array:
-  case Type::Set: {
-    const auto &src = v.asArray();
-    if (!src)
-      return v;
-    auto sit = seen.find(src.get());
-    if (sit != seen.end())
-      return sit->second; // cycle: emit the existing copy
-    auto out = std::make_shared<std::vector<QLangValue>>();
-    out->reserve(src->size());
-    QLangValue res = v.type() == Type::Set ? QLangValue::Set(out)
-                                           : QLangValue::Array(out);
-    seen[src.get()] = res; // register BEFORE recursing (cycle-safe)
-    for (const auto &el : *src)
-      out->push_back(deepCopyValue(el, seen));
-    return res;
-  }
-  case Type::Table: {
-    const auto &src = v.asTable();
-    if (!src)
-      return v; // nil table handle: nothing to copy
-    auto sit = seen.find(src.get());
-    if (sit != seen.end())
-      return sit->second; // cycle: emit the existing copy
-    auto copy = std::make_shared<std::map<std::string, QLangValue>>();
-    QLangValue out = QLangValue::Table(copy);
-    seen[src.get()] = out; // register BEFORE recursing (cycle-safe)
-    // Class instance: the meta keys describe the CLASS (closed field set,
-    // const set, field types, static anchor) and are shared, never copied
-    // (SPEC §classes "deepcopy"). `__class__` itself is a string -> copied.
-    const bool isInstance = src->count("__class__") > 0;
-    for (const auto &kv : *src) {
-      if (isInstance && (kv.first == "__fields__" ||
-                         kv.first == "__const_fields__" ||
-                         kv.first == "__field_types__" ||
-                         kv.first == "__statics__")) {
-        (*copy)[kv.first] = kv.second; // shared class-level handle
-        continue;
-      }
-      // Function values (methods, `__destroy__`) share the closure handle
-      // through the recursion below (Function returns the same handle).
-      (*copy)[kv.first] = deepCopyValue(kv.second, seen);
-    }
-    return out;
-  }
-  // Live-state / view types: shared, never copied (SPEC §functions
-  // "deepcopy"). ObjectDescriptor has no language constructor today;
-  // sharing the handle is the locked default (plan open decision 2).
-  case Type::Function:
-  case Type::Generator:
-  case Type::Object:
-  case Type::External:
-  case Type::BoundMethod:
-  case Type::TypeRef:
-    return v;
-  }
-  return v; // unreachable: every Type alternative is covered above
 }
 
 // MOVC materialization (SPEC §value semantics, plan Phase 2). A container
@@ -1178,6 +1088,149 @@ QLangValue QLangVM::callClosure(const QLangValue &value, const std::vector<QLang
   return callFunction(value.asFunction().funcIndex, args);
 }
 
+// deepcopy(x) (SPEC §functions "deepcopy", §classes "deepcopy", plan
+// docs/plans/deepcopy-plan.md): an independent recursive copy of `v`.
+// Primitives and the immutable string are copied by value; arrays/sets/blobs/
+// tables build new payloads and recurse; class instances (tables stamped with
+// `__class__`) share the class-level meta keys and every function value,
+// copying only the data fields. Closures, generators, ObjectDescriptors and
+// the external views carry live state or view a C++ object: the SAME handle
+// comes back. `seen` maps an already-copied payload address to its copy so a
+// value that transitively contains itself terminates and the cycle is
+// preserved in the result. Since Phase 2 every container — array, set, blob
+// and table — is pointer-backed, so all four are keyable; a self-referencing
+// array (`a[] = a`) now round-trips as a cycle instead of recursing forever.
+// A table carrying a callable `__deepcopy__` is copied by that hook instead
+// of the default field walk (see below); the dispatch needs the VM call path,
+// which is why this is a member and not a free function.
+QLangValue QLangVM::deepCopyValue(
+    const QLangValue &v, std::unordered_map<const void *, QLangValue> &seen) {
+  using Type = QLangValue::Type;
+  switch (v.type()) {
+  // Value-backed payloads: the variant copy IS the deep copy (string is the
+  // spec's deliberate exception — copied, never shared).
+  case Type::Nil:
+  case Type::Eof:
+  case Type::Bool:
+  case Type::Char:
+  case Type::Byte:
+  case Type::Word:
+  case Type::Short:
+  case Type::Int:
+  case Type::Unsigned:
+  case Type::Qword:
+  case Type::Long:
+  case Type::Float:
+  case Type::String:
+    return v;
+  case Type::Blob: {
+    // Bytes only — nothing nested to recurse into, but the payload is shared
+    // storage now, so the copy must be a new buffer.
+    const auto &src = v.asBlob();
+    if (!src)
+      return v;
+    auto sit = seen.find(src.get());
+    if (sit != seen.end())
+      return sit->second;
+    auto copy = std::make_shared<std::vector<uint8_t>>(*src);
+    QLangValue out = QLangValue::Blob(std::move(copy));
+    seen[src.get()] = out;
+    return out;
+  }
+  case Type::Array:
+  case Type::Set: {
+    const auto &src = v.asArray();
+    if (!src)
+      return v;
+    auto sit = seen.find(src.get());
+    if (sit != seen.end())
+      return sit->second; // cycle: emit the existing copy
+    auto out = std::make_shared<std::vector<QLangValue>>();
+    out->reserve(src->size());
+    QLangValue res = v.type() == Type::Set ? QLangValue::Set(out)
+                                           : QLangValue::Array(out);
+    seen[src.get()] = res; // register BEFORE recursing (cycle-safe)
+    for (const auto &el : *src)
+      out->push_back(deepCopyValue(el, seen));
+    return res;
+  }
+  case Type::Table: {
+    const auto &src = v.asTable();
+    if (!src)
+      return v; // nil table handle: nothing to copy
+    auto sit = seen.find(src.get());
+    if (sit != seen.end())
+      return sit->second; // cycle: emit the existing copy
+    // `__deepcopy__` override (SPEC §classes "deepcopy"): a table carrying a
+    // callable `__deepcopy__` is copied by that hook — it runs on the
+    // ORIGINAL (self = v, the same dispatch shape as `__str__` in
+    // displayString and `__destroy__` in runFinalizer), returns the copy, and
+    // may throw to refuse (the error propagates out of deepcopy). Resolution
+    // happens AFTER the cycle check so a hook result reached through a cycle
+    // is not re-invoked.
+    auto hit = src->find("__deepcopy__");
+    if (hit != src->end() && hit->second.type() == Type::Function &&
+        m_deepCopyHooked.find(src.get()) == m_deepCopyHooked.end()) {
+      // Re-entrancy: a hook that deep-copies `self` re-enters on the same
+      // payload; the nested call skips the hook and takes the default field
+      // copy below, so `def __deepcopy__() { return deepcopy(self) }`
+      // terminates. Erase on every exit, including a throwing hook.
+      m_deepCopyHooked.insert(src.get());
+      struct HookGuard {
+        std::unordered_set<const void *> &set;
+        const void *key;
+        ~HookGuard() { set.erase(key); }
+      } guard{m_deepCopyHooked, src.get()};
+      trace(TRACE_VM_LOOP, "deepcopy: __deepcopy__ hook on %p\n", src.get());
+      QLangValue r = callClosure(hit->second, {v});
+      // A hook must return a distinct instance or throw (SPEC §classes
+      // "deepcopy"): nil or the original handle would silently alias the
+      // copy to the source, defeating the whole point of the copy.
+      if (r.type() != Type::Table || !r.asTable())
+        vmThrow(QLangErrorKind::Runtime,
+                std::string("__deepcopy__ must return an instance, got ") +
+                    r.typeName());
+      if (r.asTable().get() == src.get())
+        vmThrow(QLangErrorKind::Runtime,
+                "__deepcopy__ must return a new instance, not self");
+      seen[src.get()] = r; // other references to the original share the copy
+      return r;
+    }
+    auto copy = std::make_shared<std::map<std::string, QLangValue>>();
+    QLangValue out = QLangValue::Table(copy);
+    seen[src.get()] = out; // register BEFORE recursing (cycle-safe)
+    // Class instance: the meta keys describe the CLASS (closed field set,
+    // const set, field types, static anchor) and are shared, never copied
+    // (SPEC §classes "deepcopy"). `__class__` itself is a string -> copied.
+    const bool isInstance = src->count("__class__") > 0;
+    for (const auto &kv : *src) {
+      if (isInstance && (kv.first == "__fields__" ||
+                         kv.first == "__const_fields__" ||
+                         kv.first == "__field_types__" ||
+                         kv.first == "__statics__")) {
+        (*copy)[kv.first] = kv.second; // shared class-level handle
+        continue;
+      }
+      // Function values (methods, `__destroy__`) share the closure handle
+      // through the recursion below (Function returns the same handle).
+      (*copy)[kv.first] = deepCopyValue(kv.second, seen);
+    }
+    return out;
+  }
+  // Live-state / view types: shared, never copied (SPEC §functions
+  // "deepcopy"). ObjectDescriptor has no language constructor today;
+  // sharing the handle is the locked default (plan open decision 2).
+  case Type::Function:
+  case Type::Generator:
+  case Type::Object:
+  case Type::External:
+  case Type::BoundMethod:
+  case Type::TypeRef:
+    return v;
+  }
+  return v; // unreachable: every Type alternative is covered above
+}
+
 // Deliver a signal (docs/spec/17-signals.md). The sender must be an external
 // object (v1: external types only); the signal is resolved against its type
 // descriptor; the argument count and types are checked against the declared
@@ -1914,12 +1967,15 @@ RunResult QLangVM::runFrames() {
     case Opcode::DEEPCOPY: {
       // r[a] = independent recursive copy of r[b] (SPEC §functions
       // "deepcopy"). Fresh identity map per instruction: cycles inside one
-      // value are preserved, nothing carries across instructions.
+      // value are preserved, nothing carries across instructions. A table
+      // carrying `__deepcopy__` is copied by that hook (SPEC §classes
+      // "deepcopy"); deepCopyValue dispatches it on the original.
       std::unordered_map<const void *, QLangValue> seen;
       frame.regs[i.a] = deepCopyValue(frame.regs[i.b], seen);
       // The copy is a new instance with its own `__destroy__` finalization
       // (SPEC §classes "deepcopy"); attachFinalizer is a no-op without the
-      // method and never touches the original's registration.
+      // method, idempotent on a hook result the constructor already
+      // registered, and never touches the original's registration.
       attachFinalizer(frame.regs[i.a], m_scope);
       break;
     }

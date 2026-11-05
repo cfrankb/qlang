@@ -354,10 +354,26 @@ easy to bisect.
    format unchanged); migration note for the copy→share change. Compliance
    hashes after green run.
 
-### Phase 3 — `__deepcopy__` override (M, medium risk)
+### Phase 3 — `__deepcopy__` override (M, medium risk) — **✓ LANDED 2026-11-05 (Round 44)**
 
 The override is a **QLang method**, not an `ObjectOps` entry — script classes
 have no `ObjectOps` (see "Class instances are tables, not `ObjectDescriptor`").
+
+> **Landed as:** `QLangVM::deepCopyValue` (member — the dispatch needs the VM
+> call path), hook resolved after the cycle check, invoked on the original via
+> `callClosure(hook, {self})`; nil/non-table and self returns are runtime
+> errors; result registered in `seen`; per-payload re-entrancy set
+> (`m_deepCopyHooked`) makes `deepcopy(self)` inside a hook terminate on the
+> default copy; `attachFinalizer` made idempotent (named `FinalizerDeleter` +
+> `std::get_deleter`) so a constructor-registered hook result is not wrapped
+> twice. 13 `spec_check2` cases (499 → 512), full `ctest` 44/44.
+>
+> **Limitation found while testing (pre-existing, out of scope):** class names
+> do not resolve inside method bodies (`unknown function 'Point'`), so a hook
+> cannot construct a fresh instance of its own class — it returns a
+> hand-built table or a pre-built instance (e.g. a global capture; captures
+> alias the global slot, so no closure→instance cycle forms). A method-body
+> name-resolution fix is its own round.
 
 1. **Resolution** — in `deepCopyValue`, before the default field copy, look up
    `__deepcopy__` in the instance table. The precedent is the `__str__` path

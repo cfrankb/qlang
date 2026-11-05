@@ -158,6 +158,16 @@ public:
   // recursive, scalars in plain display form.
   std::string renderElement(const QLangValue &v);
 
+  // deepcopy(x) (SPEC §functions "deepcopy", §classes "deepcopy"): an
+  // independent recursive copy of `v`. A table carrying a callable
+  // `__deepcopy__` is copied by that hook — invoked on the ORIGINAL, its
+  // return value taken as the copy (guarded against nil/self); everything
+  // else follows the default per-type rules. `seen` maps an already-copied
+  // payload address to its copy so shared substructures stay shared and
+  // cycles terminate. Needs the VM for the hook dispatch (callClosure).
+  QLangValue deepCopyValue(const QLangValue &v,
+                           std::unordered_map<const void *, QLangValue> &seen);
+
   // EQ/NE with object dispatch (spec §operator == and !=): a string compared
   // with an object (a table carrying `__str__` or the `__class__` meta key)
   // is equal only when the object's `__str__` value matches the string; all
@@ -186,6 +196,13 @@ public:
   // Re-entrancy guard for displayString: an `__str__` that displays `self`
   // must not recurse — the nested call skips `__str__` and falls back.
   bool m_inDisplayString = false;
+  // Re-entrancy guard for the `__deepcopy__` hook: the originals whose hook
+  // is currently running. A hook that deep-copies `self` re-enters on the
+  // SAME payload — the nested call skips the hook and takes the default
+  // field copy, so `def __deepcopy__() { return deepcopy(self) }` terminates
+  // instead of recursing forever. Other objects copied inside a hook still
+  // dispatch their own hooks (per-payload, unlike the displayString flag).
+  std::unordered_set<const void *> m_deepCopyHooked;
   // Prototype closure per function index, registered by MAKEFUNC. Def
   // statements materialize their closure at def time; the map lets host-
   // driven calls (callFunction) and CALLFN reach the def-time cell bindings.

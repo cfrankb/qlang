@@ -1338,6 +1338,104 @@ int main() {
     fails++;
   }
 
+  // -- __deepcopy__ override (Phase 3, SPEC 10 ## deepcopy) --
+  // A table carrying a callable `__deepcopy__` is copied by that hook: it
+  // runs on the ORIGINAL (self = source), its return value IS the copy, and
+  // it may throw to refuse. nil/self returns are runtime errors.
+  expectVal("deepcopy hook return value used",
+            "class Point {\n  x = 0\n  __deepcopy__(self) [ ] {\n    local c = {}\n    c.x = self.x + 100\n    return c\n  }\n}\nlocal p = Point()\np.x = 7\nlocal q = deepcopy(p)\nlocal r = q.x;",
+            "r", 107);
+  expectVal("deepcopy hook original untouched",
+            "class Point {\n  x = 0\n  __deepcopy__(self) [ ] {\n    local c = {}\n    c.x = self.x + 100\n    return c\n  }\n}\nlocal p = Point()\np.x = 7\nlocal q = deepcopy(p)\nlocal r = p.x;",
+            "r", 7);
+  expectThrow("deepcopy hook returns self",
+              "class Point {\n  x = 0\n  __deepcopy__(self) [ ] {\n    return self\n  }\n}\nlocal p = Point()\nlocal q = deepcopy(p)");
+  expectThrow("deepcopy hook returns nil",
+              "class Point {\n  x = 0\n  __deepcopy__(self) [ ] {\n    return nil\n  }\n}\nlocal p = Point()\nlocal q = deepcopy(p)");
+  expectMsg("deepcopy hook throws to refuse",
+            "class Point {\n  x = 0\n  __deepcopy__(self) [ ] {\n    assert(false, \"refuse\")\n    return {}\n  }\n}\nlocal p = Point()\nlocal q = deepcopy(p)",
+            "refuse");
+  // Re-entrancy: a hook that deep-copies `self` re-enters on the same
+  // payload; the nested call skips the hook and takes the default field
+  // copy, so the recursion terminates (the run finishing proves it).
+  expectVal("deepcopy hook deepcopy(self) terminates",
+            "class Point {\n  x = 0\n  __deepcopy__(self) [ ] {\n    local c = deepcopy(self)\n    return c\n  }\n}\nlocal p = Point()\np.x = 9\nlocal q = deepcopy(p)\nlocal r = q.x;",
+            "r", 9);
+  // Nested instance: the outer class has no hook; the default field walk
+  // dispatches the INNER instance's hook.
+  expectVal("deepcopy nested instance hook dispatched",
+            "class Inner {\n  v = 0\n  __deepcopy__(self) [ ] {\n    local c = {}\n    c.v = self.v * 2\n    return c\n  }\n}\nclass Outer {\n  inner = nil\n}\nlocal o = Outer()\nlocal i = Inner()\ni.v = 21\no.inner = i\nlocal o2 = deepcopy(o)\nlocal r = o2.inner.v;",
+            "r", 42);
+  // Identity: two references to the same hooked original share ONE hook
+  // result (the hook result is registered in `seen`), and the hook runs
+  // exactly once for both.
+  try {
+    QLangContext dctx;
+    dctx.run(
+        "local cnt = 0\n"
+        "class Point {\n  x = 0\n  __deepcopy__(self) [cnt] {\n    cnt = cnt + 1\n    local c = {}\n    c.x = self.x\n    return c\n  }\n}\n"
+        "local p = Point()\n"
+        "local t = {}\n"
+        "t.a = p\n"
+        "t.b = p\n"
+        "local u = deepcopy(t)");
+    expectTrue("deepcopy hook runs once for shared original",
+               toInt64(dctx.get("cnt")) == 1);
+    const auto &umap = dctx.get("u").asTable();
+    expectTrue("deepcopy hook result shared by both refs",
+               umap->at("a").asTable().get() == umap->at("b").asTable().get());
+  } catch (const QLangError &e) {
+    std::cout << "[FAIL] id:   deepcopy hook identity run -> " << e.what() << "\n";
+    fails++;
+  }
+  // `__destroy__` interaction: the copy is a new instance with its OWN
+  // finalization; releasing the original finalizes only the original, and
+  // releasing the copy later finalizes the copy (SPEC 10 ## deepcopy).
+  try {
+    QLangContext dctx;
+    dctx.run("local n = 0\n"
+             "class D {\n  x = 0\n  __destroy__ (self) [n] { n = n + 1 }\n}\n"
+             "local a = D()\n"
+             "local b = deepcopy(a)\n"
+             "a = nil\n");
+    dctx.processFinalizers();
+    expectTrue("deepcopy copy finalizes independently (original ran)",
+               toInt64(dctx.get("n")) == 1);
+    dctx.run("b = nil");
+    dctx.processFinalizers();
+    expectTrue("deepcopy copy finalizes independently (copy ran too)",
+               toInt64(dctx.get("n")) == 2);
+  } catch (const QLangError &e) {
+    std::cout << "[FAIL] id:   deepcopy destroy run -> " << e.what() << "\n";
+    fails++;
+  }
+  // Idempotent attach: a hook returning an instance the constructor already
+  // registered must NOT be wrapped a second time — a double registration
+  // would enqueue `__destroy__` twice for the returned instance (n would
+  // reach 3). Also exercises the hook returning a pre-built instance. The
+  // twin is a GLOBAL (captures alias the global slot, so no closure->value
+  // reference cycle forms through the instance table).
+  try {
+    QLangContext dctx;
+    dctx.run("local n = 0\n"
+             "local twin = nil\n"
+             "class D {\n  x = 0\n"
+             "  __destroy__ (self) [n] { n = n + 1 }\n"
+             "  __deepcopy__ (self) [twin] { return twin }\n}\n"
+             "local a = D()\n"
+             "twin = D()\n"
+             "local c = deepcopy(a)\n");
+    expectTrue("deepcopy hook result is the pre-built instance",
+               dctx.get("c").asTable().get() == dctx.get("twin").asTable().get());
+    dctx.run("a = nil\ntwin = nil\nc = nil");
+    dctx.processFinalizers();
+    expectTrue("deepcopy hook result finalized exactly once",
+               toInt64(dctx.get("n")) == 2);
+  } catch (const QLangError &e) {
+    std::cout << "[FAIL] id:   deepcopy idempotent attach run -> " << e.what() << "\n";
+    fails++;
+  }
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

@@ -46,7 +46,7 @@ Unit (22):
 |---|---|---|---|
 | `smoke` | `qlang_example` | `examples/hello.cpp` | `VM result: OK` |
 | `spec_check` | `spec_check` | `tests/unit/spec_check.cpp` | 33 passed |
-| `spec_check2` | `spec_check2` | `tests/unit/spec_check2.cpp` | 499 passed (incl. 20 `deepcopy` cases added Round 42) |
+| `spec_check2` | `spec_check2` | `tests/unit/spec_check2.cpp` | 512 passed (incl. 20 `deepcopy` cases added Round 42 + 13 `__deepcopy__` hook cases added Round 44) |
 | `spec_cast_test` | `spec_cast_test` | `tests/unit/spec_cast_test.cpp` | 20 passed |
 | `test_module` | `test_module` | `tests/unit/test_module.cpp` | 7 tests OK |
 | `gen_test` | `gen_test` | `tests/unit/gen_test.cpp` | 5 passed |
@@ -68,7 +68,7 @@ Unit (22):
 | `phase5_api` | `phase5_api` | `tests/unit/phase5_api.cpp` | 17 checks (step budget, threading contract) |
 | `value_semantics` | `value_semantics` | `tests/unit/value_semantics.cpp` | 40 checks (Round 43 share-by-default array/set/blob: aliasing on assign/call, literal freshness, `deepcopy` independence + array cycles, `+`/`cast` freshness, `a += a`, `string` still a value type) |
 
-Counted unit cases: **953** (499+33+20+7+5+22+13+17+18+49+8+123+41+8+3+7+23+17+40), plus
+Counted unit cases: **966** (512+33+20+7+5+22+13+17+18+49+8+123+41+8+3+7+23+17+40), plus
 the three `ALL PASS` gate suites (`test_native`, `test_call`, `test_inject`).
 
 Script (20): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
