@@ -1,3 +1,47 @@
+## Round 46 (2026-11-05)
+
+**Documentation hash gate; tracking hygiene.**
+New `cmake/check_doc_hashes.cmake` + the `doc_hashes` ctest entry.
+**Tooling + docs only — no source, test-source, or spec-module change.**
+
+- **Why.** AGENTS.md requires a SHA256 per spec/compliance module, re-recorded
+  after every verified change, and "never bump a hash before testing". Nothing
+  checked the rule mechanically, and drift had already been found twice (Round
+  45 corrected a stale case count and a stale "last audit" row).
+- **The gate.** `cmake -DQLANG_SOURCE_DIR=<src> -P cmake/check_doc_hashes.cmake`
+  verifies (1) every `docs/spec/*.md` and `docs/compliance/*.md` module has a
+  row in its README index, (2) the recorded SHA256 still matches the file, (3)
+  no row names a deleted file, and reports malformed (non-64-hex) or duplicated
+  rows. `-DDOCS_HASH_UPDATE=ON` rewrites only the affected rows in place. CMake
+  script mode — no binary, no shell — so it runs on every CI job including
+  MSVC. Registered as the `doc_hashes` ctest entry (44 → 45 entries).
+  `file(GLOB)` is deliberate here: an untracked new module must fail the gate,
+  which is the opposite of the explicit-list rule used for test sources.
+- **Implementation notes.** CMake regex gotchas: `.` matches a newline and
+  `{n}` repetition is unreliable, so rows are matched one line at a time
+  (`file(STRINGS … ENCODING UTF-8)` — the default ASCII reading truncates the
+  rows containing en dashes/arrows) with `[0-9a-f]+` plus an explicit
+  64-character length check.
+- **Verification (before touching any hash, per AGENTS.md).** `cmake -B build &&
+  cmake --build build` clean; `ctest --test-dir build` **45/45 green** — the
+  966 counted unit cases unchanged + 20 script regressions + the `perf` gate +
+  the new `doc_hashes` (24 modules: 17 spec + 7 compliance). The gate was
+  exercised on a scratch copy of `docs/`: appended text → stale-hash failure;
+  `-DDOCS_HASH_UPDATE=ON` → exactly one row rewritten; an untracked module, a
+  ghost row, a 40-character hash and a duplicated row each fail with their own
+  message.
+- **Hygiene.** The `status.md` Open Item "Reserved word `set`" still said **NOT
+  implemented** although Round 26 landed it — re-verified (`local set = 1` →
+  `expected variable name but found 'set'`; `set(1,5,7)` → `set(1, 5, 7)`) and
+  flipped. The untracked scratch note `docs/plans/missing` is superseded by
+  `docs/plans/missing-features-plan.md` and pending removal (the sandbox blocks
+  file deletion).
+- **Not done (needs explicit approval).** `AGENTS.md` is untouched — its
+  "Build & test" section should mention `doc_hashes`, but editing that file
+  requires user permission. Untracked root artifacts (`debug_*.cpp`,
+  `repro_forin.cpp`, `perf_result.json`, `hello_*.qlc`, `test-hello-*.qla`) are
+  left in place.
+
 ## Round 45 (2026-11-05)
 
 **deepcopy Phase 4 — closure audit; plan complete.**

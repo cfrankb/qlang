@@ -281,3 +281,14 @@ add_test(NAME perf COMMAND perf_bench)
 # calibrated for Release (CI gxx job), so the gate skips instead of failing
 # on build-type noise.
 set_tests_properties(perf PROPERTIES SKIP_RETURN_CODE 77)
+
+# Documentation hash gate (AGENTS.md "Keep Compliance Documentation Current"):
+# every SHA256 recorded in docs/spec/README.md and docs/compliance/README.md
+# must still match the module it names, every module must have a row, and no
+# row may point at a deleted file. CMake script mode — no binary, no shell, so
+# it runs on every CI job including MSVC. Re-record after a verified doc edit:
+#   cmake -DQLANG_SOURCE_DIR=<src> -DDOCS_HASH_UPDATE=ON -P cmake/check_doc_hashes.cmake
+add_test(NAME doc_hashes
+         COMMAND ${CMAKE_COMMAND}
+                 -DQLANG_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_doc_hashes.cmake)

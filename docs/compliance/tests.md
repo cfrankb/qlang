@@ -38,7 +38,7 @@ tests/
 `examples/` retains only real demos: `hello.cpp` (smoke app) and `qlang_run.cpp`
 (script runner / smoke-test app).
 
-### ctest matrix — 44 entries (44/44 green, 2026-11-05)
+### ctest matrix — 45 entries (45/45 green, 2026-11-05)
 
 Unit (22):
 
@@ -78,6 +78,14 @@ Script (20): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
 `test_minmax`, `test_minmax2`, `type`, `value_share`.
 
 Perf (1): `perf` — `perf_bench` compared against `baseline.json` (below).
+
+Docs (1): `doc_hashes` — `cmake -P cmake/check_doc_hashes.cmake` (script mode,
+no binary): every SHA256 recorded in `docs/spec/README.md` and
+`docs/compliance/README.md` must match its module, every module must have a
+row, and no row may name a deleted file (24 modules). Re-record after a
+verified doc edit with
+`cmake -DQLANG_SOURCE_DIR=<src> -DDOCS_HASH_UPDATE=ON -P cmake/check_doc_hashes.cmake`
+(Round 46).
 
 ### Performance baseline
 
