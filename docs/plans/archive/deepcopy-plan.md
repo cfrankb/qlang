@@ -5,7 +5,13 @@ mirroring Python `copy.deepcopy`.** Companion rule: **deep copy of
 non-primitive values is always explicit**; the default for every non-primitive
 is **share / pass-by-pointer**.
 
-Spec anchors (all landed **2026-11-05**, marked *Proposed* until Phase 1 runs):
+> **Plan status: ✓ COMPLETE (2026-11-05, Round 45).** Phases 1–4 all landed,
+> `ctest` 44/44 green, every open decision resolved or explicitly deferred.
+> Audit trail: `docs/compliance/history.md` Rounds 42–45; tracking entry:
+> the `deepcopy` Open Item in `docs/compliance/status.md`.
+
+Spec anchors (all landed **2026-11-05**; the *Proposed* markers were dropped
+once Phase 1 ran — the spec modules now state the behavior as implemented):
 
 | Anchor | Content |
 |---|---|
@@ -398,7 +404,7 @@ have no `ObjectOps` (see "Class instances are tables, not `ObjectDescriptor`").
 5. **Docs** — `10-classes.md` `## deepcopy` already specifies the override;
    drop the "planned" framing once implemented and re-hash.
 
-### Phase 4 — migration note + tracking
+### Phase 4 — migration note + tracking — **✓ LANDED 2026-11-05 (Round 45)**
 
 Items 1–3 of the original Phase 4 (spec text for `01-types.md` value
 semantics, the `13-bytecodes.md` `DEEPCOPY` row + locked encoding rules, and
@@ -409,12 +415,22 @@ longer open work. Remaining:
    `docs/compliance/migration-value-semantics.md` (what changed, the `deepcopy()`
    replacement, an audit checklist of patterns whose meaning changed, the C++
    accessor update, and the "no compat layer" decision).
-2. **Tracking** — flip the `deepcopy` Open Item in `docs/compliance/status.md`
-   (:196) as each phase lands; append an audit round to
-   `docs/compliance/history.md`.
-3. **Hashes** — SHA256 rows in `docs/spec/README.md` /
-   `docs/compliance/README.md` updated **only after** the green run (AGENTS.md:
-   testing proves correctness, the hash merely detects change).
+2. **Tracking** — **✓ LANDED 2026-11-05** (Round 45). The `deepcopy` Open Item
+   in `docs/compliance/status.md` is flipped to **✓ plan complete** and
+   `docs/compliance/history.md` carries **Round 45**, the closure audit
+   (what was re-verified, the drift corrected, and the disposition of every
+   open decision). Rounds 42/43/44 already recorded Phases 1/2/3 as they landed.
+3. **Hashes** — **✓ LANDED 2026-11-05** (Round 45), after the green run
+   (AGENTS.md: testing proves correctness, the hash merely detects change).
+   All 17 `docs/spec/*.md` hashes and every compliance self-hash were
+   re-computed and compared: **all already matched** — no spec module was
+   edited in Phase 4, so `docs/spec/README.md` is untouched; only the
+   `status.md` and `history.md` rows in `docs/compliance/README.md` were
+   re-hashed (plus the index's "last audit" / history-range lines).
+
+> **Phase 4 verification.** `cmake -B build && cmake --build build` clean;
+> `ctest --test-dir build` **44/44** green (966 counted unit cases + 20 script
+> regressions + the perf gate). Docs-only round: no source, test, or spec change.
 
 ---
 
@@ -429,26 +445,32 @@ longer open work. Remaining:
 
 ## Open decisions
 
-1. **Arity check: compile-time or runtime** — the spec says compile error
-   (`06-functions.md:83`); the engine only has runtime `need()` in
-   `callBuiltin` (`src/QLangVM.cpp:432`). Decide: introduce the first
-   compile-time arity table, or amend the spec to "runtime error".
-2. **`Type::Object` (`ObjectDescriptor`) handling** — share the handle
-   (recommended: no language construct creates one, so there is no user-visible
-   behavior to define yet) vs deep-copy `fields` and share `ops` vs add an
-   `ObjectOps::deepcopy` hook now.
-3. **Hook mechanism** — QLang `__deepcopy__` method resolved through the
-   instance table (recommended, matches `10-classes.md`) vs an `ObjectOps`
-   function pointer (only reachable from C++ embedders).
-4. **Index-assignment defect** — fix `compileAssignTarget()` in Phase 1 (small
-   `isCompound` guard, unblocks the spec examples and the independence tests)
-   or defer to its own round. It is a pre-existing bug, not caused by this
-   plan.
+1. **Arity check: compile-time or runtime** — **✓ RESOLVED 2026-11-05 (Round
+   42): compile-time.** The compiler rejects a wrong arity in the `deepcopy(x)`
+   lowering (`src/QLangCompiler.cpp`, the direct-to-`DEEPCOPY` path) with
+   `deepcopy expects exactly one argument, got N`, so the spec's wording
+   (`06-functions.md` "compile errors") stands and no runtime `need()` fallback
+   was added. `codec_check` covers both error cases.
+2. **`Type::Object` (`ObjectDescriptor`) handling** — **✓ RESOLVED 2026-11-05
+   (Round 42): share the handle.** `deepCopyValue` returns the same handle for
+   `Object` alongside `Function`/`Generator`/`External`/`BoundMethod`/`TypeRef`.
+   No language construct builds an `ObjectDescriptor` today, so there is no
+   user-visible behavior to define, and no `ObjectOps::deepcopy` entry was
+   added (nothing would call it).
+3. **Hook mechanism** — **✓ RESOLVED 2026-11-05 (Round 44): QLang
+   `__deepcopy__` resolved through the instance table**, matching
+   `10-classes.md` and the existing `__str__` / `__destroy__` dispatch shape
+   (`callClosure(hook, {self})`). No `ObjectOps` function pointer.
+4. **Index-assignment defect** — **✓ FIXED 2026-11-05 (Round 42).**
+   `compileAssignTarget()` branches on `isCompound`, so plain `ab[0] = 55` no
+   longer falls into the read-modify-write path with an empty operator
+   (`unsupported operator ''`). This unblocked the plan's independence tests.
 5. **`shallowcopy(x)` companion** — copy the top container, share elements.
-   Cheap and useful; defer to a follow-up round (not required for this plan).
+   Cheap and useful; **still deferred** to a follow-up round (explicitly out of
+   scope for this plan; not required by it).
 6. **`copy` parameter specifier (Option D)** — `def f(copy x)` to deep-copy a
-   param on entry. Deferred: Option A (`deepcopy` builtin) was chosen; the
-   specifier is a natural later sugar over it.
+   param on entry. **Still deferred:** Option A (`deepcopy` builtin) was chosen;
+   the specifier is a natural later sugar over it.
 7. **Rollout of the breaking change** — **✓ RESOLVED 2026-11-05: clean break.**
    No version bump, no compat flag, no copy-semantics shim for old images. The
    `.qlc` **durable layout did not change** (the writer stores payloads, the

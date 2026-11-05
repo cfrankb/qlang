@@ -1,3 +1,49 @@
+## Round 45 (2026-11-05)
+
+**deepcopy Phase 4 — closure audit; plan complete.**
+Plan `docs/plans/deepcopy-plan.md` Phase 4 (migration note + tracking).
+**Documentation only — no source, test, or spec-module change.**
+
+- **What was left.** Phase 4 items 1–3 were audited against the tree rather
+  than assumed: the migration note (`docs/compliance/migration-value-semantics.md`)
+  had already landed with Phase 2 (Round 43), and every spec marker the plan
+  asked for was already flipped — `01-types.md` `## value semantics` carries the
+  "fully implemented (Phase 1 + Phase 2)" bullet, `13-bytecodes.md` `## OpCode
+  deepcopy` opens with "Implemented 2026-11-05", `10-classes.md` `## deepcopy`
+  and `06-functions.md` `### deepcopy` state the behavior with no "planned"
+  framing. Remaining work was therefore the Open Item flip, this audit round,
+  and the hash re-verification.
+- **Verification (before touching any hash, per AGENTS.md).** `cmake -B build &&
+  cmake --build build` clean; `ctest --test-dir build` **44/44 green** — 966
+  counted unit cases (512 `spec_check2` incl. the Round 42 deepcopy + Round 44
+  hook cases, 123 `codec_check`, 40 `value_semantics`, 18 `signal`, the phase*/
+  scope/api suites) + 20 script regressions + the `perf_bench` baseline gate.
+- **Hashes.** All 17 `docs/spec/*.md` hashes and all compliance self-hashes
+  re-computed with `sha256sum` and compared to the index tables: **every row
+  already matched** (no spec module was edited this round, so
+  `docs/spec/README.md` is untouched). Only `status.md` and `history.md` — the
+  files this round edited — were re-hashed in `docs/compliance/README.md`.
+- **Drift corrected.** `status.md` intro still described the harness as
+  `spec_check2` "(499 cases)" — it has been 512 since Round 44.
+  `docs/compliance/README.md` still said "last audit Round 43" while
+  `history.md` carried Round 44; the `history.md` index row said "rounds 7–44".
+- **Open decisions — disposition.** #1 arity: **compile-time** (the compiler
+  rejects `deepcopy()` / `deepcopy(a, b)` with `deepcopy expects exactly one
+  argument, got N`; the spec's wording stands, no runtime `need()` fallback).
+  #2 `Type::Object`: **share the handle** (no language construct builds an
+  `ObjectDescriptor` today, so there is no user-visible behavior to define).
+  #3 hook mechanism: **QLang `__deepcopy__` resolved through the instance
+  table** (no `ObjectOps` entry added). #4 index-assignment defect: **fixed**
+  in Round 42 (`compileAssignTarget` branches on `isCompound`). #7 rollout:
+  **clean break** (resolved in Round 43). #5 `shallowcopy` and #6 the `copy`
+  param specifier stay **deferred** — explicitly out of scope for this plan.
+- **Deliberately not touched.** The MOVI/ADDI sections of
+  `docs/spec/13-bytecodes.md` and the Round 30/31 rows of `status.md` still
+  say `usesI32()` / "all four exec loops" (stale since the escape-byte format
+  migration and the single-`runFrames()` executor). They are historical
+  records; correcting them means re-hashing a spec module, which the plan
+  assigns to its own docs round.
+
 ## Round 44 (2026-11-05)
 
 **deepcopy Phase 3 — `__deepcopy__` override.**
