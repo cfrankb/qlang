@@ -40,6 +40,27 @@ feature.
   `QLangCompiler::compileAssignTarget()` does an unconditional
   read-modify-write for a non-empty subscript, so `op.text == "="` reaches
   `binOp("")`. `ab[0] += 5` (compound) works. `status.md` line 107 is wrong.
+- **Plan re-audited and rewritten** (`deepcopy-plan.md`, docs only — no code).
+  Five blockers found against the tree and corrected: (1) class instances are
+  **tables** carrying `__class__`/`__fields__`/`__const_fields__`/
+  `__field_types__`/`__statics__` — **not** `ObjectDescriptor` (`Type::Object`
+  is the raw/external ops substrate, created only by embedders) — so the
+  instance copy rules and the `__deepcopy__` override are now specified against
+  the table model (meta keys shared, hook resolved as a QLang method like
+  `__str__`, `__destroy__` re-registered through `attachFinalizer`); (2) the
+  cycle identity map only keys `shared_ptr` payloads, so array/set cycles are
+  unobservable until Phase 2; (3) builtin arity is a runtime `need()` concern —
+  the spec's "compile error" has no mechanism, recorded as an open decision;
+  (4) `tests/unit/codec_check.cpp:835–841` uses opcode byte **70** as the first
+  undefined identity (comment still says `kOpcodeUsedCount == 69`) — it must
+  move to 71 when `DEEPCOPY = 70` lands, or the negative test silently stops
+  rejecting; (5) `deepCopyValue` must cover `Eof`/`Function`/`BoundMethod`/
+  `TypeRef`. Stale references removed (`usesI32()`, "all four dispatch loops",
+  `callBuiltin :385`, the `13-bytecodes.md` "lines 428–434" anchor); Phase 4
+  items 1–3 dropped as already landed this date. The remaining `usesI32()` /
+  four-loops wording in `13-bytecodes.md:104–109,158–166` and in historical
+  `status.md` rows is left as-is (accurate for rounds 30/31; fixing it means
+  re-hashing a spec module).
 - No implementation, no opcode, no test changes. Suite re-run unchanged
   (`ctest`: 42/42); spec hashes re-verified for `01-types`, `06-functions`,
   `10-classes`, `13-bytecodes`.
