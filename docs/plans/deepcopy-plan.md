@@ -163,6 +163,11 @@ keyed on the **payload address** (the `shared_ptr`'d map / descriptor). On
 entering a container already in `seen`, emit the *existing* copy instead of
 re-walking — terminates, and preserves the cycle in the result.
 
+> **Resolved by Phase 2 (2026-11-05).** `array`, `set` and `blob` are now
+> `shared_ptr` payloads, so all three are keyed in `seen` and `a[] = a`
+> round-trips as a cycle (`value_semantics` D2). The bullets below describe the
+> Phase 1 state.
+
 **Limitation until Phase 2.** `array`, `set` and `blob` are stored **by value**
 (`vector<QLangValue>`), so they have no stable address to key on: two copies of
 the same array are indistinguishable. Consequences:
@@ -220,7 +225,7 @@ For a `TableValue` carrying `__class__` (i.e. a class instance), `deepcopy`:
 
 Each phase is independently shippable with `ctest` green.
 
-### Phase 1 — `deepcopy` builtin + `DEEPCOPY` opcode (additive, S–M, low risk)
+### Phase 1 — `deepcopy` builtin + `DEEPCOPY` opcode (additive, S–M, low risk) — **✓ LANDED 2026-11-05 (Round 42)**
 
 Pure addition: no existing behavior changes. `deepcopy` works on top of the
 current storage (it copies payloads directly, pointer- or value-backed).
@@ -297,11 +302,24 @@ current storage (it copies payloads directly, pointer- or value-backed).
    clause); `docs/compliance/status.md` Open Item (:196) → verified. Compliance
    hashes after the green run (AGENTS.md).
 
-### Phase 2 — pointer-backed storage for `array` / `set` / `blob` (breaking, L, high risk)
+### Phase 2 — pointer-backed storage for `array` / `set` / `blob` (breaking, L, high risk) — **✓ LANDED 2026-11-05 (Round 43)**
 
 The change that makes the **default** share-by-pointer for the value-backed
 types. This is the breaking phase — keep it standalone so any regression is
 easy to bisect.
+
+> **Status (2026-11-05).** All eight items landed; 44/44 ctest green. Deviations
+> from the plan text, all recorded in `docs/compliance/history.md` Round 43:
+> `MOVC` clones containers out of the pool (`freshContainerValue`, recursive) so
+> a literal — including one folded with a deduped twin — is never aliased; array
+> literals with non-constant elements build at runtime (`MOVC []` + `ARRAPP`);
+> `arr += <array-typed expr>` emits `ARRAPPV` per the `+=` spec; `ARRAPPV`
+> snapshots a self-aliased source (`a += a`); `+`, `slice`, `range` and `cast`
+> return fresh payloads; `isEqual`/`cmp` compare by content. Item 7's audit found
+> no script or test that relied on copy-on-assign beyond the expectations already
+> updated. `perf_stress` execute −29 % (13.780 → 9.809 ms); baseline re-recorded.
+> Item 8's migration note is `docs/compliance/migration-value-semantics.md`.
+> **Open decision #7 resolved: clean break** (see below).
 
 1. **`include/qlang/QLangVariant.h`**
    - `ArrayValue` → `std::shared_ptr<std::vector<QLangValue>>` (set reuses the
@@ -371,9 +389,10 @@ semantics, the `13-bytecodes.md` `DEEPCOPY` row + locked encoding rules, and
 `06-functions.md` call-argument semantics) **landed 2026-11-05** and are no
 longer open work. Remaining:
 
-1. **Migration note** — a short `docs/compliance/` entry: array/set/blob
-   assignment and call arguments changed from copy to share in this round;
-   scripts that needed an independent copy must now write `deepcopy(x)`.
+1. **Migration note** — **✓ LANDED 2026-11-05** with Phase 2:
+   `docs/compliance/migration-value-semantics.md` (what changed, the `deepcopy()`
+   replacement, an audit checklist of patterns whose meaning changed, the C++
+   accessor update, and the "no compat layer" decision).
 2. **Tracking** — flip the `deepcopy` Open Item in `docs/compliance/status.md`
    (:196) as each phase lands; append an audit round to
    `docs/compliance/history.md`.
@@ -414,10 +433,15 @@ longer open work. Remaining:
 6. **`copy` parameter specifier (Option D)** — `def f(copy x)` to deep-copy a
    param on entry. Deferred: Option A (`deepcopy` builtin) was chosen; the
    specifier is a natural later sugar over it.
-7. **Rollout of the breaking change** — version bump / compat flag for old
-   `.qlc` (copy semantics) vs a clean break (the spec's compat rule is "exact
-   same compiler version", `13-bytecodes.md:492`, so a clean break is
-   defensible). Decide in the Phase 2 round.
+7. **Rollout of the breaking change** — **✓ RESOLVED 2026-11-05: clean break.**
+   No version bump, no compat flag, no copy-semantics shim for old images. The
+   `.qlc` **durable layout did not change** (the writer stores payloads, the
+   `shared_ptr` is an in-memory detail — `SERIALIZATION.md` R5), so pre-Phase-2
+   files still load and decode into fresh payloads; the break is purely at the
+   **source-language** level, and the spec's compat rule ("exact same compiler
+   version", `13-bytecodes.md`) already forbids mixing images across builds.
+   Scripts that need the old independent-copy behavior write `deepcopy(x)` —
+   see `docs/compliance/migration-value-semantics.md`.
 
 ---
 

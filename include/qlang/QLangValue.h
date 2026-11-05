@@ -103,21 +103,48 @@ public:
     q.m_storage = std::move(v);
     return q;
   }
-  static QLangValue Blob(std::vector<uint8_t> v) {
+  // Container factories (Phase 2: array/set/blob are pointer-backed).
+  // Each type has three forms: adopt an existing payload (SHARE it, used by
+  // `deepcopy` and by anything that must not fork the storage), build a FRESH
+  // payload from elements, and build a fresh empty payload. The zero-argument
+  // form exists because `QLangValue::Blob({})` would be ambiguous between the
+  // payload and the element-vector overloads.
+  static QLangValue Blob(BlobValue v) {
     QLangValue q(Type::Blob);
-    q.m_storage = std::move(v);
+    q.m_storage = v ? std::move(v) : std::make_shared<std::vector<uint8_t>>();
     return q;
   }
+  static QLangValue Blob(std::vector<uint8_t> v) {
+    auto p = std::make_shared<std::vector<uint8_t>>(std::move(v));
+    QLangValue q(Type::Blob);
+    q.m_storage = std::move(p);
+    return q;
+  }
+  static QLangValue Blob() { return Blob(std::vector<uint8_t>{}); }
   static QLangValue Array(ArrayValue v) {
     QLangValue q(Type::Array);
-    q.m_storage = std::move(v);
+    q.m_storage = v ? std::move(v) : std::make_shared<std::vector<QLangValue>>();
     return q;
   }
+  static QLangValue Array(std::vector<QLangValue> v) {
+    auto p = std::make_shared<std::vector<QLangValue>>(std::move(v));
+    QLangValue q(Type::Array);
+    q.m_storage = std::move(p);
+    return q;
+  }
+  static QLangValue Array() { return Array(std::vector<QLangValue>{}); }
   static QLangValue Set(ArrayValue v) {
     QLangValue q(Type::Set);
-    q.m_storage = std::move(v);
+    q.m_storage = v ? std::move(v) : std::make_shared<std::vector<QLangValue>>();
     return q;
   }
+  static QLangValue Set(std::vector<QLangValue> v) {
+    auto p = std::make_shared<std::vector<QLangValue>>(std::move(v));
+    QLangValue q(Type::Set);
+    q.m_storage = std::move(p);
+    return q;
+  }
+  static QLangValue Set() { return Set(std::vector<QLangValue>{}); }
   static QLangValue Float(double v) {
     QLangValue q(Type::Float);
     q.m_storage = v;
@@ -210,8 +237,13 @@ public:
   int64_t &asLong();
   const std::string &asString() const;
   std::string &asString();
-  const std::vector<uint8_t> &asBlob() const;
-  std::vector<uint8_t> &asBlob();
+  // Container accessors return the shared payload handle, not the payload
+  // itself: `v.asArray()->size()`, `(*v.asArray())[i]`. The mutable overload
+  // hands back the same handle, so mutating through it mutates every alias
+  // (SPEC §types "value semantics": non-primitives share). `payload.get()` is
+  // the value's identity for `deepcopy`'s cycle map.
+  const BlobValue &asBlob() const;
+  BlobValue &asBlob();
   const ArrayValue &asArray() const;
   ArrayValue &asArray();
   const ArrayValue &asSet() const;

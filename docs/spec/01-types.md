@@ -58,11 +58,13 @@ types are either **primitives** (fixed size, fit in a register pair) or
   not on assignment, not on call, not on return.
 - `deepcopy(x)` returns an independent recursive copy, see
   [06-functions.md](06-functions.md) `### deepcopy`.
-- **implementation status**: `deepcopy` is implemented (Phase 1, 2026-11-05).
-  `table`, class instances, closures and external references already share.
-  `array`, `set` and `blob` are still **copied** on assignment and on call —
-  Phase 2 (share-by-default) is pending, tracked in
-  `docs/compliance/status.md` (Open Items).
+- **implementation status**: fully implemented (Phase 1 + Phase 2,
+  2026-11-05). `table`, class instances, closures and external references
+  share; `array`, `set` and `blob` are pointer-backed payloads, so they share
+  on assignment and on call too. `string` stays a value type (the exception
+  above). `deepcopy()` is the only way to get an independent copy.
+  Migration note for the copy-to-share change:
+  `docs/compliance/migration-value-semantics.md`.
 
 
 ## strings

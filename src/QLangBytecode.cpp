@@ -630,16 +630,18 @@ std::string valueKey(const QLangValue &v) {
   case T::Blob:
   {
     const auto &b = v.asBlob();
-    pushU32(static_cast<uint32_t>(b.size()));
-    push(b.data(), b.size());
+    pushU32(static_cast<uint32_t>(b->size()));
+    push(b->data(), b->size());
     break;
   }
   case T::Array:
   case T::Set:
   {
+    // Content key, not the handle: two literals with equal elements must fold
+    // to one pool entry even though each carries its own payload (Phase 2).
     const auto &a = v.asArray();
-    pushU32(static_cast<uint32_t>(a.size()));
-    for (const auto &e : a) {
+    pushU32(static_cast<uint32_t>(a->size()));
+    for (const auto &e : *a) {
       std::string sub = valueKey(e);
       pushU32(static_cast<uint32_t>(sub.size()));
       k.append(sub);

@@ -81,6 +81,15 @@ Rules:
   that re-binds those captures to live frames at load/first-call time. A
   reader that cannot re-bind captures MUST treat a closure with a non-empty
   capture list as unloadable.
+- **R5** The durable form stores **payloads**, never handles. In memory
+  `Blob`, `Array` and `Set` are reference-counted payloads
+  (`shared_ptr<vector<uint8_t>>` / `shared_ptr<vector<QLangValue>>`) so they
+  share on assignment and on call (SPEC §types "value semantics"); on disk the
+  writer dereferences and emits the bytes / element list exactly as before.
+  The pointerization is therefore invisible to this format: tags 10, 11 and 19
+  and the program image (v5) are unchanged, and files written before it still
+  load. A reader always materialises **fresh** payloads — a decoded value
+  never aliases another value's storage.
 
 ## 4. Program image (magic `QLC1`, version 5)
 

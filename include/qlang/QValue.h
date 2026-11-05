@@ -130,10 +130,10 @@ namespace qlang
     // types that are collections.
     template <class T>
     QValue qval_vec(const std::vector<T> &v) {
-        ArrayValue arr;
-        arr.reserve(v.size());
+        auto arr = std::make_shared<std::vector<QLangValue>>();
+        arr->reserve(v.size());
         for (const auto &e : v)
-            arr.push_back(qval_of(e));
+            arr->push_back(qval_of(e));
         return QValue::Array(std::move(arr));
     }
 

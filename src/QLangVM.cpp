@@ -143,16 +143,17 @@ static void attachFinalizer(QLangValue &v, QLangContext &scope) {
 }
 
 // deepcopy(x) (SPEC §functions "deepcopy", plan docs/plans/deepcopy-plan.md):
-// an independent recursive copy of `v`. Primitives, the immutable string and
-// blobs are copied by value; arrays/sets/tables build new containers and
+// an independent recursive copy of `v`. Primitives and the immutable string
+// are copied by value; arrays/sets/blobs/tables build new payloads and
 // recurse; class instances (tables stamped with `__class__`) share the
 // class-level meta keys and every function value, copying only the data
 // fields. Closures, generators, ObjectDescriptors and the external views
 // carry live state or view a C++ object: the SAME handle comes back.
-// `seen` maps an already-copied pointer-backed payload (table map) to its
-// copy so a value that transitively contains itself terminates and the cycle
-// is preserved in the result. Arrays/sets are stored by value (no stable
-// address), so they cannot be keyed until Phase 2 pointerizes them.
+// `seen` maps an already-copied payload address to its copy so a value that
+// transitively contains itself terminates and the cycle is preserved in the
+// result. Since Phase 2 every container — array, set, blob and table — is
+// pointer-backed, so all four are keyable; a self-referencing array
+// (`a[] = a`) now round-trips as a cycle instead of recursing forever.
 static QLangValue deepCopyValue(
     const QLangValue &v, std::unordered_map<const void *, QLangValue> &seen) {
   using Type = QLangValue::Type;
@@ -172,16 +173,37 @@ static QLangValue deepCopyValue(
   case Type::Long:
   case Type::Float:
   case Type::String:
-  case Type::Blob:
     return v;
+  case Type::Blob: {
+    // Bytes only — nothing nested to recurse into, but the payload is shared
+    // storage now, so the copy must be a new buffer.
+    const auto &src = v.asBlob();
+    if (!src)
+      return v;
+    auto sit = seen.find(src.get());
+    if (sit != seen.end())
+      return sit->second;
+    auto copy = std::make_shared<std::vector<uint8_t>>(*src);
+    QLangValue out = QLangValue::Blob(std::move(copy));
+    seen[src.get()] = out;
+    return out;
+  }
   case Type::Array:
   case Type::Set: {
-    ArrayValue out;
-    out.reserve(v.asArray().size());
-    for (const auto &el : v.asArray())
-      out.push_back(deepCopyValue(el, seen));
-    return v.type() == Type::Set ? QLangValue::Set(std::move(out))
-                                 : QLangValue::Array(std::move(out));
+    const auto &src = v.asArray();
+    if (!src)
+      return v;
+    auto sit = seen.find(src.get());
+    if (sit != seen.end())
+      return sit->second; // cycle: emit the existing copy
+    auto out = std::make_shared<std::vector<QLangValue>>();
+    out->reserve(src->size());
+    QLangValue res = v.type() == Type::Set ? QLangValue::Set(out)
+                                           : QLangValue::Array(out);
+    seen[src.get()] = res; // register BEFORE recursing (cycle-safe)
+    for (const auto &el : *src)
+      out->push_back(deepCopyValue(el, seen));
+    return res;
   }
   case Type::Table: {
     const auto &src = v.asTable();
@@ -223,6 +245,52 @@ static QLangValue deepCopyValue(
     return v;
   }
   return v; // unreachable: every Type alternative is covered above
+}
+
+// MOVC materialization (SPEC §value semantics, plan Phase 2). A container
+// constant lives in the function's constant pool for the whole program run,
+// so handing the pool payload to a register would alias it: every later
+// mutation of the register would rewrite the literal for every subsequent
+// evaluation (`local a = [1]; a[] = 2; local b = [1]` would see [1,2]).
+// Containers therefore get a fresh payload here — recursively, so a nested
+// container inside a literal is fresh too. Everything else (scalars, the
+// immutable string, closures, generators, external views) is copied as-is;
+// sharing those handles is the intended semantics.
+// Constant-pool values are built from literals and const-exprs, so they are
+// acyclic and the recursion is bounded by the literal's nesting depth.
+static QLangValue freshContainerValue(const QLangValue &v) {
+  using Type = QLangValue::Type;
+  switch (v.type()) {
+  case Type::Blob: {
+    const auto &src = v.asBlob();
+    if (!src)
+      return v;
+    return QLangValue::Blob(std::make_shared<std::vector<uint8_t>>(*src));
+  }
+  case Type::Array:
+  case Type::Set: {
+    const auto &src = v.asArray();
+    if (!src)
+      return v;
+    auto out = std::make_shared<std::vector<QLangValue>>();
+    out->reserve(src->size());
+    for (const auto &el : *src)
+      out->push_back(freshContainerValue(el));
+    return v.type() == Type::Set ? QLangValue::Set(std::move(out))
+                                 : QLangValue::Array(std::move(out));
+  }
+  case Type::Table: {
+    const auto &src = v.asTable();
+    if (!src)
+      return v;
+    auto out = std::make_shared<std::map<std::string, QLangValue>>();
+    for (const auto &kv : *src)
+      out->emplace(kv.first, freshContainerValue(kv.second));
+    return QLangValue::Table(std::move(out));
+  }
+  default:
+    return v;
+  }
 }
 
 // release(x) (Phase 3, H2): drop the owned shared_ptr of an owned External so
@@ -289,7 +357,7 @@ int cmp(const QLangValue &a, const QLangValue &b, const char *op,
   // array vs array: each value at the relative index; the first differing
   // value decides, the shorter array is less.
   if (a.type() == QLangValue::Type::Array && b.type() == QLangValue::Type::Array) {
-    const auto &ea = a.asArray(), &eb = b.asArray();
+    const auto &ea = *a.asArray(), &eb = *b.asArray();
     size_t n = std::min(ea.size(), eb.size());
     for (size_t i = 0; i < n; i++) {
       int c = cmp(ea[i], eb[i], op, vm);
@@ -325,7 +393,8 @@ int cmp(const QLangValue &a, const QLangValue &b, const char *op,
 
 // Forward decl: set membership test (defined below with the other set helpers);
 // used by isEqual's Set case.
-static bool setContains(const ArrayValue &elems, const QLangValue &v);
+static bool setContains(const std::vector<QLangValue> &elems,
+                        const QLangValue &v);
 
 // Equality per spec §23 (== and !=): Int 1/0. nil == nil true; nil != x true.
 // bool == int (bool stored as Int 1/0 at runtime). Number types compare equal
@@ -347,10 +416,13 @@ bool isEqual(const QLangValue &a, const QLangValue &b) {
   switch (a.type()) {
   case QLangValue::Type::String:
     return a.asString() == b.asString();
+  // Containers compare by CONTENT, never by handle: two aliases of one
+  // payload are equal, and so are two distinct payloads holding equal values
+  // (SPEC §operators "== and !=" — identity is not an equality relation).
   case QLangValue::Type::Blob:
-    return a.asBlob() == b.asBlob();
+    return *a.asBlob() == *b.asBlob();
   case QLangValue::Type::Array: {
-    const auto &ea = a.asArray(), eb = b.asArray();
+    const auto &ea = *a.asArray(), &eb = *b.asArray();
     if (ea.size() != eb.size()) return false;
     for (size_t i = 0; i < ea.size(); ++i)
       if (!isEqual(ea[i], eb[i])) return false;
@@ -369,7 +441,7 @@ bool isEqual(const QLangValue &a, const QLangValue &b) {
   case QLangValue::Type::Set: {
     // Exact match: same unique elements, order-independent (set order is
     // implementation-defined per SPEC §sets).
-    const auto &ea = a.asSet(), eb = b.asSet();
+    const auto &ea = *a.asSet(), &eb = *b.asSet();
     if (ea.size() != eb.size()) return false;
     for (const QLangValue &e : ea)
       if (!setContains(eb, e)) return false;
@@ -401,8 +473,10 @@ static bool setElementEq(const QLangValue &a, const QLangValue &b) {
   }
 }
 
-// True if `elems` already holds a value equal to `v` (set dedup).
-static bool setContains(const ArrayValue &elems, const QLangValue &v) {
+// True if `elems` already holds a value equal to `v` (set dedup). Takes the
+// element vector, not the shared payload: callers deref once.
+static bool setContains(const std::vector<QLangValue> &elems,
+                        const QLangValue &v) {
   for (const auto &e : elems)
     if (setElementEq(e, v)) return true;
   return false;
@@ -410,9 +484,11 @@ static bool setContains(const ArrayValue &elems, const QLangValue &v) {
 
 // Build set storage from source values: numbers and strings only, duplicates
 // dropped, first-seen order kept. Throws (Type) on any other element type.
-static ArrayValue toSetElements(const std::vector<QLangValue> &src,
-                                QLangVM *vm = nullptr) {
-  ArrayValue out;
+// Returns a plain element vector — the QLangValue::Set factory wraps it in a
+// fresh payload, so the result never aliases `src`.
+static std::vector<QLangValue> toSetElements(const std::vector<QLangValue> &src,
+                                             QLangVM *vm = nullptr) {
+  std::vector<QLangValue> out;
   for (const auto &v : src) {
     if (v.type() != QLangValue::Type::String && !isNumeric(v))
       vThrow(vm, QLangErrorKind::Type,
@@ -429,7 +505,7 @@ static ArrayValue toSetElements(const std::vector<QLangValue> &src,
 static void appendValue(QLangValue &base, const QLangValue &val,
                         QLangVM *vm = nullptr) {
   if (base.type() == QLangValue::Type::Array) {
-    base.asArray().push_back(val);
+    (*base.asArray()).push_back(val);
     return;
   }
   if (base.type() == QLangValue::Type::Set) {
@@ -437,8 +513,8 @@ static void appendValue(QLangValue &base, const QLangValue &val,
       vThrow(vm, QLangErrorKind::Type,
              std::string("set element must be a number or string, got ") +
                  val.typeName());
-    if (!setContains(base.asSet(), val))
-      base.asSet().push_back(val);
+    if (!setContains(*base.asSet(), val))
+      (*base.asSet()).push_back(val);
     return;
   }
   vThrow(vm, QLangErrorKind::Type, "cannot append to non-array value");
@@ -452,9 +528,9 @@ int64_t lenOf(const QLangValue &v, QLangVM *vm = nullptr) {
   case QLangValue::Type::Nil:
     vThrow(vm, QLangErrorKind::Runtime, "len: undefined/nil has no length");
   case QLangValue::Type::String: return v.asString().size();
-  case QLangValue::Type::Array: return v.asArray().size();
-  case QLangValue::Type::Set: return static_cast<int64_t>(v.asSet().size());
-  case QLangValue::Type::Blob: return v.asBlob().size();
+  case QLangValue::Type::Array: return static_cast<int64_t>(v.asArray()->size());
+  case QLangValue::Type::Set: return static_cast<int64_t>(v.asSet()->size());
+  case QLangValue::Type::Blob: return static_cast<int64_t>(v.asBlob()->size());
   case QLangValue::Type::Table: {
     auto t = v.asTable();
     if (t->find("__class__") != t->end()) return 1; // class instance
@@ -484,13 +560,13 @@ QLangValue seqGet(const QLangValue &col, int64_t idx, QLangVM *vm = nullptr) {
     return QLangValue::Byte(static_cast<uint8_t>(s[static_cast<size_t>(idx)]));
   }
   if (col.type() == QLangValue::Type::Array) {
-    const auto &elems = col.asArray();
+    const auto &elems = *col.asArray();
     if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
       vThrow(vm, QLangErrorKind::Runtime, "array index out of range");
     return elems[static_cast<size_t>(idx)];
   }
   if (col.type() == QLangValue::Type::Set) {
-    const auto &elems = col.asSet();
+    const auto &elems = *col.asSet();
     if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
       vThrow(vm, QLangErrorKind::Runtime, "set index out of range");
     return elems[static_cast<size_t>(idx)];
@@ -809,14 +885,14 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
   }
   case Builtin::Blob: {
     need(0, "blob");
-    return QLangValue::Blob(std::vector<uint8_t>{});
+    return QLangValue::Blob();
   }
   case Builtin::Set: {
     // set(1,5,7) variadic, or set([1,2,3]) with a single array argument
     // (SPEC §sets: array coerced into set).
     std::vector<QLangValue> src;
     if (args.size() == 1 && args[0].type() == QLangValue::Type::Array)
-      src = args[0].asArray();
+      src = *args[0].asArray();
     else
       src = args;
     return QLangValue::Set(toSetElements(src, vm));
@@ -853,7 +929,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     if (args[0].type() != QLangValue::Type::Array)
       thr(QLangErrorKind::Type,
                        "slice: first argument must be an array");
-    const std::vector<QLangValue> &arr = args[0].asArray();
+    const std::vector<QLangValue> &arr = *args[0].asArray();
     int64_t start = (long long)toInt64(args[1]);
     int64_t len = (args.size() == 3)
                       ? (long long)toInt64(args[2])
@@ -861,14 +937,14 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
     if (start < 0) start = 0;
     if (len < 0) len = 0;
     if (start >= static_cast<int64_t>(arr.size()))
-      return QLangValue::Array({});
+      return QLangValue::Array();
     if (start + len > static_cast<int64_t>(arr.size()))
       len = static_cast<int64_t>(arr.size()) - start;
     std::vector<QLangValue> result;
     result.reserve(static_cast<size_t>(len));
     for (int64_t i = 0; i < len; ++i)
       result.push_back(arr[static_cast<size_t>(start) + i]);
-    return QLangValue::Array(result);
+    return QLangValue::Array(std::move(result));
   }
   case Builtin::Range: {
     // range(start, end) — inclusive on both ends; returns [start, start+1, ...,
@@ -884,7 +960,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
       for (int64_t i = start; i <= end; ++i)
         result.push_back(QLangValue::Int(static_cast<int32_t>(i)));
     }
-    return QLangValue::Array(result);
+    return QLangValue::Array(std::move(result));
   }
   case Builtin::Join: {
     // join(separator, array) — concatenates array elements with separator.
@@ -896,7 +972,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
       thr(QLangErrorKind::Type,
                        "join: second argument must be an array");
     const std::string &sep = args[0].asString();
-    const auto &elems = args[1].asArray();
+    const auto &elems = *args[1].asArray();
     std::string result;
     for (size_t i = 0; i < elems.size(); ++i) {
       if (i > 0) result += sep;
@@ -1046,10 +1122,10 @@ bool QLangVM::isTrue(const QLangValue &v) {
   case QLangValue::Type::Nil: return false;
   case QLangValue::Type::Eof: return false;
   case QLangValue::Type::String: return !v.asString().empty();
-  case QLangValue::Type::Array: return !v.asArray().empty();
+  case QLangValue::Type::Array: return !v.asArray()->empty();
   case QLangValue::Type::Table: return !v.asTable()->empty();
-  case QLangValue::Type::Blob: return !v.asBlob().empty();
-  case QLangValue::Type::Set: return !v.asSet().empty();
+  case QLangValue::Type::Blob: return !v.asBlob()->empty();
+  case QLangValue::Type::Set: return !v.asSet()->empty();
   case QLangValue::Type::Generator: return true;
   case QLangValue::Type::Function:
     // SPEC §boolean evaluation: truthiness of a function/lambda is
@@ -1250,7 +1326,7 @@ std::string QLangVM::displayString(const QLangValue &v) {
   }
   if (v.type() == QLangValue::Type::Array) {
     // Implicit __str__ renders the elements: [e1, e2, ...]
-    const auto &a = v.asArray();
+    const auto &a = *v.asArray();
     std::string out = "[";
     for (size_t i = 0; i < a.size(); i++) {
       if (i) out += ", ";
@@ -1260,7 +1336,7 @@ std::string QLangVM::displayString(const QLangValue &v) {
   }
   if (v.type() == QLangValue::Type::Set) {
     // Set __str__: set(e1, e2, ...) (SPEC §sets).
-    const auto &a = v.asSet();
+    const auto &a = *v.asSet();
     std::string out = "set(";
     for (size_t i = 0; i < a.size(); i++) {
       if (i) out += ", ";
@@ -1357,7 +1433,7 @@ QLangValue convert(const QLangValue &v, QLangValue::Type type) {
     // Typed declaration: array coerced into a set (SPEC §sets); a set passes
     // through; anything else passes through (lenient, like array/table).
     if (v.type() == QLangValue::Type::Array)
-      return QLangValue::Set(toSetElements(v.asArray()));
+      return QLangValue::Set(toSetElements(*v.asArray()));
     return v;
   default: return v;
   }
@@ -1415,10 +1491,13 @@ QLangValue strict_convert(const QLangValue &v, QLangValue::Type type,
   // same-type collections pass through; anything else is rejected.
   if (type == QLangValue::Type::Array || type == QLangValue::Type::Table ||
       type == QLangValue::Type::Set) {
+    // A conversion builds a NEW payload: sharing the source handle would let a
+    // mutation of the cast result reach the original (Phase 2 shares on
+    // assignment and call, not across an explicit cast).
     if (type == QLangValue::Type::Array && v.type() == QLangValue::Type::Set)
-      return QLangValue::Array(v.asSet()); // cast<array>(set)
+      return QLangValue::Array(*v.asSet()); // cast<array>(set)
     if (type == QLangValue::Type::Set && v.type() == QLangValue::Type::Array)
-      return QLangValue::Set(toSetElements(v.asArray(), vm)); // cast<set>(array)
+      return QLangValue::Set(toSetElements(*v.asArray(), vm)); // cast<set>(array)
     if (v.type() != QLangValue::Type::Array && v.type() != QLangValue::Type::Table &&
         v.type() != QLangValue::Type::Set) {
       vThrow(vm, QLangErrorKind::Type,
@@ -1478,9 +1557,10 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
     if (a.type() == QLangValue::Type::Array &&
         b.type() == QLangValue::Type::Array) {
       // Array concatenation: aa + ab -> new array (spec: "append both arrays").
-      ArrayValue result = a.asArray();
-      const auto &extra = b.asArray();
-      result.insert(result.end(), extra.begin(), extra.end());
+      // The result is a fresh payload — `a + b` must not reach into `a`.
+      auto result = std::make_shared<std::vector<QLangValue>>(*a.asArray());
+      const auto &extra = *b.asArray();
+      result->insert(result->end(), extra.begin(), extra.end());
       return QLangValue::Array(std::move(result));
     }
     if (a.type() == QLangValue::Type::Float ||
@@ -1573,7 +1653,7 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
     // table (key match). Returns a Bool (spec §143-147).
     const QLangValue &col = b;
     if (col.type() == QLangValue::Type::Array) {
-      for (const QLangValue &e : col.asArray())
+      for (const QLangValue &e : *col.asArray())
         if (cmp(a, e, "in") == 0)
           return QLangValue::Bool(1);
       return QLangValue::Bool(0);
@@ -1585,7 +1665,7 @@ QLangValue QLangVM::doBinary(Opcode op, const QLangValue &a, const QLangValue &b
     if (col.type() == QLangValue::Type::Set) {
       // `x in set` mirrors `x in [..]` (SPEC §sets); element equality is the
       // same exact-match rule set dedup uses.
-      return QLangValue::Bool(setContains(col.asSet(), a) ? 1 : 0);
+      return QLangValue::Bool(setContains(*col.asSet(), a) ? 1 : 0);
     }
     thr(QLangErrorKind::Type,
                      std::string("operator 'in' requires an array, table or set, got ") +
@@ -1821,7 +1901,9 @@ RunResult QLangVM::runFrames() {
 
     switch (op) {
     case Opcode::MOVC:
-      frame.regs[i.a] = consts[i.b];
+      // Containers are cloned out of the pool so a register mutation cannot
+      // reach the literal (see freshContainerValue).
+      frame.regs[i.a] = freshContainerValue(consts[i.b]);
       break;
     case Opcode::MOVI:
       frame.regs[i.a] = QLangValue::Int(static_cast<int32_t>(i.imm));
@@ -1882,7 +1964,7 @@ RunResult QLangVM::runFrames() {
       if (base.type() != QLangValue::Type::Array)
         vmThrow(QLangErrorKind::Type, "cannot subscript non-array value");
       int64_t idx = (long long)toInt64(frame.regs[i.c]);
-      const auto &elems = base.asArray();
+      const auto &elems = *base.asArray();
       if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
         vmThrow(QLangErrorKind::Runtime, "array index out of range");
       frame.regs[i.a] = elems[static_cast<size_t>(idx)];
@@ -1893,7 +1975,7 @@ RunResult QLangVM::runFrames() {
       if (base.type() != QLangValue::Type::Array)
         vmThrow(QLangErrorKind::Type, "cannot assign into non-array value");
       int64_t idx = (long long)toInt64(frame.regs[i.b]);
-      auto &elems = base.asArray();
+      auto &elems = *base.asArray();
       if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
         vmThrow(QLangErrorKind::Runtime, "array index out of range");
       elems[static_cast<size_t>(idx)] = frame.regs[i.c];
@@ -1910,9 +1992,16 @@ RunResult QLangVM::runFrames() {
         vmThrow(QLangErrorKind::Type, "cannot append non-array to array");
       if (frame.regs[i.b].type() != QLangValue::Type::Array)
         vmThrow(QLangErrorKind::Type, "cannot append non-array to array");
-      auto &elems = base.asArray();
-      const auto &extra = frame.regs[i.b].asArray();
-      elems.insert(elems.end(), extra.begin(), extra.end());
+      auto &elems = *base.asArray();
+      const ArrayValue &extra = frame.regs[i.b].asArray();
+      // `a += b` where b shares a's payload (`a += a`, Phase 2 aliasing) would
+      // invalidate the iterators mid-insert: snapshot the source first.
+      if (extra.get() == base.asArray().get()) {
+        std::vector<QLangValue> copy = elems;
+        elems.insert(elems.end(), copy.begin(), copy.end());
+      } else {
+        elems.insert(elems.end(), extra->begin(), extra->end());
+      }
       break;
     }
     case Opcode::ARRLEN:

@@ -187,10 +187,10 @@ QLangValue decodeValue(Reader &r, int depth, size_t &valueCount) {
   }
   case T::Array: {
     uint32_t count = r.u32();
-    ArrayValue a;
-    a.reserve(count);
+    auto a = std::make_shared<std::vector<QLangValue>>();
+    a->reserve(count);
     for (uint32_t i = 0; i < count; i++)
-      a.push_back(decodeValue(r, depth + 1, valueCount));
+      a->push_back(decodeValue(r, depth + 1, valueCount));
     return QLangValue::Array(std::move(a));
   }
   case T::Float:
@@ -231,10 +231,10 @@ QLangValue decodeValue(Reader &r, int depth, size_t &valueCount) {
     return QLangValue::Long(r.i64());
   case T::Set: {
     uint32_t count = r.u32();
-    ArrayValue a;
-    a.reserve(count);
+    auto a = std::make_shared<std::vector<QLangValue>>();
+    a->reserve(count);
     for (uint32_t i = 0; i < count; i++)
-      a.push_back(decodeValue(r, depth + 1, valueCount));
+      a->push_back(decodeValue(r, depth + 1, valueCount));
     return QLangValue::Set(std::move(a));
   }
   }
@@ -258,7 +258,7 @@ bool isDurable(const QLangValue &v) {
   case T::Array:
   case T::Set: {
     const auto &a = (t == T::Array) ? v.asArray() : v.asSet();
-    for (const auto &e : a)
+    for (const auto &e : *a)
       if (!isDurable(e))
         return false;
     break;
@@ -318,17 +318,20 @@ void serializeValue(std::ostream &os, const QLangValue &v) {
   case T::String:
     putStr(os, v.asString());
     break;
+  // The shared_ptr is an in-memory detail: the durable form stores the
+  // PAYLOAD (bytes / element list), so the .qlc layout is unchanged by
+  // Phase 2 pointerization (SPEC §bytecodes "constant pool", SERIALIZATION §4).
   case T::Blob: {
     const auto &b = v.asBlob();
-    putU32(os, static_cast<uint32_t>(b.size()));
-    putBytes(os, b.data(), b.size());
+    putU32(os, static_cast<uint32_t>(b->size()));
+    putBytes(os, b->data(), b->size());
     break;
   }
   case T::Array:
   case T::Set: {
     const auto &a = (t == T::Array) ? v.asArray() : v.asSet();
-    putU32(os, static_cast<uint32_t>(a.size()));
-    for (const auto &e : a)
+    putU32(os, static_cast<uint32_t>(a->size()));
+    for (const auto &e : *a)
       serializeValue(os, e);
     break;
   }

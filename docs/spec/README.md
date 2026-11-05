@@ -11,7 +11,7 @@ defined against C++20.
 
 | Module | Domain | SHA256 |
 |--------|--------|--------|
-| [01-types.md](01-types.md) | language intro, data types, value semantics, strings, sets, append | `be6cae8db3b285e8ea38780111997f0fe09eda25621690814e1ae212f932fd7a` |
+| [01-types.md](01-types.md) | language intro, data types, value semantics, strings, sets, append | `4ed004cec48d9c1ec3626c48deb02919e9c3b6c6831b1eb7332fa11aa02b2c64` |
 | [02-lexical.md](02-lexical.md) | reserved words, constants, enum, comments | `0e746264958922212c10368a5f8085f520c39e1712b46694f8ea92a8c218c46a` |
 | [03-declarations.md](03-declarations.md) | boolean evaluation, declarations and assignments | `a50f56689fdc330b7d9bfe28faa7d8806ecb6801959d2b262cec312747c82c68` |
 | [04-control-flow.md](04-control-flow.md) | conditions, range, switch, loops, label/goto | `b531d6356ea43f7b470c3e22f4f58af887926b8987533b419ce91602c0e0d0e2` |

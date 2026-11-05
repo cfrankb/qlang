@@ -629,14 +629,14 @@ namespace
     case T::String:
       return quoteString(v.asString());
     case T::Blob:
-      return "<" + std::to_string(v.asBlob().size()) + " bytes>";
+      return "<" + std::to_string(v.asBlob()->size()) + " bytes>";
     case T::Array:
     case T::Set:
     {
       if (depth)
         return "[...]";
       std::string s = "[";
-      const auto &a = v.asArray();
+      const auto &a = *v.asArray();
       for (size_t i = 0; i < a.size(); i++)
       {
         if (i)

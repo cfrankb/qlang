@@ -224,6 +224,14 @@ add_executable(phase5_api tests/unit/phase5_api.cpp)
 target_link_libraries(phase5_api PRIVATE qlang)
 add_test(NAME phase5_api COMMAND phase5_api)
 
+# Value semantics (docs/spec/01-types.md `## value semantics`, plan
+# docs/plans/deepcopy-plan.md Phase 2): array/set/blob are pointer-backed, so
+# they share on assignment and on call, a literal is fresh on every
+# evaluation, and deepcopy is the only way to fork the storage.
+add_executable(value_semantics tests/unit/value_semantics.cpp)
+target_link_libraries(value_semantics PRIVATE qlang)
+add_test(NAME value_semantics COMMAND value_semantics)
+
 # Script-level regression suite (tests/scripts/). Each .ql script is driven
 # by qlang_run (the smoke-test app); a non-zero exit code fails the suite.
 # Explicit list (Phase 5, F7) — no file(GLOB), so a new script is a deliberate
@@ -248,6 +256,7 @@ set(QL_SCRIPTS
   test_minmax.ql
   test_minmax2.ql
   type.ql
+  value_share.ql
 )
 foreach(ql_script IN LISTS QL_SCRIPTS)
   get_filename_component(ql_name ${ql_script} NAME_WE)

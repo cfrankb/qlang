@@ -49,7 +49,19 @@ using ClosurePtr = std::shared_ptr<Closure>;
 
 // A script array is a homogeneous C++ container of mixed script values.
 // The value itself is recursively a QLangValue, so arrays nest freely.
-using ArrayValue = std::vector<QLangValue>;
+//
+// Phase 2 of docs/plans/deepcopy-plan.md: the payload is held behind a
+// shared_ptr so that `array` (and `set`, which reuses this alternative) is
+// SHARED on assignment and on call, like `table` always has been. Copying a
+// QLangValue now copies the handle; mutating through one name is visible
+// through every other name (SPEC §types "value semantics"). The payload
+// address doubles as the value's identity for `deepcopy`'s cycle map.
+using ArrayValue = std::shared_ptr<std::vector<QLangValue>>;
+
+// Blob payload, pointer-backed for the same reason as ArrayValue: a blob is a
+// non-primitive, so it shares rather than copies (SPEC §types "value
+// semantics"). `string` deliberately stays a value type — it is immutable.
+using BlobValue = std::shared_ptr<std::vector<uint8_t>>;
 
 // A generator instance (Phase 1 substrate): owns its saved frame state.
 // Each generator value is an independent instance — there is no VM-level
@@ -134,9 +146,15 @@ struct TypeRefRef {
 // float, table, function (closure), generator. Index 0 is monostate (nil).
 // The last three alternatives (ExternalRef, BoundMethodRef, TypeRefRef) are
 // non-durable: the codec serializes them as Nil (tag 0).
+//
+// Storage classes (SPEC §types "value semantics"): the fixed-size scalars and
+// the immutable `string` live in the variant itself, so assigning or passing
+// one copies the value. Every non-primitive — `blob`, `array`, `set`, `table`
+// and the reference types — is a shared_ptr, so assigning or passing one
+// shares the payload; `deepcopy()` is the only way to get an independent copy.
 using QLangVariant = std::variant<std::monostate, uint8_t, uint16_t, int16_t,
                                   int32_t, uint32_t, uint64_t, double,
-                                  std::string, std::vector<uint8_t>, ArrayValue,
+                                  std::string, BlobValue, ArrayValue,
                                   TableValue, ClosurePtr, GeneratorValuePtr,
                                   ObjectValue, int64_t, ExternalRef,
                                   BoundMethodRef, TypeRefRef>;

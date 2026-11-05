@@ -1150,8 +1150,9 @@ int main() {
         fails++;
       }
     };
-    check("empty blob falsy", vm.isTrue(QLangValue::Blob({})), false);
-    check("non-empty blob truthy", vm.isTrue(QLangValue::Blob({1, 2, 3})), true);
+    check("empty blob falsy", vm.isTrue(QLangValue::Blob()), false);
+    check("non-empty blob truthy",
+          vm.isTrue(QLangValue::Blob(std::vector<uint8_t>{1, 2, 3})), true);
     // sanity: rows also expressible in scripts
     check("nil falsy", vm.isTrue(QLangValue()), false);
     check("0 falsy", vm.isTrue(QLangValue::Int(0)), false);

@@ -9,10 +9,10 @@ Phases 0–5, not from the legacy monolith.
 
 | Requirement (15-tests.md) | Status | Evidence |
 |---|---|---|
-| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (20 C++ harnesses), `tests/scripts/` (19 `.ql`), `tests/perf/`; `examples/` holds demos only — `hello.cpp` (smoke app) + `qlang_run.cpp` (runner) |
+| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (21 C++ harnesses), `tests/scripts/` (20 `.ql`), `tests/perf/`; `examples/` holds demos only — `hello.cpp` (smoke app) + `qlang_run.cpp` (runner) |
 | Tests run after every task (regression gate) | ✓ | ctest is the gate (AGENTS.md "Build & test"); CI on every push to `main` |
-| Regression tests exist | ✓ | 19 script regressions (`script_*`, driven by `qlang_run`) + all 20 unit suites |
-| Unit tests exist (features + edge cases) | ✓ | 21 unit suites — see ctest matrix below |
+| Regression tests exist | ✓ | 20 script regressions (`script_*`, driven by `qlang_run`) + all 21 unit harnesses |
+| Unit tests exist (features + edge cases) | ✓ | 22 unit suites — see ctest matrix below |
 | Performance tests: immutable baseline for parser/compiler/execution time, logged and compared | ✓ | `tests/perf/perf_bench.cpp` + committed `tests/perf/baseline.json`; ctest `perf` gate (±20% / 0.5 ms) |
 | GitHub CI: library + smoke app + test suite against `msvc`, `g++`, `mingw`, `wasm`, `clang` | ✓ | three workflows, per the spec's "three separate ci/cd yaml" — see CI matrix |
 | Running on C++20 | ✓ | `CMAKE_CXX_STANDARD 20` (root `CMakeLists.txt`) |
@@ -27,20 +27,20 @@ tests/
             test_module.cpp test_external.cpp test_inject.cpp test_dollar_operator.cpp
             test_native.cpp test_call.cpp
             phase0_scope.cpp phase0_api.cpp phase2_scope.cpp phase3_api.cpp
-            phase5_api.cpp
+            phase5_api.cpp value_semantics.cpp
   scripts/  cast.ql cmp.ql encode_repro.ql ext_consts.ql ext_regs.ql
             hello.ql helpers.ql jump_widths.ql len.ql money.ql
             moneyv2.ql perf_stress.ql test_assert.ql test_assert2.ql test_cast.ql
-            test_cast2.ql test_minmax.ql test_minmax2.ql type.ql
+            test_cast2.ql test_minmax.ql test_minmax2.ql type.ql value_share.ql
   perf/     perf_bench.cpp baseline.json
 ```
 
 `examples/` retains only real demos: `hello.cpp` (smoke app) and `qlang_run.cpp`
 (script runner / smoke-test app).
 
-### ctest matrix — 42 entries (42/42 green, 2026-11-05)
+### ctest matrix — 44 entries (44/44 green, 2026-11-05)
 
-Unit (21):
+Unit (22):
 
 | ctest | binary | source | result |
 |---|---|---|---|
@@ -66,15 +66,16 @@ Unit (21):
 | `phase2_scope` | `phase2_scope` | `tests/unit/phase2_scope.cpp` | 7 checks (global-table scope) |
 | `phase3_api` | `phase3_api` | `tests/unit/phase3_api.cpp` | 23 checks (handles, type-mismatch, finalizer queue, `release()`) |
 | `phase5_api` | `phase5_api` | `tests/unit/phase5_api.cpp` | 17 checks (step budget, threading contract) |
+| `value_semantics` | `value_semantics` | `tests/unit/value_semantics.cpp` | 40 checks (Round 43 share-by-default array/set/blob: aliasing on assign/call, literal freshness, `deepcopy` independence + array cycles, `+`/`cast` freshness, `a += a`, `string` still a value type) |
 
-Counted unit cases: **913** (499+33+20+7+5+22+13+17+18+49+8+123+41+8+3+7+23+17), plus
+Counted unit cases: **953** (499+33+20+7+5+22+13+17+18+49+8+123+41+8+3+7+23+17+40), plus
 the three `ALL PASS` gate suites (`test_native`, `test_call`, `test_inject`).
 
-Script (19): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
+Script (20): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
 `qlang_run` (non-zero exit = fail): `cast`, `cmp`, `encode_repro`, `ext_consts`,
 `ext_regs`, `hello`, `helpers`, `jump_widths`, `len`, `money`, `moneyv2`,
 `perf_stress`, `test_assert`, `test_assert2`, `test_cast`, `test_cast2`,
-`test_minmax`, `test_minmax2`, `type`.
+`test_minmax`, `test_minmax2`, `type`, `value_share`.
 
 Perf (1): `perf` — `perf_bench` compared against `baseline.json` (below).
 
@@ -93,6 +94,13 @@ Perf (1): `perf` — `perf_bench` compared against `baseline.json` (below).
 - `--update-baseline` regenerates `tests/perf/baseline.json` (a deliberate act,
   always a separate commit). `baseline.json` is the immutable reference
   (calibrated g++/Linux Release).
+- **Re-recorded Round 43 (2026-11-05)** after the share-by-default change:
+  `perf_stress` execute dropped 13.780 ms → 9.809 ms (−29 %, the array churn no
+  longer deep-copies on every move), which the ±20 % gate flags in *both*
+  directions, so the baseline was regenerated deliberately. It is the only stage
+  above the 0.5 ms absolute floor — every other stage moved by ≤ 74 µs and is
+  dominated by host noise (sub-0.2 ms stages vary by ±15 % run to run), so their
+  new medians are not attributable to this change.
 - Build-type handling: non-Release builds → `perf_bench` exits 77 → ctest reports
   **Skipped** (`set_tests_properties(perf PROPERTIES SKIP_RETURN_CODE 77)`).
   Cross-compiler jobs exclude the gate (`ctest -E perf`); the gxx job runs it and

@@ -65,11 +65,11 @@ static bool valueEq(const QLangValue &x, const QLangValue &y) {
   case T::String:
     return x.asString() == y.asString();
   case T::Blob:
-    return x.asBlob() == y.asBlob();
+    return *x.asBlob() == *y.asBlob();
   case T::Array:
   case T::Set: {
-    const auto &a = (x.type() == T::Array) ? x.asArray() : x.asSet();
-    const auto &b = (y.type() == T::Array) ? y.asArray() : y.asSet();
+    const auto &a = *((x.type() == T::Array) ? x.asArray() : x.asSet());
+    const auto &b = *((y.type() == T::Array) ? y.asArray() : y.asSet());
     if (a.size() != b.size())
       return false;
     for (size_t i = 0; i < a.size(); i++)
@@ -155,8 +155,8 @@ static void testValues() {
       {"float big", QLangValue::Float(1e300)},
       {"string empty", QLangValue::String("")},
       {"string", QLangValue::String("héllo wörld\n")},
-      {"blob empty", QLangValue::Blob({})},
-      {"blob", QLangValue::Blob({0, 1, 2, 255})},
+      {"blob empty", QLangValue::Blob()},
+      {"blob", QLangValue::Blob(std::vector<uint8_t>{0, 1, 2, 255})},
       {"array nested",
        QLangValue::Array({QLangValue::Int(1),
                           QLangValue::Array({QLangValue::String("x")}),

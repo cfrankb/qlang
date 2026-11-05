@@ -1,3 +1,76 @@
+## Round 43 (2026-11-05)
+
+**deepcopy Phase 2 — `array` / `set` / `blob` share by default** (**breaking**).
+Plan `docs/plans/deepcopy-plan.md` Phase 2; spec `01-types.md`
+`## value semantics` (Phase 1 landed the same date, recorded in `status.md` as
+Round 42).
+
+- **Storage.** `QLangVariant.h`: `ArrayValue` is now
+  `std::shared_ptr<std::vector<QLangValue>>` (`set` reuses the alternative) and
+  the blob alternative became `BlobValue = std::shared_ptr<std::vector<uint8_t>>`.
+  Copying a `QLangValue` copies the handle, so assignment and call arguments
+  **share** — the spec's rule for every non-primitive. `string` deliberately
+  stays `std::string` (immutable exception, design decision #3).
+- **API.** `QLangValue::asArray()/asSet()/asBlob()` (const + mutable) return the
+  payload handle; call sites deref (`v.asArray()->size()`, `(*v.asArray())[i]`).
+  Each container factory gained three forms: `Array(shared_ptr)` **adopts**
+  (shares) an existing payload, `Array(std::vector<…>)` builds a fresh one,
+  `Array()` / `Blob()` / `Set()` build a fresh empty one (the zero-arg form also
+  resolves the old `Blob({})` ambiguity). Updated: `QLangVM.cpp` (every
+  array/set/blob site, `cmp`, `isEqual`, `lenOf`, `seqGet`, `isTrue`,
+  `displayString`, `convert`/`strict_convert`, `doBinary`, `callBuiltin`, the
+  `runFrames` `ARRGET/ARRSET/ARRAPP/ARRAPPV` handlers), `QLangCompiler.cpp`,
+  `QLangBytecode.cpp` (`valueKey`), `QLangBytecodeIO.cpp`, `QLangModules.cpp`,
+  `QValue.h`, `examples/qlang_run.cpp`.
+- **Literal freshness (`MOVC`).** A container constant lives in the pool for the
+  whole run, so handing its payload to a register would alias the literal. `MOVC`
+  now runs containers through `freshContainerValue` (recursive: nested arrays,
+  sets, blobs and tables inside a literal are fresh too). This also fixes the
+  interaction with constant-pool dedup — two identical literals folded to one
+  entry used to hand out one shared table, which is why `perf_stress`'s
+  `{n=0, v=0}` loop and the `L3` check matter. Scalars, the immutable string,
+  closures, generators and external views are copied as-is (sharing those
+  handles is the semantics).
+- **Array literals with non-constant elements** (`local outer = [inner]`) are now
+  built at runtime: `MOVC []` into the destination + `ARRAPP` per element
+  (precedent: the runtime-built table literal). Previously every element went
+  through `evalConstExpr`, so a variable element silently became a compile error.
+- **`arr += <array-typed expr>`** now emits `ARRAPPV` (extend) instead of
+  `ARRAPP` (append one element), decided by `inferType()` of the RHS — the old
+  test was `ExprKind::Array` only, so `x += x` appended the array as a single
+  element, contradicting `01-types.md` / the `+=` spec.
+- **`deepCopyValue`.** Array/set/blob payloads have a stable address now, so all
+  three join the cycle identity map (registered **before** recursing); a blob
+  copy is a new buffer. `a[] = a` is constructible and round-trips as a cycle
+  instead of recursing forever — this removes the Phase 1 "cycles are only
+  observable through tables" limitation.
+- **Self-aliasing guards.** `ARRAPPV` snapshots the source when the operand
+  shares the destination's payload (`a += a`), which previously invalidated the
+  iterators mid-`insert`. `a + b`, `slice`, `range`, `cast<array>(set)` and
+  `cast<set>(array)` build **fresh** payloads; `isEqual`/`cmp` compare containers
+  by content, never by handle.
+- **`.qlc` unchanged (v5).** The durable form stores payloads, the pointer is an
+  in-memory detail — `SERIALIZATION.md` gained rule **R5** saying so; the codec
+  only derefs around the existing encode/decode. **Open decision #7 resolved:
+  clean break** — no version bump, no compat flag, no copy-semantics shim for old
+  images (the spec's rule is "the exact same compiler version"). Migration note:
+  `docs/compliance/migration-value-semantics.md`.
+- **Tests.** New `value_semantics` suite (`tests/unit/value_semantics.cpp`,
+  40 checks: S1–S4 share on assign/call/nested alias, L1–L5 literal freshness
+  incl. deduped twins, nested literals, the table-literal loop and enum tables
+  after the `MOVC` clone, D1–D3 `deepcopy` independence + array cycle + blob,
+  X1–X4 `+`/`cast` freshness, `a += a`, `string` still a value type) and
+  `tests/scripts/value_share.ql` (`script_value_share`). `codec_check` (123) and
+  `spec_check2` (499) unchanged apart from the `Blob()`/`asBlob()` call sites.
+- **Perf.** `perf_stress` execute 13.780 ms → 9.809 ms (−29 %): the array churn no
+  longer deep-copies on every move. The ±20 % gate flags deviations in both
+  directions, so `tests/perf/baseline.json` was re-recorded with
+  `--update-baseline` (deliberate act, own commit). It is the only stage above
+  the 0.5 ms absolute floor; every other stage moved by ≤ 74 µs and is host
+  noise (see `tests.md`).
+- **Suite:** 44/44 ctest entries green (was 42; +`value_semantics`,
+  +`script_value_share`); 953 counted unit cases.
+
 ## Round 42 (2026-11-05)
 
 **`deepcopy` specified** (docs only — no code change). The feature was adopted

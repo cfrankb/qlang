@@ -76,7 +76,7 @@ static std::vector<QLangValue> flattenArgs(const std::vector<QLangValue>& args,
                          "min/max: only 1 array allowed");
       // Flatten: for min/max only the first array; for sum all arrays.
       if (!allowOneArray || arrayCount == 1) {
-        for (auto& e : a.asArray()) elems.push_back(e);
+        for (auto& e : *a.asArray()) elems.push_back(e);
       }
     } else {
       elems.push_back(a);

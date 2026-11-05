@@ -182,12 +182,6 @@ static const char *kConstFieldMetaKey = "__const_fields__";
 // reject values that violate the type inferred from the field's default.
 static const char *kFieldTypeMetaKey = "__field_types__";
 
-// True when an expression is a compile-time array literal (used to decide
-// array-append vs. array-extend for `arr += rhs`).
-static bool isArrayExpr(const ExprPtr &e) {
-  return e && e->kind == ExprKind::Array;
-}
-
 // Forward declaration: defined further down, used by the encoding-guideline
 // helpers below (inPlaceReg/foldSelfArith/compileArgsToSlots).
 static bool isIntLiteral(const ExprPtr &e);
@@ -1479,10 +1473,15 @@ void QLangCompiler::compileAssignment(const StmtPtr &s) {
   const std::string &op = s->assignOp.text;
   // Array append: `name += value` where name is an array.
   if (op == "+=" && m_varTypes[s->name] == QLangValue::Type::Array) {
+    // SPEC §operators "operator +=" decides by the RIGHT-HAND type:
+    // `[1,2,3] += [5,6]` extends ([1,2,3,5,6]), `[1,2,3] += 4` appends one
+    // element ([1,2,3,4]). A literal RHS is known here; a variable RHS is
+    // known through the inferred-type table (`x += x`). Anything else
+    // (unknown/static-typed) keeps the single-element append.
+    const bool extend = inferType(s->assignValue) == QLangValue::Type::Array;
     int t = tmpRegister();
     compileExpr(s->assignValue, t);
-    emit(isArrayExpr(s->assignValue) ? Opcode::ARRAPPV : Opcode::ARRAPP,
-         r, t, 0);
+    emit(extend ? Opcode::ARRAPPV : Opcode::ARRAPP, r, t, 0);
     releaseTemp(t); // dead after the append
     return;
   }
@@ -3451,11 +3450,38 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     break;
   }
   case ExprKind::Array: {
-    ArrayValue elems;
-    elems.reserve(e->elements.size());
-    for (auto &el : e->elements)
-      elems.push_back(evalConstExpr(el));
-    emit(Opcode::MOVC, dest, emitConst(QLangValue::Array(std::move(elems))));
+    // Constant elements: one MOVC of a pool payload. MOVC hands out a fresh
+    // copy of it (SPEC §types "value semantics"), so mutating the result never
+    // corrupts the pool entry this site (or a deduped twin) shares.
+    // Non-constant elements (`local outer = [inner]`): the array is built at
+    // runtime — MOVC an EMPTY array into the destination, then ARRAPP each
+    // element into it (SPEC §types "array: contain list of mixed variable").
+    // The destination payload is freshly created here, so appending in place
+    // cannot reach any other name.
+    bool allConst = true;
+    for (auto &el : e->elements) {
+      try {
+        evalConstExpr(el);
+      } catch (...) {
+        allConst = false;
+        break;
+      }
+    }
+    if (allConst) {
+      std::vector<QLangValue> elems;
+      elems.reserve(e->elements.size());
+      for (auto &el : e->elements)
+        elems.push_back(evalConstExpr(el));
+      emit(Opcode::MOVC, dest, emitConst(QLangValue::Array(std::move(elems))));
+      break;
+    }
+    emit(Opcode::MOVC, dest, emitConst(QLangValue::Array()));
+    for (auto &el : e->elements) {
+      int t = tmpRegister();
+      compileExpr(el, t);
+      emit(Opcode::ARRAPP, dest, t, 0);
+      releaseTemp(t); // dead after the append
+    }
     break;
   }
   case ExprKind::Table: {
@@ -3880,7 +3906,7 @@ QLangValue QLangCompiler::evalConstExpr(const ExprPtr &e) {
   case ExprKind::Literal:
     return e->literal;
   case ExprKind::Array: {
-    ArrayValue elems;
+    std::vector<QLangValue> elems;
     for (auto &el : e->elements)
       elems.push_back(evalConstExpr(el));
     return QLangValue::Array(std::move(elems));

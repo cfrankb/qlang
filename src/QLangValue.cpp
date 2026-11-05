@@ -72,7 +72,7 @@ const uint64_t &QLangValue::asQword() const {
 // asLong reads from the int64_t storage.
 QL_ACCESSOR_GETTER(int64_t, Long, int64_t)
 QL_ACCESSOR_GETTER(std::string, String, std::string)
-QL_ACCESSOR_GETTER(std::vector<uint8_t>, Blob, std::vector<uint8_t>)
+QL_ACCESSOR_GETTER(BlobValue, Blob, BlobValue)
 QL_ACCESSOR_GETTER(ArrayValue, Array, ArrayValue)
 QL_ACCESSOR_GETTER(ArrayValue, Set, ArrayValue)
 QL_ACCESSOR_GETTER(double, Float, double)
@@ -118,7 +118,7 @@ uint64_t &QLangValue::asQword() {
 // asLong mut reads from the int64_t storage.
 QL_ACCESSOR_MUT(int64_t, Long, int64_t)
 QL_ACCESSOR_MUT(std::string, String, std::string)
-QL_ACCESSOR_MUT(std::vector<uint8_t>, Blob, std::vector<uint8_t>)
+QL_ACCESSOR_MUT(BlobValue, Blob, BlobValue)
 QL_ACCESSOR_MUT(ArrayValue, Array, ArrayValue)
 QL_ACCESSOR_MUT(ArrayValue, Set, ArrayValue)
 QL_ACCESSOR_MUT(double, Float, double)
