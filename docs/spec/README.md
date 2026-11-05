@@ -27,6 +27,7 @@ defined against C++20.
 | [14-scope.md](14-scope.md) | visibility scope. execution context | `ec1eadb21c4716b94590261fec12a16b1f11a715a5bfed53b5ca46232b6a0999` |
 | [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
 | [16-strict_typing.md](16-strict_typing.md) | strict typing | `9f0d96519a83b0daa3082159f3d2ac4a8c3e66fed6775922dcc41ab0896e98d5` |
+| [17-signals.md](17-signals.md) | signals (tentative draft) | `1db5c6b6b4c7b17824f63ba7beb5a2e0a51682b378aa76f41625bd08c56ecdc9` |
 
 Compliance: see [../compliance/README.md](../compliance/README.md).
 Migration plan: [../plans/spec_migration_plan.md](../plans/spec_migration_plan.md).

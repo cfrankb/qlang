@@ -32,7 +32,7 @@ subi plans in `docs/plans/archive/`).
 | C3 | External-type wrappers: `hasMethod`/`callMethod` | `11-external-types.md` | event-handler contract; `ops->callMethod` has zero VM call sites in v1 |
 | C4 | RTTI validation on external handoff | `11-external-types.md` | **implemented (Phase 3)** — typed `qval_external_*<T>` helpers + `dynamic_cast` check; see §D |
 | C5 | Inheritance (`ObjectOps::base`) | `10-classes.md` v1 restrictions, `EXTERNAL_TYPES.md` §10.3 | reserved, returns null; base-chain walk deferred to v2 |
-| C6 | Signals (`Q_SIGNALS`/`emit`/`connect`) | **none** — `EXTERNAL_TYPES.md` §10.4, `docs/EVENT_HANDLERS.md` (engine draft) | no spec section exists; blocked on writing one |
+| C6 | Signals (`Q_SIGNALS`/`emit`/`connect`) | `17-signals.md` (tentative draft) | draft landed 2026-11-04; finalize, then implement |
 | C7 | Enum-name string form for enum-valued properties | `EXTERNAL_TYPES.md` §10.5 | no dispatch point sees both field value and type context |
 
 ### D. Resolved / no work needed
@@ -138,14 +138,14 @@ subi plans in `docs/plans/archive/`).
    `EXTERNAL_TYPES.md` §10.3 defers the base-chain walk to v2. Needs a spec
    first (base-clause syntax, field/method resolution order, constructor
    chaining) — treat like C1 step 1. Effort: medium–large once specified.
-10. **C6 signals (`Q_SIGNALS`/`emit`/`connect`)** — **no spec anchor
-    today**: `11-external-types.md` has no signals section, and
-    `docs/EVENT_HANDLERS.md` is a POC-stage *engine* doc that explicitly
-    keeps signals out of QLang (`EXTERNAL_TYPES.md` §10.4: "revisit with
-    docs/EVENT_HANDLERS.md"). Blocked on writing the spec (signal
-    declaration meta, `emit`/`connect` semantics, delivery model). Effort:
-    unknown until specified — likely the largest Phase 4 item
-    (language-level keywords + runtime).
+10. **C6 signals (`Q_SIGNALS`/`emit`/`connect`)** — tentative spec draft
+    landed: `17-signals.md` (external types only; `QL_SIGNAL` meta with
+    signature deduced from an unimplemented member function; `emit`
+    reserved word; `connect`/`disconnect` builtins; synchronous delivery,
+    step-budget-contained recursion; C++ `emitSignal`/`hasSignal`).
+    Finalize the draft (review the open design points), then implement.
+    Effort: ~1 week once the draft is finalized — the largest Phase 4 item
+    (language-level keyword + runtime + C++ API).
 11. **C7 enum-name string form** — reverse lookup for enum-valued
     properties. Known blocker (`EXTERNAL_TYPES.md` §10.5): no dispatch
     point sees both the field value and its type context —
@@ -165,7 +165,8 @@ subi plans in `docs/plans/archive/`).
 B1 (warnings) ──> B2 (dup-decl warning)
 spec finalization ──> C1 (strict typing)
 API definition ──> C2 (enum injection)
-spec writing ──> C5 (inheritance), C6 (signals)
+spec writing ──> C5 (inheritance)
+draft finalization ──> C6 (signals)
 design decision ──> C7 (enum-name string form)
 A1, A2, A3, C3: independent of each other
 ```

@@ -226,7 +226,8 @@ wrappers). `base` is reserved for inheritance (returns null in v1).
 3. **Inheritance** — `ObjectOps::base` is reserved; base-chain walk deferred
    to v2.
 4. **Signals** (`Q_SIGNALS`/`emit`/`connect`) — revisit with
-   `docs/EVENT_HANDLERS.md`.
+   `docs/EVENT_HANDLERS.md`; tentative spec draft in
+   `docs/spec/17-signals.md`.
 5. **Enum-name string form** (reverse lookup for enum-valued properties) —
    deferred: no dispatch point sees both the field value and its type context
    (`str(e.options)` sees a bare `Int`).

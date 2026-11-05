@@ -254,8 +254,12 @@ context is the host boundary for that rule.
 ## external types
 
 See [EXTERNAL_TYPES.md](../EXTERNAL_TYPES.md)
-and [11-external-types.md](11-external-types.md)
+and [docs/spec/11-external-types.md](11-external-types.md)
 
 ## serialization
 
 See [SERIALIZATION.md](../SERIALIZATION.md)
+
+## signals
+
+See [docs/spec/17-signals.md](17-signals.md)
