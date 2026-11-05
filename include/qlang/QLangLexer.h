@@ -121,6 +121,7 @@ enum class TokenType {
   Semicolon, // ;
   Colon,     // :
   Comma,     // ,
+  Question,  // ?  (ternary operator)
 
   EndOfFile
 };

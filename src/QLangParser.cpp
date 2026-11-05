@@ -114,6 +114,13 @@ static void shiftExprLines(Expr &e, int delta) {
   case ExprKind::Closure:
     for (auto &s : e.body) s->line += delta;
     break;
+  case ExprKind::Ternary:
+    if (e.cond) shiftExprLines(*e.cond, delta);
+    if (e.trueExpr) shiftExprLines(*e.trueExpr, delta);
+    if (e.falseExpr) shiftExprLines(*e.falseExpr, delta);
+    for (auto &s : e.trueBlock) s->line += delta;
+    for (auto &s : e.falseBlock) s->line += delta;
+    break;
   default:
     break;
   }
@@ -1091,7 +1098,41 @@ ExprPtr QLangParser::parseExpression() {
                          std::to_string(kMaxParseDepth) + ")");
   }
   ParseDepthGuard guard{m_depth};
-  return parseBinary(1);
+  ExprPtr e = parseBinary(1);
+  // Ternary `?` sits below every binary operator (lowest precedence) and is
+  // right-associative: a ? b : c ? d : e groups as a ? b : (c ? d : e).
+  if (check(TokenType::Question))
+    e = parseTernary(std::move(e));
+  return e;
+}
+
+// Ternary: cond ? trueBranch : falseBranch  (SPEC §operators "operator ?").
+// Each branch is an expression or a brace block; in the block form the
+// block's `return` yields the ternary's value. A `{` in branch position is
+// always a block (a table-literal branch must be parenthesized).
+ExprPtr QLangParser::parseTernary(ExprPtr cond) {
+  consume(TokenType::Question, "'?'");
+  auto node = std::make_shared<Expr>();
+  node->kind = ExprKind::Ternary;
+  node->cond = std::move(cond);
+  if (check(TokenType::LBrace)) {
+    m_pos++; // consume '{'
+    while (!check(TokenType::RBrace) && !atEnd())
+      node->trueBlock.push_back(parseStatement());
+    consume(TokenType::RBrace, "'}' to close ternary branch");
+  } else {
+    node->trueExpr = parseExpression();
+  }
+  consume(TokenType::Colon, "':' after ternary true branch");
+  if (check(TokenType::LBrace)) {
+    m_pos++; // consume '{'
+    while (!check(TokenType::RBrace) && !atEnd())
+      node->falseBlock.push_back(parseStatement());
+    consume(TokenType::RBrace, "'}' to close ternary branch");
+  } else {
+    node->falseExpr = parseExpression();
+  }
+  return node;
 }
 
 ExprPtr QLangParser::parseBinary(int minPrec) {

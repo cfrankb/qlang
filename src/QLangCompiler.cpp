@@ -980,6 +980,12 @@ static void collectIds(const ExprPtr &e, std::unordered_set<std::string> &ids,
     }
   } else if (e->kind == ExprKind::Closure) {
     for (auto &st : e->body) collectStmtIds(st, ids, skip);
+  } else if (e->kind == ExprKind::Ternary) {
+    collectIds(e->cond, ids, skip);
+    collectIds(e->trueExpr, ids, skip);
+    collectIds(e->falseExpr, ids, skip);
+    for (auto &st : e->trueBlock) collectStmtIds(st, ids, skip);
+    for (auto &st : e->falseBlock) collectStmtIds(st, ids, skip);
   }
 }
 
@@ -3530,6 +3536,30 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     emit(Opcode::CAST, dest, src, static_cast<int>(e->targetType));
     break;
   }
+  case ExprKind::Ternary: {
+    // cond ? trueBranch : falseBranch  (SPEC §operators "operator ?").
+    // The condition goes to a temp; JMPIFFALSE branches to the false side.
+    // Block branches lower to a closure call whose `return` yields the
+    // ternary's value.
+    int condReg = tmpRegister();
+    compileExpr(e->cond, condReg);
+    emit(Opcode::JMPIFFALSE, condReg, 0);
+    size_t jumpFalseIdx = m_emitter.size() - 1;
+    if (e->trueExpr)
+      compileExpr(e->trueExpr, dest);
+    else
+      compileTernaryBlock(e->trueBlock, dest);
+    emit(Opcode::JMP, 0);
+    size_t jumpEndIdx = m_emitter.size() - 1;
+    m_emitter.patchJump(jumpFalseIdx, static_cast<int32_t>(m_emitter.size()));
+    if (e->falseExpr)
+      compileExpr(e->falseExpr, dest);
+    else
+      compileTernaryBlock(e->falseBlock, dest);
+    m_emitter.patchJump(jumpEndIdx, static_cast<int32_t>(m_emitter.size()));
+    freeRegister(condReg);
+    break;
+  }
   case ExprKind::FString: {
     // f"literal ${expr} more" -> call format(template, expr1, expr2, ...)
     // CALL convention: args at dest+1..dest+argCount, result at dest.
@@ -3685,6 +3715,69 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     break;
   }
   }
+}
+
+void QLangCompiler::compileTernaryBlock(const std::vector<StmtPtr> &block,
+                                        int dest) {
+  // The block is a zero-arg closure: its `return` yields the ternary's value
+  // (SPEC §operators "operator ?"). F3 removed implicit capture of enclosing
+  // locals, so the block's free variables are passed as an explicit capture
+  // list (the arrow-closure pattern); buildFunction augments it with global
+  // consts, enums, and capturing def functions.
+  std::unordered_set<std::string> allIds;
+  for (auto &s : block)
+    collectStmtIds(s, allIds);
+  std::unordered_set<std::string> localVars;
+  for (auto &s : block)
+    collectLocalVars(s, localVars);
+  std::vector<std::string> captures;
+  for (const std::string &id : allIds) {
+    if (localVars.count(id)) continue; // declared inside the block
+    if (m_userFuncs.count(id)) continue; // buildFunction captures it if needed
+    if (builtinId(id) >= 0) continue;
+    if (m_nativeFuncIds.count(id)) continue;
+    if (m_constVars.count(id)) continue; // visible everywhere
+    if (m_enums.count(id)) continue; // resolves to a hidden table var
+    if (m_classes.count(id)) continue; // compile-time, not a value
+    // Top-level globals are invisible inside a function scope unless
+    // imported via `global`; the fallback below skips them there (no
+    // register, no capture) and the body compile raises the clean error.
+    // At script level they have live registers and are captured like any
+    // local: the block is inline in the current scope.
+    if (regOf(id) < 0 && m_captureRegs.find(id) == m_captureRegs.end())
+      continue; // unresolvable here: the body compile raises the clean error
+    captures.push_back(id);
+  }
+  int funcIndex = buildFunction("ternary", {}, captures, block);
+  // buildFunction just pushed it: it is the last element of m_functions
+  // (the returned funcIndex is the final program index, main prepended at
+  // 0, so it is NOT a valid m_functions index).
+  const Function &built = m_functions.back();
+  auto closure = std::make_shared<Closure>();
+  closure->funcIndex = funcIndex;
+  for (const std::string &cap : built.captureNames) {
+    int reg = regOf(cap);
+    if (reg < 0) {
+      // The capture is itself a free variable of this scope (transitive
+      // capture): load it into a hidden named register so the cell can
+      // alias it for the frame's lifetime.
+      auto cit = m_captureRegs.find(cap);
+      if (cit != m_captureRegs.end()) {
+        reg = declareVar(std::string("__cap_") + cap);
+        emit(Opcode::REFLOAD, reg, cit->second, 0);
+      }
+    }
+    if (reg < 0)
+      reg = 0; // preserve legacy binding for unresolvable names
+    CaptureRef cr;
+    cr.reg = reg;
+    closure->captures.push_back(cr);
+  }
+  int closureReg = tmpRegister();
+  int constIdx = emitConst(QLangValue::Function(closure));
+  emit(Opcode::MAKEFUNC, closureReg, constIdx);
+  emit(Opcode::CALLCLOS, closureReg, dest, 0);
+  freeRegister(closureReg);
 }
 
 int QLangCompiler::builtinId(const std::string &name) const {

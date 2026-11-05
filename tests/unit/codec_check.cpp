@@ -17,6 +17,7 @@
 #include "qlang/QLangCompiler.h"
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
+#include "qlang/QLangVM.h"
 
 using namespace qlang;
 
@@ -629,6 +630,97 @@ static void testPoolDedup() {
 }
 
 // ---------------------------------------------------------------------------
+// Nop: a zero-operand no-op opcode (SPEC §bytecodes "OpCode nop"). Appended
+// last (identity 68) so existing .qlc opcode numbers stay valid. The compiler
+// never emits it; the codec must round-trip it and the VM must execute it.
+// ---------------------------------------------------------------------------
+static void testNop() {
+  try {
+    // Identity, name, and size.
+    check(static_cast<uint8_t>(Opcode::Nop) == 68,
+          "nop: identity 68 (appended last)");
+    check(Bytecode::name(Opcode::Nop) == "nop", "nop: name");
+    check(isValidOpcode(Opcode::Nop), "nop: valid opcode");
+    check(baseInstructionSize(Opcode::Nop) == 1, "nop: 1-byte base size");
+
+    // 1-byte encode/decode round-trip.
+    DecodedInstruction in;
+    in.op = Opcode::Nop;
+    std::vector<uint8_t> buf;
+    encodeInstruction(buf, in);
+    check(buf.size() == 1 && buf[0] == 68, "nop: encodes to 1 byte");
+    DecodedInstruction out;
+    decodeInstruction(buf.data(), 0, buf.size(), out);
+    check(out.op == Opcode::Nop && !out.escaped && out.size == 1,
+          "nop: decode round-trip");
+
+    // The escaped form is meaningless for a 0-operand opcode: rejected.
+    bool rejected = false;
+    try {
+      DecodedInstruction esc;
+      esc.op = Opcode::Nop;
+      esc.escaped = true;
+      esc.modifier = 0x11;
+      std::vector<uint8_t> ebuf;
+      encodeInstruction(ebuf, esc);
+    } catch (const QLangError &) {
+      rejected = true;
+    }
+    check(rejected, "nop: escaped form rejected");
+
+    // .qlc round-trip of a hand-built program: Nop; MOVI 0, 42; RETURN 0.
+    Function fn;
+    fn.name = "main";
+    fn.paramCount = 0;
+    fn.registerCount = 1;
+    DecodedInstruction d1;
+    d1.op = Opcode::Nop;
+    DecodedInstruction d2;
+    d2.op = Opcode::MOVI;
+    d2.a = 0;
+    d2.imm = 42;
+    DecodedInstruction d3;
+    d3.op = Opcode::RETURN;
+    d3.a = 0;
+    for (const auto &d : {d1, d2, d3}) {
+      fn.instrOffsets.push_back(fn.code.size());
+      encodeInstruction(fn.code, d);
+      fn.loc.emplace_back(1, 1);
+    }
+    CompiledProgram p;
+    p.registerCount = 1;
+    p.vars["x"] = 0;
+    p.functions.push_back(fn);
+    std::ostringstream os(std::ios::binary);
+    check(writeQlc(os, p, {}), "nop: writeQlc");
+    CompiledProgram back;
+    std::vector<std::pair<int, std::string>> slots;
+    std::string err;
+    std::istringstream is(os.str(), std::ios::binary);
+    check(readQlc(is, back, slots, err), std::string("nop: readQlc (") + err + ")");
+    if (err.empty()) {
+      const auto &b = back.functions[0];
+      bool same = b.code == fn.code && b.instrOffsets == fn.instrOffsets;
+      check(same, "nop: round-trip instruction equality");
+      if (same) {
+        DecodedInstruction di;
+        decodeInstruction(b.code.data(), 0, b.code.size(), di);
+        check(di.op == Opcode::Nop,
+              "nop: first instruction survives round-trip");
+      }
+    }
+
+    // The VM executes the no-op: the program runs and leaves 42 in x.
+    QLangContext ctx;
+    QLangVM vm(p, ctx);
+    vm.run();
+    check(ctx.get("x").asInt() == 42, "nop: VM executes the no-op");
+  } catch (const QLangError &e) {
+    check(false, std::string("nop: ") + e.what());
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Malformed-input suite: each case must fail cleanly, leave the out-params
 // untouched, and say why.
 // ---------------------------------------------------------------------------
@@ -742,10 +834,10 @@ static void testMalformed() {
 
   std::string badOp = fileWithOneInstr();
   // The single instruction's opcode byte is at byte 37 (header + function
-  // metadata + codeSize). Set it to 69: a valid 7-bit identity that is not a
-  // defined opcode (kOpcodeUsedCount == 68). It decodes as a 4-byte 3-operand
+  // metadata + codeSize). Set it to 70: a valid 7-bit identity that is not a
+  // defined opcode (kOpcodeUsedCount == 69). It decodes as a 4-byte 3-operand
   // form, then fails isValidOpcode.
-  badOp[37] = 69;
+  badOp[37] = 70;
   rejects("malformed: invalid opcode", badOp);
 
   // Truncated instruction: codeSize=3, but the ADD at offset 0 needs 4 bytes.
@@ -885,6 +977,7 @@ int main() {
   testSubi();
   testCmpJump();
   testPoolDedup();
+  testNop();
   testMalformed();
   std::cout << (fails == 0 ? "all codec checks passed\n"
                            : "codec checks FAILED\n");

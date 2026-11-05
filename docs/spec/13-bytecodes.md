@@ -564,6 +564,7 @@ extra byte (e):
          value 7 => 8 bytes  (signed)
          value 8 => 8 bytes  (float) // future version
          value 9 => 1 byte   (bool)  // future version
+         value 10 => 0 byte  (nil)   // future version
       else if register
         value 0 register 0-255 (1 byte)
         value 1 extended register (2 bytes)

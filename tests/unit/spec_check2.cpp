@@ -1213,6 +1213,54 @@ int main() {
             "local a = 1\nlocal b = 2\nlocal c = a + \"x\"",
             "line 3, col 1 in function 'main'");
 
+  // --- SPEC §operators "operator ?" (short-hand if / ternary) ---
+  // Both branches (spec examples).
+  expectStr("ternary true branch",
+            "local a = 3\nlet b = a == 3 ? \"This is Three\" : \"This is NOT Three\";",
+            "b", "This is Three");
+  expectStr("ternary false branch",
+            "local a = 3\nlet b = a == 5 ? \"This is Three\" : \"This is NOT Three\";",
+            "b", "This is NOT Three");
+  // Nesting: right-associative, a ? b : c ? d : e == a ? b : (c ? d : e).
+  expectVal("ternary nested true", "local r = 1 == 1 ? 10 : 2 == 2 ? 20 : 30;", "r", 10);
+  expectVal("ternary nested middle", "local r = 1 == 2 ? 10 : 2 == 2 ? 20 : 30;", "r", 20);
+  expectVal("ternary nested false", "local r = 1 == 2 ? 10 : 2 == 3 ? 20 : 30;", "r", 30);
+  // Block form (spec example): the block's `return` yields the value.
+  expectStr("ternary block form true",
+            "local a = 5\nlet c = a == 5 ? {\n  return \"this is 5\"\n} : {\n  return \"this is not 5\"\n};",
+            "c", "this is 5");
+  expectStr("ternary block form false",
+            "local a = 3\nlet c = a == 5 ? {\n  return \"this is 5\"\n} : {\n  return \"this is not 5\"\n};",
+            "c", "this is not 5");
+  // Mixed branches: expression on one side, block on the other.
+  expectStr("ternary mixed branches",
+            "local a = 3\nlet c = a == 5 ? \"this is 5\" : {\n  return \"this is not 5\"\n};",
+            "c", "this is not 5");
+  // Block branches capture free variables (lowered to a closure call).
+  expectVal("ternary block captures free var",
+            "local x = 7\nlocal r = x > 5 ? {\n  return x * 2\n} : {\n  return 0\n};",
+            "r", 14);
+  // Precedence: `?` binds looser than every binary operator, incl. && / ||.
+  expectVal("ternary precedence &&", "local r = 1 && 0 ? 10 : 20;", "r", 20);
+  expectVal("ternary precedence ||", "local r = 0 || 1 ? 10 : 20;", "r", 10);
+  expectVal("ternary precedence arithmetic", "local r = 1 + 2 == 3 ? 10 : 20;", "r", 10);
+  // Ternary inside a function body: free vars in all three sub-expressions
+  // must be captured by the enclosing closure.
+  expectVal("ternary in closure captures",
+            "def f(x) {\n  local y = 10\n  return x > 0 ? y + 1 : y - 1\n}\nlocal r = f(5);",
+            "r", 11);
+  expectVal("ternary in closure captures false side",
+            "def f(x) {\n  local y = 10\n  return x > 0 ? y + 1 : y - 1\n}\nlocal r = f(-5);",
+            "r", 9);
+  // Block form inside a function body.
+  expectVal("ternary block in closure",
+            "def f(x) {\n  local y = 4\n  return x > 0 ? {\n    return y * 2\n  } : {\n    return y * 3\n  }\n}\nlocal r = f(1);",
+            "r", 8);
+  // Nested ternary with block branches.
+  expectStr("ternary nested block",
+            "local a = 2\nlocal r = a == 1 ? \"one\" : a == 2 ? {\n  return \"two\"\n} : \"other\";",
+            "r", "two");
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

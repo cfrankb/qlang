@@ -1,3 +1,40 @@
+## Round 39 (2026-11-04)
+
+**Phase 1 of `docs/plans/missing-features-plan.md` — A1 `nop` opcode + A2 `?`
+ternary operator.** No spec changes; no `.qlc` format change (v5). One new
+opcode (`nop`, appended last); the ternary reuses existing branch opcodes.
+- **A1 `nop`:** `Opcode::Nop` appended **last** in the enum (identity 68) so
+  existing `.qlc` opcode numbers stay valid; `Bytecode::name` → `"nop"`;
+  zero-operand (base size 1 byte; the escaped form is rejected — a 0-operand
+  opcode has nothing to widen); no-op in the VM dispatch; the compiler never
+  emits it (spec: "this OpCode takes no action"). 12 new `codec_check` cases
+  (identity, name, validity, size, 1-byte encode/decode round-trip,
+  escaped-form rejection, `.qlc` program round-trip).
+- **A2 `?` ternary:** `TokenType::Question` (`?`) in the lexer. Parser
+  `parseTernary` sits **below every binary operator** (lowest precedence) and
+  is right-associative (`a ? b : c ? d : e` → `a ? b : (c ? d : e)`); each
+  branch is an expression or a brace block — a `{` in branch position is
+  always a block (a table-literal branch must be parenthesized). Codegen:
+  condition to a temp, `JMPIFFALSE` to the false side, `JMP` past it; block
+  branches lower to a zero-arg closure call (`compileTernaryBlock`) whose
+  `return` yields the ternary's value. **Capture fix:** F3 removed implicit
+  capture of enclosing locals, so the block's free variables are computed
+  (`collectStmtIds` − `collectLocalVars`, minus names `buildFunction`
+  auto-resolves) and passed as an **explicit capture list** (the
+  arrow-closure pattern); at script level top-level locals have live
+  registers and are captured like locals, inside a function scope
+  unimported globals stay invisible (clean `use of undeclared variable`
+  error). `collectIds` (free-var detection) gained a `Ternary` arm so a
+  ternary inside a function body captures its sub-expression free vars.
+  16 new `spec_check2` cases (both branches, nesting, block form, mixed
+  branches, free-var capture, precedence vs `&&`/`||`/arithmetic, closure +
+  script-level scope).
+- **Tally:** `spec_check2` 463 → 479, `codec_check` 96 → 108; **834 counted
+  unit cases**, 41/41 ctest green.
+- **Docs:** `status.md` — `?` gap row → implemented, `nop` Open Item →
+  implemented, Current Status tally + Round 39 note, `?` added to the
+  Working operators list.
+
 ## Round 38 (2026-11-04)
 
 **Constant-pool dedup restored** (SPEC §bytecodes `## constant pool`: "constant

@@ -26,7 +26,8 @@ enum class ExprKind {
   Member,   // base.name    (table member read)
   Closure,   // (params)[captures] { ... }  (anonymous closure expression)
   FString,   // f"hello ${name}"  (interpolated string literal)
-  Cast       // cast<Type>(expr)  (runtime type coercion)
+  Cast,      // cast<Type>(expr)  (runtime type coercion)
+  Ternary    // cond ? trueExpr : falseExpr  (or block form, see below)
 };
 
 struct Expr; // forward declaration so ExprPtr can be used inside Expr
@@ -92,6 +93,18 @@ struct Expr {
   // Cast: cast<Type>(expr)  (runtime type coercion).
   QLangValue::Type targetType;
   ExprPtr castOperand;
+
+  // Ternary: cond ? trueExpr : falseExpr  (SPEC §operators "operator ?").
+  // Lowest precedence, right-associative. Each branch is either an expression
+  // (trueExpr / falseExpr) or a brace block (trueBlock / falseBlock); in the
+  // block form the block's `return` yields the ternary's value, so the block
+  // lowers to a closure call. A `{` in branch position is always a block (a
+  // table-literal branch must be parenthesized).
+  ExprPtr cond;
+  ExprPtr trueExpr;
+  ExprPtr falseExpr;
+  std::vector<std::shared_ptr<Stmt>> trueBlock;
+  std::vector<std::shared_ptr<Stmt>> falseBlock;
 };
 
 // ---------------------------------------------------------------------------
@@ -286,6 +299,7 @@ private:
   StmtPtr parseArrowClosure(const std::string &varName);
   bool looksLikeArrow() const;
   ExprPtr parseExpression();
+  ExprPtr parseTernary(ExprPtr cond);
   ExprPtr parseBinary(int minPrecedence);
   ExprPtr parseUnary();
   ExprPtr parsePostfix();

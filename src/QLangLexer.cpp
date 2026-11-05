@@ -412,6 +412,7 @@ Token QLangLexer::operatorToken() {
   case ';': return make(TokenType::Semicolon, ";", 1);
   case ':': return make(TokenType::Colon, ":", 1);
   case ',': return make(TokenType::Comma, ",", 1);
+  case '?': return make(TokenType::Question, "?", 1);
   case '.': return make(TokenType::Dot, ".", 1);
   }
 

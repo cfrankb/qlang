@@ -200,11 +200,15 @@ enum class Opcode : uint8_t {
   JGE,  // if flags == (GR|EQ)       pc = i32
   JL,   // if flags == LT            pc = i32
   JLE,  // if flags == (LT|EQ)       pc = i32
+
+  // No-op: takes no action (SPEC §bytecodes "OpCode nop"). Zero operands.
+  // Appended last so existing .qlc opcode numbers stay valid.
+  Nop
 };
 
 inline constexpr uint8_t kOpcodeEscape = 0x80;
 inline constexpr uint8_t kOpcodeMax = 128; // identities 0..127
-inline constexpr uint8_t kOpcodeUsedCount = 68; // defined identities 0..67
+inline constexpr uint8_t kOpcodeUsedCount = 69; // defined identities 0..68
 
 struct DecodedInstruction {
   Opcode op = Opcode::MOVC;

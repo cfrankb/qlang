@@ -71,6 +71,11 @@ static size_t baseOperandCount(Opcode op) {
   }
   if (isImmediateOpcode(op))
     return 2; // reg + imm
+  // 0-operand
+  switch (op) {
+  case Opcode::Nop:
+    return 0;
+  }
   // 1-operand
   switch (op) {
   case Opcode::INC:
@@ -147,6 +152,9 @@ size_t escapedInstructionSize(Opcode op, uint8_t modifier) {
     return 2 + leftSize + 2 + 1; // op+mod + a + b(2) + c(1)
   }
   // RegConst
+  if (baseOperandCount(op) == 0)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "escaped form has no operands for this opcode");
   uint8_t leftForm = modifier & 0x0F;
   uint8_t rightForm = modifier >> 4;
   size_t leftSize = (leftForm == 0) ? 1 : (leftForm == 1) ? 2 : 0;
@@ -346,6 +354,9 @@ void encodeInstruction(std::vector<uint8_t> &out, const DecodedInstruction &in) 
     }
     return;
   }
+  if (n == 0)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "escaped form has no operands for this opcode");
   uint8_t leftForm = in.modifier & 0x0F;
   uint8_t rightForm = in.modifier >> 4;
   if (leftForm > 1 || rightForm > 1)
@@ -525,6 +536,9 @@ void decodeInstruction(const uint8_t *code, size_t pc, size_t codeSize,
     out.size = pos - pc;
     return;
   }
+  if (nOps == 0)
+    throw QLangError(QLangErrorKind::Io, 0, 0,
+                     "escaped form has no operands for this opcode");
   uint8_t leftForm = out.modifier & 0x0F;
   uint8_t rightForm = out.modifier >> 4;
   if (leftForm > 1 || rightForm > 1)
@@ -799,6 +813,7 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::JGE: return "jge";
   case Opcode::JL: return "jl";
   case Opcode::JLE: return "jle";
+  case Opcode::Nop: return "nop";
   default:
     return "???";
   }

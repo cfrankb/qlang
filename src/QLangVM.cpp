@@ -2036,6 +2036,8 @@ RunResult QLangVM::runFrames() {
       if (!isTrue(frame.regs[i.a]))
         frame.pc += static_cast<size_t>(i.jumpOffset);
       continue;
+    case Opcode::Nop:
+      break; // takes no action (SPEC §bytecodes "OpCode nop")
     }
   }
   return RunResult::Returned; // defensive: the frame stack ran out

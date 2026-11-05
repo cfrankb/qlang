@@ -257,6 +257,10 @@ private:
   void compileGlobal(const StmtPtr &s, std::vector<std::string> *captures);
   void compileSwitch(const StmtPtr &s);
   void compileExpr(const ExprPtr &e, int dest);
+  // Lower a ternary block branch ({ ... return v ... }) to a closure call:
+  // the block's `return` yields the ternary's value (SPEC §operators
+  // "operator ?"). Free variables are captured by buildFunction.
+  void compileTernaryBlock(const std::vector<StmtPtr> &block, int dest);
   Opcode binOp(const std::string &text) const;
   Opcode unOp(const std::string &text) const;
 
