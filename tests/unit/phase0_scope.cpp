@@ -25,14 +25,15 @@
 //       Expectation: r == 10 (the capture must stay live after the creator
 //       frame is gone).  Today: segfault or garbage.
 //
-// S1 runs in a forked child so a segfault there cannot prevent the other
-// checks (and cannot kill the test harness). P3 (API level) does the same.
-
-#include <sys/wait.h>
-#include <unistd.h>
+// S1 runs in a child process (test_child.h) so a segfault there cannot
+// prevent the other checks (and cannot kill the test harness). P3 (API
+// level) does the same.
 
 #include <cstdio>
+#include <cstring>
 #include <string>
+
+#include "test_child.h"
 
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
@@ -82,7 +83,45 @@ bool runAndCheck(const char *label, const char *script, const char *var,
 
 } // namespace
 
-int main() {
+// S1 check body. Runs in the child process (see test_child.h); returns 42
+// on success, 1 on failure.
+int s1Check() {
+  try {
+    QLangContext ctx;
+    // The churn loop below does ~200k function calls to stress frame
+    // push/pop; raise the step guard so it is not mistaken for a hang.
+    ctx.setMaxSteps(10000000);
+    ctx.run("def make() {\n"
+            "  local n = 10\n"
+            "  local f = ()[n] { return n }\n"
+            "  local t = {}\n"
+            "  t.f = f\n"
+            "  return t\n"
+            "}\n"
+            "local h = make()\n"
+            "def churn2() { return 1 }\n"
+            "def churn1() { return churn2() }\n"
+            "local sink = []\n"
+            "for i = 0 to 2000 {\n"
+            "  sink[] = sprintf(\"churn-%d-%d-%d\", i, i, i)\n"
+            "  local s = 0\n"
+            "  for j = 0 to 50 { s = s + churn1() }\n"
+            "  sink[] = s\n"
+            "}\n"
+            "local r = h.f()\n");
+    QLangValue v = ctx.get("r");
+    if (v.type() == QLangValue::Type::Int && toInt64(v) == 10)
+      return 42;
+  } catch (...) {
+  }
+  return 1;
+}
+
+int main(int argc, char **argv) {
+  if (argc > 2 && std::strcmp(argv[1], "--child") == 0 &&
+      std::strcmp(argv[2], "s1") == 0)
+    return s1Check();
+
   // ---------------------------------------------------------------- S2
   {
     QLangContext ctx;
@@ -144,50 +183,15 @@ int main() {
   }
 
   // ---------------------------------------------------------------- S1
-  // Fork: the current tree dereferences a dangling frame pointer here
-  // (segfault), which must not take down the other checks.
+  // Child process: the current tree dereferences a dangling frame pointer
+  // here (segfault), which must not take down the other checks.
   {
-    pid_t pid = fork();
-    if (pid == 0) {
-      int rc = 1;
-      try {
-        QLangContext ctx;
-        // The churn loop below does ~200k function calls to stress frame
-        // push/pop; raise the step guard so it is not mistaken for a hang.
-        ctx.setMaxSteps(10000000);
-        ctx.run("def make() {\n"
-                "  local n = 10\n"
-                "  local f = ()[n] { return n }\n"
-                "  local t = {}\n"
-                "  t.f = f\n"
-                "  return t\n"
-                "}\n"
-                "local h = make()\n"
-                "def churn2() { return 1 }\n"
-                "def churn1() { return churn2() }\n"
-                "local sink = []\n"
-                "for i = 0 to 2000 {\n"
-                "  sink[] = sprintf(\"churn-%d-%d-%d\", i, i, i)\n"
-                "  local s = 0\n"
-                "  for j = 0 to 50 { s = s + churn1() }\n"
-                "  sink[] = s\n"
-                "}\n"
-                "local r = h.f()\n");
-        QLangValue v = ctx.get("r");
-        if (v.type() == QLangValue::Type::Int && toInt64(v) == 10)
-          rc = 42;
-      } catch (...) {
-        rc = 1;
-      }
-      _exit(rc);
-    }
-    int st = 0;
-    waitpid(pid, &st, 0);
-    if (WIFEXITED(st) && WEXITSTATUS(st) == 42) {
+    int rc = testchild::runSelfChild(argv[0], "s1");
+    if (rc == 42) {
       fprintf(stderr, "ok   S1: closure outlives creator frame (r = 10)\n");
     } else {
-      const char *why = WIFSIGNALED(st) ? "crashed (dangling frame read)"
-                                        : "wrong value";
+      const char *why = rc < 0 ? "crashed (dangling frame read)"
+                               : "wrong value";
       fprintf(stderr, "FAIL S1: closure outlives creator frame — %s\n", why);
       g_failures++;
     }

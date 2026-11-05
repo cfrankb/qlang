@@ -21,15 +21,15 @@
 //       the values.  Today: writeQlc returns true and the constants come
 //       back as Nil.
 //
-// P3 runs in a forked child so the current segfault cannot kill the other
-// checks.
-
-#include <sys/wait.h>
-#include <unistd.h>
+// P3 runs in a child process (test_child.h) so the current segfault cannot
+// kill the other checks.
 
 #include <cstdio>
+#include <cstring>
 #include <sstream>
 #include <string>
+
+#include "test_child.h"
 
 #include "qlang/QLangBytecode.h"
 #include "qlang/QLangBytecodeIO.h"
@@ -39,7 +39,27 @@
 
 using namespace qlang;
 
-int main() {
+// P3 check body. Runs in the child process (see test_child.h); returns 42
+// on success, 1 on failure.
+int p3Check() {
+  try {
+    QLangContext ctx;
+    ctx.set("x", QLangValue::Int(7));
+    ctx.run("x = 0\ndef f() { global x; return x }\n");
+    ctx.set("x", QLangValue::Int(5));
+    QLangValue r = ctx.call("f");
+    if (r.type() == QLangValue::Type::Int && toInt64(r) == 5)
+      return 42;
+  } catch (...) {
+  }
+  return 1;
+}
+
+int main(int argc, char **argv) {
+  if (argc > 2 && std::strcmp(argv[1], "--child") == 0 &&
+      std::strcmp(argv[2], "p3") == 0)
+    return p3Check();
+
   int failures = 0;
 
   // ---------------------------------------------------------------- P1
@@ -70,28 +90,11 @@ int main() {
 
   // ---------------------------------------------------------------- P3
   {
-    pid_t pid = fork();
-    if (pid == 0) {
-      int rc = 1;
-      try {
-        QLangContext ctx;
-        ctx.set("x", QLangValue::Int(7));
-        ctx.run("x = 0\ndef f() { global x; return x }\n");
-        ctx.set("x", QLangValue::Int(5));
-        QLangValue r = ctx.call("f");
-        if (r.type() == QLangValue::Type::Int && toInt64(r) == 5)
-          rc = 42;
-      } catch (...) {
-        rc = 1;
-      }
-      _exit(rc);
-    }
-    int st = 0;
-    waitpid(pid, &st, 0);
-    if (WIFEXITED(st) && WEXITSTATUS(st) == 42) {
+    int rc = testchild::runSelfChild(argv[0], "p3");
+    if (rc == 42) {
       fprintf(stderr, "ok   P3: set() after run() visible to call() (x = 5)\n");
     } else {
-      const char *why = WIFSIGNALED(st)
+      const char *why = rc < 0
                             ? "crashed (capture bound to frame -1 / stale snapshot)"
                             : "wrong value (stale snapshot)";
       fprintf(stderr, "FAIL P3: set() after run() visible to call() — %s\n", why);
