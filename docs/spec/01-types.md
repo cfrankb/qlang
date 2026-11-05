@@ -58,11 +58,11 @@ types are either **primitives** (fixed size, fit in a register pair) or
   not on assignment, not on call, not on return.
 - `deepcopy(x)` returns an independent recursive copy, see
   [06-functions.md](06-functions.md) `### deepcopy`.
-- **implementation status**: `table`, class instances, closures and external
-  references already share. `array`, `set` and `blob` are still **copied** on
-  assignment and on call, and `deepcopy` is not yet implemented — tracked in
-  `docs/compliance/status.md` (Open Items), plan
-  `docs/plans/deepcopy-plan.md` (Phase 1 builtin, Phase 2 share-by-default).
+- **implementation status**: `deepcopy` is implemented (Phase 1, 2026-11-05).
+  `table`, class instances, closures and external references already share.
+  `array`, `set` and `blob` are still **copied** on assignment and on call —
+  Phase 2 (share-by-default) is pending, tracked in
+  `docs/compliance/status.md` (Open Items).
 
 
 ## strings

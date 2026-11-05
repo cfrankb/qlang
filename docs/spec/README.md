@@ -11,7 +11,7 @@ defined against C++20.
 
 | Module | Domain | SHA256 |
 |--------|--------|--------|
-| [01-types.md](01-types.md) | language intro, data types, value semantics, strings, sets, append | `9dd45838e8522b9e488f9632d51071c14a55f4cf932595fac6c8f03d0d7a7896` |
+| [01-types.md](01-types.md) | language intro, data types, value semantics, strings, sets, append | `be6cae8db3b285e8ea38780111997f0fe09eda25621690814e1ae212f932fd7a` |
 | [02-lexical.md](02-lexical.md) | reserved words, constants, enum, comments | `0e746264958922212c10368a5f8085f520c39e1712b46694f8ea92a8c218c46a` |
 | [03-declarations.md](03-declarations.md) | boolean evaluation, declarations and assignments | `a50f56689fdc330b7d9bfe28faa7d8806ecb6801959d2b262cec312747c82c68` |
 | [04-control-flow.md](04-control-flow.md) | conditions, range, switch, loops, label/goto | `b531d6356ea43f7b470c3e22f4f58af887926b8987533b419ce91602c0e0d0e2` |
@@ -23,7 +23,7 @@ defined against C++20.
 | [10-classes.md](10-classes.md) | user-defined classes, `static`, `::`, `deepcopy`, restrictions | `6f2cacb5b2135951a9aa27b2d69aa9b898a3fa27aeeaa56559dd18522621c458` |
 | [11-external-types.md](11-external-types.md) | conformance with external (C++) types | `43993db71abbc2f4145a8768c6a9c34d6245dd38ac3925744c333b8f51907b83` |
 | [12-errors-trace.md](12-errors-trace.md) | error reporting, requirements, execution trace, format | `f0814e4811e60570546d4771c048ecb1e903e6737ad388ee752d9699b9e68ff8` |
-| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy` (proposed) | `efbaafb03e23feffc2f4afc7e934b2ce6e0abf2697336e5a2bba33249e33306f` |
+| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy` | `c15b9c86779d0b02f0ce97d179da563a7adb95d728ec6d6675808ea1e2ccf68e` |
 | [14-scope.md](14-scope.md) | visibility scope. execution context | `ec1eadb21c4716b94590261fec12a16b1f11a715a5bfed53b5ca46232b6a0999` |
 | [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
 | [16-strict_typing.md](16-strict_typing.md) | strict typing | `9f0d96519a83b0daa3082159f3d2ac4a8c3e66fed6775922dcc41ab0896e98d5` |

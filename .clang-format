@@ -1,0 +1,56 @@
+# clang-format configuration for the QLang sandbox.
+#
+# AGENTS.md ("Code formatting guideline") requires Google-style formatting; this
+# file pins that baseline and records the deviations the existing src/ and
+# include/ sources already follow, so formatting new or touched code matches the
+# tree instead of fighting it.
+#
+#   Check a file:   clang-format --dry-run -Werror <file>
+#   Format a file:  clang-format -i <file>
+#   Inspect result: clang-format --dump-config
+---
+Language: Cpp
+BasedOnStyle: Google
+Standard: c++20
+
+# --- Layout ---------------------------------------------------------------
+ColumnLimit: 80            # ~97% of existing code lines already fit
+IndentWidth: 2
+TabWidth: 8
+UseTab: Never
+AccessModifierOffset: -2   # `public:` at column 0, members indented by 2
+
+# --- Braces and indentation ----------------------------------------------
+BreakBeforeBraces: Attach
+NamespaceIndentation: None # `namespace qlang {` bodies are not indented
+IndentCaseLabels: false    # `case` labels line up with their `switch`
+AlignAfterOpenBracket: Align
+ContinuationIndentWidth: 4
+
+# --- Pointers and references ---------------------------------------------
+PointerAlignment: Right    # `const QLangValue &v`, `Instruction *ins`
+DerivePointerAlignment: false
+
+# --- Compact statements (already common in this tree) -------------------
+AllowShortFunctionsOnASingleLine: All
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortIfStatementsOnASingleLine: WithoutElse
+AllowShortLoopsOnASingleLine: true
+AllowShortLambdasOnASingleLine: All
+AllowShortEnumsOnASingleLine: false # keep enum members one per line
+
+# --- Comments -------------------------------------------------------------
+ReflowComments: Never           # never re-wrap hand-written comment blocks
+AlignTrailingComments: Never    # leave existing trailing-comment spacing alone
+SpacesBeforeTrailingComments: 1
+
+# --- Includes: main header, then <system>, then "project" ---------------
+SortIncludes: CaseSensitive
+IncludeBlocks: Regroup
+IncludeCategories:
+  - Regex: '^<.*>$'
+    Priority: 1
+    SortPriority: 1
+  - Regex: '^".*"$'
+    Priority: 2
+    SortPriority: 2

@@ -46,7 +46,7 @@ Unit (21):
 |---|---|---|---|
 | `smoke` | `qlang_example` | `examples/hello.cpp` | `VM result: OK` |
 | `spec_check` | `spec_check` | `tests/unit/spec_check.cpp` | 33 passed |
-| `spec_check2` | `spec_check2` | `tests/unit/spec_check2.cpp` | 479 passed (incl. 42 scope/boolean/trace cases added Round 32) |
+| `spec_check2` | `spec_check2` | `tests/unit/spec_check2.cpp` | 499 passed (incl. 20 `deepcopy` cases added Round 42) |
 | `spec_cast_test` | `spec_cast_test` | `tests/unit/spec_cast_test.cpp` | 20 passed |
 | `test_module` | `test_module` | `tests/unit/test_module.cpp` | 7 tests OK |
 | `gen_test` | `gen_test` | `tests/unit/gen_test.cpp` | 5 passed |
@@ -56,7 +56,7 @@ Unit (21):
 | `class_str` | `class_str_test` | `tests/unit/class_str_test.cpp` | 13 passed |
 | `class_static` | `class_static_test` | `tests/unit/class_static_test.cpp` | 17 passed |
 | `signal` | `signal_test` | `tests/unit/signal_test.cpp` | 18 passed (Round 40; `docs/spec/17-signals.md`) |
-| `codec` | `codec_check` | `tests/unit/codec_check.cpp` | 108 checks passed |
+| `codec` | `codec_check` | `tests/unit/codec_check.cpp` | 123 checks passed (incl. 15 `deepcopy` cases, Round 42) |
 | `encoding` | `encoding_test` | `tests/unit/encoding_test.cpp` | 41 checks passed |
 | `external` | `test_external` | `tests/unit/test_external.cpp` | 49 checks passed (incl. `registerEnum` injection, Round 41) |
 | `test_inject` | `test_inject` | `tests/unit/test_inject.cpp` | `ALL PASS` |
@@ -67,7 +67,7 @@ Unit (21):
 | `phase3_api` | `phase3_api` | `tests/unit/phase3_api.cpp` | 23 checks (handles, type-mismatch, finalizer queue, `release()`) |
 | `phase5_api` | `phase5_api` | `tests/unit/phase5_api.cpp` | 17 checks (step budget, threading contract) |
 
-Counted unit cases: **878** (479+33+20+7+5+22+13+17+18+49+8+108+41+8+3+7+23+17), plus
+Counted unit cases: **913** (499+33+20+7+5+22+13+17+18+49+8+123+41+8+3+7+23+17), plus
 the three `ALL PASS` gate suites (`test_native`, `test_call`, `test_inject`).
 
 Script (19): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by

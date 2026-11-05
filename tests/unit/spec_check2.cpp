@@ -89,6 +89,17 @@ static void expectMsgImpl(const std::string &name, const std::string &src,
 #define expectValDrain(name, src, var, expect)  expectValDrainImpl(name, src, var, expect, __LINE__)
 #define expectStr(name, src, var, expect)  expectStrImpl(name, src, var, expect, __LINE__)
 #define expectMsg(name, src, ...)   expectMsgImpl(name, src, {__VA_ARGS__}, __LINE__)
+// Assert a C++-level condition (handle identity / payload independence).
+#define expectTrue(name, cond)                                             \
+  do {                                                                     \
+    if (cond) {                                                            \
+      std::cout << "[PASS] id:   [L" << __LINE__ << "] " << name << "\n";  \
+      passes++;                                                            \
+    } else {                                                               \
+      std::cout << "[FAIL] id:   [L" << __LINE__ << "] " << name << "\n";  \
+      fails++;                                                             \
+    }                                                                      \
+  } while (0)
 
 int main() {
   // -- const (spec 53-58, 119-120) --
@@ -1260,6 +1271,71 @@ int main() {
   expectStr("ternary nested block",
             "local a = 2\nlocal r = a == 1 ? \"one\" : a == 2 ? {\n  return \"two\"\n} : \"other\";",
             "r", "two");
+
+  // -- deepcopy (Phase 1: Opcode::DEEPCOPY 70, Builtin::Deepcopy) --
+  // SPEC 01 value semantics, 06 ### deepcopy, 10 ## deepcopy, 13 ## OpCode deepcopy.
+  expectVal("deepcopy int", "local a = 42\nlocal b = deepcopy(a);", "b", 42);
+  expectStr("deepcopy string by value", "local a = \"hi\"\nlocal b = deepcopy(a);", "b", "hi");
+  expectVal("deepcopy bool", "local a = true\nlocal b = deepcopy(a)\nlocal r = b ? 1 : 0;", "r", 1);
+  // Independence: mutating the copy never touches the original (index
+  // assignment also exercises the compileAssignTarget read-modify-write fix).
+  expectVal("deepcopy array independent", "local a = [1,2,3,4]\nlocal b = deepcopy(a)\nb[0] = 55\nlocal r = a[0];", "r", 1);
+  expectVal("deepcopy array copy mutated", "local a = [1,2,3,4]\nlocal b = deepcopy(a)\nb[0] = 55\nlocal r = b[0];", "r", 55);
+  expectVal("deepcopy nested array independent", "local a = [[1,2],[3,4]]\nlocal b = deepcopy(a)\nb[0] = [9,9]\nlocal r = a[0][0];", "r", 1);
+  // (chained member assign is not in the grammar; mutate via a local alias,
+  // which shares the nested table handle inside the copy)
+  expectVal("deepcopy nested table independent", "local t = {inner = {n = 1}}\nlocal u = deepcopy(t)\nlocal w = u.inner\nw.n = 2\nlocal r = t.inner.n;", "r", 1);
+  expectVal("deepcopy nested table copy mutated", "local t = {inner = {n = 1}}\nlocal u = deepcopy(t)\nlocal w = u.inner\nw.n = 2\nlocal r = u.inner.n;", "r", 2);
+  // Class instances: data fields recurse (independent), methods work on the
+  // copy, type identity preserved (class-level meta keys shared).
+  expectVal("deepcopy instance field independent",
+            "class Point {\n  x = 0\n  move(self, dx)[] {\n    self.x = self.x + dx\n  }\n}\nlocal p = Point()\np.x = 1\nlocal q = deepcopy(p)\nq.move(5)\nlocal r = p.x;", "r", 1);
+  expectVal("deepcopy instance copy mutated",
+            "class Point {\n  x = 0\n  move(self, dx)[] {\n    self.x = self.x + dx\n  }\n}\nlocal p = Point()\np.x = 1\nlocal q = deepcopy(p)\nq.move(5)\nlocal r = q.x;", "r", 6);
+  expectStr("deepcopy instance type preserved",
+            "class Point {\n  x = 0\n}\nlocal p = Point()\nlocal q = deepcopy(p)\nlocal tn = type(q);", "tn", "Point");
+  // Arity: exactly one argument (compile-time, SPEC 06 ### deepcopy).
+  expectThrow("deepcopy no args", "local a = deepcopy()");
+  expectThrow("deepcopy two args", "local a = 1\nlocal b = deepcopy(a, a)");
+  // Handle sharing + cycle safety (C++-level pointer identity; the run
+  // terminating at all proves the cycle walk is bounded).
+  try {
+    QLangContext dctx;
+    dctx.run(
+        "local f = (x)[] {\n  return x\n}\nlocal g = deepcopy(f)\n"
+        "def gen_range(mi, mx) {\n  for i = mi to mx { yield i }\n}\n"
+        "local gen = gen_range(1, 3)\nlocal h = deepcopy(gen)\n"
+        "local t = {a = 1}\nt.self = t\nlocal u = deepcopy(t)");
+    expectTrue("deepcopy function shares handle",
+               &dctx.get("f").asFunction() == &dctx.get("g").asFunction());
+    expectTrue("deepcopy generator shares handle",
+               &dctx.get("gen").asGenerator() == &dctx.get("h").asGenerator());
+    // Bind the QLangValue itself: get() returns by value, and a reference
+    // into the temporary's member would dangle (no lifetime extension).
+    const auto &uval = dctx.get("u");
+    const auto &umap = uval.asTable();
+    expectTrue("deepcopy table cycle u.self is u copy",
+               umap->at("self").asTable().get() == umap.get());
+    expectTrue("deepcopy table cycle u.self.self is u copy",
+               umap->at("self").asTable()->at("self").asTable().get() == umap.get());
+  } catch (const QLangError &e) {
+    std::cout << "[FAIL] id:   deepcopy identity run -> " << e.what() << "\n";
+    fails++;
+  }
+  try {
+    QLangContext dctx;
+    dctx.run("class Point {\n  x = 0\n}\nlocal p = Point()\nlocal q = deepcopy(p)\nlocal t = {a = 1}\nlocal u = deepcopy(t)");
+    expectTrue("deepcopy table payload independent",
+               dctx.get("t").asTable().get() != dctx.get("u").asTable().get());
+    expectTrue("deepcopy instance payload independent",
+               dctx.get("p").asTable().get() != dctx.get("q").asTable().get());
+    expectTrue("deepcopy instance shares __class__",
+               dctx.get("p").asTable()->at("__class__").asString() ==
+                   dctx.get("q").asTable()->at("__class__").asString());
+  } catch (const QLangError &e) {
+    std::cout << "[FAIL] id:   deepcopy payload run -> " << e.what() << "\n";
+    fails++;
+  }
 
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;

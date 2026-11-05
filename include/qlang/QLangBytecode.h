@@ -43,7 +43,8 @@ enum class Builtin : int {
   SetMaxSteps, // set_max_steps(n) -> void (set the VM's infinite-loop step limit)
   GetMaxSteps, // get_max_steps() -> int (current infinite-loop step limit)
   Set,         // set(...) -> set (unique-value collection constructor)
-  Release      // release(x) -> nil (drop an owned external's shared_ptr)
+  Release,     // release(x) -> nil (drop an owned external's shared_ptr)
+  Deepcopy     // deepcopy(x) -> independent recursive copy (SPEC §functions "deepcopy")
 };
 
 // Register-machine opcodes. This is a small register VM: each script variable
@@ -209,12 +210,19 @@ enum class Opcode : uint8_t {
   // connection of the signal named const[b] on the object in r[a]. Same
   // operand convention as CALL (dest in a, arg count in c, args in
   // r[a+1..a+c]). Appended last so existing .qlc opcode numbers stay valid.
-  EMIT // deliver signal const[b] on r[a] with c args in r[a+1..a+c]
+  EMIT, // deliver signal const[b] on r[a] with c args in r[a+1..a+c]
+
+  // Deep copy of a register value: r[a] = deep copy of r[b]. Two register
+  // operands, no i32 slot (same shape as MOV). The compiler lowers a
+  // `deepcopy(x)` call directly to this opcode (no CALL, no arg staging).
+  // Copy semantics: SPEC §functions "deepcopy"; plan docs/plans/deepcopy-plan.md.
+  // Appended last so existing .qlc opcode numbers stay valid.
+  DEEPCOPY // r[a] = deepcopy(r[b])
 };
 
 inline constexpr uint8_t kOpcodeEscape = 0x80;
 inline constexpr uint8_t kOpcodeMax = 128; // identities 0..127
-inline constexpr uint8_t kOpcodeUsedCount = 70; // defined identities 0..69
+inline constexpr uint8_t kOpcodeUsedCount = 71; // defined identities 0..70
 
 struct DecodedInstruction {
   Opcode op = Opcode::MOVC;

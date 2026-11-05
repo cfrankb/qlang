@@ -231,6 +231,10 @@ namespace
       return "get_max_steps";
     case 19:
       return "set";
+    case 20:
+      return "release";
+    case 21:
+      return "deepcopy";
     default:
       return nullptr;
     }
@@ -274,6 +278,9 @@ namespace
       break;
     case Opcode::MOV:
       ss << rn(ins.a) << " = " << rn(ins.b);
+      break;
+    case Opcode::DEEPCOPY:
+      ss << rn(ins.a) << " = deepcopy(" << rn(ins.b) << ")";
       break;
     case Opcode::MOVI:
       ss << rn(ins.a) << " = " << ins.imm;
@@ -528,6 +535,7 @@ namespace
     case Opcode::ARRAPPV:
     case Opcode::ARRLEN:
     case Opcode::LEN:
+    case Opcode::DEEPCOPY:
       add(ins.a);
       add(ins.b);
       break;

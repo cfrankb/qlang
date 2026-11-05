@@ -105,6 +105,7 @@ static size_t baseOperandCount(Opcode op) {
   case Opcode::NEG:
   case Opcode::NOT:
   case Opcode::EVALKEY:
+  case Opcode::DEEPCOPY:
     return 2;
   }
   // 3-operand (default): ADD..INx, CONV, CAST, ARRGET/ARRPUT, TABGET/TABPUT,
@@ -815,6 +816,7 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::JLE: return "jle";
   case Opcode::Nop: return "nop";
   case Opcode::EMIT: return "emit";
+  case Opcode::DEEPCOPY: return "deepcopy";
   default:
     return "???";
   }

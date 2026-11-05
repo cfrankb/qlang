@@ -721,6 +721,140 @@ static void testNop() {
 }
 
 // ---------------------------------------------------------------------------
+// DEEPCOPY: r[a] = deep copy of r[b] (SPEC §bytecodes "OpCode deepcopy").
+// Appended last (identity 70) so existing .qlc opcode numbers stay valid.
+// Two register operands, no i32 slot (same shape as MOV). The compiler lowers
+// a `deepcopy(x)` call directly to this opcode.
+// ---------------------------------------------------------------------------
+static void testDeepcopy() {
+  try {
+    // Identity, name, validity, and size.
+    check(static_cast<uint8_t>(Opcode::DEEPCOPY) == 70,
+          "deepcopy: identity 70 (appended last)");
+    check(Bytecode::name(Opcode::DEEPCOPY) == "deepcopy", "deepcopy: name");
+    check(isValidOpcode(Opcode::DEEPCOPY), "deepcopy: valid opcode");
+    check(baseInstructionSize(Opcode::DEEPCOPY) == 3,
+          "deepcopy: 3-byte base size (op + 2 reg operands)");
+
+    // 3-byte encode/decode round-trip (a=dest reg, b=src reg).
+    DecodedInstruction in;
+    in.op = Opcode::DEEPCOPY;
+    in.a = 3;
+    in.b = 5;
+    std::vector<uint8_t> buf;
+    encodeInstruction(buf, in);
+    check(buf.size() == 3 && buf[0] == 70 && buf[1] == 3 && buf[2] == 5,
+          "deepcopy: encodes to 3 bytes");
+    DecodedInstruction out;
+    decodeInstruction(buf.data(), 0, buf.size(), out);
+    check(out.op == Opcode::DEEPCOPY && !out.escaped && out.size == 3 &&
+              out.a == 3 && out.b == 5,
+          "deepcopy: decode round-trip");
+
+    // .qlc round-trip of a hand-built program: MOVI 1, 7; DEEPCOPY 0, 1;
+    // RETURN 0.
+    Function fn;
+    fn.name = "main";
+    fn.paramCount = 0;
+    fn.registerCount = 2;
+    DecodedInstruction d1;
+    d1.op = Opcode::MOVI;
+    d1.a = 1;
+    d1.imm = 7;
+    DecodedInstruction d2;
+    d2.op = Opcode::DEEPCOPY;
+    d2.a = 0;
+    d2.b = 1;
+    DecodedInstruction d3;
+    d3.op = Opcode::RETURN;
+    d3.a = 0;
+    for (const auto &d : {d1, d2, d3}) {
+      fn.instrOffsets.push_back(fn.code.size());
+      encodeInstruction(fn.code, d);
+      fn.loc.emplace_back(1, 1);
+    }
+    CompiledProgram p;
+    p.registerCount = 2;
+    p.vars["x"] = 0;
+    p.functions.push_back(fn);
+    std::ostringstream os(std::ios::binary);
+    check(writeQlc(os, p, {}), "deepcopy: writeQlc");
+    CompiledProgram back;
+    std::vector<std::pair<int, std::string>> slots;
+    std::string err;
+    std::istringstream is(os.str(), std::ios::binary);
+    check(readQlc(is, back, slots, err),
+          std::string("deepcopy: readQlc (") + err + ")");
+    if (err.empty()) {
+      const auto &b = back.functions[0];
+      bool same = b.code == fn.code && b.instrOffsets == fn.instrOffsets;
+      check(same, "deepcopy: round-trip instruction equality");
+      if (same) {
+        DecodedInstruction di;
+        decodeInstruction(b.code.data(), b.instrOffsets[1], b.code.size(), di);
+        check(di.op == Opcode::DEEPCOPY && di.a == 0 && di.b == 1,
+              "deepcopy: instruction survives round-trip");
+      }
+    }
+
+    // The VM executes it: r0 = deepcopy(r1) with r1 = Int 7 leaves 7 in x.
+    QLangContext ctx;
+    QLangVM vm(p, ctx);
+    vm.run();
+    check(ctx.get("x").asInt() == 7, "deepcopy: VM executes the copy");
+  } catch (const QLangError &e) {
+    check(false, std::string("deepcopy: ") + e.what());
+  }
+}
+
+// ---------------------------------------------------------------------------
+// deepcopy lowering + arity (SPEC §functions "deepcopy"): the compiler emits
+// DEEPCOPY directly (no CALL, no arg staging); wrong arity is a compile error.
+// ---------------------------------------------------------------------------
+static void testDeepcopyLowering() {
+  try {
+    QLangContext ctx;
+    QLangCompiler compiler(ctx.parse("local a = [1, 2]\nlocal b = deepcopy(a);\n"),
+                           &ctx);
+    CompiledProgram p = compiler.compile();
+    const Function &fn = p.functions[0];
+    bool hasDeepcopy = false, hasCall = false;
+    for (size_t off : fn.instrOffsets) {
+      DecodedInstruction d;
+      decodeInstruction(fn.code.data(), off, fn.code.size(), d);
+      if (d.op == Opcode::DEEPCOPY)
+        hasDeepcopy = true;
+      if (d.op == Opcode::CALL)
+        hasCall = true;
+    }
+    check(hasDeepcopy, "deepcopy: compiler lowers the call to DEEPCOPY");
+    check(!hasCall, "deepcopy: no CALL emitted for the builtin");
+
+    // Arity: deepcopy() and deepcopy(a, b) are compile errors.
+    bool zeroRejected = false, twoRejected = false;
+    try {
+      QLangContext c1;
+      QLangCompiler k(c1.parse("local b = deepcopy();\n"), &c1);
+      k.compile();
+    } catch (const QLangError &) {
+      zeroRejected = true;
+    }
+    try {
+      QLangContext c2;
+      QLangCompiler k(c2.parse("local a = [1]\nlocal b = deepcopy(a, a);\n"),
+                      &c2);
+      k.compile();
+    } catch (const QLangError &) {
+      twoRejected = true;
+    }
+    check(zeroRejected, "deepcopy: zero args rejected at compile time");
+    check(twoRejected, "deepcopy: two args rejected at compile time");
+  } catch (const QLangError &e) {
+    check(false, std::string("deepcopy-lowering: ") + e.what());
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Malformed-input suite: each case must fail cleanly, leave the out-params
 // untouched, and say why.
 // ---------------------------------------------------------------------------
@@ -834,10 +968,10 @@ static void testMalformed() {
 
   std::string badOp = fileWithOneInstr();
   // The single instruction's opcode byte is at byte 37 (header + function
-  // metadata + codeSize). Set it to 70: a valid 7-bit identity that is not a
-  // defined opcode (kOpcodeUsedCount == 69). It decodes as a 4-byte 3-operand
-  // form, then fails isValidOpcode.
-  badOp[37] = 70;
+  // metadata + codeSize). Set it to 71: a valid 7-bit identity that is not a
+  // defined opcode (kOpcodeUsedCount == 71; DEEPCOPY took 70). It decodes as
+  // a 4-byte 3-operand form, then fails isValidOpcode.
+  badOp[37] = 71;
   rejects("malformed: invalid opcode", badOp);
 
   // Truncated instruction: codeSize=3, but the ADD at offset 0 needs 4 bytes.
@@ -978,6 +1112,8 @@ int main() {
   testCmpJump();
   testPoolDedup();
   testNop();
+  testDeepcopy();
+  testDeepcopyLowering();
   testMalformed();
   std::cout << (fails == 0 ? "all codec checks passed\n"
                            : "codec checks FAILED\n");

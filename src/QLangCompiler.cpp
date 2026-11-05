@@ -3000,6 +3000,27 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     int argCount = static_cast<int>(e->args.size());
     trace(TRACE_FRAME, "[DBG-CALL] Entering call expr for '%s' with %d args\n", e->callee.c_str(), argCount);
     trace(TRACE_FULL, "[DBG-CALL] &m_emitter=%p m_emitter.size=%zu\n", (void*)&m_emitter, m_emitter.size());
+    // deepcopy(x) lowers directly to DEEPCOPY dest, src (SPEC §bytecodes
+    // "OpCode deepcopy"): the argument is compiled into a temp and the copy
+    // lands straight in dest — no CALL, no arg staging in dest+1.. (encoding
+    // guidelines: copy directly to the final register, avoid temporaries).
+    // Arity is checked here: the spec makes deepcopy() / deepcopy(a, b)
+    // compile errors (SPEC §functions "deepcopy"), and the compiler sees the
+    // argument count on this path.
+    if (!e->calleeMember &&
+        builtinId(e->callee) == static_cast<int>(Builtin::Deepcopy)) {
+      if (e->args.size() != 1)
+        throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
+                         "deepcopy expects exactly one argument, got " +
+                             std::to_string(e->args.size()));
+      int srcR = tmpRegister();
+      compileExpr(e->args[0], srcR);
+      emit(Opcode::DEEPCOPY, dest, srcR, 0);
+      m_emitter.setLastLoc(static_cast<uint16_t>(e->callLine),
+                           static_cast<uint16_t>(e->callCol));
+      releaseTemp(srcR);
+      break;
+    }
     // Reserve one extra slot: method/constructor calls shift args up by one
     // (self/anchor), so their live slots reach dest+argCount+1. Must happen
     // BEFORE any arg register is allocated, or it would take a slot register.
@@ -3848,6 +3869,7 @@ int QLangCompiler::builtinId(const std::string &name) const {
   if (name == "set_max_steps") return static_cast<int>(Builtin::SetMaxSteps);
   if (name == "get_max_steps") return static_cast<int>(Builtin::GetMaxSteps);
   if (name == "release") return static_cast<int>(Builtin::Release);
+  if (name == "deepcopy") return static_cast<int>(Builtin::Deepcopy);
   return -1;
 }
 
@@ -3922,7 +3944,7 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
     else
       emitImm(Opcode::MOVI, idxR, 0); // ab[] -> append
     int valR = tmpRegister();
-    if (target->indexExpr) {
+    if (target->indexExpr && isCompound) {
       // read-modify-write for compound ops (e.g. a[i] += v)
       int tmpR = tmpRegister();
       emit(Opcode::ARRGET, tmpR, baseR, idxR);
@@ -3939,6 +3961,12 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
         emit(opCode, tmpR, tmpR, valR);
       }
       emit(Opcode::ARRPUT, baseR, idxR, tmpR);
+    } else if (target->indexExpr) {
+      // Plain index assignment ab[i] = v (SPEC §declarations): direct put —
+      // the compound path above would call binOp with the empty operator
+      // text left by stripping the '='.
+      compileExpr(value, valR);
+      emit(Opcode::ARRPUT, baseR, idxR, valR);
     } else {
       compileExpr(value, valR);
       // empty subscript ab[] = v -> append

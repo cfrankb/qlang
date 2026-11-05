@@ -97,7 +97,7 @@ Conventions:
 | JGE | — | — | — | pc target | jump when GT or EQ (`a >= b`) |
 | JL | — | — | — | pc target | jump when LT only (`a < b`) |
 | JLE | — | — | — | pc target | jump when LT or EQ (`a <= b`) |
-| DEEPCOPY | dest reg | src reg | — | | `r[a] = deepcopy(r[b])`; **proposed** — not yet implemented |
+| DEEPCOPY | dest reg | src reg | — | | `r[a] = deepcopy(r[b])` |
 
 ## opcode: MOVI
 
@@ -334,7 +334,7 @@ this OpCode takes no action
 
 ## OpCode deepcopy
 
-**Proposed** — not yet implemented. Plan: `docs/plans/deepcopy-plan.md`.
+Implemented 2026-11-05 (Phase 1 of `docs/plans/deepcopy-plan.md`).
 
 `deepcopy a, b` — `r[a] = deep copy of r[b]`. two register operands, no i32
 slot (same shape as `mov`). appended last in the opcode enum so existing `.qlc`
