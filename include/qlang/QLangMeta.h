@@ -9,6 +9,10 @@
 // `&SelfType::translate`) — unqualified `&x` is not a pointer-to-member in
 // C++ (it is ill-formed in a static context and yields a bound `int*`/is
 // rejected for methods in a non-static one), so a type is always required.
+// The one exception is QL_SIGNAL: its member function is declared but never
+// defined, so the macro names its *type* (`decltype(&SelfType::name)`) instead
+// of forming a pointer to it — taking the address would odr-use a definition
+// that does not exist, which MSVC reports as an unresolved external.
 // The script-visible type *name* is recovered from the platform "current
 // function" string (QL_PRETTY_FUNCTION: __PRETTY_FUNCTION__ on
 // GCC/Clang/MinGW/emscripten, __FUNCSIG__ on MSVC; `__CLASS__` is MSVC-only
@@ -39,6 +43,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -248,22 +253,40 @@ std::function<bool(const QLangValue&)> arg_check() {
   };
 }
 
-// Non-const member function -> signal.
+// Parameter types of a signal's member-function type (non-const and const).
+template <class Sig> struct SignalArgs {
+  static_assert(sizeof(Sig) == 0,
+                "QL_SIGNAL requires the name of a member function");
+};
+template <class T, class R, class... A> struct SignalArgs<R (T::*)(A...)> {
+  using type = std::tuple<A...>;
+};
 template <class T, class R, class... A>
-SignalMeta signal(const char* n, R (T::*f)(A...)) {
+struct SignalArgs<R (T::*)(A...) const> {
+  using type = std::tuple<A...>;
+};
+
+// Signature-only signal builder. `Sig` is the member-function *type*
+// (`decltype(&SelfType::name)`), never its address: taking the address of the
+// declared-but-never-defined signal function odr-uses it, and MSVC then emits
+// an external reference to a definition that does not exist (LNK2019). Naming
+// the type in `decltype` is an unevaluated context, so no definition is
+// required on any compiler.
+template <class Sig, std::size_t... I>
+SignalMeta signal_args(const char* n, std::index_sequence<I...>) {
   SignalMeta s;
   s.name = n;
-  (s.argChecks.push_back(arg_check<A>()), ...);
+  (s.argChecks.push_back(
+       arg_check<std::tuple_element_t<I, typename SignalArgs<Sig>::type>>()),
+   ...);
   return s;
 }
 
-// Const member function -> signal.
-template <class T, class R, class... A>
-SignalMeta signal(const char* n, R (T::*f)(A...) const) {
-  SignalMeta s;
-  s.name = n;
-  (s.argChecks.push_back(arg_check<A>()), ...);
-  return s;
+template <class Sig>
+SignalMeta signal(const char* n) {
+  return signal_args<Sig>(
+      n, std::make_index_sequence<
+             std::tuple_size_v<typename SignalArgs<Sig>::type>>{});
 }
 
 // --- Whole-group enum tables (QL_ENUM / QL_FLAGS) -------------------------
@@ -408,9 +431,11 @@ template <class... Ts> TypeMeta assemble(std::string name, Ts... es) {
 #define QL_INVOKABLE(name) qlang::meta_detail::method(#name, &SelfType::name)
 #define QL_SLOTS(name) qlang::meta_detail::method(#name, &SelfType::name)
 
-// Signal: the member function is declared (never implemented); its
-// signature defines the emit argument types.
-#define QL_SIGNAL(name) qlang::meta_detail::signal(#name, &SelfType::name)
+// Signal: the member function is declared (never implemented); its signature
+// defines the emit argument types. The *type* is named via decltype — taking
+// &SelfType::name would odr-use a function that has no definition.
+#define QL_SIGNAL(name) \
+  qlang::meta_detail::signal<decltype(&SelfType::name)>(#name)
 
 // Whole enum/flag group in one line: bare enumerator names. The macro forms
 // one (name, value) pair per enumerator (C++17 has no dependent NTTP packs,
