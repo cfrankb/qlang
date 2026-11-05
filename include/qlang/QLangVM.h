@@ -50,6 +50,15 @@ public:
   QLangValue callClosure(const QLangValue &value,
                          const std::vector<QLangValue> &args);
 
+  // Deliver a signal (docs/spec/17-signals.md): resolve the signal against
+  // the sender's type descriptor, check the argument count and types, and
+  // invoke each live connection's handler in connection order. The single
+  // home for delivery — the EMIT opcode and QLangContext::emitSignal both
+  // delegate here. A handler that emits recurses; the step budget contains
+  // runaway recursion (no re-entrancy guard).
+  void deliverSignal(const QLangValue &sender, const std::string &signal,
+                     const std::vector<QLangValue> &args);
+
   // Number of registers in the main program (for debugging / assertions).
   int registerCount() const { return m_prog.registerCount; }
 
@@ -238,6 +247,17 @@ public:
   // saved registers onto a live frame, runs the single loop, and moves the
   // frame back. Returns the yielded value, or nil when exhausted.
   QLangValue resumeGenerator(GeneratorState &gen);
+
+  // Invoke one signal connection's handler (docs/spec/17-signals.md): a
+  // Function value via callClosure, a BoundMethod inline (like the CALLCLOS
+  // case), or the string-slot form (resolve the method on the target at emit
+  // time; a missing method is a silent no-op, a throwing method propagates).
+  void callHandler(const QLangContext::SignalConnection &conn,
+                   const std::vector<QLangValue> &args);
+  // The string-slot form of callHandler: resolve `method` on `target` and
+  // invoke it with `args`.
+  void callSlotHandler(const QLangValue &target, const std::string &method,
+                       const std::vector<QLangValue> &args);
 
   // Default infinite-loop guard. The live limit is owned by the context
   // (QLangContext::maxSteps), which the VM reads at every step; this constant

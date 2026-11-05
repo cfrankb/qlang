@@ -459,4 +459,10 @@ const ObjectOps* getObjectOps(const QLangValue& obj) {
   return nullptr;
 }
 
+bool isClassInstance(const QLangValue& v) {
+  if (v.type() != QLangValue::Type::Table)
+    return false;
+  return table_ops::isClassInstance(*v.asTable());
+}
+
 } // namespace qlang

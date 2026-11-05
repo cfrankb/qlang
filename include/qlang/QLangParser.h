@@ -133,7 +133,8 @@ enum class StmtKind {
   Global,    // global a, b (import top-level vars into function scope)
   Import,    // import math / import math.min
   Class,     // class Name { fields + methods end }
-  Enum       // enum Name[:type] { A, B, C = 100, D }
+  Enum,      // enum Name[:type] { A, B, C = 100, D }
+  Emit       // emit obj.signal(args) (signal emission)
 };
 
 // Base statement node. Forward-declared so StmtPtr can be used inside Stmt.
@@ -262,6 +263,11 @@ struct Stmt {
     ExprPtr value; // explicit `= N` (null = implied sequential value)
   };
   std::vector<EnumMember> enumMembers;
+
+  // Emit: emit obj.signal(args). `emitTarget` is the object expression,
+  // `name` holds the signal name, `emitArgs` the argument expressions.
+  ExprPtr emitTarget;
+  std::vector<ExprPtr> emitArgs;
 };
 
 using StmtPtr = std::shared_ptr<Stmt>;
@@ -295,6 +301,8 @@ private:
   StmtPtr parseImport();
   StmtPtr parseClass();
   StmtPtr parseEnum();
+  StmtPtr parseEmit();
+  ExprPtr parseEmitSender();
   StmtPtr parseFunction();
   StmtPtr parseArrowClosure(const std::string &varName);
   bool looksLikeArrow() const;
@@ -303,6 +311,7 @@ private:
   ExprPtr parseBinary(int minPrecedence);
   ExprPtr parseUnary();
   ExprPtr parsePostfix();
+  ExprPtr parsePostfixChain();
   ExprPtr parsePrimary();
   ExprPtr parseArrayLiteral();
   ExprPtr parseTableLiteral();

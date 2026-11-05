@@ -1,6 +1,6 @@
 # signals
 
-**Status: tentative draft (2026-11-04) — not yet conforming, no implementation.**
+**Status: final (2026-11-05) — implemented and conforming.**
 Resolves the open question in `docs/EXTERNAL_TYPES.md` §10.4 ("Signals —
 revisit with `docs/EVENT_HANDLERS.md`"). Supersedes the C6 inventory entry in
 `docs/plans/missing-features-plan.md`.
@@ -42,7 +42,10 @@ struct Sensor : qlang::QLObject<Sensor> {
 emit sensor.levelChanged(3)
 ```
 
-- `emit` is a reserved word (lands in `02-lexical.md` on finalization).
+- `emit` is a reserved word (`02-lexical.md`).
+- the target is a postfix chain (member/subscript access, no calls); the
+  **last** dot separates the target from the signal name, so
+  `emit a.b.c(1)` emits signal `c` on object `a.b`.
 - the signal name is resolved against the object's type descriptor at
   runtime: unknown name → `type error: unknown signal 'x' on type 'T'`.
 - argument count and types are checked against the declared signature (same

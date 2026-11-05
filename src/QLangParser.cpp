@@ -200,6 +200,7 @@ StmtPtr QLangParser::parseStatementImpl() {
   if (check(TokenType::Global)) return parseGlobal();
   if (check(TokenType::Import) || check(TokenType::From)) return parseImport();
   if (check(TokenType::Class)) return parseClass();
+  if (check(TokenType::Emit)) return parseEmit();
 
   if (check(TokenType::Def)) return parseFunction();
   if (check(TokenType::Return)) return parseReturn();
@@ -732,6 +733,64 @@ StmtPtr QLangParser::parseYield() {
   return stmt;
 }
 
+StmtPtr QLangParser::parseEmit() {
+  consume(TokenType::Emit, "'emit'");
+  auto stmt = std::make_shared<Stmt>();
+  stmt->kind = StmtKind::Emit;
+  stmt->line = current().line;
+  stmt->col = current().col;
+  // emit obj.signal(args)
+  // The target is a postfix chain (member/subscript access, no calls); the
+  // final `.name` is the signal name (the last dot separates target from
+  // signal, so `emit a.b.c(1)` -> target `a.b`, signal `c`).
+  ExprPtr e = parsePrimary();
+  while (check(TokenType::LBracket) || check(TokenType::Dot) ||
+         check(TokenType::ScopeRes)) {
+    if (check(TokenType::LBracket)) {
+      m_pos++; // consume '['
+      ExprPtr idx;
+      if (check(TokenType::RBracket))
+        idx = nullptr; // empty subscript ab[] (append target)
+      else
+        idx = parseExpression();
+      consume(TokenType::RBracket, "']' after subscript");
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Index;
+      node->indexBase = e;
+      node->indexExpr = idx;
+      e = std::move(node);
+    } else {
+      bool scopeRes = check(TokenType::ScopeRes);
+      m_pos++; // consume '.' or '::'
+      const Token &nameTok = current();
+      m_pos++; // consume the member-name token (Ident or keyword)
+      auto node = std::make_shared<Expr>();
+      node->kind = ExprKind::Member;
+      node->memberBase = e;
+      node->memberName = nameTok.value;
+      node->scopeStatic = scopeRes; // `C::name` -> class static member
+      e = std::move(node);
+    }
+  }
+  if (e->kind != ExprKind::Member) {
+    const Token &cur = current();
+    throw QLangError(QLangErrorKind::Parse, cur.line, cur.col,
+                     "expected '.' after emit target but found '" +
+                         cur.text + "'");
+  }
+  stmt->emitTarget = e->memberBase;
+  stmt->name = e->memberName;
+  consume(TokenType::LParen, "'(' after signal name");
+  if (!check(TokenType::RParen)) {
+    do {
+      stmt->emitArgs.push_back(parseExpression());
+    } while (match(TokenType::Comma));
+  }
+  consume(TokenType::RParen, "')' to close emit arguments");
+  match(TokenType::Semicolon);
+  return stmt;
+}
+
 StmtPtr QLangParser::parseContinue() {
   int line = current().line, col = current().col;
   (void)line;
@@ -1172,7 +1231,7 @@ ExprPtr QLangParser::parseUnary() {
   return parsePostfix();
 }
 
-ExprPtr QLangParser::parsePostfix() {
+ExprPtr QLangParser::parsePostfixChain() {
   ExprPtr e = parsePrimary();
   // Postfix inc/dec binds only to a bare variable (e.g. a++). Restricting to a
   // Variable prevents a following statement-level ++/-- from being greedily
@@ -1217,6 +1276,11 @@ ExprPtr QLangParser::parsePostfix() {
       break;
     }
   }
+  return e;
+}
+
+ExprPtr QLangParser::parsePostfix() {
+  ExprPtr e = parsePostfixChain();
   // Call on member: obj.method(args) -> wrap in Call with Member as callee.
   if (check(TokenType::LParen)) {
     m_pos++; // consume '('

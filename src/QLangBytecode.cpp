@@ -814,6 +814,7 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::JL: return "jl";
   case Opcode::JLE: return "jle";
   case Opcode::Nop: return "nop";
+  case Opcode::EMIT: return "emit";
   default:
     return "???";
   }

@@ -76,6 +76,7 @@ enum class TokenType {
   Class,       // class (user-defined class)
   Static,      // static (class-level member, new extension beyond v1)
   Enum,        // enum (immutable value collection)
+  Emit,        // emit (signal emission statement)
   True,        // true
   False,       // false
   Nil,         // nil (undefined/sentinel value)

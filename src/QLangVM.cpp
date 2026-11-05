@@ -1019,6 +1019,120 @@ QLangValue QLangVM::callClosure(const QLangValue &value, const std::vector<QLang
   return callFunction(value.asFunction().funcIndex, args);
 }
 
+// Deliver a signal (docs/spec/17-signals.md). The sender must be an external
+// object (v1: external types only); the signal is resolved against its type
+// descriptor; the argument count and types are checked against the declared
+// signature (the same as<A>() conversion rules a method call uses). Each
+// live connection's handler is then invoked, in connection order. A handler
+// that emits recurses into deliverSignal; the step budget contains runaway
+// recursion (there is no re-entrancy guard).
+void QLangVM::deliverSignal(const QLangValue &sender, const std::string &signal,
+                            const std::vector<QLangValue> &args) {
+  if (sender.type() != QLangValue::Type::External)
+    vmThrow(QLangErrorKind::Type, "emit on a non-external object");
+  const auto &ref = sender.asExternal();
+  if (!ref.type)
+    vmThrow(QLangErrorKind::Type, "emit on a non-external object");
+  const TypeDescriptor &desc = *ref.type;
+  const SignalMeta *sig = nullptr;
+  for (const auto &s : desc.signals)
+    if (s.name == signal) {
+      sig = &s;
+      break;
+    }
+  if (!sig)
+    vmThrow(QLangErrorKind::Type, "unknown signal '" + signal + "' on type '" +
+                                      desc.name + "'");
+  if (args.size() != sig->argChecks.size())
+    vmThrow(QLangErrorKind::Type,
+             "signal '" + signal + "' on type '" + desc.name + "' expects " +
+                 std::to_string(sig->argChecks.size()) + " argument(s), got " +
+                 std::to_string(args.size()));
+  for (size_t k = 0; k < args.size(); k++)
+    if (!sig->argChecks[k](args[k]))
+      vmThrow(QLangErrorKind::Type,
+               "signal '" + signal + "' on type '" + desc.name + "': argument " +
+                   std::to_string(k + 1) + " has the wrong type");
+  // Deliver to each live connection, in connection order. The vector is a
+  // copy, so a handler that connects/disconnects during delivery does not
+  // disturb the iteration.
+  for (const auto &conn : m_scope.signalConnections(sender, signal))
+    callHandler(conn, args);
+}
+
+// Invoke one signal connection's handler (docs/spec/17-signals.md).
+void QLangVM::callHandler(const QLangContext::SignalConnection &conn,
+                          const std::vector<QLangValue> &args) {
+  if (!conn.method.empty()) {
+    // String-slot form: resolve the method on the target at emit time.
+    callSlotHandler(conn.target, conn.method, args);
+    return;
+  }
+  if (conn.handler.type() == QLangValue::Type::Function) {
+    callClosure(conn.handler, args);
+    return;
+  }
+  if (conn.handler.type() == QLangValue::Type::BoundMethod) {
+    // External C++ method: invoke the bound member on the target (like the
+    // CALLCLOS case). selfMut() throws on an expired borrow; C++ exceptions
+    // from the binding become runtime errors.
+    const auto &bm = conn.handler.asBoundMethod();
+    ExternalRef target = bm.target; // copy: selfMut() is non-const
+    void *self = target.selfMut();
+    try {
+      bm.member->invoke(self, m_scope, args);
+    } catch (const QLangError &) {
+      throw;
+    } catch (const std::exception &e) {
+      vmThrow(QLangErrorKind::Runtime, e.what());
+    }
+    return;
+  }
+  // A handler that is neither a function nor a bound method is a silent
+  // no-op (it was valid at connect time; it may have been reassigned).
+}
+
+// The string-slot form of callHandler: resolve `method` on `target` at emit
+// time and invoke it with `args`. A missing method is a silent no-op (the
+// event-handler miss rule); a method that throws propagates (the handler's
+// error becomes the emit's error).
+void QLangVM::callSlotHandler(const QLangValue &target, const std::string &method,
+                              const std::vector<QLangValue> &args) {
+  const ObjectOps *ops = getObjectOps(target);
+  if (!ops)
+    return;
+  QLangValue m;
+  try {
+    m = ops->getField(target, method, m_scope);
+  } catch (const QLangError &) {
+    return; // missing method: silent no-op
+  }
+  if (m.type() == QLangValue::Type::Function) {
+    // Table-stored closures are called as-is (no self); class methods take
+    // self as the first argument (the script's method-call convention).
+    // Class instances are tables carrying the `__fields__` schema.
+    std::vector<QLangValue> callArgs = args;
+    if (target.type() == QLangValue::Type::Object || isClassInstance(target))
+      callArgs.insert(callArgs.begin(), target);
+    callClosure(m, callArgs);
+    return;
+  }
+  if (m.type() == QLangValue::Type::BoundMethod) {
+    const auto &bm = m.asBoundMethod();
+    ExternalRef t = bm.target;
+    void *self = t.selfMut();
+    try {
+      bm.member->invoke(self, m_scope, args);
+    } catch (const QLangError &) {
+      throw;
+    } catch (const std::exception &e) {
+      vmThrow(QLangErrorKind::Runtime, e.what());
+    }
+    return;
+  }
+  // Any other resolved value (a plain field, not a method) is a silent no-op.
+}
+
 // Display form of a value (print/println/printf/sprintf/f-string/join). A
 // table with a `__str__` method renders by calling it with the table as the
 // sole argument; class instances without `__str__` render as their class
@@ -1855,6 +1969,17 @@ RunResult QLangVM::runFrames() {
       // directly (no re-binding at call time).
       m_frames[static_cast<size_t>(m_cur)].captures = clos.captures;
       continue;
+    }
+    case Opcode::EMIT: {
+      // Deliver signal const[b] on r[a] with c args in r[a+1..a+c] (the same
+      // operand convention as CALL). Delivery is synchronous: each connected
+      // handler runs to completion, in connection order, before EMIT returns.
+      std::vector<QLangValue> emitArgs;
+      emitArgs.reserve(i.c);
+      for (int k = 0; k < i.c; k++)
+        emitArgs.push_back(frame.regs[i.a + 1 + k]);
+      deliverSignal(frame.regs[i.a], consts[i.b].asString(), emitArgs);
+      break;
     }
     case Opcode::MAKEFUNC: {
       const QLangValue &cv = consts[i.b];

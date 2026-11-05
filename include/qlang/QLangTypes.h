@@ -29,6 +29,7 @@ struct TypeDescriptor {
                                       const std::vector<QLangValue>&)>
       construct;
   std::vector<EnumMeta> enums;  // QL_ENUM / QL_FLAGS
+  std::vector<SignalMeta> signals;  // QL_SIGNAL
   // Concrete C++ type of constructed objects (Phase 3): copied from the
   // TypeMeta at registration; `typeCheck` validates a resolved object
   // pointer against it (null when the ctor returns a void-typed shared_ptr).

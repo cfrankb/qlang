@@ -155,6 +155,13 @@ add_executable(class_static_test tests/unit/class_static_test.cpp)
 target_link_libraries(class_static_test PRIVATE qlang)
 add_test(NAME class_static COMMAND class_static_test)
 
+# Signals (docs/spec/17-signals.md): QL_SIGNAL meta, script emit,
+# connect/disconnect (function value + string-slot), synchronous delivery,
+# auto-disconnect on sender destruction, C++ hasSignal/emitSignal.
+add_executable(signal_test tests/unit/signal_test.cpp)
+target_link_libraries(signal_test PRIVATE qlang)
+add_test(NAME signal COMMAND signal_test)
+
 # .qlc codec round-trip + malformed-input robustness (docs/SERIALIZATION.md §9).
 add_executable(codec_check tests/unit/codec_check.cpp)
 target_link_libraries(codec_check PRIVATE qlang)

@@ -1,3 +1,56 @@
+## Round 40 (2026-11-05)
+
+**Signals implemented** (spec module `docs/spec/17-signals.md`, finalized
+this round; plan `docs/plans/signals-implementation-plan.md`; supersedes
+`missing-features-plan.md` C6). External (C++) types can now notify script
+code of state changes. v1 scope: **external types only** — no signal
+declaration on QLang classes.
+- **Declaration:** `QL_SIGNAL(name)` in the `QL_OBJECT` meta; the argument
+  signature is deduced from a **declared, unimplemented** member function
+  (Qt-style; no `Q_SIGNALS` marker — every `QL_` line is self-describing).
+  `SignalMeta{name, per-arg convertibility checkers}` via
+  `meta_detail::signal()`; `TypeMeta`/`TypeDescriptor` gain
+  `std::vector<SignalMeta> signals`; `registerType` copies + validates
+  (property/method name clash, duplicate signal → `QLangError` at import).
+  A signal is **not a method** — `obj.sig(1)` is a type error.
+- **Emit:** `emit` is a reserved word (`02-lexical.md`; `TokenType::Emit` in
+  `keywordType()`), parsed as a statement (`StmtKind::Emit`, like `assert`);
+  the target is a postfix chain and the **last** dot separates target from
+  signal name (`emit a.b.c(1)` emits `c` on `a.b`). New `EMIT` opcode
+  appended **last** (`kOpcodeUsedCount` 69 → 70; `.qlc` stays v5):
+  `EMIT a,b,c` = sender reg `a`, signal-name const `b`, arg count `c`, args
+  in `r[a+1..a+c]` (the `CALL` convention). `compileEmit()` lowers the
+  statement.
+- **Delivery:** `QLangVM::deliverSignal()` — resolve the signal against the
+  object's type descriptor (unknown name → `type error: unknown signal 'x'
+  on type 'T'`), check arity/types (same conversion rules as method calls),
+  iterate connections, `callHandler` for `Function` (callClosure) +
+  `BoundMethod` (inline, like `CALLCLOS`). Synchronous, connection order,
+  zero connections = silent no-op; re-entrant emits recurse, contained by
+  the step budget (no re-entrancy guard). C++ `ctx.emitSignal()` creates a
+  VM and delegates to the same method; `ctx.hasSignal()` mirrors
+  `hasMethod`.
+- **Connect / disconnect:** arity-dispatched native builtins.
+  `connect(sender, "signal", handler)` (function/`BoundMethod`) and
+  `connect(sender, "signal", target, "method")` (string-slot; method
+  resolved at emit time via `ObjectOps::callMethod`, missing method = silent
+  no-op per the event-handler miss rule) return an int handle;
+  `disconnect(handle)` / `disconnect(sender, "signal")` (stale handle =
+  silent no-op). The context-level connection registry
+  (`unordered_map<int,SignalConnection>`) holds a **weak** sender
+  (`weak_ptr<void>`, does not keep alive) + **strong** handler (the
+  closure's refcount is raised while connected);
+  `dropExpiredConnections()` (called from `processFinalizers()`)
+  auto-disconnects destroyed senders.
+- **Tally:** `signal_test` 18 (new suite, precedent `class_static_test`);
+  **852 counted unit cases**, 42/42 ctest green.
+- **Docs:** `17-signals.md` finalized (draft → final; `Q_SIGNALS`
+  section-marker wording dropped); `02-lexical.md` reserved-word list gains
+  `emit`; `spec/README.md` hash row updated; `missing-features-plan.md` C6
+  → implemented (§D + Phase 4 item 10 + C6 section); `status.md` — signals
+  Open Item added, external-types "Still open" list updated, Working bullet,
+  Current Status tally + Round 40 note.
+
 ## Round 39 (2026-11-04)
 
 **Phase 1 of `docs/plans/missing-features-plan.md` — A1 `nop` opcode + A2 `?`

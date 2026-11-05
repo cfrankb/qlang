@@ -203,12 +203,18 @@ enum class Opcode : uint8_t {
 
   // No-op: takes no action (SPEC §bytecodes "OpCode nop"). Zero operands.
   // Appended last so existing .qlc opcode numbers stay valid.
-  Nop
+  Nop,
+
+  // Emit a signal on an external object: deliver r[a+1..a+c] to every
+  // connection of the signal named const[b] on the object in r[a]. Same
+  // operand convention as CALL (dest in a, arg count in c, args in
+  // r[a+1..a+c]). Appended last so existing .qlc opcode numbers stay valid.
+  EMIT // deliver signal const[b] on r[a] with c args in r[a+1..a+c]
 };
 
 inline constexpr uint8_t kOpcodeEscape = 0x80;
 inline constexpr uint8_t kOpcodeMax = 128; // identities 0..127
-inline constexpr uint8_t kOpcodeUsedCount = 69; // defined identities 0..68
+inline constexpr uint8_t kOpcodeUsedCount = 70; // defined identities 0..69
 
 struct DecodedInstruction {
   Opcode op = Opcode::MOVC;

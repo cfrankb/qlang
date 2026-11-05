@@ -1,7 +1,7 @@
 # QLang Compliance — Module Index
 
 Entry point for the compliance reference (migrated from root `SPEC_COMPLIANCE.md`,
-2026-10-29; last audit Round 39, 2026-11-04). Content is verbatim from the
+2026-10-29; last audit Round 40, 2026-11-05). Content is verbatim from the
 original `SPEC_COMPLIANCE.md`.
 
 Per AGENTS.md, each module validates the **specific spec module(s)** listed
@@ -10,12 +10,12 @@ below (spec hashes tracked in [../spec/README.md](../spec/README.md)); the
 
 | Module | Content | Validates spec module(s) | SHA256 (self) |
 |--------|---------|--------------------------|---------------|
-| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `2f06e4de53b3d9dbc8ed3b9a8610f9e3676220da5bb84b3768747858dc766d1b` |
-| [coverage.md](coverage.md) | reserved-word coverage, value-type coverage | 02-lexical, 01-types | `b4216bca0917a7ca9a021a849c7fcafda49887f293c43a7c68a89487786ff0c9` |
+| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `5da9c856cf6daf39a10a2690c236ccccdde64f126d6b29d330ea677e0f789ce0` |
+| [coverage.md](coverage.md) | reserved-word coverage, value-type coverage | 02-lexical, 01-types | `789a0b58112961a6f32e98426923c17c88be737f0cfbc3a809ad771b11c898eb` |
 | [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `756eeeef865754de8af8da23433626feb75b19ac574ac2e3e3777e88cceea4d0` |
-| [history.md](history.md) | audit rounds 7–39 (append-only) | mixed (per round) | `1a728f62da90fd098b29895ed1b3fb453af29bf3635e3834d58f32c2ab14d61e` |
+| [history.md](history.md) | audit rounds 7–40 (append-only) | mixed (per round) | `69545594188f594ab049825e24513554c020f5c57d34bc127827a70df1610ac3` |
 | [classes.md](classes.md) | class implementation details, class spec conformance | 10-classes | `5bda8947b022dcb7f63ab159a9114faae311e9e17638b9ed1d6121e69038465f` |
-| [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `d3a8e1fd3ee200c45ad6fd40850eea0ae7abe6e12d7ded50638df85ac112cf3c` |
+| [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `d30cd0539ca465b236d3c7501dcb10e351455b79f289bbb9ea627f995f57f399` |
 
 **New spec modules:** every new module in `docs/spec/` must get, at creation,
 (a) a SHA256 row in [../spec/README.md](../spec/README.md) and (b) compliance

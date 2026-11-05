@@ -55,6 +55,7 @@ set
 long
 enum
 export
+emit
 ```
 
 ## constants

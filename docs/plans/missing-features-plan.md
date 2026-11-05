@@ -32,7 +32,7 @@ subi plans in `docs/plans/archive/`).
 | C3 | External-type wrappers: `hasMethod`/`callMethod` | `11-external-types.md` | event-handler contract; `ops->callMethod` has zero VM call sites in v1 |
 | C4 | RTTI validation on external handoff | `11-external-types.md` | **implemented (Phase 3)** — typed `qval_external_*<T>` helpers + `dynamic_cast` check; see §D |
 | C5 | Inheritance (`ObjectOps::base`) | `10-classes.md` v1 restrictions, `EXTERNAL_TYPES.md` §10.3 | reserved, returns null; base-chain walk deferred to v2 |
-| C6 | Signals (`Q_SIGNALS`/`emit`/`connect`) | `17-signals.md` (tentative draft) | draft landed 2026-11-04; finalize, then implement |
+| C6 | Signals (`emit`/`connect`/`disconnect`) | `17-signals.md` | **implemented (Round 40, 2026-11-05)** — `QL_SIGNAL` meta, `EMIT` opcode, connection registry, `emitSignal`/`hasSignal`; see §D |
 | C7 | Enum-name string form for enum-valued properties | `EXTERNAL_TYPES.md` §10.5 | no dispatch point sees both field value and type context |
 
 ### D. Resolved / no work needed
@@ -51,6 +51,16 @@ subi plans in `docs/plans/archive/`).
   mismatch: …` at first use, not UB. Untyped `qval_external(type, …)`
   factories remain for hosts that cannot name the concrete type (no check).
   `phase3_api` tests cover the mismatch path.
+- **C6 signals** — implemented in Round 40 (2026-11-05; spec
+  `17-signals.md` finalized the same day). `QL_SIGNAL(name)` meta with the
+  signature deduced from a declared, unimplemented member function; `emit`
+  reserved word + `EMIT` opcode (appended last, `kOpcodeUsedCount` 69 → 70,
+  `.qlc` stays v5); `connect`/`disconnect` builtins (function and
+  string-slot forms) with a context-level connection registry (weak sender,
+  strong handler, auto-disconnect at the finalizer drain); synchronous
+  delivery in connection order, re-entrancy contained by the step budget;
+  C++ `ctx.hasSignal()`/`ctx.emitSignal()`. 18 checks in the dedicated
+  `signal_test` suite.
 
 ## Phases
 
@@ -138,14 +148,13 @@ subi plans in `docs/plans/archive/`).
    `EXTERNAL_TYPES.md` §10.3 defers the base-chain walk to v2. Needs a spec
    first (base-clause syntax, field/method resolution order, constructor
    chaining) — treat like C1 step 1. Effort: medium–large once specified.
-10. **C6 signals (`Q_SIGNALS`/`emit`/`connect`)** — tentative spec draft
-    landed: `17-signals.md` (external types only; `QL_SIGNAL` meta with
-    signature deduced from an unimplemented member function; `emit`
-    reserved word; `connect`/`disconnect` builtins; synchronous delivery,
-    step-budget-contained recursion; C++ `emitSignal`/`hasSignal`).
-    Finalize the draft (review the open design points), then implement.
-    Effort: ~1 week once the draft is finalized — the largest Phase 4 item
-    (language-level keyword + runtime + C++ API).
+10. **C6 signals (`emit`/`connect`/`disconnect`)** — ✓ **implemented**
+    (Round 40, 2026-11-05). Spec `17-signals.md` finalized (external types
+    only; `QL_SIGNAL` meta with signature deduced from an unimplemented
+    member function; `emit` reserved word; `connect`/`disconnect` builtins;
+    synchronous delivery, step-budget-contained recursion; C++
+    `emitSignal`/`hasSignal`). `EMIT` opcode appended last (`.qlc` v5
+    unchanged); 18 checks in `signal_test`. See §D.
 11. **C7 enum-name string form** — reverse lookup for enum-valued
     properties. Known blocker (`EXTERNAL_TYPES.md` §10.5): no dispatch
     point sees both the field value and its type context —
@@ -158,6 +167,141 @@ subi plans in `docs/plans/archive/`).
 - Table key insertion order (would require reworking `TableValue`
   code-wide) — **not planned**: spec says implementation-defined.
 - Instance-call-of-static-method anchor routing — **not planned**: spec-silent.
+
+## Detailed implementation plans
+
+Per the overview convention, each phase item gets a detailed plan before work
+starts. The two Phase 4 items below have their detailed plans recorded here
+(C6's full plan lives in its own file and is referenced).
+
+### C2 — Enum C++ injection API
+
+Status: **draft** (2026-11-05) — pending approval.
+Spec: `docs/spec/02-lexical.md` `## enum` ("C++ api needed to inject enums to
+the global context (needs discussion)"). Supersedes the Phase 4 item 7 summary
+above.
+
+The language-side enum is fully implemented (Round 28): `parseEnum` →
+`compileEnum` stores the members in a hidden const table `__enum_<Name>` and
+records the name in the compiler's `m_enums` (name → member values, for
+compile-time `E::M`/`E.M` folding) and `m_globalEnums` (top-level visibility +
+redeclaration check). Only the C++ injection API is missing.
+
+**API**
+
+    // QLangContext
+    bool registerEnum(const std::string &name,
+                      const std::vector<std::pair<std::string, int64_t>> &members);
+
+- `name` — the enum name (a valid QLang identifier, not a reserved word).
+- `members` — member name → value, in declaration order. Values are `int64_t`
+  (the enum's base type is metadata only in v1 — `compileEnum` stores every
+  member as an `Int` value regardless of the declared base type, so the API
+  takes plain integers).
+- Returns `true` on success; throws `QLangError` on validation failure.
+
+**Behavior**
+
+1. **Validation** (→ `QLangError`): `name` is a valid identifier and not a
+   reserved word; `members` is non-empty (spec: "valueless enum triggers an
+   error"); each member name is a valid identifier; no duplicate member names;
+   `name` is not already in use (a live global in `m_globals.names` or a
+   previously injected enum) → "cannot inject enum 'X': name already in use".
+2. **Seed the hidden table** — build a `TableValue` (name → `Int`) and
+   `set("__enum_" + name, table, /*isConst=*/true)`. The main frame aliases
+   the global slots directly, so the table is visible at runtime with no VM
+   change; `isConst` puts it in `m_injectedConsts` so it is immutable and
+   excluded from the writable-external-var set.
+3. **Register with the compiler** — track `m_injectedEnums[name] = members`
+   on the context; `run()` passes it to a new `compiler.addExternalEnums(...)`
+   (mirrors `addExternalConsts`/`addExternalVars`), which populates `m_enums`
+   and `m_globalEnums`. This is what makes `E::M`/`E.M` fold at compile time
+   and `E` resolve to the hidden table.
+4. **Redeclaration** — a script `enum X` colliding with an injected `X` hits
+   the existing `m_globalEnums.count(name)` check in `compileEnum` → "cannot
+   redeclare enum 'X'". No new code.
+5. **Removal** — `remove(name)` and `clear()` also erase `m_injectedEnums` and
+   the `__enum_<Name>` slot, so a removed enum is invisible to the next
+   compile.
+
+**Impact assessment**
+
+| Area | File(s) | Change | Risk |
+|------|---------|--------|------|
+| Compiler | `include/qlang/QLangCompiler.h`, `src/QLangCompiler.cpp` | `addExternalEnums(...)` populating `m_enums` + `m_globalEnums` | Low. Pure addition, mirrors `addExternalConsts`. |
+| Context API | `include/qlang/QLangContext.h`, `src/QLangContext.cpp` | `m_injectedEnums`; `registerEnum(...)`; wire into `run()`; `remove`/`clear` cleanup | Low–medium: validation + lifecycle (remove/clear) must be correct. |
+| Tests | `tests/unit/test_external.cpp` | New enum-injection checks | — |
+| Docs | `docs/spec/02-lexical.md`, `docs/compliance/status.md` (+ `history.md`) | Record the API, flip the C2 open item | Per AGENTS.md: test first, then bump hashes. |
+
+Not affected: lexer, parser, VM (the hidden table is a plain global const; the
+main frame already aliases the global slots), `.qlc` format, opcodes.
+
+**Implementation steps**
+
+1. `QLangCompiler.h/.cpp` — `addExternalEnums(...)`.
+2. `QLangContext.h/.cpp` — `m_injectedEnums`; `registerEnum(...)` (validate,
+   seed `__enum_<Name>` as const, track); wire into `run()`; `remove`/`clear`
+   cleanup.
+3. `tests/unit/test_external.cpp` — the cases below. Build
+   `cmake -B build && cmake --build build`, run `ctest --test-dir build`.
+4. Docs — record the API in the spec, flip the C2 open item.
+
+**Test cases** (in `test_external`, the external/C++-API suite)
+
+- **injected enum readable** — `registerEnum("Animal", {{"Dog",0},{"Cat",1},{"Horse",2}})`
+  → `Animal::Dog` == 0, `Animal.Cat` == 1, `Animal::Horse` == 2 (both
+  notations fold).
+- **len** — `len(Animal)` == 3 (the hidden table).
+- **redeclaration rejected** — after injection, `run("enum Animal { A }")` →
+  compile error "cannot redeclare enum 'Animal'".
+- **unknown member** — `Animal::Nope` → compile error.
+- **validation: empty members** — `registerEnum("E", {})` → `QLangError`.
+- **validation: duplicate member** — `registerEnum("E", {{"A",0},{"A",1}})` →
+  `QLangError`.
+- **validation: name clash** — `set("Animal", 1)` then
+  `registerEnum("Animal", ...)` → `QLangError`.
+- **removal** — `remove("Animal")` → the next compile no longer sees `Animal`
+  (unknown-enum error); `clear()` likewise.
+
+**Risks / open questions**
+
+1. **Base type** — the spec allows `enum Name:byte`; v1 `compileEnum` ignores
+   the base type (members are always `Int`). The API therefore takes plain
+   `int64_t` values. If base-type enforcement is wanted later, the API gains a
+   `QLangValue::Type` parameter and `compileEnum` must start honoring
+   `s->enumType` — a separate change.
+2. **Name-clash policy** — the plan rejects injection when the name is a live
+   global. Alternative: let the enum win (would require reordering the
+   `compileExpr` Variable checks so `m_enums` is consulted before
+   `m_externalVars`). Rejection is simpler and matches "enum cannot be
+   redefined".
+
+### C6 — Signals
+
+Status: **implemented** (Round 40, 2026-11-05) — spec `17-signals.md`
+finalized the same day; all steps of the plan landed.
+**Full plan: `docs/plans/signals-implementation-plan.md`** (this entry
+supersedes the Phase 4 item 10 summary above; the linked file carries the
+complete impact assessment, implementation steps, and test cases).
+
+Signals let an external (C++) type notify script code of state changes. v1
+scope: **external types only** — user-defined QLang classes have no signal
+declaration syntax. Key design points:
+
+- **Declaration** — `QL_SIGNAL(name)` in the `QL_OBJECT` list; the argument
+  signature is deduced from a declared, unimplemented member function
+  (Qt-style). A signal is a name + typed argument list; it is **not a method**.
+- **Emit** — `emit obj.signal(args)`; `emit` is a reserved word; synchronous
+  delivery in connection order; zero connections → silent no-op; re-entrant
+  emits recurse and are contained by the step budget.
+- **Connect / Disconnect** — `connect(sender, "signal", handler)` and the
+  string-slot form return an int connection handle; a connection retains its
+  handler (strong ref) but **not** its sender (weak ref); expired connections
+  drop at the finalizer drain.
+- **Opcode** — `EMIT` appended last (`kOpcodeUsedCount` 69 → 70); `.qlc` stays
+  v5.
+- **C++ API** — `ctx.hasSignal(obj, name)` / `ctx.emitSignal(obj, name, args)`.
+- **Tests** — dedicated `signal_test` suite (precedent: `class_static_test`).
 
 ## Dependencies
 

@@ -57,6 +57,7 @@
 | `isset` | `Isset` | ✓ | Reserved word; existence probe — undeclared names allowed. Also the `isset(var)` builtin (§builtins, string arg naming a variable) |
 | `set` | `TypeSet` | ✓ | Reserved word; also callable as `set(...)` (unique-value container, Rounds 26–27: `in`/`for x in`/`set == set`/`cast<array>(set)`/`cast<set>(array)`/`__str__` → `"set(1, 2, 3)"`) |
 | `yield` | `Yield` | ✓ | Reserved word; generator keyword — `yield expr` / empty `yield`; generator exhaustion returns `nil` (EOF sentinel). 5 tests in `gen_test` |
+| `emit` | `Emit` | ✓ | ★ **Implemented** (Round 40, 2026-11-05). `TokenType::Emit` in `keywordType()` — `local emit = 1` → parse error (reserved word). `emit obj.signal(args)` statement (`StmtKind::Emit`, `EMIT` opcode appended last, `.qlc` v5 unchanged); signals on external (C++) types only — `docs/spec/17-signals.md`. 18 tests in `signal_test`. |
 
 ## Value-Type Coverage (SPEC.md §14–28 vs. QLangValue::Type)
 

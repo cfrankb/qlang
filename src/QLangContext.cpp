@@ -1,5 +1,6 @@
 #include "qlang/QLangContext.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "qlang/QLangCompiler.h"
@@ -54,6 +55,53 @@ namespace {
   }
   QLangValue getMaxStepsFunc(QLangContext &ctx, const std::vector<QLangValue> &) {
     return QLangValue::Int(static_cast<int>(ctx.maxSteps()));
+  }
+
+  // The weak sender reference of an External value: the owned shared_ptr when
+  // the script constructed the object, else the borrowed weak_ptr. A
+  // connection stores this so it never keeps its sender alive.
+  std::weak_ptr<void> senderWeakRef(const QLangValue &sender) {
+    const auto &ref = sender.asExternal();
+    if (ref.owned)
+      return ref.owned;
+    return ref.borrowed;
+  }
+
+  // The sender's object pointer (for identity matching), or null when the
+  // borrow has expired.
+  void *senderObjectPtr(const QLangValue &sender) {
+    const auto &ref = sender.asExternal();
+    if (ref.owned)
+      return ref.owned.get();
+    return ref.borrowed.lock().get();
+  }
+
+  // QLang-callable: connect(sender, "signal", handler) or
+  // connect(sender, "signal", target, "method"). Returns a connection handle
+  // (int). The arity dispatch is the only difference between the two forms.
+  QLangValue connectFunc(QLangContext &ctx, const std::vector<QLangValue> &args) {
+    if (args.size() == 3)
+      return QLangValue::Int(
+          ctx.connectSignal(args[0], args[1].asString(), args[2]));
+    if (args.size() == 4)
+      return QLangValue::Int(ctx.connectSignalSlot(args[0], args[1].asString(),
+                                                   args[2], args[3].asString()));
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     "connect expects 3 or 4 arguments");
+  }
+
+  // QLang-callable: disconnect(handle) or disconnect(sender, "signal").
+  QLangValue disconnectFunc(QLangContext &ctx, const std::vector<QLangValue> &args) {
+    if (args.size() == 1) {
+      ctx.disconnectSignal(static_cast<int>(toInt64(args[0])));
+      return QLangValue();
+    }
+    if (args.size() == 2) {
+      ctx.disconnectSignalAll(args[0], args[1].asString());
+      return QLangValue();
+    }
+    throw QLangError(QLangErrorKind::Type, 0, 0,
+                     "disconnect expects 1 or 2 arguments");
   }
 }
 
@@ -137,6 +185,10 @@ namespace {
     // VM step limit, adjustable from QLang via set_max_steps(n) / get_max_steps().
     setFunc("set_max_steps", setMaxStepsFunc);
     setFunc("get_max_steps", getMaxStepsFunc);
+    // Signal connect/disconnect (docs/spec/17-signals.md): arity-dispatched
+    // natives (3/4 args for connect, 1/2 for disconnect).
+    setFunc("connect", connectFunc);
+    setFunc("disconnect", disconnectFunc);
   }
 
   // Threading contract (Phase 5, H5): one context, one thread. The first use
@@ -348,6 +400,10 @@ namespace {
     m_injectedConsts.clear();
     m_nativeFuncs.clear();
     m_modules.clear();
+    // Signal connections hold closures from the program being cleared; drop
+    // them all (a host must re-connect after clear()).
+    m_signalConnections.clear();
+    m_nextSignalHandle = 1;
     m_pimpl->programs.clear();
     // External type descriptors, their constructor natives, and the TypeRef
     // variables all die together; host code must re-run import<T>() after
@@ -383,6 +439,23 @@ namespace {
                              meta.name + "'");
       memberKinds[m.name] = m.kind;
     }
+    // Signals: non-empty name, no clash with a member name, no duplicates.
+    std::unordered_map<std::string, bool> signalNames;
+    for (const auto &s : meta.signals) {
+      if (s.name.empty())
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "external type '" + meta.name +
+                             "' has a signal with an empty name");
+      if (memberKinds.count(s.name))
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "signal name '" + s.name +
+                             "' clashes with a member on type '" + meta.name +
+                             "'");
+      if (!signalNames.emplace(s.name, true).second)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "duplicate signal name '" + s.name + "' on type '" +
+                             meta.name + "'");
+    }
     // Duplicate type name: re-import is supported only after clear(), which
     // also clears the type registry and the constructor native.
     if (m_pimpl->types.contains(meta.name))
@@ -402,6 +475,7 @@ namespace {
     desc->toString = meta.toString;
     desc->construct = meta.construct;
     desc->enums = meta.enums;
+    desc->signals = meta.signals;
     desc->typeInfo = meta.typeInfo;
     desc->typeCheck = meta.typeCheck;
 
@@ -425,6 +499,152 @@ namespace {
     set(meta.name, QValue::TypeRef(desc), true);
 
     return m_pimpl->types.add(std::move(desc));
+  }
+
+  // -----------------------------------------------------------------------
+  // Signals (docs/spec/17-signals.md)
+  // -----------------------------------------------------------------------
+
+  bool QLangContext::hasSignal(const QLangValue &obj, const std::string &name) const
+  {
+    bindThread();
+    if (obj.type() != QLangValue::Type::External)
+      return false;
+    const auto &ref = obj.asExternal();
+    if (!ref.type)
+      return false;
+    for (const auto &s : ref.type->signals)
+      if (s.name == name)
+        return true;
+    return false;
+  }
+
+  void QLangContext::emitSignal(const QLangValue &obj, const std::string &name,
+                                const std::vector<QLangValue> &args)
+  {
+    bindThread();
+    // Safe point (Phase 3): drain pending instance finalizers first.
+    processFinalizers();
+    // Delivery runs in a VM (the same deliverSignal the EMIT opcode calls),
+    // so a compiled program is required.
+    if (!m_pimpl->programs.has())
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "no program compiled; call run() first");
+    QLangVM vm(m_pimpl->programs.compiled(), *this);
+    vm.deliverSignal(obj, name, args);
+  }
+
+  int QLangContext::connectSignal(const QLangValue &sender, const std::string &signal,
+                                  const QLangValue &handler)
+  {
+    bindThread();
+    if (sender.type() != QLangValue::Type::External)
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "connect on a non-external object");
+    if (!hasSignal(sender, signal))
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "unknown signal '" + signal + "' on type '" +
+                           sender.asExternal().type->name + "'");
+    if (handler.type() != QLangValue::Type::Function &&
+        handler.type() != QLangValue::Type::BoundMethod)
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "connect handler is not a function");
+    SignalConnection conn;
+    conn.handle = m_nextSignalHandle++;
+    conn.sender = senderWeakRef(sender);
+    conn.signal = signal;
+    conn.handler = handler;
+    m_signalConnections[conn.handle] = std::move(conn);
+    return conn.handle;
+  }
+
+  int QLangContext::connectSignalSlot(const QLangValue &sender,
+                                      const std::string &signal,
+                                      const QLangValue &target,
+                                      const std::string &method)
+  {
+    bindThread();
+    if (sender.type() != QLangValue::Type::External)
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "connect on a non-external object");
+    if (!hasSignal(sender, signal))
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "unknown signal '" + signal + "' on type '" +
+                           sender.asExternal().type->name + "'");
+    SignalConnection conn;
+    conn.handle = m_nextSignalHandle++;
+    conn.sender = senderWeakRef(sender);
+    conn.signal = signal;
+    conn.target = target;
+    conn.method = method;
+    m_signalConnections[conn.handle] = std::move(conn);
+    return conn.handle;
+  }
+
+  void QLangContext::disconnectSignal(int handle)
+  {
+    bindThread();
+    m_signalConnections.erase(handle); // stale handle: silent no-op
+  }
+
+  void QLangContext::disconnectSignalAll(const QLangValue &sender,
+                                         const std::string &signal)
+  {
+    bindThread();
+    if (sender.type() != QLangValue::Type::External)
+      return;
+    void *ptr = senderObjectPtr(sender);
+    if (!ptr)
+      return;
+    for (auto it = m_signalConnections.begin();
+         it != m_signalConnections.end();) {
+      if (it->second.signal == signal &&
+          it->second.sender.lock().get() == ptr)
+        it = m_signalConnections.erase(it);
+      else
+        ++it;
+    }
+  }
+
+  std::vector<QLangContext::SignalConnection>
+  QLangContext::signalConnections(const QLangValue &sender,
+                                  const std::string &signal) const
+  {
+    bindThread();
+    std::vector<SignalConnection> out;
+    if (sender.type() != QLangValue::Type::External)
+      return out;
+    void *ptr = senderObjectPtr(sender);
+    if (!ptr)
+      return out;
+    for (const auto &kv : m_signalConnections) {
+      const SignalConnection &conn = kv.second;
+      if (conn.signal != signal)
+        continue;
+      auto locked = conn.sender.lock();
+      if (!locked || locked.get() != ptr)
+        continue; // expired, or a distinct object of the same type
+      out.push_back(conn);
+    }
+    // Connection order == handle order (the monotonically increasing connect
+    // order); the registry is a hash map, so sort explicitly.
+    std::sort(out.begin(), out.end(),
+              [](const SignalConnection &a, const SignalConnection &b) {
+                return a.handle < b.handle;
+              });
+    return out;
+  }
+
+  void QLangContext::dropExpiredConnections()
+  {
+    bindThread();
+    for (auto it = m_signalConnections.begin();
+         it != m_signalConnections.end();) {
+      if (it->second.sender.expired())
+        it = m_signalConnections.erase(it);
+      else
+        ++it;
+    }
   }
 
   void QLangContext::registerModule(const std::string &name, const Module &module)
@@ -571,6 +791,10 @@ namespace {
       for (const auto &entry : batch)
         runFinalizer(entry);
     }
+    // A finalizer that released the last reference to a signal sender drops
+    // that sender's connections (docs/spec/17-signals.md: "dropped via the
+    // finalizer queue").
+    dropExpiredConnections();
     m_drainingFinalizers = false;
   }
 

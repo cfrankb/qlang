@@ -67,6 +67,11 @@ struct ObjectOps {
 // object).
 const ObjectOps* getObjectOps(const QLangValue& obj);
 
+// True when a value is a class instance (a table carrying the `__fields__`
+// schema). Class-instance methods take `self` as their first argument;
+// plain table closures do not.
+bool isClassInstance(const QLangValue& v);
+
 // Table kind ObjectOps implementation.
 // These functions implement the table key-lookup/insert semantics for the
 // table type. This is the "neutral" implementation that the table kind

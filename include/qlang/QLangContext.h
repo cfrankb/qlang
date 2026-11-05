@@ -221,6 +221,50 @@ namespace qlang
       return registerType(T::qlang_meta());
     }
 
+    // Signal API (docs/spec/17-signals.md). Signals let an external (C++)
+    // type notify script code of state changes. v1: external types only.
+    //
+    // One live connection. The sender is held WEAK (a connection never keeps
+    // its sender alive); the handler (and, for the string-slot form, the
+    // target) is held STRONG. `handle` is the monotonically increasing int
+    // returned by connect (its order is the delivery order).
+    struct SignalConnection {
+      int handle = 0;
+      std::weak_ptr<void> sender;
+      std::string signal;
+      QLangValue handler;  // Function or BoundMethod (nil for the slot form)
+      QLangValue target;   // string-slot form: the method's target (nil otherwise)
+      std::string method;  // string-slot form: the method name (empty otherwise)
+    };
+
+    // True when the external object's type declares a signal named `name`
+    // (mirrors hasMethod for the event-handler contract).
+    bool hasSignal(const QLangValue &obj, const std::string &name) const;
+    // C++-side emit: same checks and delivery rules as script `emit`.
+    void emitSignal(const QLangValue &obj, const std::string &name,
+                    const std::vector<QLangValue> &args);
+    // connect(sender, "signal", handler) -> handle. `handler` is a Function
+    // value or a BoundMethod.
+    int connectSignal(const QLangValue &sender, const std::string &signal,
+                      const QLangValue &handler);
+    // connect(sender, "signal", target, "method") -> handle (string-slot
+    // form; the method is resolved on `target` at emit time).
+    int connectSignalSlot(const QLangValue &sender, const std::string &signal,
+                          const QLangValue &target, const std::string &method);
+    // disconnect(handle): drop one connection (a stale handle is a silent
+    // no-op).
+    void disconnectSignal(int handle);
+    // disconnect(sender, "signal"): drop every connection for that signal.
+    void disconnectSignalAll(const QLangValue &sender, const std::string &signal);
+    // The live connections for (sender, signal), in connection (handle)
+    // order. A connection whose sender has expired is skipped (it is dropped
+    // by the next finalizer drain).
+    std::vector<SignalConnection> signalConnections(const QLangValue &sender,
+                                                    const std::string &signal) const;
+    // Drop every connection whose sender has expired. Called from
+    // processFinalizers() (the spec's "dropped via the finalizer queue").
+    void dropExpiredConnections();
+
   private:
     // Pimpl: holds the compiled program without creating a circular include.
     struct Pimpl;
@@ -265,6 +309,11 @@ namespace qlang
     mutable std::thread::id m_thread;
     void bindThread() const;
     std::vector<Module> m_modules;
+    // Signal connection registry (docs/spec/17-signals.md): handle ->
+    // connection. The handle is a monotonically increasing int (its order is
+    // the delivery order); it does not wrap in practice.
+    std::unordered_map<int, SignalConnection> m_signalConnections;
+    int m_nextSignalHandle = 1;
     // Set in the destructor before m_globals is torn down: finalizer drains
     // must not build a VM against a half-destroyed context (SIGBUS in
     // adoptGlobals). Deleters firing during teardown only enqueue; the

@@ -89,6 +89,15 @@ struct EnumMeta {
   std::vector<EnumEntry> entries;
 };
 
+// One signal declared by QL_SIGNAL: the script-visible name plus a
+// convertibility checker per parameter. The checkers apply the same
+// as<A>() conversion rules a method call uses, so a signal argument that
+// would be accepted by a same-signature method is accepted by emit.
+struct SignalMeta {
+  std::string name;
+  std::vector<std::function<bool(const QLangValue&)>> argChecks;
+};
+
 // Compile-time meta for one external type, produced by QL_OBJECT(...).
 struct TypeMeta {
   std::string name;
@@ -97,6 +106,7 @@ struct TypeMeta {
   std::function<std::shared_ptr<void>(QLangContext&, const std::vector<QLangValue>&)>
       construct;
   std::vector<EnumMeta> enums;
+  std::vector<SignalMeta> signals;
   // Concrete C++ type of constructed objects (Phase 3): deduced from the
   // QL_CTOR lambda's return type. `typeCheck` validates a resolved object
   // pointer against it (dynamic_cast at the binding site); both are null
@@ -219,6 +229,43 @@ Member method(const char* n, R (T::*f)(A...) const) {
           }};
 }
 
+// --- QL_SIGNAL: declared member function -> signal -----------------------
+// The signal's member function is declared (never implemented); only its
+// signature is used. The parameter types become per-argument
+// convertibility checkers for emit / emitSignal.
+
+// Per-argument convertibility check: true when the value converts to A
+// under the same rules a method call applies (QLangValue::as<A>()).
+template <class A>
+std::function<bool(const QLangValue&)> arg_check() {
+  return [](const QLangValue& v) {
+    try {
+      v.as<A>();
+      return true;
+    } catch (const QLangError&) {
+      return false;
+    }
+  };
+}
+
+// Non-const member function -> signal.
+template <class T, class R, class... A>
+SignalMeta signal(const char* n, R (T::*f)(A...)) {
+  SignalMeta s;
+  s.name = n;
+  (s.argChecks.push_back(arg_check<A>()), ...);
+  return s;
+}
+
+// Const member function -> signal.
+template <class T, class R, class... A>
+SignalMeta signal(const char* n, R (T::*f)(A...) const) {
+  SignalMeta s;
+  s.name = n;
+  (s.argChecks.push_back(arg_check<A>()), ...);
+  return s;
+}
+
 // --- Whole-group enum tables (QL_ENUM / QL_FLAGS) -------------------------
 
 // Whole-group table from explicit (name, value) pairs; the QL_ENUM/QL_FLAGS
@@ -285,6 +332,9 @@ template <class F> CtorClause ctor_clause(F f) {
 
 inline void add(TypeMeta& m, Member e) { m.members.push_back(std::move(e)); }
 inline void add(TypeMeta& m, EnumMeta e) { m.enums.push_back(std::move(e)); }
+inline void add(TypeMeta& m, SignalMeta e) {
+  m.signals.push_back(std::move(e));
+}
 inline void add(TypeMeta& m, StrClause e) { m.toString = std::move(e.f); }
 inline void add(TypeMeta& m, CtorClause e) {
   m.construct = std::move(e.f);
@@ -357,6 +407,10 @@ template <class... Ts> TypeMeta assemble(std::string name, Ts... es) {
 // the same thing to the VM.
 #define QL_INVOKABLE(name) qlang::meta_detail::method(#name, &SelfType::name)
 #define QL_SLOTS(name) qlang::meta_detail::method(#name, &SelfType::name)
+
+// Signal: the member function is declared (never implemented); its
+// signature defines the emit argument types.
+#define QL_SIGNAL(name) qlang::meta_detail::signal(#name, &SelfType::name)
 
 // Whole enum/flag group in one line: bare enumerator names. The macro forms
 // one (name, value) pair per enumerator (C++17 has no dependent NTTP packs,

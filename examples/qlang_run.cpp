@@ -434,6 +434,9 @@ namespace
     case Opcode::CALLCLOS:
       ss << rn(ins.a) << " = " << rn(ins.a) << "(" << args(ins.a, ins.c) << ")";
       break;
+    case Opcode::EMIT:
+      ss << "emit " << rn(ins.a) << ".pool[" << ins.b << "](" << args(ins.a, ins.c) << ")";
+      break;
     case Opcode::RETURN:
       ss << "return " << rn(ins.a);
       break;
@@ -740,6 +743,7 @@ namespace
           case Opcode::MOVC:
           case Opcode::MAKEFUNC:
           case Opcode::MAKEGEN:
+          case Opcode::EMIT:
             if (ins.b >= 0 && static_cast<size_t>(ins.b) < f.constants.size())
               constNote = valueText(f.constants[static_cast<size_t>(ins.b)]);
             break;

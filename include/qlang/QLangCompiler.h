@@ -247,6 +247,7 @@ private:
   void compileArrow(const StmtPtr &s);
   void compileReturn(const StmtPtr &s);
   void compileYield(const StmtPtr &s);
+  void compileEmit(const StmtPtr &s);
   void compileContinue(const StmtPtr &s);
   void compileBreak(const StmtPtr &s);
   void compileLabel(const StmtPtr &s);

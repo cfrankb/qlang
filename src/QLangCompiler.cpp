@@ -1315,6 +1315,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
   case StmtKind::Arrow: compileArrow(s); break;
   case StmtKind::Return: compileReturn(s); break;
   case StmtKind::Yield: compileYield(s); break;
+  case StmtKind::Emit: compileEmit(s); break;
   case StmtKind::Continue: compileContinue(s); break;
   case StmtKind::Break: compileBreak(s); break;
   case StmtKind::Label: compileLabel(s); break;
@@ -2140,6 +2141,25 @@ void QLangCompiler::compileYield(const StmtPtr &s) {
     emit(Opcode::MOVC, 0, emitConst(QLangValue())); // nil
   }
   emit(Opcode::YIELD, 0);
+}
+
+void QLangCompiler::compileEmit(const StmtPtr &s) {
+  // emit obj.signal(args): the sender object lands in a temp, the signal
+  // name is a string constant, and the args occupy the consecutive slots
+  // sender+1..sender+argCount (the same layout CALL uses for its args).
+  int senderReg = tmpRegister();
+  compileExpr(s->emitTarget, senderReg);
+  int argCount = static_cast<int>(s->emitArgs.size());
+  reserveArgSlots(senderReg, argCount);
+  compileArgsToSlots(s->emitArgs, senderReg + 1);
+  int sigConstIdx = emitConst(QLangValue::String(s->name));
+  emit(Opcode::EMIT, senderReg, sigConstIdx, argCount);
+  // Clear the arg slots so they do not keep a reference alive past the
+  // statement (Phase 7 finalizers need the true final release).
+  int nilC = m_emitter.addConst(QLangValue());
+  for (int j = 0; j < argCount; j++)
+    emit(Opcode::MOVC, senderReg + 1 + j, nilC, 0);
+  releaseTemp(senderReg);
 }
 
 void QLangCompiler::compileContinue(const StmtPtr &s) {
