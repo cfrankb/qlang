@@ -2,12 +2,14 @@
 // Tasks 5-6). Covers public-member setters, read-only computed props, methods
 // (incl. extraction as a first-class BoundMethod value), enum constants,
 // str, handoff integrity, registration-time validation, and QL_FLAGS
-// (bitmask flag tables resolve and OR in script).
+// (bitmask flag tables resolve and OR in script), and the registerEnum C++
+// injection API (SPEC §enum).
 //
 // Written against the real throwing API: run() throws QLangError on
 // failure; results come back via get().
 #include <cmath>
 #include <cstdio>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -162,6 +164,87 @@ int main() {
   CHECK(runAndGet(ctx, "DockArea.AnimatedDocks").asInt() == 1);
   CHECK(runAndGet(ctx, "DockArea.AnimatedDocks | DockArea.AllowTabbedDocks")
             .asInt() == 3);
+
+  // 13. registerEnum (SPEC §enum "C++ api needed to inject enums"): the
+  // injected enum behaves like a top-level QLang enum — both member
+  // notations fold, the bare name resolves to the hidden const table, and
+  // the name is visible inside a function body (global-enum semantics).
+  {
+    QLangContext c;
+    CHECK(c.registerEnum("Animal", {{"Dog", 0}, {"Cat", 1}, {"Horse", 2}}));
+    CHECK(runAndGet(c, "Animal::Dog").asInt() == 0);
+    CHECK(runAndGet(c, "Animal.Cat").asInt() == 1);
+    CHECK(runAndGet(c, "Animal::Horse").asInt() == 2);
+    CHECK(runAndGet(c, "len(Animal)").asInt() == 3);
+    CHECK(!runThrows(c, "def f() { return Animal::Cat }; g = f()"));
+    CHECK(c.get("g").asInt() == 1);
+    // The hidden table is a const: not writable from script.
+    CHECK(runThrows(c, "__enum_Animal = 1"));
+  }
+
+  // 14. Base type: members are typed like a declared enum's (byte -> the
+  // member value converts losslessly; type() of the folded value is byte).
+  {
+    QLangContext c;
+    c.registerEnum("Small", {{"Zero", 0}, {"One", 1}}, QLangValue::Type::Byte);
+    CHECK(runAndGet(c, "cast<int>(Small::One)").asInt() == 1);
+    CHECK(runAndGet(c, "type(Small::One)").asString() == "byte");
+  }
+
+  // 15. A script enum cannot redeclare an injected one; an unknown member
+  // stays a compile error.
+  {
+    QLangContext c;
+    c.registerEnum("Animal", {{"Dog", 0}});
+    CHECK(runThrows(c, "enum Animal { A }"));
+    CHECK(runThrows(c, "Animal::Nope"));
+  }
+
+  // 16. Validation: empty member list, duplicate member, name already in
+  // use, reserved-word name, non-numeric base type -> QLangError.
+  {
+    QLangContext c;
+    auto throws = [](const std::function<bool()> &fn) {
+      try {
+        fn();
+        return false;
+      } catch (const QLangError &) {
+        return true;
+      }
+    };
+    CHECK(throws([&] { return c.registerEnum("E", {}); }));
+    CHECK(throws([&] { return c.registerEnum("E", {{"A", 0}, {"A", 1}}); }));
+    c.set("Animal", QValue::Int(1));
+    CHECK(throws([&] { return c.registerEnum("Animal", {{"Dog", 0}}); }));
+    CHECK(throws([&] { return c.registerEnum("if", {{"A", 0}}); }));
+    CHECK(throws([&] { return c.registerEnum("9bad", {{"A", 0}}); }));
+    CHECK(throws([&] {
+      return c.registerEnum("E", {{"A", 0}}, QLangValue::Type::String);
+    }));
+  }
+
+  // 17. remove(): the enum and its hidden table vanish — the next compile
+  // no longer resolves the name, and re-injection is accepted.
+  {
+    QLangContext c;
+    c.registerEnum("Animal", {{"Dog", 0}});
+    CHECK(!runThrows(c, "v = Animal::Dog"));
+    c.remove("Animal");
+    CHECK(runThrows(c, "Animal::Dog"));
+    CHECK(!c.isset("__enum_Animal"));
+    CHECK(c.registerEnum("Animal", {{"Cat", 5}}));
+    CHECK(runAndGet(c, "Animal::Cat").asInt() == 5);
+  }
+
+  // 18. clear(): same invisibility; re-injection after clear works.
+  {
+    QLangContext c;
+    c.registerEnum("Animal", {{"Dog", 0}});
+    c.clear();
+    CHECK(runThrows(c, "Animal::Dog"));
+    CHECK(c.registerEnum("Animal", {{"Cat", 7}}));
+    CHECK(runAndGet(c, "Animal::Cat").asInt() == 7);
+  }
 
   if (failures) {
     printf("%d FAILURES\n", failures);

@@ -1,6 +1,7 @@
 #include "qlang/QLangContext.h"
 
 #include <algorithm>
+#include <cctype>
 #include <utility>
 
 #include "qlang/QLangCompiler.h"
@@ -228,6 +229,16 @@ namespace {
     std::vector<StmtPtr> program = parse(source);
     QLangCompiler compiler(std::move(program), this);
     compiler.addExternalConsts(m_injectedConsts);
+    // Host-injected enums (registerEnum): the names must resolve at compile
+    // time (member folding, bare-enum reads); the runtime table is already
+    // in the hidden const var.
+    if (!m_injectedEnums.empty()) {
+      std::unordered_map<std::string,
+                         std::vector<std::pair<std::string, QLangValue>>> enums;
+      for (const auto &[ename, ie] : m_injectedEnums)
+        enums[ename] = ie.members;
+      compiler.addExternalEnums(enums);
+    }
     // External vars are the table's LIVE names: erased (deleted) slots are
     // not visible to the program, matching the old m_vars behavior.
     std::unordered_set<std::string> externalVars;
@@ -312,6 +323,101 @@ namespace {
     bindThread();
     removeGlobal(name);
     m_injectedConsts.erase(name);
+    // An injected enum dies with its name: drop the compiler registration
+    // and the hidden table var (`__enum_<Name>` is a separate global slot).
+    auto eit = m_injectedEnums.find(name);
+    if (eit != m_injectedEnums.end()) {
+      removeGlobal(eit->second.hiddenVar);
+      m_injectedConsts.erase(eit->second.hiddenVar);
+      m_injectedEnums.erase(eit);
+    }
+  }
+
+  bool QLangContext::registerEnum(const std::string &name,
+                                  const std::vector<std::pair<std::string, int64_t>> &members,
+                                  const QLangValue::Type baseType)
+  {
+    bindThread();
+    // A name is injectable when it lexes as a plain identifier: non-empty,
+    // starting with a letter or underscore, and keywordType() mapping it to
+    // Ident (which also rejects reserved words and type keywords).
+    auto validIdent = [](const std::string &s) {
+      if (s.empty())
+        return false;
+      const unsigned char c = static_cast<unsigned char>(s[0]);
+      if (!(std::isalpha(c) || c == '_'))
+        return false;
+      return keywordType(s) == TokenType::Ident;
+    };
+    if (!validIdent(name))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "cannot inject enum '" + name +
+                       "': not a valid identifier");
+    if (members.empty())
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "cannot inject enum '" + name +
+                       "': an enum requires at least one member");
+    std::unordered_set<std::string> seen;
+    for (const auto &[mname, value] : members) {
+      (void)value;
+      if (!validIdent(mname))
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "cannot inject enum '" + name + "': member '" +
+                         mname + "' is not a valid identifier");
+      if (!seen.insert(mname).second)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "cannot inject enum '" + name +
+                         "': duplicate member '" + mname + "'");
+    }
+    switch (baseType) {
+    case QLangValue::Type::Char:
+    case QLangValue::Type::Byte:
+    case QLangValue::Type::Word:
+    case QLangValue::Type::Short:
+    case QLangValue::Type::Int:
+    case QLangValue::Type::Unsigned:
+    case QLangValue::Type::Qword:
+    case QLangValue::Type::Long:
+      break;
+    default:
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "cannot inject enum '" + name +
+                       "': base type must be numeric");
+    }
+    const std::string hvar = "__enum_" + name;
+    if (hasGlobal(name) || m_injectedEnums.count(name) || hasGlobal(hvar))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "cannot inject enum '" + name + "': name already in use");
+    // Type the members exactly as compileEnum types a declared enum's.
+    std::vector<std::pair<std::string, QLangValue>> typed;
+    typed.reserve(members.size());
+    TableValue kv = std::make_shared<std::map<std::string, QLangValue>>();
+    for (const auto &[mname, value] : members) {
+      QLangValue v = QLangValue::Int(static_cast<int32_t>(value));
+      switch (baseType) {
+      case QLangValue::Type::Char: v = QLangValue::Char(static_cast<int8_t>(value)); break;
+      case QLangValue::Type::Byte: v = QLangValue::Byte(static_cast<uint8_t>(value)); break;
+      case QLangValue::Type::Word: v = QLangValue::Word(static_cast<uint16_t>(value)); break;
+      case QLangValue::Type::Short: v = QLangValue::Short(static_cast<int16_t>(value)); break;
+      case QLangValue::Type::Unsigned: v = QLangValue::Unsigned(static_cast<uint32_t>(value)); break;
+      case QLangValue::Type::Qword: v = QLangValue::Qword(static_cast<uint64_t>(value)); break;
+      case QLangValue::Type::Long: v = QLangValue::Long(value); break;
+      default: break;
+      }
+      typed.push_back({mname, v});
+      (*kv)[mname] = v;
+    }
+    // Runtime: the hidden const table (the main frame aliases the global
+    // slots, so no VM change is needed). The hidden name is registered as an
+    // injected const too — that is how the compiler loads it (declareVar on
+    // the const path) and keeps it out of the writable-external-var set.
+    set(hvar, QLangValue::Table(kv), /*isConst=*/true);
+    InjectedEnum ie;
+    ie.members = std::move(typed);
+    ie.hiddenVar = hvar;
+    m_injectedEnums[name] = std::move(ie);
+    m_injectedConsts.insert(name);
+    return true;
   }
 
   // -----------------------------------------------------------------------
@@ -398,6 +504,7 @@ namespace {
     m_globals = GlobalTable();
     processFinalizers();
     m_injectedConsts.clear();
+    m_injectedEnums.clear(); // their hidden vars died with m_globals above
     m_nativeFuncs.clear();
     m_modules.clear();
     // Signal connections hold closures from the program being cleared; drop

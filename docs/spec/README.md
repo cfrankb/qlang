@@ -12,7 +12,7 @@ defined against C++20.
 | Module | Domain | SHA256 |
 |--------|--------|--------|
 | [01-types.md](01-types.md) | language intro, data types, strings, sets, append | `f7831d8a67d00f4785256d7a79424da949c6220f961616c464b4298e8c180bad` |
-| [02-lexical.md](02-lexical.md) | reserved words, constants, enum, comments | `3e50027f543c331bfbb9a6be45f7ae550a7e708b6ec14f7d87b7022fa195b0b4` |
+| [02-lexical.md](02-lexical.md) | reserved words, constants, enum, comments | `0e746264958922212c10368a5f8085f520c39e1712b46694f8ea92a8c218c46a` |
 | [03-declarations.md](03-declarations.md) | boolean evaluation, declarations and assignments | `a50f56689fdc330b7d9bfe28faa7d8806ecb6801959d2b262cec312747c82c68` |
 | [04-control-flow.md](04-control-flow.md) | conditions, range, switch, loops, label/goto | `b531d6356ea43f7b470c3e22f4f58af887926b8987533b419ce91602c0e0d0e2` |
 | [05-operators.md](05-operators.md) | operators incl. `?`, `<`/`>`, `**`, cast, `==`/`!=`, `$`, `$$` | `5f71e2c3dc86ee9a6101caf87d71729c8e5c3dd195ca6736d0a0b7e00f2e0e46` |

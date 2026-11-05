@@ -80,6 +80,23 @@ namespace qlang
     void remove(const std::string &name);
     void clear();
 
+    // Inject an enum into the global context (SPEC §enum: "C++ api needed to
+    // inject enums to the global context"). Mirrors a top-level QLang
+    // `enum Name:baseType { ... }`: the members are stored in the hidden
+    // const table `__enum_<Name>` and the name is registered with the
+    // compiler, so `Name::Member` / `Name.Member` fold to the member value
+    // and `Name` resolves to the table (`len(Name)` = member count). The
+    // enum is global: visible inside functions, like a global const.
+    // `members` is declaration order; values are converted to `baseType`
+    // (numeric; default int) exactly as a declared enum's members are.
+    // Throws QLangError when the name or a member name is not an identifier
+    // lexeme (or a reserved word), `members` is empty, a member name is
+    // duplicated, `baseType` is not numeric, or the name is already in use
+    // (a live global, a previous injection, or a declared enum).
+    bool registerEnum(const std::string &name,
+                      const std::vector<std::pair<std::string, int64_t>> &members,
+                      QLangValue::Type baseType = QLangValue::Type::Int);
+
     // Global-table access (Phase 2). The compiler assigns top-level names
     // to table slots (globalSlotFor) so the main frame can alias them;
     // the VM's main frame aliases `globalSlots()` directly.
@@ -294,6 +311,14 @@ namespace qlang
     // carries delete state per slot.
     GlobalTable m_globals;
     std::unordered_set<std::string> m_injectedConsts;
+    // Host-injected enums (registerEnum): name -> the member values handed
+    // to the compiler (m_enums shape) + the hidden table var holding them at
+    // runtime. remove()/clear() drop both the name and the hidden var.
+    struct InjectedEnum {
+      std::vector<std::pair<std::string, QLangValue>> members;
+      std::string hiddenVar;
+    };
+    std::unordered_map<std::string, InjectedEnum> m_injectedEnums;
     std::unordered_map<std::string, NativeFunc> m_nativeFuncs;
     // Registered external C++ types live in the Pimpl's TypeRegistry
     // (Phase 3, H1): shared handles stay valid across clear() because the

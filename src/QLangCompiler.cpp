@@ -254,6 +254,19 @@ void QLangCompiler::addExternalVars(const std::unordered_set<std::string> &names
   m_externalVars.insert(names.begin(), names.end());
 }
 
+void QLangCompiler::addExternalEnums(const std::unordered_map<std::string,
+                                                          std::vector<std::pair<std::string, QLangValue>>> &enums) {
+  // Host-injected enums (QLangContext::registerEnum): the runtime table is
+  // already seeded as the hidden const var `__enum_<Name>`; register the
+  // name -> member values so `E::M`/`E.M` fold and `E` resolves. Injected
+  // enums are global (visible inside functions, like global consts).
+  for (const auto &[name, members] : enums) {
+    m_enums[name] = members;
+    m_globalEnums.insert(name);
+    m_injectedEnumNames.insert(name);
+  }
+}
+
 void QLangCompiler::addExternalFuncs(const std::unordered_set<std::string> &names) {
   // Ids are negative and unique across all calls: the .qlc native-slot table
   // (slot = -1 - id) requires unique ids, and a second call must not reuse
@@ -873,6 +886,13 @@ CompiledProgram QLangCompiler::compile() {
     if (m_nextNamedReg < base)
       m_nextNamedReg = base;
   }
+  // Host-injected enums (addExternalEnums): bind each hidden table var to its
+  // global slot BEFORE compiling the program, so member folding, bare-enum
+  // reads, and function captures all resolve `__enum_<Name>` (a script
+  // `enum <Name>` colliding with an injected one then hits the existing
+  // "cannot redeclare enum" check — regOf finds the live binding).
+  for (const auto &e : m_enums)
+    declareVar("__enum_" + e.first);
   for (auto &s : m_program)
     compileStmt(s, nullptr);
   // Implicit `return nil` at the end of the main program.
@@ -3489,7 +3509,13 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       auto eit = m_enums.find(e->memberBase->name);
       if (eit != m_enums.end()) {
         const std::string hvar = "__enum_" + e->memberBase->name;
-        if (regOf(hvar) < 0 && !m_captureRegs.count(hvar))
+        // A host-injected enum has no hidden-var register inside a function
+        // body until captured — the member value folds, so no load is
+        // needed. Anything else must have a live binding (register or
+        // capture), which keeps a block-scoped `local enum` invisible
+        // outside its block.
+        if (regOf(hvar) < 0 && !m_captureRegs.count(hvar) &&
+            !m_injectedEnumNames.count(e->memberBase->name))
           throw QLangError(QLangErrorKind::Parse, 0, 0,
                            "unknown enum '" + e->memberBase->name + "'");
         bool found = false;

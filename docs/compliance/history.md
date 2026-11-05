@@ -1,3 +1,40 @@
+## Round 41 (2026-11-05)
+
+**Enum C++ injection API implemented** (`missing-features-plan.md` C2; spec
+`docs/spec/02-lexical.md` `## enum` — "C++ api needed to inject enums to the
+global context" resolved). Host code can now seed a global enum without
+QLang source.
+- **API:** `QLangContext::registerEnum(name, members, baseType = Int)` —
+  `members` is a declaration-order `vector<pair<string, int64_t>>`; values
+  are converted to `baseType` exactly as `compileEnum` types a declared
+  enum's (the draft plan's "base type is metadata only" was wrong —
+  `m_enums` stores typed `QLangValue`s and member folding emits them).
+  Validation → `QLangError`: name/member not an identifier lexeme or a
+  reserved word (`keywordType`), empty members, duplicate member,
+  non-numeric base type, name already in use (live global, previous
+  injection, or hidden-var clash).
+- **Mechanics:** the members are seeded as the hidden const table
+  `__enum_<Name>` (`set(..., isConst)`; the hidden name is also registered
+  in `m_injectedConsts` so the compiler loads it on the injected-const
+  path); `run()` passes the member values to the new
+  `QLangCompiler::addExternalEnums`, which populates `m_enums` +
+  `m_globalEnums` — so `Name::M`/`Name.M` fold, `Name` resolves to the
+  table, and a script `enum Name` colliding with an injected one hits the
+  existing "cannot redeclare enum" check. `compile()` pre-binds each hidden
+  var to its global slot so bare-enum reads and function captures resolve;
+  member folding inside a function body accepts injected enums via
+  `m_injectedEnumNames` (block-scoped `local enum` invisibility unchanged).
+  `remove(name)` drops the enum + hidden var; `clear()` drops all
+  injections.
+- **Tests:** `test_external` 23 → 49 checks (injection both notations,
+  `len`, function-body visibility, hidden table const, byte base type,
+  redeclaration/unknown-member rejection, all validation paths,
+  remove/clear lifecycle). Full suite: **42/42 ctest**, **878 counted unit
+  cases**.
+- **Docs:** `02-lexical.md` records the API (hash re-verified);
+  `status.md` enum Open Item flipped to implemented (C2); `tests.md`
+  tally; `missing-features-plan.md` C2 marked implemented.
+
 ## Round 40 (2026-11-05)
 
 **Signals implemented** (spec module `docs/spec/17-signals.md`, finalized

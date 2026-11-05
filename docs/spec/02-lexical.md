@@ -120,7 +120,25 @@ restrictions and special considerations
 - using local or let qualifier, enum can be restricted to block scope.
 - global enums are visible everywhere.
 - enum cannot be redefined. 
-- C++ api needed to inject enums to the global context (needs discussion)
+- C++ api to inject enums to the global context: `QLangContext::registerEnum`
+
+```
+bool registerEnum(const std::string &name,
+                  const std::vector<std::pair<std::string, int64_t>> &members,
+                  QLangValue::Type baseType = QLangValue::Type::Int);
+```
+
+  injects an enum exactly like a top-level `enum Name:baseType { ... }`:
+  `members` is declaration order (implied sequences are the caller's job —
+  explicit values only), member values are converted to `baseType` (numeric;
+  default `int`), `Name::Member` / `Name.Member` fold at compile time, `Name`
+  resolves to the hidden const table (`len(Name)` = member count), and the
+  enum is global (visible everywhere). Throws `QLangError` when the name or a
+  member name is not an identifier lexeme (or a reserved word), `members` is
+  empty, a member name is duplicated, `baseType` is not numeric, or the name
+  is already in use (live global, previous injection, or declared enum —
+  "enum cannot be redefined" applies across the boundary). `remove(name)` /
+  `clear()` drop the enum and its hidden table; the name becomes free again.
 - trying to reference an unknown enum, triggers an error
 - valueless enum triggers an error
 

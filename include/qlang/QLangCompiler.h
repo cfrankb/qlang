@@ -144,6 +144,14 @@ public:
   // variable is an error).
   void addExternalVars(const std::unordered_set<std::string> &names);
 
+  // Register enums injected from the host (QLangContext::registerEnum). The
+  // runtime table already lives in the hidden const var `__enum_<Name>`; this
+  // only makes the name resolve at compile time: member access folds to the
+  // stored value and the enum name resolves to the hidden var (the hidden
+  // name itself is passed in addExternalConsts). Injected enums are global.
+  void addExternalEnums(const std::unordered_map<std::string,
+                                                    std::vector<std::pair<std::string, QLangValue>>> &enums);
+
   // Register names of C++ native functions. The compiler assigns them
   // negative indices so the VM can dispatch them at runtime.
   void addExternalFuncs(const std::unordered_set<std::string> &names);
@@ -380,6 +388,10 @@ private:
   // Names of enums declared at top level (visible everywhere, like global
   // consts). Used to keep global enums visible when entering a function body.
   std::unordered_set<std::string> m_globalEnums;
+  // Names of host-injected enums (addExternalEnums). Unlike a declared enum
+  // they have no hidden-var register inside a function body until captured;
+  // member folding accepts them on the strength of this set alone.
+  std::unordered_set<std::string> m_injectedEnumNames;
   // Variable names that currently hold an arrow-closure value.
   std::unordered_set<std::string> m_closureVars;
   // Active closure capture table: captured variable name -> refId (index into

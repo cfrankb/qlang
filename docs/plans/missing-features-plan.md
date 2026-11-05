@@ -28,7 +28,7 @@ subi plans in `docs/plans/archive/`).
 | # | Item | Spec anchor | Notes |
 |---|------|-------------|-------|
 | C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | draft spec — C++ API "to be provided"; examples show runtime exceptions at call/return sites |
-| C2 | Enum C++ injection API | `02-lexical.md` `## enum` | language-side enum implemented (`__enum_<Name>` hidden table); only the C++ API is missing ("needs discussion") |
+| C2 | Enum C++ injection API | `02-lexical.md` `## enum` | **implemented (Round 41, 2026-11-05)** — `QLangContext::registerEnum(...)` + `QLangCompiler::addExternalEnums`; see §D and the detailed section |
 | C3 | External-type wrappers: `hasMethod`/`callMethod` | `11-external-types.md` | event-handler contract; `ops->callMethod` has zero VM call sites in v1 |
 | C4 | RTTI validation on external handoff | `11-external-types.md` | **implemented (Phase 3)** — typed `qval_external_*<T>` helpers + `dynamic_cast` check; see §D |
 | C5 | Inheritance (`ObjectOps::base`) | `10-classes.md` v1 restrictions, `EXTERNAL_TYPES.md` §10.3 | reserved, returns null; base-chain walk deferred to v2 |
@@ -51,6 +51,17 @@ subi plans in `docs/plans/archive/`).
   mismatch: …` at first use, not UB. Untyped `qval_external(type, …)`
   factories remain for hosts that cannot name the concrete type (no check).
   `phase3_api` tests cover the mismatch path.
+- **C2 enum injection** — implemented in Round 41 (2026-11-05).
+  `QLangContext::registerEnum(name, members, baseType = Int)` validates
+  (identifier/reserved-word names, non-empty members, no duplicates, numeric
+  base type, name free), seeds the members as the hidden const table
+  `__enum_<Name>`, and registers the name with the compiler via the new
+  `QLangCompiler::addExternalEnums` — so `E::M`/`E.M` fold, `E` resolves to
+  the table, a script `enum E` collides ("cannot redeclare enum"), and
+  `remove`/`clear` drop the enum + hidden var. The API carries a base type
+  (the draft's "base type is metadata only" was wrong: `compileEnum` types
+  members per the declared base and `m_enums` stores typed `QLangValue`s).
+  26 `test_external` cases. See the detailed section below.
 - **C6 signals** — implemented in Round 40 (2026-11-05; spec
   `17-signals.md` finalized the same day). `QL_SIGNAL(name)` meta with the
   signature deduced from a declared, unimplemented member function; `emit`
@@ -126,15 +137,12 @@ subi plans in `docs/plans/archive/`).
    Tests: `spec_check2` (mismatch per type family, narrowing accepted,
    cross-sign rejected, return-type check, level 0/1/2 matrix). Effort:
    1–2 days spec + ~1 week implementation.
-7. **C2 enum injection** — the language-side enum is fully implemented
-   (parser `parseEnum`, compiler `compileEnum` → `__enum_<Name>` hidden
-   const table, `m_globalEnums`); only the C++ API is missing (spec:
-   "needs discussion"). Define the API (e.g. `ctx.registerEnum(name,
-   baseType, members)`) that seeds the `__enum_<Name>` hidden var into the
-   global table **and** registers the name with the compiler's global-enum
-   set, so injected names resolve at compile time. Tests: `test_external`
-   (injected enum readable, member values, redeclaration rejected). Effort:
-   small once the API is defined.
+7. **C2 enum injection** — ✓ **implemented** (Round 41, 2026-11-05).
+   `QLangContext::registerEnum(name, members, baseType = Int)` seeds the
+   `__enum_<Name>` hidden const table and registers the name with the
+   compiler via the new `QLangCompiler::addExternalEnums`, so injected
+   enums fold at compile time and collide with script declarations.
+   26 `test_external` cases. See the detailed section below and §D.
 8. **C3 `hasMethod`/`callMethod` context wrappers** — add
    `QLangContext::hasMethod(obj, name)` / `callMethod(obj, name, args)`
    routing through `getObjectOps` → `ops->callMethod` (present on every ops
@@ -176,7 +184,18 @@ starts. The two Phase 4 items below have their detailed plans recorded here
 
 ### C2 — Enum C++ injection API
 
-Status: **draft** (2026-11-05) — pending approval.
+Status: **implemented** (Round 41, 2026-11-05) — landed with three
+refinements to this draft: (1) the API carries a base type
+(`registerEnum(name, members, baseType = Int)`) because `compileEnum` types
+members per the declared base and `m_enums` stores typed `QLangValue`s (the
+draft's "base type is metadata only" premise was wrong); (2) the hidden name
+`__enum_<Name>` is also registered in `m_injectedConsts` — that is how the
+compiler loads it (injected-const `declareVar` path) and keeps it out of the
+writable-external-var set; (3) `compile()` pre-binds each injected enum's
+hidden var to its global slot, and member folding inside a function body
+accepts injected enums via a dedicated `m_injectedEnumNames` set (using
+`m_globalEnums` there would have weakened block-scoped `local enum`
+invisibility — caught by `spec_check2`).
 Spec: `docs/spec/02-lexical.md` `## enum` ("C++ api needed to inject enums to
 the global context (needs discussion)"). Supersedes the Phase 4 item 7 summary
 above.
@@ -191,13 +210,14 @@ redeclaration check). Only the C++ injection API is missing.
 
     // QLangContext
     bool registerEnum(const std::string &name,
-                      const std::vector<std::pair<std::string, int64_t>> &members);
+                      const std::vector<std::pair<std::string, int64_t>> &members,
+                      QLangValue::Type baseType = QLangValue::Type::Int);
 
 - `name` — the enum name (a valid QLang identifier, not a reserved word).
-- `members` — member name → value, in declaration order. Values are `int64_t`
-  (the enum's base type is metadata only in v1 — `compileEnum` stores every
-  member as an `Int` value regardless of the declared base type, so the API
-  takes plain integers).
+- `members` — member name → value, in declaration order. Values are
+  `int64_t`; implied sequences are the caller's job (explicit values only).
+- `baseType` — numeric member type (default `Int`); values are converted
+  exactly as `compileEnum` types a declared enum's members.
 - Returns `true` on success; throws `QLangError` on validation failure.
 
 **Behavior**
@@ -263,18 +283,24 @@ main frame already aliases the global slots), `.qlc` format, opcodes.
 - **removal** — `remove("Animal")` → the next compile no longer sees `Animal`
   (unknown-enum error); `clear()` likewise.
 
-**Risks / open questions**
+**Risks / open questions** (resolved at landing)
 
-1. **Base type** — the spec allows `enum Name:byte`; v1 `compileEnum` ignores
-   the base type (members are always `Int`). The API therefore takes plain
-   `int64_t` values. If base-type enforcement is wanted later, the API gains a
-   `QLangValue::Type` parameter and `compileEnum` must start honoring
-   `s->enumType` — a separate change.
-2. **Name-clash policy** — the plan rejects injection when the name is a live
-   global. Alternative: let the enum win (would require reordering the
-   `compileExpr` Variable checks so `m_enums` is consulted before
-   `m_externalVars`). Rejection is simpler and matches "enum cannot be
-   redefined".
+1. **Base type** — resolved: the API carries `baseType` (the draft's premise
+   was wrong — `compileEnum` honors the declared base). v1 does **not**
+   range-check member values against the base: `registerEnum(..., 300, Byte)`
+   wraps to 44, exactly like a declared `enum E:byte { A = 300 }`
+   (`static_cast<uint8_t>`). Consistent; validation is a possible future
+   change for both paths.
+2. **Name-clash policy** — resolved: injection is **rejected** when the name
+   is a live global, a previous injection, or a declared enum (matches "enum
+   cannot be redefined"). Consequence: a `local enum` inside a block cannot
+   shadow an injected enum of the same name (the hidden-var collision is
+   detected via the pre-bound register).
+3. **`.qlc` / `call()`** — verified: `call()` reuses the cached program and
+   resolves injected enums; a `.qlc` written from a program that used an
+   injected enum carries `__enum_<Name>` in `prog.vars` (like any top-level
+   name) — the host must `registerEnum` before executing a loaded program,
+   same contract as any injected global.
 
 ### C6 — Signals
 
