@@ -98,6 +98,8 @@ Conventions:
 | JL | — | — | — | pc target | jump when LT only (`a < b`) |
 | JLE | — | — | — | pc target | jump when LT or EQ (`a <= b`) |
 | DEEPCOPY | dest reg | src reg | — | | `r[a] = deepcopy(r[b])` |
+| INDEXGET | dest reg | base reg | key reg | | `r[a] = r[b][r[c]]`; array/table/object subscript |
+| INDEXPUT | base reg | key reg | value reg | | `r[a][r[b]] = r[c]`; array/table/object subscript |
 
 ## opcode: MOVI
 
@@ -348,6 +350,70 @@ avoiding temporaries.
 
 the copy semantics (what is copied, what stays shared, how cycles behave) are
 defined in [06-functions.md](06-functions.md) `### deepcopy`.
+
+
+
+## OpCode indexget
+
+Implemented 2026-11-05. Closes the table-subscript gap recorded in
+[../compliance/status.md](../compliance/status.md): the language allows a
+subscript on a table ([03-declarations.md](03-declarations.md):
+`t["age"] = 33  # valid; equivalent to t.age`), but the compiler lowered every
+postfix `[...]` to `arrget`, which rejects a non-array base.
+
+`indexget a, b, c` — `r[a] = r[b][r[c]]`. three register operands, no `i32`
+slot (the `baseOperandCount()` default). appended last in the opcode enum —
+`DEEPCOPY` was 70, so this is 71 and `kOpcodeUsedCount` becomes 73 — so
+existing `.qlc` opcode numbers stay valid; the `.qlc` format version is
+unchanged (v5).
+
+the base register is dispatched at **runtime**:
+
+| base of `r[b]` | behaviour |
+|----------------|-----------|
+| `array` | integer index; out of range → `array index out of range` |
+| `table`, class instance, external object | key via `valueToString(r[c])`, read through `ObjectOps::getField` |
+| anything else | `type error: cannot subscript <type> value` |
+
+going through `ObjectOps` is what makes `t["age"]` and `t.age` the *same*
+operation: `tabget` already resolves member access that way, so the subscript
+form inherits the closed field set and the `const` guards instead of
+re-implementing them.
+
+the compiler emits this opcode for every postfix subscript **read**
+(`ExprKind::Index`), replacing the `arrget` emission. `seqget` is unaffected —
+it is the `for-in` iteration opcode, not a subscript.
+
+
+
+## OpCode indexput
+
+`indexput a, b, c` — `r[a][r[b]] = r[c]`. same encoding and enum placement as
+`indexget` (identity 72).
+
+| base of `r[a]` | behaviour |
+|----------------|-----------|
+| `array` | integer index, assigned in place; out of range → `array index out of range` |
+| `table`, class instance, external object | key via `valueToString(r[b])`, written through `ObjectOps::setField` (closed field set + `const` guards on class instances) |
+| anything else | `type error: cannot assign into <type> value` |
+
+the compiler emits this opcode for every postfix subscript **write**
+(`compileAssignTarget`), replacing the `arrput` emission. the empty subscript
+(`ab[] = v`) is unchanged: it still lowers to `arrapp`, which appends on arrays
+and sets and errors on tables (`cannot append to non-array value`) — matching
+`t[] = 44  # error`.
+
+`arrget`/`arrput` are no longer emitted by the compiler. they stay in the enum
+and in the VM as the single-kind forms (`.qlc` compatibility, direct use).
+`tabget`/`tabput` remain in active use for member targets (`t.name = 1`) and
+for the class/statics machinery.
+
+disambiguation: these are **not** the reserved `INDGET`/`INDPUT` placeholders
+(`$$` indirect access, [05-operators.md](05-operators.md) `## operator $$`),
+which remain unimplemented.
+
+the disassembler (`examples/qlang_run.cpp`) prints both with the existing
+subscript mnemonics: `r5 = r3[r4]`, `r3[r4] = r5`.
 
 
 

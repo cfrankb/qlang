@@ -217,12 +217,23 @@ enum class Opcode : uint8_t {
   // `deepcopy(x)` call directly to this opcode (no CALL, no arg staging).
   // Copy semantics: SPEC §functions "deepcopy"; plan docs/plans/deepcopy-plan.md.
   // Appended last so existing .qlc opcode numbers stay valid.
-  DEEPCOPY // r[a] = deepcopy(r[b])
+  DEEPCOPY, // r[a] = deepcopy(r[b])
+
+  // Polymorphic subscript: the base register is dispatched at runtime, so the
+  // same opcode reads/writes an array element (integer index) or a table /
+  // class-instance / external-object field (key stringified, resolved through
+  // ObjectOps). This is what makes t["age"] and t.age the same operation
+  // (SPEC §declarations). Three register operands, no i32 slot. The compiler
+  // emits these for every postfix [...] read/write, replacing ARRGET/ARRPUT.
+  // Distinct from the reserved INDGET/INDPUT ($$ indirect access) placeholders.
+  // Appended last so existing .qlc opcode numbers stay valid.
+  INDEXGET, // r[a] = r[b][r[c]]
+  INDEXPUT  // r[a][r[b]] = r[c]
 };
 
 inline constexpr uint8_t kOpcodeEscape = 0x80;
 inline constexpr uint8_t kOpcodeMax = 128; // identities 0..127
-inline constexpr uint8_t kOpcodeUsedCount = 71; // defined identities 0..70
+inline constexpr uint8_t kOpcodeUsedCount = 73; // defined identities 0..72
 
 struct DecodedInstruction {
   Opcode op = Opcode::MOVC;

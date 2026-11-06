@@ -249,6 +249,7 @@ set(QL_SCRIPTS
   money.ql
   moneyv2.ql
   perf_stress.ql
+  table_subscript.ql
   test_assert.ql
   test_assert2.ql
   test_cast.ql

@@ -382,11 +382,13 @@ namespace
     case Opcode::SEQGET:
     case Opcode::TABGET:
     case Opcode::INDGET:
+    case Opcode::INDEXGET:
       ss << rn(ins.a) << " = " << rn(ins.b) << "[" << rn(ins.c) << "]";
       break;
     case Opcode::ARRPUT:
     case Opcode::TABPUT:
     case Opcode::INDPUT:
+    case Opcode::INDEXPUT:
       ss << rn(ins.a) << "[" << rn(ins.b) << "] = " << rn(ins.c);
       break;
     case Opcode::ARRAPP:

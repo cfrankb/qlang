@@ -3540,12 +3540,15 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     break;
   }
   case ExprKind::Index: {
-    // base[index] read -> ARRGET dest, baseR, idxR
+    // base[index] read -> INDEXGET dest, baseR, idxR. The base kind is not
+    // known statically, so the polymorphic opcode is used: it dispatches to an
+    // array index or to ObjectOps field access (SPEC §declarations:
+    // `t["age"]` is equivalent to `t.age`).
     int baseR = tmpRegister();
     compileExpr(e->indexBase, baseR);
     int idxR = tmpRegister();
     compileExpr(e->indexExpr, idxR);
-    emit(Opcode::ARRGET, dest, baseR, idxR);
+    emit(Opcode::INDEXGET, dest, baseR, idxR);
     break;
   }
   case ExprKind::Member: {
@@ -3971,9 +3974,9 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
       emitImm(Opcode::MOVI, idxR, 0); // ab[] -> append
     int valR = tmpRegister();
     if (target->indexExpr && isCompound) {
-      // read-modify-write for compound ops (e.g. a[i] += v)
+      // read-modify-write for compound ops (e.g. a[i] += v, t["n"] += v)
       int tmpR = tmpRegister();
-      emit(Opcode::ARRGET, tmpR, baseR, idxR);
+      emit(Opcode::INDEXGET, tmpR, baseR, idxR);
       Opcode opCode = (op.text == "++") ? Opcode::INC
                       : (op.text == "--") ? Opcode::DEC
                                           : binOp(op.text.substr(0, op.text.size() - 1));
@@ -3986,13 +3989,14 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
         compileExpr(value, valR);
         emit(opCode, tmpR, tmpR, valR);
       }
-      emit(Opcode::ARRPUT, baseR, idxR, tmpR);
+      emit(Opcode::INDEXPUT, baseR, idxR, tmpR);
     } else if (target->indexExpr) {
-      // Plain index assignment ab[i] = v (SPEC §declarations): direct put —
-      // the compound path above would call binOp with the empty operator
-      // text left by stripping the '='.
+      // Plain index assignment ab[i] = v / t["k"] = v (SPEC §declarations):
+      // direct put — the compound path above would call binOp with the empty
+      // operator text left by stripping the '='. INDEXPUT dispatches on the
+      // runtime base type (array element or ObjectOps field).
       compileExpr(value, valR);
-      emit(Opcode::ARRPUT, baseR, idxR, valR);
+      emit(Opcode::INDEXPUT, baseR, idxR, valR);
     } else {
       compileExpr(value, valR);
       // empty subscript ab[] = v -> append

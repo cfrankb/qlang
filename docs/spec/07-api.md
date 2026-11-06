@@ -263,3 +263,19 @@ See [SERIALIZATION.md](../SERIALIZATION.md)
 ## signals
 
 See [docs/spec/17-signals.md](17-signals.md)
+
+
+
+## module search paths
+
+API C++ will provide a means to set the search paths to find modules.
+
+Since all modules in the POC are single file then it will simply search for `[modulename].ql` in all the directories listed in the search paths.
+
+## external search callback
+
+An external search function can be assigned to allow qlang to find modules embedded in non-standard filesystem (like Qt `:/...`).
+
+callback prototype
+
+`string searchCallback(string modulename)`

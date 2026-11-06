@@ -1,16 +1,17 @@
 ## Harness
 
-- `examples/spec_check.cpp` — original cases (const, nil, float, concat, for, if,
+- `tests/unit/spec_check.cpp` — original cases (const, nil, float, concat, for, if,
   while, operators, toStr/toInt). Result: **33 passed, 0 failed.**
-- `examples/spec_check2.cpp` — 421 test cases covering all spec features including `bool`, `char`, `qword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, method calls, `==`/`!=` nil-equality, function/generator returns, 19 `step` loop cases, 42 class-conformance cases (L449–L615), 6 `$` dynamic-key cases (L617–L626), 6 block-scope cases (L633–L640), 9 `len` storage-size cases, 2 `delete` guard cases (Round 21), 16 `enum` cases (Round 28), 6 error-reporting cases (Round 29: line numbers for lex/parse/runtime errors, module + function name in the report, deep call-chain trace) and the Round 30/31 MOVI/ADDI/SUBI + CMP/j* cases. Result: **421 passed, 0 failed.**
-- `examples/spec_cast_test.cpp` — 20 cast tests: numeric casts (int/float/byte/word/short/unsigned/qword/char/bool), string casts, invalid collection casts, nested casts, expression-context casts, nil cast. Result: **20 passed, 0 failed.**
-- `examples/gen_test.cpp` — 5 generator tests: basic yield, second yield, exhaustion/EOF, loop accumulate, empty yield, outer variable capture, type check. Result: **5 passed, 0 failed.**
-- `examples/range_check.cpp` — 22 range tests: `for i in range(a,b)` counter loop (sum/count/break/continue), `in range(a,b)` bounds check (inside/low/high/above/below/as-value), `arr = range(a,b)` materialization, for-in array membership, generator range. Result: **22 passed, 0 failed.**
-- `examples/codec_check.cpp` — `.qlc` codec round-trip checks: format version 3 (explicit little-endian, field-by-field instructions; readers accept v1..v3), MOVI + ADDI + SUBI + CMP/j* suites (Rounds 30–31), malformed-file guards. Result: **all codec checks passed.**
+- `tests/unit/spec_check2.cpp` — 512 test cases covering all spec features including `bool`, `char`, `qword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, method calls, `==`/`!=` nil-equality, function/generator returns, 19 `step` loop cases, 42 class-conformance cases (L449–L615), 6 `$` dynamic-key cases (L617–L626), 6 block-scope cases (L633–L640), 9 `len` storage-size cases, 2 `delete` guard cases (Round 21), 16 `enum` cases (Round 28), 6 error-reporting cases (Round 29: line numbers for lex/parse/runtime errors, module + function name in the report, deep call-chain trace), the Round 30/31 MOVI/ADDI/SUBI + CMP/j* cases, 16 `?` ternary cases (Round 39), 20 `deepcopy` cases (Round 42) and 13 `__deepcopy__` hook cases (Round 44). Result: **512 passed, 0 failed.**
+- `tests/unit/spec_cast_test.cpp` — 20 cast tests: numeric casts (int/float/byte/word/short/unsigned/qword/char/bool), string casts, invalid collection casts, nested casts, expression-context casts, nil cast. Result: **20 passed, 0 failed.**
+- `tests/unit/gen_test.cpp` — 5 generator tests: basic yield, second yield, exhaustion/EOF, loop accumulate, empty yield, outer variable capture, type check. Result: **5 passed, 0 failed.**
+- `tests/unit/range_check.cpp` — 22 range tests: `for i in range(a,b)` counter loop (sum/count/break/continue), `in range(a,b)` bounds check (inside/low/high/above/below/as-value), `arr = range(a,b)` materialization, for-in array membership, generator range. Result: **22 passed, 0 failed.**
+- `tests/unit/codec_check.cpp` — `.qlc` codec round-trip checks: format version **5** (escape-byte flat byte stream + `loc` side-table; **v5-only reader**, v1–v4 dropped in Round 37), MOVI + ADDI + SUBI + CMP/j* suites (Rounds 30–31), constant-pool dedup (Round 38), `nop` (Round 39) and `deepcopy` (Round 42) suites, malformed-file guards. Result: **123 checks passed.**
+- `tests/unit/test_external.cpp` — external (C++) type bindings: `QL_` declarative meta, `External`/`BoundMethod`/`TypeRef`, method dispatch, RTTI handoff validation (Phase 3), `registerEnum` injection (Round 41). Result: **49 checks passed.**
 Compile against the static lib:
-`g++ -std=c++20 -Iinclude examples/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
-Result: **421 passed, 0 failed.** All spec builtins implemented.
-`g++ -std=c++20 -Iinclude examples/spec_cast_test.cpp build/libqlang.a -o /tmp/cast_test && /tmp/cast_test 2>/dev/null`
+`g++ -std=c++20 -Iinclude tests/unit/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
+Result: **512 passed, 0 failed.** All spec builtins implemented.
+`g++ -std=c++20 -Iinclude tests/unit/spec_cast_test.cpp build/libqlang.a -o /tmp/cast_test && /tmp/cast_test 2>/dev/null`
 Result: **20 passed, 0 failed.**
 
 ## C++ Interface (new this round)
@@ -22,7 +23,7 @@ Result: **20 passed, 0 failed.**
 | `CompiledProgram::constVars` | ✓ added to struct |
 | VM skips end-of-run sync for const vars | ✓ patched in `QLangVM.cpp` |
 | Compiler `guardNotConst()` covers injected consts | ✓ via `addExternalConsts()` |
-| Test: `examples/test_inject.cpp` | ✓ passes |
+| Test: `tests/unit/test_inject.cpp` | ✓ passes |
 
 ## Fixes Applied This Round (since prior audit)
 
@@ -67,9 +68,16 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 | `**` exponential | Not implemented | Added `TokenType::Exponential`, precedence 11, `POW` opcode in VM (`pow()` for float, repeated mul for int) |
 | `|||` logical-or | Not implemented | Added `TokenType::LogicalOr3`, precedence 1 |
 | Generator keeps restarting after exhaustion | Consumed generator's saved frame was erased; the loop re-created a fresh frame and re-ran the body from the top | Added `Frame::exhausted` flag; generator `RETURN` marks the saved frame `exhausted`; generator loop early-returns nil for an already-exhausted frame; post-loop cleanup no longer erases the exhausted frame |
-| nil-returning test cases threw | `expectVal` used `asInt()`, which threw "expected Int, Bool or Char but value is nil" on nil results | Switched `expectVal` to `toInt64()` (returns 0 for nil) in `examples/gen_test.cpp` and `examples/spec_check2.cpp` |
+| nil-returning test cases threw | `expectVal` used `asInt()`, which threw "expected Int, Bool or Char but value is nil" on nil results | Switched `expectVal` to `toInt64()` (returns 0 for nil) in `tests/unit/gen_test.cpp` and `tests/unit/spec_check2.cpp` |
 
 ## Current Round Summary
 
-Core spec fully implemented. **295 passed, 0 failed** (spec_check2) + **33 passed, 0 failed** (spec_check) + **20 passed, 0 failed** (spec_cast_test) + **7 passed, 0 failed** (test_module) + **5 passed, 0 failed** (gen_test) + **22 passed, 0 failed** (range_check) + **13 passed, 0 failed** (class_str) + **17 passed, 0 failed** (class_static) = **412 total**. Since the prior audit: implemented the `step` loop construct (both `for` forms; 19 new cases) and made the `for` endpoint inclusive for all step sizes (`e955a8d`); SPEC.md gained the `step` reserved word/examples (`d07eb4f`/`21cc1c5`); `import`/`from` reserved words, duplicate-declaration examples, and the `$$` operator-table row + TODO stub committed in `9cc0a3f`; `## operator $$` committed in full (`c83ebc8`) — spec-only, implementation and harness cases pending; **user-defined classes brought to full conformance** (9 phases, `6a4c559`/`8c013a1`/`b242645`/`0d7115b`) and the **`$` dynamic-key operator implemented** (`0c63f4b`; 6 new cases) — see Round 8; **block scope implemented** (2026-10-26; 6 new cases) — see Round 10.
+**Current tally (re-verified Round 52, 2026-11-05): 1002 counted unit cases + 21
+script regressions + 1 perf gate = 46 ctest entries, all green** — the authoritative,
+per-suite breakdown lives in `docs/compliance/tests.md` (ctest matrix) and
+`docs/compliance/status.md` (`## Current Status`); this module deliberately no
+longer keeps its own copy of the numbers (the paragraph below was a frozen
+Round 8 snapshot that had drifted three times).
+
+Historical snapshot (Round 8, 2026-10-26) — Core spec fully implemented. **295 passed, 0 failed** (spec_check2) + **33 passed, 0 failed** (spec_check) + **20 passed, 0 failed** (spec_cast_test) + **7 passed, 0 failed** (test_module) + **5 passed, 0 failed** (gen_test) + **22 passed, 0 failed** (range_check) + **13 passed, 0 failed** (class_str) + **17 passed, 0 failed** (class_static) = **412 total**. Since the prior audit: implemented the `step` loop construct (both `for` forms; 19 new cases) and made the `for` endpoint inclusive for all step sizes (`e955a8d`); SPEC.md gained the `step` reserved word/examples (`d07eb4f`/`21cc1c5`); `import`/`from` reserved words, duplicate-declaration examples, and the `$$` operator-table row + TODO stub committed in `9cc0a3f`; `## operator $$` committed in full (`c83ebc8`) — spec-only, implementation and harness cases pending; **user-defined classes brought to full conformance** (9 phases, `6a4c559`/`8c013a1`/`b242645`/`0d7115b`) and the **`$` dynamic-key operator implemented** (`0c63f4b`; 6 new cases) — see Round 8; **block scope implemented** (2026-10-26; 6 new cases) — see Round 10.
 

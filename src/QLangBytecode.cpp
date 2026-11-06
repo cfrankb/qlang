@@ -109,7 +109,8 @@ static size_t baseOperandCount(Opcode op) {
     return 2;
   }
   // 3-operand (default): ADD..INx, CONV, CAST, ARRGET/ARRPUT, TABGET/TABPUT,
-  // INDGET/INDPUT, CALL/CALLFN/CALLCLOS, MAKEGEN (c=argCount), SEQGET (c=index).
+  // INDGET/INDPUT, INDEXGET/INDEXPUT, CALL/CALLFN/CALLCLOS, MAKEGEN
+  // (c=argCount), SEQGET (c=index).
   return 3;
 }
 
@@ -819,6 +820,8 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::Nop: return "nop";
   case Opcode::EMIT: return "emit";
   case Opcode::DEEPCOPY: return "deepcopy";
+  case Opcode::INDEXGET: return "indexget";
+  case Opcode::INDEXPUT: return "indexput";
   default:
     return "???";
   }

@@ -1436,6 +1436,96 @@ int main() {
     fails++;
   }
 
+  // -- polymorphic subscript: INDEXGET / INDEXPUT (spec 13-bytecodes
+  // "indexget"/"indexput"). SPEC §declarations: `t["age"] = 33  # valid;
+  // equivalent to t.age`, `t[] = 44  # error`. The base kind is resolved at
+  // runtime: arrays index, tables/class instances go through ObjectOps, so the
+  // closed field set and const guards apply to the subscript form too.
+  expectVal(R"(table subscript read)", R"(
+local t:table = {age=99}
+local v = t["age"]
+)", "v", 99);
+  expectVal(R"(table subscript write is equivalent to member write)", R"(
+local t:table = {age=99}
+t["age"] = 33
+local v = t.age
+)", "v", 33);
+  expectVal(R"(table subscript adds a new field)", R"(
+local t:table = {a=1}
+t["b"] = 7
+local v = t.b
+)", "v", 7);
+  expectVal(R"(table subscript key may be a variable)", R"(
+local k = "age"
+local t:table = {age=99}
+local v = t[k]
+)", "v", 99);
+  expectVal(R"(table subscript compound assign)", R"(
+local t:table = {n=1}
+t["n"] += 5
+local v = t.n
+)", "v", 6);
+  expectVal(R"(array subscript read unchanged)", R"(
+local ab = [0,4,5]
+local v = ab[1]
+)", "v", 4);
+  expectVal(R"(array subscript write unchanged)", R"(
+local ab = [0,4,5]
+ab[0] = 55
+local v = ab[0]
+)", "v", 55);
+  expectVal(R"(array subscript compound assign unchanged)", R"(
+local ab = [0,4,5]
+ab[1] += 10
+local v = ab[1]
+)", "v", 14);
+  expectVal(R"(empty subscript still appends to arrays)", R"(
+local ab = [0,4,5]
+ab[] = 4
+local v = len(ab)
+)", "v", 4);
+  expectVal(R"(class instance subscript read)", R"(
+class D {
+  x = 7
+}
+local a = D()
+local v = a["x"]
+)", "v", 7);
+  expectVal(R"(class instance subscript write)", R"(
+class D {
+  x = 7
+}
+local a = D()
+a["x"] = 9
+local v = a.x
+)", "v", 9);
+  expectMsg(R"(class instance subscript respects the closed field set)", R"(
+class D {
+  x = 7
+}
+local a = D()
+a["zz"] = 1
+)", "has no field 'zz'");
+  expectMsg(R"(class instance subscript respects const fields)", R"(
+class D {
+  const x = 7
+}
+local a = D()
+a["x"] = 9
+)", "cannot assign to const field 'x'");
+  expectMsg(R"(subscript read on a scalar)", "local x = 5\nlocal v = x[0]",
+            "cannot subscript int value");
+  expectMsg(R"(subscript write on a scalar)", "local x = 5\nx[0] = 1",
+            "cannot assign into int value");
+  expectMsg(R"(empty subscript on a table is an error)", R"(
+local t:table = {a=1}
+t[] = 44
+)", "cannot append to non-array value");
+  expectMsg(R"(array subscript out of range)", R"(
+local ab = [1,2]
+local v = ab[5]
+)", "array index out of range");
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

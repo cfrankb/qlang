@@ -968,10 +968,10 @@ static void testMalformed() {
 
   std::string badOp = fileWithOneInstr();
   // The single instruction's opcode byte is at byte 37 (header + function
-  // metadata + codeSize). Set it to 71: a valid 7-bit identity that is not a
-  // defined opcode (kOpcodeUsedCount == 71; DEEPCOPY took 70). It decodes as
-  // a 4-byte 3-operand form, then fails isValidOpcode.
-  badOp[37] = 71;
+  // metadata + codeSize). Set it to 73: a valid 7-bit identity that is not a
+  // defined opcode (kOpcodeUsedCount == 73; INDEXGET/INDEXPUT took 71/72). It
+  // decodes as a 4-byte 3-operand form, then fails isValidOpcode.
+  badOp[37] = 73;
   rejects("malformed: invalid opcode", badOp);
 
   // Truncated instruction: codeSize=3, but the ADD at offset 0 needs 4 bytes.
@@ -1102,6 +1102,127 @@ static void testMalformed() {
           }));
 }
 
+// ---------------------------------------------------------------------------
+// INDEXGET / INDEXPUT: polymorphic subscript (SPEC §bytecodes "OpCode
+// indexget"/"indexput"). Appended last (identities 71, 72) so existing .qlc
+// opcode numbers stay valid. Three register operands, no i32 slot. The
+// compiler emits them for every postfix [...] read or write, replacing the
+// ARRGET/ARRPUT emission; those remain valid opcodes.
+// ---------------------------------------------------------------------------
+static void testIndexSubscript() {
+  try {
+    check(kOpcodeUsedCount == 73, "index: kOpcodeUsedCount is 73");
+    check(static_cast<uint8_t>(Opcode::INDEXGET) == 71,
+          "indexget: identity 71 (appended last)");
+    check(static_cast<uint8_t>(Opcode::INDEXPUT) == 72,
+          "indexput: identity 72 (appended last)");
+    check(Bytecode::name(Opcode::INDEXGET) == "indexget", "indexget: name");
+    check(Bytecode::name(Opcode::INDEXPUT) == "indexput", "indexput: name");
+    check(isValidOpcode(Opcode::INDEXGET) && isValidOpcode(Opcode::INDEXPUT),
+          "index: both are valid opcodes");
+    check(baseInstructionSize(Opcode::INDEXGET) == 4 &&
+              baseInstructionSize(Opcode::INDEXPUT) == 4,
+          "index: 4-byte base size (op + 3 register operands)");
+
+    // 4-byte base-form encode/decode round-trip.
+    DecodedInstruction in;
+    in.op = Opcode::INDEXGET;
+    in.a = 1;
+    in.b = 2;
+    in.c = 3;
+    std::vector<uint8_t> buf;
+    encodeInstruction(buf, in);
+    check(buf.size() == 4 && buf[0] == 71 && buf[1] == 1 && buf[2] == 2 &&
+              buf[3] == 3,
+          "indexget: encodes to 4 bytes");
+    DecodedInstruction out;
+    decodeInstruction(buf.data(), 0, buf.size(), out);
+    check(out.op == Opcode::INDEXGET && !out.escaped && out.size == 4 &&
+              out.a == 1 && out.b == 2 && out.c == 3,
+          "indexget: decode round-trip");
+
+    in = DecodedInstruction();
+    in.op = Opcode::INDEXPUT;
+    in.a = 4;
+    in.b = 5;
+    in.c = 6;
+    buf.clear();
+    encodeInstruction(buf, in);
+    check(buf.size() == 4 && buf[0] == 72 && buf[1] == 4 && buf[2] == 5 &&
+              buf[3] == 6,
+          "indexput: encodes to 4 bytes");
+    decodeInstruction(buf.data(), 0, buf.size(), out);
+    check(out.op == Opcode::INDEXPUT && !out.escaped && out.size == 4 &&
+              out.a == 4 && out.b == 5 && out.c == 6,
+          "indexput: decode round-trip");
+
+    // No renumbering: the previously last opcode keeps its identity, and the
+    // single-kind subscript opcodes stay valid (retained, no longer emitted).
+    check(static_cast<uint8_t>(Opcode::DEEPCOPY) == 70,
+          "index: deepcopy identity unchanged (70)");
+    check(isValidOpcode(Opcode::ARRGET) && isValidOpcode(Opcode::ARRPUT),
+          "index: arrget/arrput still valid opcodes");
+  } catch (const QLangError &e) {
+    check(false, std::string("index: ") + e.what());
+  }
+}
+
+// The compiler lowers every postfix [...] to INDEXGET/INDEXPUT (SPEC
+// §declarations: `t["age"] = 33` is equivalent to `t.age`), and the empty
+// subscript `ab[] = v` still lowers to ARRAPP.
+static void testIndexLowering() {
+  try {
+    QLangContext ctx;
+    QLangCompiler compiler(
+        ctx.parse(R"(
+local t:table = {age=1}
+local v = t["age"]
+t["age"] = 2
+local ab = [1,2]
+ab[0] = 3
+local w = ab[1]
+)"),
+        &ctx);
+    CompiledProgram p = compiler.compile();
+    const Function &fn = p.functions[0];
+    int gets = 0, puts = 0, legacy = 0, appends = 0;
+    for (size_t off : fn.instrOffsets) {
+      DecodedInstruction d;
+      decodeInstruction(fn.code.data(), off, fn.code.size(), d);
+      if (d.op == Opcode::INDEXGET)
+        gets++;
+      if (d.op == Opcode::INDEXPUT)
+        puts++;
+      if (d.op == Opcode::ARRGET || d.op == Opcode::ARRPUT)
+        legacy++;
+      if (d.op == Opcode::ARRAPP)
+        appends++;
+    }
+    check(gets == 2, "index-lowering: two INDEXGET emitted");
+    check(puts == 2, "index-lowering: two INDEXPUT emitted");
+    check(legacy == 0, "index-lowering: no ARRGET/ARRPUT emitted");
+    check(appends == 0, "index-lowering: no spurious ARRAPP");
+
+    QLangContext c2;
+    QLangCompiler k(c2.parse("local ab = [1,2]\nab[] = 3\n"), &c2);
+    CompiledProgram p2 = k.compile();
+    const Function &f2 = p2.functions[0];
+    bool hasAppend = false, hasPut = false;
+    for (size_t off : f2.instrOffsets) {
+      DecodedInstruction d;
+      decodeInstruction(f2.code.data(), off, f2.code.size(), d);
+      if (d.op == Opcode::ARRAPP)
+        hasAppend = true;
+      if (d.op == Opcode::INDEXPUT)
+        hasPut = true;
+    }
+    check(hasAppend, "index-lowering: empty subscript lowers to ARRAPP");
+    check(!hasPut, "index-lowering: empty subscript emits no INDEXPUT");
+  } catch (const QLangError &e) {
+    check(false, std::string("index-lowering: ") + e.what());
+  }
+}
+
 int main() {
   testValues();
   testProgram();
@@ -1114,6 +1235,8 @@ int main() {
   testNop();
   testDeepcopy();
   testDeepcopyLowering();
+  testIndexSubscript();
+  testIndexLowering();
   testMalformed();
   std::cout << (fails == 0 ? "all codec checks passed\n"
                            : "codec checks FAILED\n");

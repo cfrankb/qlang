@@ -2111,6 +2111,49 @@ RunResult QLangVM::runFrames() {
       }
       break;
     }
+    case Opcode::INDEXGET: {
+      // Polymorphic subscript read (SPEC §bytecodes "indexget"): arrays take an
+      // integer index, tables/class instances/external objects resolve the
+      // stringified key through ObjectOps -- the same path TABGET uses for
+      // member access, so t["age"] and t.age behave identically (closed field
+      // set, const guards).
+      QLangValue &base = frame.regs[i.b];
+      if (base.type() == QLangValue::Type::Array) {
+        int64_t idx = (long long)toInt64(frame.regs[i.c]);
+        const auto &elems = *base.asArray();
+        if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
+          vmThrow(QLangErrorKind::Runtime, "array index out of range");
+        frame.regs[i.a] = elems[static_cast<size_t>(idx)];
+        break;
+      }
+      const ObjectOps *ops = getObjectOps(base);
+      if (!ops)
+        vmThrow(QLangErrorKind::Type,
+                std::string("cannot subscript ") + base.typeName() + " value");
+      frame.regs[i.a] =
+          ops->getField(base, valueToString(frame.regs[i.c], m_scope), m_scope);
+      break;
+    }
+    case Opcode::INDEXPUT: {
+      // Polymorphic subscript write (SPEC §bytecodes "indexput"). The empty
+      // subscript (t[]) is not handled here: the compiler lowers it to ARRAPP.
+      QLangValue &base = frame.regs[i.a];
+      if (base.type() == QLangValue::Type::Array) {
+        int64_t idx = (long long)toInt64(frame.regs[i.b]);
+        auto &elems = *base.asArray();
+        if (idx < 0 || idx >= static_cast<int64_t>(elems.size()))
+          vmThrow(QLangErrorKind::Runtime, "array index out of range");
+        elems[static_cast<size_t>(idx)] = frame.regs[i.c];
+        break;
+      }
+      const ObjectOps *ops = getObjectOps(base);
+      if (!ops)
+        vmThrow(QLangErrorKind::Type,
+                std::string("cannot assign into ") + base.typeName() + " value");
+      ops->setField(base, valueToString(frame.regs[i.b], m_scope),
+                    frame.regs[i.c], m_scope);
+      break;
+    }
     case Opcode::CALL: {
       int dest = i.a;
       int argCount = i.c;

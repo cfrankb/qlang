@@ -52,7 +52,7 @@ Spec additions (2026-10-27, uncommitted): `static` reserved word, `::` scope-res
 operator, `## static` section, and the Money example extended with `static banner`,
 `static getBanner()`/`setBanner()`, `Money::setBanner(...)`, and `__str__`
 interpolating `{banner}`. **Status: fully conforming** (17 cases in
-`examples/class_static_test.cpp`, ctest `class_static`). No new opcodes.
+`tests/unit/class_static_test.cpp`, ctest `class_static`). No new opcodes.
 
 | Spec requirement | Status |
 |---|---|

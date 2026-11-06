@@ -1,3 +1,159 @@
+## Round 52 (2026-11-05)
+
+**Spec↔compliance reload audit: an untracked `.gitattributes`, tallies left one
+round behind, pre-migration `examples/` paths, mangled markdown.**
+`.gitattributes`, `docs/compliance/{status,tests,harness,classes,history,README}.md`.
+**Docs + git hygiene only — no source, test-source, or spec-module change.**
+
+- **Trigger.** The AGENTS.md session-start reload: `docs/spec/` re-read against
+  `docs/compliance/`. `./update-doc-hashes.sh --check` reported **24 modules
+  verified** (no hash drift) and the root stubs were correct (`SPEC.md` 17
+  modules, `SPEC_COMPLIANCE.md` all 7 compliance modules), so this round is
+  about the facts *inside* the modules rather than the rows tracking them.
+- **`.gitattributes` was never committed.** Round 48's CRLF fix — the reason the
+  MSVC job stopped reporting 24 phantom hash drifts — existed only on disk
+  (`git ls-files` → not in HEAD), so a fresh clone still checked out CRLF on
+  `windows-latest`. Now staged with `git add`.
+- **`harness.md` tally lagged a round.** "Round 50 … 966 counted unit cases + 20
+  script regressions … 45 ctest entries" → re-verified as **1002 + 21 + 1 perf =
+  46 entries** (the numbers themselves were already correct in `tests.md` /
+  `status.md`; only this copy had not been re-pointed after Round 51).
+- **`tests.md` counts and layout.** Requirement table said 21 C++ harnesses
+  (22), 20 `.ql` scripts (21), "20 script regressions" (21) and "all 21 unit
+  harnesses" (22); the layout tree omitted `table_subscript.ql`.
+- **`status.md` contradicted itself on `step`.** The `## Working` range bullet
+  still said the `step` variants are "**NOT implemented** (parser parses no
+  `step`)" while the resolved Open Item in the same file records `e955a8d`.
+  Re-verified empirically — `for i in range(0,10) step 2` → `30` — and the
+  bullet corrected. Two `examples/range_check.cpp` references (and one
+  `examples/class_static_test.cpp` in `classes.md`) predate the Round 32 move to
+  `tests/unit/` → corrected.
+- **Markdown mangled by an old table→list conversion.** Six list items carried
+  stray leading pipes (`|-`, `||-`, `|||-`, `||||-`) and five table rows a
+  doubled leading pipe (an empty first column); two of the list items also ended
+  in a trailing `|`. All normalized — no wording changed.
+- **`update-doc-hashes.sh` mode.** Recorded as `100755` in the index
+  (`git update-index --chmod=+x`) so the documented `./update-doc-hashes.sh`
+  invocation works on a fresh clone; the working-tree bit still needs a local
+  `chmod +x` (the sandbox denies `chmod`), which shows as a mode-only diff until
+  then.
+- **Still pending (sandbox denies file deletion).** `docs/plans/missing` — the
+  scratch note Round 46 recorded as superseded by `missing-features-plan.md` and
+  "pending removal" — plus root-level scratch `debug_{nested,s1,s1b,s2,s2b,s3}.cpp`,
+  `repro_forin.cpp` and `perf_result.json` (AGENTS.md: generated files must not
+  touch the source root). All untracked; `rm` them by hand.
+- **Verification.** `cmake -B build && cmake --build build` clean; `ctest`
+  **46/46** green (`doc_hashes` Skipped by design, Round 49); hashes
+  re-recorded afterwards for the five edited compliance modules.
+
+## Round 51 (2026-11-05)
+
+**Table subscript `t[key]`: new opcodes `INDEXGET` / `INDEXPUT`.**
+`docs/spec/13-bytecodes.md`, `include/qlang/QLangBytecode.h`,
+`src/QLangBytecode.cpp`, `src/QLangVM.cpp`, `src/QLangCompiler.cpp`,
+`examples/qlang_run.cpp`, `tests/unit/spec_check2.cpp`,
+`tests/unit/codec_check.cpp`, new `tests/scripts/table_subscript.ql`,
+`CMakeLists.txt`. Closes the gap found in Round 50.
+
+- **Gap.** `docs/spec/03-declarations.md` states `t["age"] = 33  # valid;
+  equivalent to t.age` and `docs/spec/05-operators.md` refers to "ordinary
+  dynamic table access (`t[key]`)", but every postfix `[...]` lowered to
+  `ARRGET`/`ARRPUT`, which accept `Type::Array` only. `TABGET`/`TABPUT` — which
+  already resolve keys through `ObjectOps::getField`/`setField` — were reachable
+  only from the `.` member path.
+- **Design choice.** Two new opcodes rather than making `arrget`/`arrput`
+  polymorphic: the existing names describe an array, and keeping them intact
+  leaves the single-kind forms available (and `.qlc` opcode numbers unchanged).
+  Appended **last** — identities 71 and 72, `kOpcodeUsedCount` 71 → 73; `.qlc`
+  stays **v5** (no encoding change: three register operands, no `i32` slot, the
+  `baseOperandCount()` default). Distinct from the reserved `INDGET`/`INDPUT`
+  (`$$` indirect access) placeholders, which remain unimplemented.
+- **VM.** `runFrames()` dispatches on the runtime base type: `Type::Array`
+  reproduces the `ARRGET`/`ARRPUT` semantics exactly (same out-of-range error);
+  anything with `ObjectOps` stringifies the key (`valueToString`) and calls
+  `getField`/`setField`; anything else throws `cannot subscript <type> value` /
+  `cannot assign into <type> value` (the old messages named only "non-array",
+  which is no longer true). No test asserted the old wording.
+- **Why `ObjectOps` and not a direct map lookup.** It makes the subscript form
+  inherit the member rules instead of re-implementing them: on a class instance
+  `a["zz"] = 1` → `D has no field 'zz'` and a `const` field → `cannot assign to
+  const field 'x'` — byte for byte what `a.zz` reports.
+- **Compiler.** `ExprKind::Index` emits `INDEXGET`; `compileAssignTarget` emits
+  `INDEXPUT` for both the plain and the compound (`t["n"] += 5`) paths.
+  `ARRGET`/`ARRPUT` are now emitted nowhere (verified by a codec check asserting
+  zero emissions) but stay valid opcodes. `TABGET`/`TABPUT` remain in heavy use
+  (member targets, class/statics machinery). The empty subscript `ab[] = v`
+  still lowers to `ARRAPP`, so `t[] = 44` still errors — with the pre-existing
+  `cannot append to non-array value`, not a new message.
+- **Disassembler.** `examples/qlang_run.cpp` folds both into the existing
+  subscript mnemonics (`r5 = r3[r4]`, `r3[r4] = r5`); the register-use switch
+  already defaults to three operands.
+- **Tests.** `spec_check2` 512 → **529** (+17: table read/write/add-field/
+  variable key/compound, array read/write/compound/append unchanged, class
+  instance read/write, closed-field-set, const guard, scalar read/write,
+  `t[] = 44`, out-of-range). `codec_check` 123 → **142** (+19: identities,
+  names, validity, 4-byte base size, encode/decode round-trips, `DEEPCOPY`
+  identity unchanged, `ARRGET`/`ARRPUT` still valid, compiler lowering, empty
+  subscript → `ARRAPP`). One pre-existing malformed-input case had used opcode
+  byte 71 as "undefined" — moved to 73. New `tests/scripts/table_subscript.ql`
+  added to the explicit `QL_SCRIPTS` list (21st script regression).
+- **Verification.** `cmake -B build && cmake --build build` clean; `ctest`
+  **46/46** green (1002 counted unit cases + 21 script regressions + the perf
+  gate), `doc_hashes` re-recorded afterwards for `docs/spec/13-bytecodes.md`,
+  `docs/spec/README.md` (untouched), `docs/compliance/{status,tests,history,
+  harness,README}.md` as edited.
+- **Note for future rounds.** `.ql` sources use `#` comments — `//` is not a
+  comment token and the lexer reports `unexpected character` on it (and on
+  non-ASCII such as `§` inside what looks like a comment).
+
+## Round 50 (2026-11-05)
+
+**Spec↔compliance reload audit: untracked spec text, drifted harness tallies,
+stale root stubs.** `docs/compliance/status.md`, `docs/compliance/harness.md`,
+`docs/spec/README.md`, root `SPEC.md` + `SPEC_COMPLIANCE.md`. **Docs only — no
+source, test-source, or spec-module change.**
+
+- **Trigger.** A full reload of `docs/spec/` against `docs/compliance/` with the
+  `doc_hashes` gate plus an empirical probe of every "Working" bullet that could
+  be checked from `qlang_run`.
+- **Untracked spec text (now an Open Item).** `docs/spec/07-api.md` carries two
+  uncommitted sections — `## module search paths` (set search paths; a POC module
+  is one file, so resolution is `[modulename].ql` per directory) and
+  `## external search callback` (`string searchCallback(string modulename)` for
+  non-standard filesystems such as Qt `:/...`). Neither had compliance tracking and
+  neither is implemented (`searchPath`/`searchCallback` appear nowhere in
+  `include/` or `src/`); `status.md` gained the Open Item, `docs/spec/README.md`
+  the two extra domain terms in the 07-api row.
+- **`harness.md` had drifted three times.** It still described the sources under
+  `examples/` (they moved to `tests/unit/`), `spec_check2` at 421 cases (512 since
+  Round 44), and `codec_check` as "format version 3, readers accept v1..v3" (v5
+  escape-byte stream, v5-only reader since Round 37). Its `## Current Round
+  Summary` still carried the Round 8 snapshot ("295 passed … 412 total"). Paths and
+  counts corrected; the summary now states the current tally once and defers to
+  `tests.md` / `status.md` instead of keeping a third copy of the numbers.
+- **Root stubs.** `SPEC.md` said "16 domain modules" (17 exist); `SPEC_COMPLIANCE.md`
+  omitted `migration-value-semantics.md` (7 modules exist, 6 listed).
+- **Empirical finding (NOT fixed here — Round 51).** `docs/spec/03-declarations.md`
+  states `t["age"] = 33  # valid; equivalent to t.age`, but subscript on a table
+  throws: read → `type error: cannot subscript non-array value`, write → `cannot
+  assign into non-array value`. `QLangCompiler` emits `ARRGET`/`ARRPUT`
+  unconditionally for a subscript (`src/QLangCompiler.cpp:3543-3548`,
+  `3976-3995`) and the VM handlers accept `Type::Array` only
+  (`src/QLangVM.cpp:2018-2039`). No test anywhere exercises table subscript —
+  `spec_check2.cpp` and `tests/scripts/*.ql` contain no `t["…"]` — so
+  `status.md`'s `[x] table member read/write t.name, t["age"]` bullet was
+  unverified. `t.name` and the spec's `t[] = 44 → error` both behave correctly.
+  Tracked as an Open Item and implemented in Round 51.
+- **Verification.** `cmake --build build` clean; `ctest --test-dir build` **44
+  passed + `doc_hashes` Skipped** before the re-record, **45/45** after
+  (`07-api.md`, `status.md`, `harness.md` rows re-hashed once green, per AGENTS.md
+  order). `spec_check2` 512/0 and `signal_test` 18/0 re-run directly.
+- **Deferred (sandbox denies `chmod`/`rm`).** `update-doc-hashes.sh` is committed
+  `100644`, so `./update-doc-hashes.sh` needs `git update-index --chmod=+x
+  update-doc-hashes.sh`; the stale scratch note `docs/plans/missing` (Round 46
+  deleted it; it reappeared untracked with pre-Round-39 claims) needs `rm`. Both
+  left for the user to run.
+
 ## Round 49 (2026-11-05)
 
 **`doc_hashes` made optional (drift reported, not failed) + manual re-record
