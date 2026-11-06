@@ -7,6 +7,7 @@
 #include "qlang/QLangCompiler.h"
 #include "qlang/QLangErrors.h"
 #include "qlang/QLangLexer.h"
+#include "qlang/QLangObjects.h"
 #include "qlang/QLangVM.h"
 #include "qlang/QLangModules.h"
 
@@ -606,6 +607,52 @@ namespace {
     set(meta.name, QValue::TypeRef(desc), true);
 
     return m_pimpl->types.add(std::move(desc));
+  }
+
+  // -----------------------------------------------------------------------
+  // Event-handler call surface (docs/EVENT_HANDLERS.md §4)
+  // -----------------------------------------------------------------------
+
+  bool QLangContext::hasMethod(const QLangValue &obj,
+                               const std::string &name) const
+  {
+    bindThread();
+    const ObjectOps *ops = getObjectOps(obj);
+    if (!ops)
+      return false;
+    QLangValue member;
+    try
+    {
+      // A missing member throws on class instances and external values; a
+      // plain table reads it as nil. Both are "no method".
+      member = ops->getField(obj, name, *const_cast<QLangContext *>(this));
+    }
+    catch (const QLangError &)
+    {
+      return false;
+    }
+    return member.type() == QLangValue::Type::Function ||
+           member.type() == QLangValue::Type::BoundMethod;
+  }
+
+  QLangValue QLangContext::callMethod(
+      const QLangValue &obj, const std::string &name,
+      const std::vector<QLangValue> &args)
+  {
+    bindThread();
+    // Safe point (Phase 3): drain pending instance finalizers first, like
+    // emitSignal()/callClosure().
+    processFinalizers();
+    const ObjectOps *ops = getObjectOps(obj);
+    if (!ops)
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       std::string("callMethod on a ") + obj.typeName() +
+                           " value");
+    if (!hasMethod(obj, name))
+      throw QLangError(QLangErrorKind::Type, 0, 0,
+                       "no method '" + name + "' on " + obj.typeName() +
+                           " value");
+    return ops->callMethod(obj, name, args, *this);
   }
 
   // -----------------------------------------------------------------------

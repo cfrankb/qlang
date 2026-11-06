@@ -246,6 +246,60 @@ int main() {
     CHECK(runAndGet(c, "Animal::Cat").asInt() == 7);
   }
 
+  // 19. hasMethod / callMethod context wrappers (missing-features-plan C3;
+  // docs/EVENT_HANDLERS.md §4). Host-only surface over ObjectOps — the VM
+  // path (TABGET -> BoundMethod -> CALLCLOS) is unchanged.
+  {
+    auto p = std::make_shared<Point>(1, 2);
+    QValue ext = qval_external_borrowed<Point>(pt, std::weak_ptr<Point>(p));
+    CHECK(ctx.hasMethod(ext, "translate"));   // QL_INVOKABLE method
+    CHECK(!ctx.hasMethod(ext, "x"));          // property, not callable
+    CHECK(!ctx.hasMethod(ext, "dist"));       // read-only property
+    CHECK(!ctx.hasMethod(ext, "warp"));       // unknown member
+    CHECK(!ctx.hasMethod(QValue::Int(7), "translate"));  // no ObjectOps
+    CHECK(!runThrows(ctx, "h = {}"));         // ensure a program is compiled
+    QValue handlers = ctx.get("h");
+    CHECK(!ctx.hasMethod(handlers, "onLoad"));  // empty table: no member
+    // Table closures take self as the first argument (the same convention
+    // as `t.f()` in script: TABGET -> BoundMethod -> CALLCLOS passes self).
+    CHECK(!runThrows(ctx, "h.onLoad = (self, a, b)[] { return a + b }"));
+    CHECK(ctx.hasMethod(handlers, "onLoad"));   // table closure
+    QValue r = ctx.callMethod(handlers, "onLoad", {QValue::Int(2), QValue::Int(3)});
+    CHECK(r.asInt() == 5);                      // self passed as first arg
+    CHECK(!runThrows(ctx, "h.n = 1"));
+    CHECK(!ctx.hasMethod(handlers, "n"));       // member exists, not callable
+    bool threw = false;
+    try {
+      ctx.callMethod(handlers, "nope", {});
+    } catch (const QLangError &) {
+      threw = true;
+    }
+    CHECK(threw);                               // unknown method throws
+    threw = false;
+    try {
+      ctx.callMethod(QValue::Int(7), "f", {});
+    } catch (const QLangError &) {
+      threw = true;
+    }
+    CHECK(threw);                               // non-object value throws
+  }
+
+  // 20. callMethod on an external object dispatches ops->callMethod (zero
+  // VM call sites in v1 — this wrapper is the only caller).
+  {
+    auto p = std::make_shared<Point>(10, 20);
+    QValue ext = qval_external_borrowed<Point>(pt, std::weak_ptr<Point>(p));
+    ctx.callMethod(ext, "translate", {QValue::Int(5), QValue::Int(-5)});
+    CHECK(p->x == 15 && p->y == 15);
+    bool threw = false;
+    try {
+      ctx.callMethod(ext, "warp", {});
+    } catch (const QLangError &) {
+      threw = true;
+    }
+    CHECK(threw);  // "no method 'warp' ..." — Q20: throw, mirroring emitSignal
+  }
+
   if (failures) {
     printf("%d FAILURES\n", failures);
     return 1;

@@ -620,7 +620,7 @@ better encoding
 
 ## opCode scope
 
-|opCode familiy|type|
+|opCode family|type|
 |-|-|
 |mov, movi, movc|copy 
 |add, addi, addc| add
@@ -653,7 +653,7 @@ extra byte (e):
       value 0 register 0-255
       value 1 extended register (2 bytes)
       value 2 extended register (4 bytes) // 
-   bit 2-3 (deternine right operand)
+   bit 2-3 (right operand type)
       value 0 right operand immediate
       value 1 right operand register
       value 2 right operand const pool
@@ -730,6 +730,11 @@ these new encodings reduce the number of active temporary registers
 ## constant pool
 
 constant in the pool must have unique values. duplicated entries should be folded into a single one.
+
+
+## bytecode encoding and tests
+
+all tests will have to validated again whenever new encoding guidelines are implemented.
 
 ## bytecode serialization
 

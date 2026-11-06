@@ -254,8 +254,26 @@ namespace qlang
       std::string method;  // string-slot form: the method name (empty otherwise)
     };
 
+    // Event-handler call surface (docs/EVENT_HANDLERS.md §4): thin wrappers
+    // over ObjectOps, generic — they know nothing about handlers, levels, or
+    // types. Host-only: the VM does not call ops->callMethod in v1 (method
+    // calls are TABGET -> BoundMethod -> CALLCLOS).
+
+    // True when `obj` resolves `name` to a callable member (a Function or a
+    // BoundMethod). Values without ObjectOps (numbers, strings, arrays, ...)
+    // and non-callable members are false; never throws.
+    bool hasMethod(const QLangValue &obj, const std::string &name) const;
+    // Dispatch `obj.name(args)` through the value's ObjectOps::callMethod and
+    // return the result: the method receives the script-visible first
+    // argument (self / the statics anchor), then `args` — the same convention
+    // as `obj.name(args)` in script. Throws QLangError when the value has no
+    // object ops or `name` is not a callable member (mirrors emitSignal's
+    // failure mode); errors raised inside the method propagate.
+    QLangValue callMethod(const QLangValue &obj, const std::string &name,
+                          const std::vector<QLangValue> &args);
+
     // True when the external object's type declares a signal named `name`
-    // (mirrors hasMethod for the event-handler contract).
+    // (mirrors hasMethod above, which this pair predates).
     bool hasSignal(const QLangValue &obj, const std::string &name) const;
     // C++-side emit: same checks and delivery rules as script `emit`.
     void emitSignal(const QLangValue &obj, const std::string &name,
