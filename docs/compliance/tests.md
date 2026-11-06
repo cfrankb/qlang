@@ -9,20 +9,20 @@ Phases 0–5, not from the legacy monolith.
 
 | Requirement (15-tests.md) | Status | Evidence |
 |---|---|---|
-| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (22 C++ harnesses), `tests/scripts/` (21 `.ql`), `tests/perf/`; `examples/` holds demos only — `hello.cpp` (smoke app) + `qlang_run.cpp` (runner) |
+| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (23 C++ harnesses), `tests/scripts/` (21 `.ql`), `tests/perf/`; `examples/` holds demos only — `hello.cpp` (smoke app) + `qlang_run.cpp` (runner) |
 | Tests run after every task (regression gate) | ✓ | ctest is the gate (AGENTS.md "Build & test"); CI on every push to `main` |
-| Regression tests exist | ✓ | 21 script regressions (`script_*`, driven by `qlang_run`) + all 22 unit harnesses |
-| Unit tests exist (features + edge cases) | ✓ | 22 unit suites — see ctest matrix below |
+| Regression tests exist | ✓ | 21 script regressions (`script_*`, driven by `qlang_run`) + all 23 unit harnesses |
+| Unit tests exist (features + edge cases) | ✓ | 23 unit suites — see ctest matrix below |
 | Performance tests: immutable baseline for parser/compiler/execution time, logged and compared | ✓ | `tests/perf/perf_bench.cpp` + committed `tests/perf/baseline.json`; ctest `perf` gate (±20% / 0.5 ms) |
 | GitHub CI: library + smoke app + test suite against `msvc`, `g++`, `mingw`, `wasm`, `clang` | ✓ | three workflows, per the spec's "three separate ci/cd yaml" — see CI matrix |
 | Running on C++20 | ✓ | `CMAKE_CXX_STANDARD 20` (root `CMakeLists.txt`) |
 
-### Layout (verified 2026-11-05)
+### Layout (verified 2026-11-06)
 
 ```
 tests/
   unit/     spec_check.cpp spec_check2.cpp spec_cast_test.cpp gen_test.cpp
-            range_check.cpp codec_check.cpp encoding_test.cpp
+            range_check.cpp codec_check.cpp encoding_test.cpp encoding_v6_test.cpp
             class_str_test.cpp class_static_test.cpp signal_test.cpp
             test_module.cpp test_external.cpp test_inject.cpp test_dollar_operator.cpp
             test_native.cpp test_call.cpp
@@ -39,9 +39,9 @@ tests/
 `examples/` retains only real demos: `hello.cpp` (smoke app) and `qlang_run.cpp`
 (script runner / smoke-test app).
 
-### ctest matrix — 46 entries (46/46 green, 2026-11-05)
+### ctest matrix — 47 entries (47/47 green, 2026-11-06)
 
-Unit (22):
+Unit (23):
 
 | ctest | binary | source | result |
 |---|---|---|---|
@@ -59,6 +59,7 @@ Unit (22):
 | `signal` | `signal_test` | `tests/unit/signal_test.cpp` | 18 passed (Round 40; `docs/spec/17-signals.md`) |
 | `codec` | `codec_check` | `tests/unit/codec_check.cpp` | 142 checks passed (incl. 15 `deepcopy` cases, Round 42; 19 `indexget`/`indexput` cases, Round 51) |
 | `encoding` | `encoding_test` | `tests/unit/encoding_test.cpp` | 41 checks passed |
+| `encoding_v6` | `encoding_v6_test` | `tests/unit/encoding_v6_test.cpp` | 34249 checks passed (Round 55; v6 2/2/4 modifier byte, `*V6` codec — additive, v5 codec untouched) |
 | `external` | `test_external` | `tests/unit/test_external.cpp` | 49 checks passed (incl. `registerEnum` injection, Round 41) |
 | `test_inject` | `test_inject` | `tests/unit/test_inject.cpp` | `ALL PASS` |
 | `test_dollar_operator` | `test_dollar_operator` | `tests/unit/test_dollar_operator.cpp` | 8 passed |
@@ -69,7 +70,7 @@ Unit (22):
 | `phase5_api` | `phase5_api` | `tests/unit/phase5_api.cpp` | 17 checks (step budget, threading contract) |
 | `value_semantics` | `value_semantics` | `tests/unit/value_semantics.cpp` | 40 checks (Round 43 share-by-default array/set/blob: aliasing on assign/call, literal freshness, `deepcopy` independence + array cycles, `+`/`cast` freshness, `a += a`, `string` still a value type) |
 
-Counted unit cases: **1002** (529+33+20+7+5+22+13+17+18+49+8+142+41+8+3+7+23+17+40), plus
+Counted unit cases: **35251** (529+33+20+7+5+22+13+17+18+49+8+142+41+34249+8+3+7+23+17+40), plus
 the three `ALL PASS` gate suites (`test_native`, `test_call`, `test_inject`).
 
 Script (21): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
@@ -137,7 +138,7 @@ gate or `./update-doc-hashes.sh --check` directly (Round 49).
 Triggers: `ci.yml` and `ci-wasm.yml` on push to `main`; `ci-msvc.yml` on push to
 `master` (the branch rename is still pending — Round 48).
 
-`-E perf` is a **regex**, so the clang and MSVC jobs run 44 of the 46 entries: it
+`-E perf` is a **regex**, so the clang and MSVC jobs run 45 of the 47 entries: it
 drops `perf` **and** `script_perf_stress`.
 
 The `windows-latest` image sets `core.autocrlf=true` in git's system config, so

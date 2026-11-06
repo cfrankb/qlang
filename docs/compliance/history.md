@@ -1,3 +1,68 @@
+## Round 55 (2026-11-06)
+
+**v6 encoding layer — milestone 1 of `docs/plans/encoding-v6-and-indirect-plan.md`
+(A5): the 2/2/4 modifier byte, the immediate set and a `*V6` codec land
+*additively*, beside the shipped v5 ones. Nothing emits or decodes v6 yet.**
+`include/qlang/QLangBytecode.h`, `src/QLangBytecode.cpp`, new
+`tests/unit/encoding_v6_test.cpp`, `CMakeLists.txt`,
+`docs/plans/{encoding-v6-and-indirect,missing-features}.md`,
+`docs/compliance/{status,tests,harness,history,README}.md`.
+**No language change; `.qlc` stays v5.**
+
+- **Scope.** Round 54 finalized the spec and wrote the plan; this round implements
+  the plan's first milestone — the **encoding layer only**: the vocabulary
+  (`RightKind`, `OperandWidth`, `ImmForm`, `ImmPayload`), the modifier-byte
+  accessors (`makeModifierV6`, `modifierLeftForm` / `modifierRightKind` /
+  `modifierRightForm`), the width and form tables (`operandWidthBytes`,
+  `immediateFormBytes`, `immediateFormType`), the per-opcode **permitted-kind**
+  table (`permittedKinds`, `kindPermitted`), the **in-place arity** predicate
+  (`isInPlaceForm`), the base-form equivalences (`baseModifierV6`: `0x04` /
+  `0x40` / `0x08`, `CALL` → `0x50`, the jump class and `nop` → `kNoBaseModifier`)
+  and `encodeInstructionV6` / `decodeInstructionV6` / `instructionSizeV6`. The v5
+  codec, `kQlcVersion = 5` and every call site are **untouched** — the diff in
+  `QLangBytecode.cpp` is two pure insertions.
+- **Two deviations from the plan text, both forced by the encoding itself.**
+  (1) `instructionSizeV6(op, **escaped**, e)` takes an explicit escape flag: under
+  2/2/4 **`e = 0x00` is a legal modifier** (kind immediate, form `u8` — the only
+  way to fit `mov r3, 200` in one operand byte), so v5's
+  "`modifier == 0` ⇒ base form" convention cannot be reused; the caller knows
+  whether the opcode byte had bit 7 set and must say so. (2) An **unescaped
+  `CALL`** is rejected in both codec directions — `CALL` is always escaped with
+  `e = 0x50` (2-byte signed function id + 1-byte argument count), so accepting the
+  bare identity would silently decode garbage. Both are recorded in §6.1 of the
+  plan and in the `status.md` open item.
+- **Sizes verified** (op + `e` + `a` + operand bytes): zero-byte immediate **3 B**,
+  `i8` 4 B, `i16` 5 B, `i32` 7 B, `i64` and `float` **11 B**, `CALL` 6 B (7 with a
+  word-width `a`); escaped `mov r3, r7` 4 B vs 3 B in the base form. The plan's
+  §2.9 example table was wrong in seven rows (it still carried v5 nibble
+  modifier bytes) and is corrected, with `mov r3, 200` (`e = 0x00`) and
+  `mov r3, 4000000000` (`e = 0x20`) added.
+- **New `encoding_v6` suite — 34249 checks** (`encoding_v6` ctest entry): typed
+  round-trips for every immediate form, size/encode/decode agreement, reserved
+  kind `3` and forms `12`–`15` rejected, permitted-kind enforcement per opcode
+  class, base forms **byte-identical to v5**, truncated-stream and
+  out-of-range-function-id rejection, and an **exhaustive sweep** of all 73
+  opcodes × 256 modifier bytes — **1756 accepted / 14138 rejected**, every
+  accepted pair cross-checked between `instructionSizeV6`, the encoder and the
+  decoder.
+- **Pre-existing defect fixed:** four `Bytecode::name(...) == "literal"`
+  **pointer** comparisons in `tests/unit/codec_check.cpp` (comparing a
+  `const char*` against a string literal — never true). Reproduced failing on a
+  clean tree (`git stash -u`) before any of this round's changes, so it is not a
+  regression introduced here; now `std::strcmp`. The 142-check tally is unchanged.
+- **Verification.** `cmake -B build && cmake --build build` clean;
+  `ctest --test-dir build` **47/47** green (`encoding_v6` added; the v5 pipeline
+  is untouched, so every pre-existing suite had to stay green by construction).
+  Formatting checked per-file with `clang-format --lines=…` on the diff only — a
+  blanket `clang-format -i` on the new test file was tried and reverted (it
+  explodes the braced-init tables and the repo has hundreds of pre-existing
+  violations). Tally **1002 → 35251** counted unit cases; `tests.md` 22 → 23
+  harnesses, 46 → 47 entries; `docs/compliance/README.md` "last audit" → Round 55.
+- **Not in this round (milestones 2–4):** the compiler's fusion sites, the VM
+  dispatch and the `qlang_run` disassembler still emit/decode v5; `.qlc` is still
+  v5; `eqf`/`ltf`/`gtf`/`ltef`/`gtef`/`tst`/`decl` are not appended; no behavior
+  harness cases.
+
 ## Round 54 (2026-11-06)
 
 **A5 extended-encoding spec finalized: the modifier byte settled as 2/2/4, the
