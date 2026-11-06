@@ -616,7 +616,23 @@ better encoding
 ```
 
 
-## encoding proposal
+## encoding extended
+
+## opCode scope
+
+|opCode familiy|type|
+|-|-|
+|mov, movi, movc|copy 
+|add, addi, addc| add
+|sub, subi, subc| sub
+|jmp|jump
+|ja, jb, jae, jbe|conditional jump
+| jl, jg, jle, jge|conditional jump
+| je, jne|conditional jump
+|cmp, cmpi|comparison (numbers only)
+|eq, lt, gt, lte, gte|comparison (general)
+
+### bytecode encoding
 
 [docs/plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md)
 
@@ -629,14 +645,19 @@ top bit of opCode byte is set to denote variants
 
 opCode 1 byte (0-127) are opCode value. if top opCode top bit is set then an extra byte is added next to it .
 extra byte (e):
-- if opCode jmp
+- if opCode jmp and conditional jmp (jne, je, ja etc)
    e = 0 => jmp16 (2 byte) relative address
    e = 1 => jmp32 (4 byte) relative  address
-- if opCode movi, addi, subi, movc, cmp, cmpi etc
-   bit 0-3 left operand
+- if opCode mov, movi, movc, addi/addc, subi/subc,  cmp/cmpi, eq, lt, gt, etc
+   bit 0-1 left operand (always a register)
       value 0 register 0-255
       value 1 extended register (2 bytes)
-      value 2 extended register (4 bytes) // future version
+      value 2 extended register (4 bytes) // 
+   bit 2-3 (deternine right operand)
+      value 0 right operand immediate
+      value 1 right operand register
+      value 2 right operand const pool
+      value 3 reserved
    bit 4-7 right operand
       if constant (immediate)
          value 0 => 1 byte   (unsigned)
@@ -648,8 +669,13 @@ extra byte (e):
          value 6 => 4 bytes  (signed)
          value 7 => 8 bytes  (signed)
          value 8 => 8 bytes  (float) // future version
-         value 9 => 1 byte   (bool)  // future version
-         value 10 => 0 byte  (nil)   // future version
+         value 9 => 0 byte   (bool:false)  // future version
+         value 10 => 0 byte   (bool:true)  // future version
+         value 11 => 0 byte  (nil)   // future version
+         value 12 reserved
+         value 13 reserved
+         value 14 reserved
+         value 15 reserved
       else if register
         value 0 register 0-255 (1 byte)
         value 1 extended register (2 bytes)
@@ -659,6 +685,47 @@ extra byte (e):
         value 1 extended constant (2 bytes)
         value 2 extended constant (4 bytes) // future version
 ```
+### extended OpCode eq, lt, gt, lte, gte
+
+`opCode eq` is different from `shared registers eq`
+
+`shared registers` are defined elsewhere in this document
+
+|opCode|reg eq|reg lt|reg gt|
+|-|-|-|-|
+|eq|1|0|0
+|lt|0|1|0
+|gt|0|0|1
+|lte|1|1|0
+|gte|1|0|1
+
+once the extended eq, lt and gt have set the `shared registers` then a follow up conditional jump is possible (je, jne, ja, jb, jbe, jl, jg etc).
+
+
+```
+current reg, reg (comparuson)
+
+0075  eq           11, 0c, 0d ; r17 = (r12 == r13)
+0079  jmpfalse     11, 03 -> 007f ; if !truth(r17) pc += 3
+
+
+new encoding
+
+0074 eq   e=0x04     0c, 0d; r12 == r13
+0079 jne             03 -> 007f ; pc += 3
+
+
+if the right operand is an immediate
+
+new encoding
+
+0074 eq   e=0x00     0c, 5; r12 == 5
+0079 jne             03 -> 007f ; pc += 3
+
+
+
+```
+these new encodings reduce the number of active temporary registers
 
 ## constant pool
 

@@ -37,9 +37,4 @@ class model works unchanged on external types.
 
 table key order is implementation defined (depends on the underlying container).
 
-# warning 
-
-compiler and interpreter warning can be toggled off.
-
-all warnings defered until further notice.
 

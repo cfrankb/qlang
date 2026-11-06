@@ -5,9 +5,21 @@ Created 2026-11-04 (post-Round 38 audit). **Re-audited 2026-11-05 (post-Round
 the whole of A4 `deepcopy`/value semantics; those items moved to §D, the phases
 were renumbered, and C8 (module search paths) was added. Overview/roadmap for
 every spec'd-but-unimplemented item tracked in `docs/compliance/status.md`
-(Open Items + Not Yet Implemented). This is an **overview**: each phase gets
-a detailed implementation plan before work starts (precedent: the movi/addi/
-subi plans in `docs/plans/archive/`).
+(Open Items + Not Yet Implemented). Unresolved decisions are collected in
+[Open questions](#open-questions) (Q1–Q28), each with a default to adopt.
+This is an **overview**: each phase gets a detailed implementation plan before
+work starts (precedent: the movi/addi/subi plans in `docs/plans/archive/`).
+
+**Updated 2026-11-06 — warnings are now owned by strict typing (C1).** The
+uncommitted spec edits delete `11-external-types.md` `# warning` (the
+toggleable-warnings section B1 was anchored to, incl. "all warnings defered
+until further notice") and add `16-strict_typing.md`
+`## redeclared variable within a scope`: a duplicate `local`/`let` in one scope
+is silent at level 0, `warning: duplicated variable "a" declaration within
+scope` at level 1, `error: …` at level 2. B1/B2 are therefore folded into C1
+(Phase 3 item 2); the B numbering is kept for `status.md` cross-references.
+`05-operators.md` `## operator $$` still calls the duplicate an unconditional
+"compile warning" — spec drift, **Q28**.
 
 ## Inventory
 
@@ -22,18 +34,23 @@ value semantics (Rounds 42–45, plan closed Round 45) are **implemented** — s
 §D. The numbering is kept so the round records and `status.md` cross-references
 stay readable.
 
-### B. Foundations (block other work)
+### B. Foundations (now owned by C1 — strict typing)
 
 | # | Item | Spec anchor | Blocks |
 |---|------|-------------|--------|
-| B1 | Warning infrastructure (toggleable warnings) | `11-external-types.md` `# warning` | B2 |
-| B2 | Duplicate-declaration compile warning | `03-declarations.md` (dup-decl example), `05-operators.md` `## operator $$` (declaration-state rules) | — |
+| B1 | Warning emission infrastructure | *was* `11-external-types.md` `# warning` — **section deleted (2026-11-06, uncommitted)**; no standalone anchor remains | B2 (as a C1 dependency: level 1 must be able to warn) |
+| B2 | Duplicate-declaration diagnostic (level-dependent) | `16-strict_typing.md` `## redeclared variable within a scope` (new), `03-declarations.md` dup-decl example ("possible warning or error depending on strict typing guidelines"), `05-operators.md` `## operator $$` (declaration-state rules — wording drift, **Q28**) | — |
+
+The former dependency `B1 ──> B2` (warnings must be toggleable before the
+dup-decl check can re-land) is superseded: the strict-typing level is the
+control, so both land inside C1 (Phase 3 item 2). Whether an independent
+warning toggle still exists is **Q27**.
 
 ### C. API surface (spec'd "needed", undefined or partial)
 
 | # | Item | Spec anchor | Notes |
 |---|------|-------------|-------|
-| C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | draft spec — C++ API "to be provided"; examples show runtime exceptions at call/return sites |
+| C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | draft spec — C++ API "to be provided"; examples show runtime exceptions at call/return sites; **now also owns the duplicate-declaration diagnostic (B2) and warning emission (B1)** |
 | C3 | External-type wrappers: `hasMethod`/`callMethod` | `11-external-types.md` | event-handler contract; `ops->callMethod` has zero VM call sites in v1 |
 | C5 | Inheritance (`ObjectOps::base`) | `10-classes.md` v1 restrictions, `EXTERNAL_TYPES.md` §10.3 | reserved, returns null; base-chain walk deferred to v2 |
 | C7 | Enum-name string form for enum-valued properties | `EXTERNAL_TYPES.md` §10.5 | no dispatch point sees both field value and type context |
@@ -104,39 +121,207 @@ signals (Round 40) are **implemented** — see §D.
   C++ `ctx.hasSignal()`/`ctx.emitSignal()`. 18 checks in the dedicated
   `signal_test` suite.
 
+## Open questions
+
+Decisions that are **not settled by the spec** and block (or shape) the phase that
+owns them. Each carries a **default** — the choice to adopt if nobody objects, so
+an item can start without a design round-trip. Resolving one means editing the
+owning spec module (then re-hashing it) or recording the decision in
+`docs/compliance/history.md`; this section is the single index.
+
+### B1 / B2 — warning infrastructure (owned by C1 since 2026-11-06)
+
+The `# warning` section that anchored B1 is deleted; the only warning the spec
+now names is the level-1 duplicate-declaration diagnostic in
+`16-strict_typing.md`. These questions survive as C1 design inputs.
+
+- **Q1 control granularity** — the deleted `# warning` section said only
+  "compiler and interpreter warning can be toggled off"; the surviving control
+  is the strict-typing level (0 silent / 1 warn / 2 error). One global switch,
+  per-warning ids/categories, or none beyond the level? See **Q27**.
+  **Default:** the level is the only control; categories only once a second
+  warning class exists.
+- **Q2 default state** — what does a fresh context get? **Default:** level 0
+  (the spec: "type declarations are optional. no enforcement"), so the
+  duplicate-declaration diagnostic is off until the host raises the level.
+- **Q3 destination** — AGENTS.md routes diagnostics through the gated `trace()`
+  helper, but a warning is a host-visible diagnostic, not a debug trace, and
+  `trace()` writes to stderr. `trace()` only, a host-readable list
+  (`ctx.warnings()`), or both? **Default:** both — collect on the context and
+  echo through `trace()`; never throw.
+- **Q4 runtime warnings** — the deleted section promised "interpreter warning";
+  the level table's only warning is compile-time (a re-declaration), and the
+  level 1/2 type mismatches are exceptions, not warnings. **Default:** v1 is
+  compile-only; runtime warnings return if a future spec names one.
+- **Q5 what counts as a duplicate (B2)** — the level table says "within a
+  scope"; the reverted Round 25 check targeted an explicit `local`/`let`
+  naming a name already declared *in the same scope*; block scopes exist
+  since Round 10 (`m_blockScopes`), so does a nested-block re-declaration
+  warn? And is the `$$` spec's "a later explicit `local`/`let` for the same
+  name is a compile warning" the same check or a second one? **Default:**
+  same-scope only; nested shadowing stays silent; one shared check (the `$$`
+  wording aligns via **Q28**).
+
+### A3 — `$$` indirect operator
+
+- **Q6 where the declaration bit lives** — spec note 2 puts it "on the existing
+  store/init opcode", but the instruction format has no spare bit: the base
+  (non-escaped) form carries no modifier byte, and the escaped modifier's two
+  nibbles are fully consumed by the operand-width forms
+  (`src/QLangBytecode.cpp:134-170`). Either a VM-side per-frame side table
+  (no encoding change, `.qlc` untouched) or a format widening (breaking,
+  version bump). **Default:** the side table.
+- **Q7 declaration-bit granularity** — per register or per declaration site?
+  Registers are reused across branches and loop iterations, and the spec's
+  branch example (`$$a = 1` legal only if `cond` ran) is per-*event* state.
+  **Default:** a per-frame bitset indexed by declaration-site id, cleared when
+  the frame is created and set when the declaration instruction executes.
+- **Q8 frame name map vs block scope** — spec note 1 says the map covers "every
+  name directly declared in the frame" (frame-wide), while direct references
+  have resolved block-scoped since Round 10 and the spec's "no block scope"
+  clause was removed (`dde51e4`). Must the map mirror the scope stack?
+  **Default:** frame-wide map + declaration bit, as spec note 1 reads; the
+  spec's existing "asymmetry note" already documents that direct and indirect
+  resolution differ.
+- **Q9 opcode names** — the spec says `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE`;
+  the reserved placeholders are `Opcode::INDGET`/`Opcode::INDPUT` with mnemonics
+  `indget`/`indput` (`include/qlang/QLangBytecode.h:123-124`,
+  `src/QLangBytecode.cpp:796-797`). **Default:** keep the implemented names and
+  align `05-operators.md` (spec edit → re-hash).
+- **Q10 operand count** — the spec gives each opcode two operands
+  (`nameReg → dstReg`, `nameReg, srcReg`), but the placeholders sit in the
+  3-operand default class (`src/QLangBytecode.cpp:111-113`). **Default:** move
+  them to the 2-operand class — they were never emitted, so there is no
+  compatibility cost — and update the `qlang_run` pseudo-text.
+- **Q11 does the literal form ship?** — spec note 4 says the compile-time fast
+  path applies "if a literal form `$$"name"` is ever supported", i.e. the syntax
+  is not committed; `$$` is otherwise documented as taking a string *variable*.
+  **Default:** v1 supports only the dynamic form (`$$a`); the fast path is left
+  out, so no parser change is needed.
+
+### C1 — strict typing (`16-strict_typing.md` is a draft)
+
+- **Q12 the coercion table contradicts the examples** — `## rules` allows
+  same-group coercion "of smaller storage size" (`:59-60`), yet the examples
+  reject `long` for an `int` parameter ("storage for age is too large for int",
+  `:33`) **and** `byte` for an `int` ("age is a byte not an int", `:37-38`).
+  Both cannot hold. **Default:** the examples win — exact type match — and the
+  coercion table is rewritten to say so.
+- **Q13 `nil` against a declared type** — "nil type is implicit and doesn't need
+  to be declared" is about *declarations*, not about passing `nil` to `age:int`.
+  **Default:** `nil` is accepted for any declared type.
+- **Q14 level 2 "throw an error if type is not declared"** — compile-time or
+  runtime? The signature is statically visible. **Default:** compile error at
+  the definition; level 1/2 *mismatches* stay runtime (the examples show runtime
+  exceptions at call/return sites).
+- **Q15 who enforces** — native functions and `ctx.call()` entry points bypass
+  the compiler. Are declared parameter types checked in the VM at every call
+  boundary, or only where the compiler sees the call? **Default:** at the call
+  boundary in the VM, so native and host-invoked calls are covered too.
+- **Q16 return checks** — same rules as parameters? The spec's
+  `sum_int2int(...) -> int` with no `return` yields "exception: function must
+  return an int" — is that a compile error or a runtime error on returning
+  `nil`? **Default:** same rules as parameters; runtime error when the frame
+  returns without a value.
+- **Q17 interaction with `cast<>`** — does an explicit cast satisfy a declared
+  parameter type (i.e. is it the only sanctioned conversion)? **Default:** yes —
+  `cast<>` yields the target type, so the check sees an exact match; without a
+  cast nothing converts.
+- **Q18 class / external declared types** — exact declared type only, or accept
+  a derived value once `ObjectOps::base` (C5) exists? **Default:** exact in v1;
+  base-chain acceptance lands with C5.
+- **Q27 does an independent warning toggle still exist?** — the deleted
+  `11-external-types.md` `# warning` section specified a toggle independent of
+  the strict-typing level; the level table now gates the only spec'd warning by
+  itself. Keep a separate `setWarningsEnabled(bool)` on top of the level, or is
+  the level the sole control? **Default:** the level is the sole control — no
+  independent toggle; re-introduce one only when a warning class exists outside
+  the strict-typing levels (cf. **Q1**).
+- **Q28 `$$` spec wording drift** — `05-operators.md` `## operator $$`
+  ("declaration state") still says "a later explicit `local`/`let` for the same
+  name is a compile warning", i.e. unconditional, while the level table makes
+  it silent/warning/error by level. Spec edit aligning the sentence to
+  `16-strict_typing.md` `## redeclared variable within a scope` (then re-hash).
+  **Default:** align the wording; one shared check (**Q5**).
+
+### C3 — `hasMethod` / `callMethod`
+
+- **Q19 who may call `ops->callMethod`** — it is present on every ops table but
+  has zero VM call sites in v1 (method calls are `TABGET` → `BoundMethod` →
+  `CALLCLOS`). Host-only wrapper, or reroute VM dispatch through it?
+  **Default:** host-only; the VM path is unchanged.
+- **Q20 unknown-method failure** — throw `QLangError` or return nil?
+  **Default:** throw, mirroring `emitSignal` (`include/qlang/QLangContext.h:261`).
+
+### C5 — inheritance (`ObjectOps::base`)
+
+- **Q21 the whole design** — base-clause syntax, field/method resolution order
+  and shadowing, constructor chaining, single vs multiple inheritance, and
+  whether `base()` returns the immediate base or a chain head
+  (`include/qlang/QLangObjects.h:60`, reserved, returns null;
+  `EXTERNAL_TYPES.md` §10.3 defers the base-chain walk to v2). **Default:**
+  single inheritance, derived-wins lookup, explicit base-constructor call,
+  `base()` = the immediate base ops.
+
+### C7 — enum-name string form
+
+- **Q22 where the enum type context comes from** — the known blocker is that no
+  dispatch point sees both the field value and its type
+  (`EXTERNAL_TYPES.md` §10.5: `str(e.options)` sees a bare `Int`). Carry the
+  enum table on the property binding, or tag the value? **Default:** property
+  binding metadata — value tags are shared with plain `Int`.
+
+### C8 — module search paths
+
+- **Q23 does C8 include loading `.ql` source?** The engine has no source-file
+  loading at all: `examples/qlang_run.cpp:1074` (`std::ifstream`) is the only
+  `.ql` reader and the library reads only `.qlc` (`src/QLangBytecodeIO.cpp`).
+  The spec's "search for `[modulename].ql`" implies compile-from-file.
+  **Default:** C8 ships the path list, the callback and a resolver returning the
+  module's source text; the compile-from-source entry point is tracked with
+  `external-modules-plan-v3.md`.
+- **Q24 precedence** — registered C++ modules (`ctx.registerModule()`), the
+  callback and the path list: which wins? **Default:** registered module →
+  callback → paths in order.
+- **Q25 callback failure and payload** — empty string or throw for "not found",
+  and is the returned string source text or `.qlc` bytes? **Default:** empty
+  string means not found; source text.
+- **Q26 caching and cycles** — is a resolved module compiled once per context or
+  per compile, and what happens on an import cycle? **Default:** cache per
+  context keyed by resolved name; a cycle is an error.
+
 ## Phases
 
-### Phase 1 — Warning infrastructure
+### Phase 1 — Warning infrastructure (folded into C1 — 2026-11-06)
 
-1. **B1 warnings** — warning emission path distinct from errors (warnings do
-   not throw; diagnostics route through the gated `trace()` helper per
-   AGENTS.md); toggle on `QLangContext` (`setWarningsEnabled(bool)` + a QLang
-   native mirroring `set_verbose`). Spec note: "all warnings defered until
-   further notice" — the toggle ships with zero active warnings.
-2. **B2 duplicate-declaration warning** — re-land the reverted Round 25 check
-   (explicit `local`/`let` targeting a name already declared in the same
-   scope → compile warning) on top of the B1 toggle. Tests: `spec_check2`
-   (warning emitted, suppressed when toggled off, no warning for plain
-   assignment crossing). Effort: 1–2 days total.
+The former items 1 (B1 warning infrastructure) and 2 (B2 duplicate-declaration
+warning) no longer stand alone: the `# warning` section they were anchored to
+is deleted and the diagnostic is now specified by strict-typing level
+(`16-strict_typing.md` `## redeclared variable within a scope`). Both land
+inside C1 — see Phase 3 item 2. The B numbering is kept for `status.md`
+cross-references.
 
 ### Phase 2 — `$$` indirect operator (largest feature)
 
 3. **A3 `$$`** — per the spec's implementation notes:
    - per-frame name map (name → register, binding kind `var`/`const`/
      `function`/`lambda`, declaration bit) — the map lives on `Frame`, so the
-     read/write handlers sit in the single `runFrames()` dispatch loop;
+     read/write handlers sit in the single `runFrames()` dispatch loop; frame-wide
+     vs block-scoped coverage is **Q8**;
    - declaration bit as a flag on existing store/init opcodes (no new opcode
-     for declaration state);
+     for declaration state) — **not encodable in the current instruction
+     format**, see **Q6**/**Q7**; the default is a VM-side per-frame side table
+     keyed by declaration site instead;
    - **reuse the reserved `Opcode::INDGET` / `Opcode::INDPUT` placeholders**
      (`QLangBytecode.h:123-124`) rather than adding opcodes: they already carry
      fixed identities inside the defined range (`kOpcodeUsedCount` is 73,
      identities 0..72), the `indget`/`indput` mnemonics
-     (`QLangBytecode.cpp:796-797`), the 3-operand default arity and the
-     `qlang_run` pseudo-text — so **no identity is appended and
-     `kOpcodeUsedCount` does not change**. Round 51 deliberately disambiguated
-     `INDEXGET`/`INDEXPUT` from these placeholders. The spec's
+     (`QLangBytecode.cpp:796-797`), the 3-operand default arity (**Q10** decides
+     whether to keep it) and the `qlang_run` pseudo-text — so **no identity is
+     appended and `kOpcodeUsedCount` does not change**. Round 51 deliberately
+     disambiguated `INDEXGET`/`INDEXPUT` from these placeholders. The spec's
      `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE` names are the same pair; the spec
-     wording should be aligned to the implemented mnemonics.
+     wording should be aligned to the implemented mnemonics (**Q9**).
    - six-stage check pipeline with canonical `indirect variable error:`
      messages (string → identifier lexeme → reserved word → declared/visible
      → binding kind → local-only writes);
@@ -144,51 +329,71 @@ signals (Round 40) are **implemented** — see §D.
      `global`-exposed (global const visible everywhere);
    - no variable creation; functions/lambdas never targetable; const
      read-only; branch-dependent declarations can be `not declared`;
-   - optional compile-time fast path for `$$"literal"`.
-   Tests: dedicated suite (precedent: `class_static_test`) covering all six
-   pipeline stages, resolution order, declaration state, const/function
-   rejection. Effort: 1–2 weeks.
+   - optional compile-time fast path for `$$"literal"` — the spec calls the
+     literal form "if … ever supported", so whether the syntax ships at all is
+     open (**Q11**).
+ Tests: dedicated suite (precedent: `class_static_test`) covering all six
+ pipeline stages, resolution order, declaration state, const/function
+ rejection. Open questions: **Q6–Q11** — Q6 (declaration-bit encoding) gates the
+ whole design. Effort: 1–2 weeks.
 
-### Phase 3 — API surface
+### Phase 3 — API surface (absorbs the former Phase 1)
 
-4. **C1 strict typing** — step 1: finalize `16-strict_typing.md` (define the
-   `QLangContext` API, e.g. `setStrictTypingLevel(0/1/2)`). The spec's
-   examples show runtime exceptions at call and return sites, so
-   enforcement is **runtime**: the compiler records declared parameter/
-   return types, the VM checks them. Open questions to resolve in the spec:
-   the coercion table's "smaller storage size" must read "same or smaller"
-   (the examples accept `int` for an `int` parameter); level 2's "throw an
-   error if type is not declared" — compile-time or runtime; whether a
-   declared type accepts `nil`; whether return checks use the same coercion
-   rules; interaction with explicit `cast<>`. Step 2: implement — level 1
-   checks declared parameter types at call sites, level 2 enforces
-   declarations; nil implicit; coercion rules (signed/unsigned integer
-   narrowing only, no cross-sign, float/array/set/table/class exact).
-   Tests: `spec_check2` (mismatch per type family, narrowing accepted,
-   cross-sign rejected, return-type check, level 0/1/2 matrix). Effort:
-   1–2 days spec + ~1 week implementation.
-5. **C3 `hasMethod`/`callMethod` context wrappers** — add
+1. **C1 strict typing** — step 1: finalize `16-strict_typing.md` (define the
+   `QLangContext` API, e.g. `setStrictTypingLevel(0/1/2)`) and settle
+   **Q12–Q18, Q27–Q28**. Q12 gates everything: the draft's `## rules` coercion table
+   ("smaller storage size" within the signed/unsigned group) contradicts its own
+   examples, which reject `byte` for an `int` parameter — so the choice is
+   *narrowing within a group* vs *exact type match*. The examples show runtime
+   exceptions at call and return sites, so mismatches are checked at **runtime**
+   (the compiler records declared parameter/return types, the VM checks them;
+   who covers the native and `ctx.call()` paths is Q15, level-2 undeclared types
+   are Q14, return checks Q16). Step 2: implement level 1 (check declared
+   parameter/return types) and level 2 (undeclared types are an error), with
+   `nil` implicit (Q13), `cast<>` as the only conversion (Q17) and exact
+   class/external matching (Q18), plus the duplicate-declaration diagnostic
+   (item 2). Tests: `spec_check2` (mismatch per type family, the Q12 outcome
+   recorded explicitly, cross-sign always rejected, return-type check, level
+   0/1/2 matrix). Effort: 1–2 days spec + ~1 week implementation.
+2. **B2 duplicate-declaration diagnostic (re-lands inside C1)** — re-land the
+   reverted Round 25 check (explicit `local`/`let` targeting a name already
+   declared in the same scope) as a compiler-side check reading the context's
+   strict-typing level: level 0 silent, level 1
+   `warning: duplicated variable "a" declaration within scope`, level 2
+   `error: duplicated variable "a" declaration within scope`
+   (`16-strict_typing.md` `## redeclared variable within a scope`). Level 1
+   needs the warning emission path — distinct from errors, never throws,
+   routed through the gated `trace()` helper per AGENTS.md (the former B1;
+   **Q3**) — and no independent toggle (**Q27**). The `$$` spec's
+   "compile warning" sentence is aligned to the level table (**Q28**, spec
+   edit → re-hash). Tests: `spec_check2` (silent at level 0, warning at
+   level 1, error at level 2, no diagnostic for plain assignment crossing).
+   Open questions: **Q5** (what counts as a duplicate once block scopes
+   exist). Effort: ~1 day on top of C1.
+3. **C3 `hasMethod`/`callMethod` context wrappers** — add
    `QLangContext::hasMethod(obj, name)` / `callMethod(obj, name, args)`
    routing through `getObjectOps` → `ops->callMethod` (present on every ops
    table; the VM does not call it in v1 — method calls are
    `TABGET` → `BoundMethod` → `CALLCLOS`). This is the event-handler
    contract (`docs/EVENT_HANDLERS.md` §0); `hasSignal`/`emitSignal` (Round 40)
    already mirror the shape and cite `hasMethod` in a comment, so the pair
-   should land together with the comment made accurate. Tests: `test_external`
-   (hasMethod true/false, callMethod dispatch, unknown-method error).
-   Effort: small.
-6. **C5 inheritance (`ObjectOps::base`)** — `base` returns null today;
+   should land together with the comment made accurate. Open questions:
+   **Q19–Q20** (host-only wrapper vs rerouting VM dispatch; the unknown-method
+   failure mode). Tests: `test_external` (hasMethod true/false, callMethod
+   dispatch, unknown-method error). Effort: small.
+4. **C5 inheritance (`ObjectOps::base`)** — `base` returns null today;
    `10-classes.md` v1 restrictions reserve the hook and
    `EXTERNAL_TYPES.md` §10.3 defers the base-chain walk to v2. Needs a spec
-   first (base-clause syntax, field/method resolution order, constructor
-   chaining) — treat like C1 step 1. Effort: medium–large once specified.
-7. **C7 enum-name string form** — reverse lookup for enum-valued
+   first — **Q21** is the whole design (base-clause syntax, resolution order,
+   constructor chaining, single vs multiple inheritance) — treat like C1 step 1.
+   Effort: medium–large once specified.
+5. **C7 enum-name string form** — reverse lookup for enum-valued
    properties. Known blocker (`EXTERNAL_TYPES.md` §10.5): no dispatch
    point sees both the field value and its type context —
-   `str(e.options)` sees a bare `Int`. Needs a design decision (e.g. an
-   enum-typed property binding that carries the enum table) before
+   `str(e.options)` sees a bare `Int`. **Q22** is the design decision (enum
+   table on the property binding vs a value tag) and must be settled before
    implementation. Effort: small–medium once designed.
-8. **C8 module search paths + external search callback** — **new in the
+6. **C8 module search paths + external search callback** — **new in the
    Round 52 re-audit.** Spec `07-api.md` `## module search paths` ("API C++ will
    provide a means to set the search paths to find modules"; POC modules are
    single files, so resolution is `[modulename].ql` tried in each directory in
@@ -201,9 +406,10 @@ signals (Round 40) are **implemented** — see §D.
    `setSearchCallback(...)`) plus the `import` resolution path; no lexer, parser
    or VM change is implied. Prerequisite/front end for
    `docs/plans/external-modules-plan-v3.md` (import/export tables assume a module
-   can be *found* before it can be linked). Tests: `test_module` (+ a
-   `tests/scripts/` regression once `.ql` file loading exists). Effort:
-   small–medium.
+   can be *found* before it can be linked). Open questions: **Q23–Q26** — Q23
+   (does C8 also own compile-from-source?) decides the item's size, Q24–Q26 the
+   resolution contract. Tests: `test_module` (+ a `tests/scripts/` regression
+   once `.ql` file loading exists). Effort: small–medium.
 
 C2 enum injection (Round 41) and C6 signals (Round 40) are **implemented** — see
 §D and the detailed sections below.
@@ -220,7 +426,10 @@ Per the overview convention, each phase item gets a detailed plan before work
 starts. The two entries below are the detailed plans of items that have since
 landed (C2 Round 41, C6 Round 40) and are kept as the design record; C6's full
 plan lives in `docs/plans/archive/signals-implementation-plan.md`. The open
-items (B1/B2, A3, C1, C3, C5, C7, C8) still need theirs.
+items (A3, C1 — incl. the folded B1/B2 dup-decl work, C3, C5, C7, C8) still
+need theirs — each one opens by
+closing the **Q#**s its item points at (adopting the default is a valid answer;
+it just has to be recorded).
 
 ### C2 — Enum C++ injection API
 
@@ -322,7 +531,7 @@ main frame already aliases the global slots), `.qlc` format, opcodes.
 - **removal** — `remove("Animal")` → the next compile no longer sees `Animal`
   (unknown-enum error); `clear()` likewise.
 
-**Risks / open questions** (resolved at landing)
+**Risks / decisions** (all resolved at landing — not part of §Open questions)
 
 1. **Base type** — resolved: the API carries `baseType` (the draft's premise
    was wrong — `compileEnum` honors the declared base). v1 does **not**
@@ -371,12 +580,20 @@ declaration syntax. Key design points:
 ## Dependencies
 
 ```
-B1 (warnings) ──> B2 (dup-decl warning)
+C1 (levels + warning emission) ──> B2 (dup-decl diagnostic, Phase 3 item 2)
 spec finalization ──> C1 (strict typing)
 spec writing ──> C5 (inheritance)
 design decision ──> C7 (enum-name string form)
 C8 (module search paths) ──> external-modules-plan-v3.md (import/export tables)
 A3, C3, C8: independent of each other and of the above
+
+open questions gate the work (see §Open questions):
+  Q1–Q4  ──> C1 warning shape    Q5   ──> B2 dup-decl rule
+  Q6     ──> A3 encoding design  Q7–Q11 ──> A3 details
+  Q12    ──> C1 step 2           Q13–Q18 ──> C1 spec finalization
+  Q27    ──> C1 toggle decision  Q28  ──> $$ spec wording (spec edit → re-hash)
+  Q19–Q20 ──> C3 API shape       Q21 ──> C5 spec, Q22 ──> C7 design
+  Q23    ──> C8 scope            Q24–Q26 ──> C8 resolution contract
 
 landed since this plan was written: A1 + A2 (Round 39) · C6 (Round 40) ·
 C2 (Round 41) · A4 Phases 1–4 (Rounds 42–45) · C4 (Phase 3 host-API hardening)

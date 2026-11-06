@@ -90,7 +90,7 @@ if true {
 }
 
 t = 5
-local t = 9   # warning: duplicate declaration → compile warning
+local t = 9   # possible warning or error depending on strict typing guidelines
 
 # anonymous functions inside a table
 local events:table = {

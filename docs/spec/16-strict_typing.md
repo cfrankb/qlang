@@ -63,3 +63,16 @@ let hello_word = (name:str, age:int)[]->str{
 |set|only allow set|
 |table|only allow table|
 |class|objects of that give class
+
+## redeclared variables within a scope
+
+```
+local a
+local a
+```
+
+|enforcement level||
+|-|-|
+|0|no warning, no error|
+|1|warning: duplicated variable "a" declaration within scope|
+|2|error: duplicated variable "a" declaration within scope|
