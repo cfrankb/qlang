@@ -639,7 +639,7 @@ static void testNop() {
     // Identity, name, and size.
     check(static_cast<uint8_t>(Opcode::Nop) == 68,
           "nop: identity 68 (appended last)");
-    check(Bytecode::name(Opcode::Nop) == "nop", "nop: name");
+    check(std::strcmp(Bytecode::name(Opcode::Nop), "nop") == 0, "nop: name");
     check(isValidOpcode(Opcode::Nop), "nop: valid opcode");
     check(baseInstructionSize(Opcode::Nop) == 1, "nop: 1-byte base size");
 
@@ -731,7 +731,8 @@ static void testDeepcopy() {
     // Identity, name, validity, and size.
     check(static_cast<uint8_t>(Opcode::DEEPCOPY) == 70,
           "deepcopy: identity 70 (appended last)");
-    check(Bytecode::name(Opcode::DEEPCOPY) == "deepcopy", "deepcopy: name");
+    check(std::strcmp(Bytecode::name(Opcode::DEEPCOPY), "deepcopy") == 0,
+          "deepcopy: name");
     check(isValidOpcode(Opcode::DEEPCOPY), "deepcopy: valid opcode");
     check(baseInstructionSize(Opcode::DEEPCOPY) == 3,
           "deepcopy: 3-byte base size (op + 2 reg operands)");
@@ -1116,8 +1117,10 @@ static void testIndexSubscript() {
           "indexget: identity 71 (appended last)");
     check(static_cast<uint8_t>(Opcode::INDEXPUT) == 72,
           "indexput: identity 72 (appended last)");
-    check(Bytecode::name(Opcode::INDEXGET) == "indexget", "indexget: name");
-    check(Bytecode::name(Opcode::INDEXPUT) == "indexput", "indexput: name");
+    check(std::strcmp(Bytecode::name(Opcode::INDEXGET), "indexget") == 0,
+          "indexget: name");
+    check(std::strcmp(Bytecode::name(Opcode::INDEXPUT), "indexput") == 0,
+          "indexput: name");
     check(isValidOpcode(Opcode::INDEXGET) && isValidOpcode(Opcode::INDEXPUT),
           "index: both are valid opcodes");
     check(baseInstructionSize(Opcode::INDEXGET) == 4 &&

@@ -205,6 +205,225 @@ size_t constantAddressSize(int32_t index) {
 }
 
 // ---------------------------------------------------------------------------
+// v6 modifier-byte tables (docs/plans/encoding-v6-and-indirect-plan.md §2,
+// docs/spec/13-bytecodes.md `### bytecode encoding`)
+// ---------------------------------------------------------------------------
+
+uint8_t makeModifierV6(OperandWidth left, RightKind kind, uint8_t form) {
+  if (left == OperandWidth::Reserved)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "reserved left-operand addressing form");
+  if (kind == RightKind::Reserved)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "reserved right-operand kind");
+  if (kind == RightKind::Immediate) {
+    if (form >= static_cast<uint8_t>(ImmForm::Reserved))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "reserved immediate form");
+  } else if (form > static_cast<uint8_t>(OperandWidth::DWord)) {
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "reserved register/constant addressing form");
+  }
+  return static_cast<uint8_t>(
+      (static_cast<uint8_t>(left) << kModifierLeftShift) |
+      (static_cast<uint8_t>(kind) << kModifierKindShift) |
+      (static_cast<uint8_t>(form) << kModifierFormShift));
+}
+
+OperandWidth modifierLeftForm(uint8_t e) {
+  return static_cast<OperandWidth>((e >> kModifierLeftShift) &
+                                   kModifierLeftMask);
+}
+
+RightKind modifierRightKind(uint8_t e) {
+  return static_cast<RightKind>((e >> kModifierKindShift) & 0x03);
+}
+
+uint8_t modifierRightForm(uint8_t e) {
+  return static_cast<uint8_t>((e >> kModifierFormShift) & 0x0F);
+}
+
+size_t operandWidthBytes(OperandWidth w) {
+  switch (w) {
+  case OperandWidth::Byte:
+    return 1;
+  case OperandWidth::Word:
+    return 2;
+  case OperandWidth::DWord:
+    return 4;
+  case OperandWidth::Reserved:
+    break;
+  }
+  throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                   "reserved operand addressing form");
+}
+
+size_t immediateFormBytes(uint8_t form) {
+  switch (form) {
+  case 0:
+  case 4:
+    return 1;
+  case 1:
+  case 5:
+    return 2;
+  case 2:
+  case 6:
+    return 4;
+  case 3:
+  case 7:
+  case 8:
+    return 8;
+  case 9:
+  case 10:
+  case 11:
+    return 0; // the form *is* the value: bool false/true, nil
+  default:
+    break;
+  }
+  throw QLangError(QLangErrorKind::Runtime, 0, 0, "reserved immediate form");
+}
+
+ImmType immediateFormType(uint8_t form) {
+  switch (form) {
+  case 0:
+  case 1:
+  case 2:
+    return ImmType::Unsigned;
+  case 3:
+    return ImmType::Qword;
+  case 4:
+  case 5:
+  case 6:
+    return ImmType::Int;
+  case 7:
+    return ImmType::Long;
+  case 8:
+    return ImmType::Float;
+  case 9:
+  case 10:
+    return ImmType::Bool;
+  case 11:
+    return ImmType::Nil;
+  default:
+    break;
+  }
+  throw QLangError(QLangErrorKind::Runtime, 0, 0, "reserved immediate form");
+}
+
+RightKind defaultRightKind(Opcode op) {
+  if (isImmediateOpcode(op)) // movi / addi / subi / cmpi
+    return RightKind::Immediate;
+  switch (op) {
+  case Opcode::CALL: // always escaped; the function id is an immediate
+    return RightKind::Immediate;
+  case Opcode::MOVC:
+  case Opcode::MAKEFUNC:
+  case Opcode::MAKEGEN:
+    return RightKind::ConstPool;
+  default:
+    return RightKind::Register;
+  }
+}
+
+uint8_t baseModifierV6(Opcode op) {
+  if (isJumpOpcode(op) || op == Opcode::Nop)
+    return kNoBaseModifier;
+  if (op == Opcode::CALL)
+    return makeModifierV6(OperandWidth::Byte, RightKind::Immediate,
+                          static_cast<uint8_t>(ImmForm::I16));
+  RightKind kind = defaultRightKind(op);
+  return makeModifierV6(
+      OperandWidth::Byte, kind,
+      kind == RightKind::Immediate ? static_cast<uint8_t>(ImmForm::I8) : 0);
+}
+
+// The binary ALU and flag-compare families: the only opcodes whose right
+// operand may be an immediate or a pool entry *and* whose 3-operand form
+// collapses to the in-place 2-operand form when it is (plan §2.5, §2.6).
+static bool isAluOrFlagCompare(Opcode op) {
+  switch (op) {
+  case Opcode::ADD:
+  case Opcode::SUB:
+  case Opcode::MUL:
+  case Opcode::DIV:
+  case Opcode::MOD:
+  case Opcode::AND:
+  case Opcode::OR:
+  case Opcode::XOR:
+  case Opcode::SHL:
+  case Opcode::SHR:
+  case Opcode::LAND:
+  case Opcode::LOR:
+  case Opcode::EQ:
+  case Opcode::NE:
+  case Opcode::LT:
+  case Opcode::GT:
+  case Opcode::LE:
+  case Opcode::GE:
+  case Opcode::POW:
+  case Opcode::INx:
+  case Opcode::CMP:
+    return true;
+  default:
+    return false;
+  }
+}
+
+uint8_t permittedKinds(Opcode op) {
+  constexpr uint8_t kImm = 1u << static_cast<uint8_t>(RightKind::Immediate);
+  constexpr uint8_t kReg = 1u << static_cast<uint8_t>(RightKind::Register);
+  constexpr uint8_t kConst = 1u << static_cast<uint8_t>(RightKind::ConstPool);
+
+  // The deprecated `i`/`c` suffix identities keep decoding with their
+  // historical kind only (plan §3, coexistence rule), so a v6 stream may
+  // contain either spelling.
+  switch (op) {
+  case Opcode::MOVI:
+  case Opcode::ADDI:
+  case Opcode::SUBI:
+  case Opcode::CMPI:
+    return kImm;
+  case Opcode::MOVC:
+    return kConst;
+  case Opcode::CALL: // form fixed to 5 (plan §2.8)
+    return kImm;
+  case Opcode::MAKEFUNC:
+  case Opcode::MAKEGEN: // pool-index only (plan §2.5)
+    return kConst;
+  default:
+    break;
+  }
+
+  // Copy family and the ALU / flag-compare families accept all three kinds.
+  switch (op) {
+  case Opcode::MOV:
+  case Opcode::CONV:
+  case Opcode::NEG:
+  case Opcode::DEEPCOPY:
+    return kImm | kReg | kConst;
+  default:
+    break;
+  }
+  if (isAluOrFlagCompare(op))
+    return kImm | kReg | kConst;
+
+  // Everything else: the kind field never reinterprets the operand, it only
+  // ever selects its addressing width (control flow, array/table/closure ops,
+  // indget/indput, ...).
+  return kReg;
+}
+
+bool kindPermitted(Opcode op, RightKind kind) {
+  return (permittedKinds(op) >> static_cast<uint8_t>(kind)) & 0x1u;
+}
+
+bool isInPlaceForm(Opcode op, RightKind kind) {
+  if (kind == RightKind::Register)
+    return false;
+  return isAluOrFlagCompare(op);
+}
+
+// ---------------------------------------------------------------------------
 // Encode
 // ---------------------------------------------------------------------------
 
@@ -563,6 +782,419 @@ void decodeInstruction(const uint8_t *code, size_t pc, size_t codeSize,
     pos += 2;
   }
   if (nOps == 3) {
+    if (pos >= codeSize)
+      throw QLangError(QLangErrorKind::Io, 0, 0, "truncated operand");
+    out.c = code[pos++];
+  }
+  out.size = pos - pc;
+}
+
+// ---------------------------------------------------------------------------
+// v6 codec (docs/plans/encoding-v6-and-indirect-plan.md §2)
+//
+// Same stream framing as v5 — flat byte array, opcode top bit = escape, one
+// modifier byte — with the 2/2/4 interpretation of that byte, the full
+// immediate set (signed / unsigned / float / zero-byte bool and nil) and the
+// in-place arity rule for a non-register right operand. The jump class is
+// byte-for-byte the v5 form (plan §2.7). Both the encoder and the decoder run
+// the escaped form through `escapedInstructionSizeV6` first, so the three views
+// of the encoding (size / encode / decode) cannot drift apart.
+// ---------------------------------------------------------------------------
+
+size_t escapedInstructionSizeV6(Opcode op, uint8_t e) {
+  // Jump class: unchanged from v5 — `e` selects the offset width only and is
+  // not read as the 2/2/4 layout.
+  if (isJumpOpcode(op)) {
+    if (e > 1)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "invalid jump escape modifier");
+    size_t size = 2 + (e == 0 ? 2 : 4); // jmp16 / jmp32
+    if (isConditionalJump(op))
+      size += 1; // deprecated jmpfalse/jmptrue carry a 1-byte condition reg
+    return size;
+  }
+
+  OperandWidth left = modifierLeftForm(e);
+  RightKind kind = modifierRightKind(e);
+  uint8_t form = modifierRightForm(e);
+  size_t leftBytes = operandWidthBytes(left); // throws on the reserved value
+
+  // CALL is the one documented exception (plan §2.8): always escaped, kind 0
+  // with the form fixed to 5 (2-byte signed function id), then the 1-byte
+  // argument count.
+  if (op == Opcode::CALL) {
+    if (kind != RightKind::Immediate ||
+        form != static_cast<uint8_t>(ImmForm::I16))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "invalid CALL escape modifier");
+    return 2 + leftBytes + 2 + 1; // op+e + a + function id + arg count
+  }
+
+  size_t nOps = baseOperandCount(op);
+  if (nOps == 0)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "escaped form has no operands for this opcode");
+  if (nOps == 1) {
+    // A single-operand opcode has no right operand, so only the left field is
+    // meaningful; the kind/form fields must stay at their base values.
+    if (kind != RightKind::Register || form != 0)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "invalid escape modifier for a single-operand opcode");
+    return 2 + leftBytes;
+  }
+  if (kind == RightKind::Reserved || !kindPermitted(op, kind))
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "right-operand kind not permitted for this opcode");
+
+  size_t rightBytes;
+  if (kind == RightKind::Immediate) {
+    rightBytes = immediateFormBytes(form); // throws on the reserved forms
+  } else {
+    if (form > static_cast<uint8_t>(OperandWidth::DWord))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "reserved register/constant addressing form");
+    rightBytes = operandWidthBytes(static_cast<OperandWidth>(form));
+  }
+  // The third operand is present unless the arity rule collapsed the op to its
+  // in-place 2-operand form (plan §2.6).
+  size_t third = (nOps == 3 && !isInPlaceForm(op, kind)) ? 1 : 0;
+  return 2 + leftBytes + rightBytes + third;
+}
+
+size_t instructionSizeV6(Opcode op, bool escaped, uint8_t e) {
+  if (!escaped)
+    return baseInstructionSize(op);
+  return escapedInstructionSizeV6(op, e);
+}
+
+static void writeU64LE(std::vector<uint8_t> &out, uint64_t v) {
+  for (size_t i = 0; i < 8; i++)
+    out.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFF));
+}
+
+// Read a little-endian unsigned integer of `n` bytes (0..8) at code[pos];
+// throws on truncation.
+static uint64_t readU64LE(const uint8_t *code, size_t pos, size_t n,
+                          size_t codeSize) {
+  if (n > 8 || pos + n > codeSize)
+    throw QLangError(QLangErrorKind::Io, 0, 0, "truncated instruction stream");
+  uint64_t v = 0;
+  for (size_t i = n; i > 0; i--)
+    v = (v << 8) | code[pos + i - 1];
+  return v;
+}
+
+static int64_t signExtendLE(uint64_t raw, size_t n) {
+  if (n == 0 || n >= 8)
+    return static_cast<int64_t>(raw);
+  uint64_t mask = (uint64_t{1} << (n * 8)) - 1;
+  uint64_t sign = uint64_t{1} << (n * 8 - 1);
+  raw &= mask;
+  return static_cast<int64_t>((raw & sign) ? (raw | ~mask) : raw);
+}
+
+static void writeIndexWidth(std::vector<uint8_t> &out, int64_t v,
+                            OperandWidth w) {
+  int64_t limit;
+  switch (w) {
+  case OperandWidth::Byte:
+    limit = 255;
+    break;
+  case OperandWidth::Word:
+    limit = 65535;
+    break;
+  case OperandWidth::DWord:
+    limit = INT32_MAX;
+    break;
+  default:
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "reserved operand addressing form");
+  }
+  if (v < 0 || v > limit)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "operand index out of range for its addressing width");
+  uint32_t u = static_cast<uint32_t>(v);
+  for (size_t i = 0, n = operandWidthBytes(w); i < n; i++)
+    out.push_back(static_cast<uint8_t>((u >> (8 * i)) & 0xFF));
+}
+
+static int32_t readIndexWidth(const uint8_t *code, size_t &pos, size_t codeSize,
+                              OperandWidth w) {
+  size_t n = operandWidthBytes(w); // throws on the reserved value
+  uint64_t v = readU64LE(code, pos, n, codeSize);
+  pos += n;
+  if (v > static_cast<uint64_t>(INT32_MAX))
+    throw QLangError(QLangErrorKind::Io, 0, 0, "operand index out of range");
+  return static_cast<int32_t>(v);
+}
+
+static bool fitsSignedRange(int64_t v, size_t bytes) {
+  switch (bytes) {
+  case 1:
+    return v >= -128 && v <= 127;
+  case 2:
+    return v >= -32768 && v <= 32767;
+  case 4:
+    return v >= INT32_MIN && v <= INT32_MAX;
+  default:
+    return true; // 8-byte form
+  }
+}
+
+static void writeImmediateV6(std::vector<uint8_t> &out,
+                             const DecodedInstruction &in, uint8_t form) {
+  ImmType t = immediateFormType(form); // throws on the reserved forms
+  size_t n = immediateFormBytes(form);
+  uint64_t raw = 0;
+  switch (t) {
+  case ImmType::Unsigned:
+  case ImmType::Qword:
+    raw = in.immUnsigned;
+    if (n < 8 && raw > (~uint64_t{0} >> (64 - 8 * n)))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "unsigned immediate does not fit its form");
+    break;
+  case ImmType::Int:
+  case ImmType::Long:
+    if (!fitsSignedRange(in.imm, n))
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "signed immediate does not fit its form");
+    raw = static_cast<uint64_t>(in.imm);
+    break;
+  case ImmType::Float:
+    std::memcpy(&raw, &in.immFloat, sizeof raw);
+    break;
+  case ImmType::Bool:
+  case ImmType::Nil:
+    n = 0; // the form *is* the value: no operand bytes
+    break;
+  }
+  for (size_t i = 0; i < n; i++)
+    out.push_back(static_cast<uint8_t>((raw >> (8 * i)) & 0xFF));
+}
+
+static void readImmediateV6(const uint8_t *code, size_t &pos, size_t codeSize,
+                            uint8_t form, DecodedInstruction &out) {
+  ImmType t = immediateFormType(form);
+  size_t n = immediateFormBytes(form);
+  uint64_t raw = readU64LE(code, pos, n, codeSize);
+  pos += n;
+  switch (t) {
+  case ImmType::Unsigned:
+  case ImmType::Qword:
+    out.immPayload = ImmPayload::Unsigned;
+    out.immUnsigned = raw;
+    break;
+  case ImmType::Int:
+  case ImmType::Long:
+    out.immPayload = ImmPayload::Signed;
+    out.imm = signExtendLE(raw, n);
+    break;
+  case ImmType::Float: {
+    double d = 0;
+    std::memcpy(&d, &raw, sizeof d);
+    out.immPayload = ImmPayload::Float;
+    out.immFloat = d;
+    break;
+  }
+  case ImmType::Bool:
+    out.immPayload = form == static_cast<uint8_t>(ImmForm::True)
+                         ? ImmPayload::True
+                         : ImmPayload::False;
+    break;
+  case ImmType::Nil:
+    out.immPayload = ImmPayload::Nil;
+    break;
+  }
+}
+
+void encodeInstructionV6(std::vector<uint8_t> &out,
+                         const DecodedInstruction &in) {
+  // CALL is always escaped (plan §2.8): its 2-byte signed function id can only
+  // be described by a modifier byte.
+  if (in.op == Opcode::CALL && !in.escaped)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "CALL must be escaped (signed function ID)");
+
+  // Validate the opcode/modifier combination up front: the size table is the
+  // single authority on what a legal escaped form is.
+  size_t expect = 0;
+  if (in.escaped)
+    expect = escapedInstructionSizeV6(in.op, in.modifier);
+
+  size_t start = out.size();
+  uint8_t opByte = static_cast<uint8_t>(in.op);
+  if (in.escaped)
+    opByte |= kOpcodeEscape;
+  out.push_back(opByte);
+  if (in.escaped)
+    out.push_back(in.modifier);
+
+  // Jump class: identical to v5 (plan §2.7).
+  if (isJumpOpcode(in.op)) {
+    if (isConditionalJump(in.op)) {
+      if (in.a < 0 || in.a > 255)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "condition register out of range");
+      out.push_back(static_cast<uint8_t>(in.a));
+    }
+    if (!in.escaped) {
+      if (in.jumpOffset < -128 || in.jumpOffset > 127)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "jump offset does not fit in base form");
+      out.push_back(static_cast<uint8_t>(in.jumpOffset & 0xFF));
+    } else if (in.modifier == 0) {
+      if (in.jumpOffset < -32767 || in.jumpOffset > 32767)
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "jump offset does not fit in jmp16 form");
+      writeU16LE(out,
+                 static_cast<uint16_t>(static_cast<int16_t>(in.jumpOffset)));
+    } else {
+      writeI32LE(out, in.jumpOffset);
+    }
+    return;
+  }
+
+  // A base form carries no modifier byte, so its kind is fixed by the opcode
+  // identity and its form is the 1-byte default (immediates: signed 1 byte).
+  RightKind kind =
+      in.escaped ? modifierRightKind(in.modifier) : defaultRightKind(in.op);
+  OperandWidth left =
+      in.escaped ? modifierLeftForm(in.modifier) : OperandWidth::Byte;
+  uint8_t form =
+      in.escaped
+          ? modifierRightForm(in.modifier)
+          : (kind == RightKind::Immediate ? static_cast<uint8_t>(ImmForm::I8)
+                                          : 0);
+
+  if (in.op == Opcode::CALL) {
+    writeIndexWidth(out, in.a, left);
+    if (in.b < INT16_MIN || in.b > INT16_MAX)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "function ID out of range");
+    writeU16LE(out, static_cast<uint16_t>(static_cast<int16_t>(in.b)));
+    if (in.c < 0 || in.c > 255)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "argument count out of range");
+    out.push_back(static_cast<uint8_t>(in.c));
+    if (out.size() - start != expect)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "encoder length disagrees with the size table");
+    return;
+  }
+
+  size_t nOps = baseOperandCount(in.op);
+  if (nOps == 0)
+    return; // zero-operand opcode; an escaped form was rejected above
+  writeIndexWidth(out, in.a, left);
+  if (nOps == 1)
+    return;
+  if (kind == RightKind::Immediate) {
+    writeImmediateV6(out, in, form);
+  } else {
+    writeIndexWidth(out, in.b,
+                    static_cast<OperandWidth>(in.escaped ? form : 0));
+  }
+  if (nOps == 3 && !isInPlaceForm(in.op, kind)) {
+    if (in.c < 0 || in.c > 255)
+      throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                       "third operand must be a 1-byte register");
+    out.push_back(static_cast<uint8_t>(in.c));
+  }
+  if (in.escaped && out.size() - start != expect)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "encoder length disagrees with the size table");
+}
+
+void decodeInstructionV6(const uint8_t *code, size_t pc, size_t codeSize,
+                         DecodedInstruction &out) {
+  if (pc >= codeSize)
+    throw QLangError(QLangErrorKind::Io, 0, 0, "truncated instruction stream");
+  uint8_t raw = code[pc];
+  out = DecodedInstruction();
+  out.op = static_cast<Opcode>(raw & 0x7F);
+  out.escaped = (raw & kOpcodeEscape) != 0;
+  size_t pos = pc + 1;
+
+  if (out.escaped) {
+    if (pos >= codeSize)
+      throw QLangError(QLangErrorKind::Io, 0, 0, "truncated modifier byte");
+    out.modifier = code[pos++];
+    // Reject a reserved kind/form, a kind the opcode does not accept, or a
+    // malformed CALL before touching the operands.
+    escapedInstructionSizeV6(out.op, out.modifier);
+  } else if (out.op == Opcode::CALL) {
+    throw QLangError(QLangErrorKind::Io, 0, 0,
+                     "CALL must be escaped (signed function ID)");
+  }
+
+  // The jump class does not use the 2/2/4 layout, so its modifier's kind field
+  // is not read: `rightKind` stays whatever the opcode identity means.
+  RightKind kind = (!out.escaped || isJumpOpcode(out.op))
+                       ? defaultRightKind(out.op)
+                       : modifierRightKind(out.modifier);
+  out.rightKind = kind;
+
+  if (isJumpOpcode(out.op)) {
+    if (isConditionalJump(out.op)) {
+      if (pos >= codeSize)
+        throw QLangError(QLangErrorKind::Io, 0, 0,
+                         "truncated condition register");
+      out.a = code[pos++];
+    }
+    if (!out.escaped) {
+      if (pos >= codeSize)
+        throw QLangError(QLangErrorKind::Io, 0, 0, "truncated jump offset");
+      out.jumpOffset = static_cast<int8_t>(code[pos++]);
+    } else if (out.modifier == 0) {
+      out.jumpOffset = static_cast<int16_t>(
+          static_cast<uint16_t>(readULE(code, pos, 2, codeSize)));
+      pos += 2;
+    } else {
+      out.jumpOffset = static_cast<int32_t>(readULE(code, pos, 4, codeSize));
+      pos += 4;
+    }
+    out.size = pos - pc;
+    return;
+  }
+
+  OperandWidth left =
+      out.escaped ? modifierLeftForm(out.modifier) : OperandWidth::Byte;
+  uint8_t form =
+      out.escaped
+          ? modifierRightForm(out.modifier)
+          : (kind == RightKind::Immediate ? static_cast<uint8_t>(ImmForm::I8)
+                                          : 0);
+
+  if (out.op == Opcode::CALL) {
+    out.a = readIndexWidth(code, pos, codeSize, left);
+    out.b = static_cast<int16_t>(
+        static_cast<uint16_t>(readULE(code, pos, 2, codeSize)));
+    pos += 2;
+    if (pos >= codeSize)
+      throw QLangError(QLangErrorKind::Io, 0, 0, "truncated operand");
+    out.c = code[pos++];
+    out.size = pos - pc;
+    return;
+  }
+
+  size_t nOps = baseOperandCount(out.op);
+  if (nOps == 0) {
+    out.size = pos - pc;
+    return;
+  }
+  out.a = readIndexWidth(code, pos, codeSize, left);
+  if (nOps == 1) {
+    out.size = pos - pc;
+    return;
+  }
+  if (kind == RightKind::Immediate) {
+    readImmediateV6(code, pos, codeSize, form, out);
+  } else {
+    out.b = readIndexWidth(code, pos, codeSize,
+                           static_cast<OperandWidth>(out.escaped ? form : 0));
+  }
+  if (nOps == 3 && !isInPlaceForm(out.op, kind)) {
     if (pos >= codeSize)
       throw QLangError(QLangErrorKind::Io, 0, 0, "truncated operand");
     out.c = code[pos++];

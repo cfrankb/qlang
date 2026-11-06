@@ -1,6 +1,7 @@
 # Encoding v6 — Unified Modifier Byte + `$$` Indirect Access
 
-Status: **Proposed — specification finalized 2026-11-06; implementation not started**
+Status: **In progress — specification finalized 2026-11-06; milestone 1 (v6 encoding layer,
+additive) implemented and green 2026-11-06 — see §6.1. The shipped pipeline still encodes v5.**
 Supersedes: §4 (modifier byte), §5.3 (immediates) and §13.4 (signed-`Int`-only scope) of
 `docs/plans/instruction-format-escape-byte-plan.md` — that plan's byte-stream model, opcode
 space, register/constant pooling and jump forms **stay in force**
@@ -163,26 +164,35 @@ form 5, and the trailing `c` byte is the ordinary third operand.
 
 ### 2.9 Concrete instruction forms
 
+Corrected 2026-11-06 against the milestone-1 implementation
+(`tests/unit/encoding_v6_test.cpp`); the first draft of this table still carried v5's
+two-nibble modifier bytes, which mis-stated `e` and every 8-byte immediate size. An escaped
+instruction costs `1 (op) + 1 (e) + width(a) + immediate/operand bytes`.
+
 | Instruction | Form | Bytes | Layout |
 |-------------|------|-------|--------|
-| `mov r3, r7` | base | 3 | `[MOV][03][07]` |
+| `mov r3, r7` | base | 3 | `[MOV][03][07]` (≡ `e = 0x04`) |
 | `mov r3, 5` | base | 3 | `[MOV][03][05]` (≡ `e = 0x40`) |
-| `mov r3, 500` | escaped | 6 | `[MOV\|80][45][03][F4 01]` (kind 0, form 5) |
-| `mov r3, 1.5` | escaped | 11 | `[MOV\|80][48][03][double:8]` (kind 0, form 8) |
-| `mov r3, true` | escaped | 3 | `[MOV\|80][4A][03]` (kind 0, form 10, 0 operand bytes) |
-| `mov r3, nil` | escaped | 3 | `[MOV\|80][4B][03]` (kind 0, form 11, 0 operand bytes) |
 | `mov r3, pool[9]` | base | 3 | `[MOV][03][09]` (≡ `e = 0x08`) |
-| `mov r3, pool[300]` | escaped | 5 | `[MOV\|80][0A][03][01 2C]` (kind 2, form 1) |
-| `mov r300, r7` | escaped | 5 | `[MOV\|80][01][01 2C][07]` (left form 1) |
-| `add r3, r4, r5` | base | 4 | `[ADD][03][04][05]` |
-| `add r3, 12` (in place) | base | 3 | `[ADD][03][0C]` (≡ `e = 0x40`) |
-| `cmp r6, r9` | base | 3 | `[CMP][06][09]` |
-| `cmp r6, 0` | base | 3 | `[CMP][06][00]` |
-| `eqf r12, r13` | base | 3 | `[EQF][0C][0D]` |
-| `eqf r12, 5` | base | 3 | `[EQF][0C][05]` |
-| `tst r6` | base | 2 | `[TST][06]` |
-| `decl 7` | base | 2 | `[DECL][07]` |
-| `jmp` near / mid / far | base / escaped | 2 / 4 / 6 | v5 §5.4 |
+| `mov r3, 200` | escaped | 4 | `[MOV\|80][00][03][C8]` (kind 0, form 0 — `e = 0x00` **is** a legal modifier) |
+| `mov r3, 500` | escaped | 5 | `[MOV\|80][50][03][F4 01]` (kind 0, form 5 = i16) |
+| `mov r3, 4000000000` | escaped | 7 | `[MOV\|80][20][03][u32:4]` (kind 0, form 2 = u32) |
+| `mov r3, 1.5` | escaped | 11 | `[MOV\|80][80][03][double:8]` (kind 0, form 8) |
+| `mov r3, true` | escaped | 3 | `[MOV\|80][A0][03]` (kind 0, form 10, 0 operand bytes) |
+| `mov r3, nil` | escaped | 3 | `[MOV\|80][B0][03]` (kind 0, form 11, 0 operand bytes) |
+| `mov r3, pool[300]` | escaped | 5 | `[MOV\|80][18][03][2C 01]` (kind 2, form 1) |
+| `mov r300, r7` | escaped | 5 | `[MOV\|80][14][01 2C][07]` (left form 1, kind 1) |
+| `add r3, r4, r5` | base | 4 | `[ADD][03][04][05]` (≡ `e = 0x04`, three operands) |
+| `add r3, 12` (in place) | base | 3 | `[ADD][03][0C]` (≡ `e = 0x40`, no `c`) |
+| `add r3, 2.5` (in place) | escaped | 11 | `[ADD\|80][80][03][double:8]` (kind 0 ⇒ in place, no `c`) |
+| `cmp r6, r9` | base | 3 | `[CMP][06][09]` (≡ `e = 0x04`) |
+| `cmp r6, 0` | base | 3 | `[CMP][06][00]` (≡ `e = 0x40`) |
+| `call f, 2` | escaped | 6 | `[CALL\|80][50][01][id:2][02]` (kind 0, form 5 — always escaped, §2.8) |
+| `jmp` near / mid / far | base / escaped | 2 / 4 / 6 | v5 §5.4 — the jump class ignores the 2/2/4 fields (§2.7) |
+| `eqf r12, r13` | base | 3 | `[EQF][0C][0D]` — **M3**, opcode not yet in the enum |
+| `eqf r12, 5` | base | 3 | `[EQF][0C][05]` (≡ `e = 0x40`, in place) — **M3** |
+| `tst r6` | base | 2 | `[TST][06]` — **M3** |
+| `decl 7` | base | 2 | `[DECL][07]` — **M4** |
 
 ---
 
@@ -340,6 +350,36 @@ truthiness test.
 Phase 3 is deliberately separate: it changes no layout, only the identity table, and it can
 only land once no producer (compiler, tests, checked-in `.qlc` fixtures) emits the old
 spellings.
+
+### 6.1 Milestone status (implementation decomposition actually used)
+
+The phase table above is the *encoding* phasing. The work is landed in four reviewable
+milestones; each keeps `ctest --test-dir build` green.
+
+| # | Milestone | Scope | Status |
+|---|-----------|-------|--------|
+| **M1** | v6 encoding layer, **additive** | 2/2/4 modifier byte, kind/form tables, permitted-kind + in-place-arity rules, full immediate set, `CALL` as kind 0 / form 5, jump class untouched, new `*V6` codec + `encoding_v6` test suite. v5 codec, `kQlcVersion = 5` and the shipped pipeline are **not** modified. | **DONE 2026-11-06** |
+| **M2** | Switch the pipeline | Compiler emits unified `mov`/`add`/`sub`/`cmp` kinds with immediate selection, VM decodes v6, `.qlc` v5 → v6, disassembler (`examples/qlang_run.cpp`) | pending |
+| **M3** | Flag flow | `eqf`/`ltf`/`gtf`/`ltef`/`gtef` + `tst`, flag jumps, `ja`/`jae`/`jb`/`jbe` aliases (§4) | pending |
+| **M4** | `$$` (A3) | Declaration table, frame name map + bitset, `DECL`, two-operand `INDGET`/`INDPUT`, `$$"literal"` fast path (§7) | pending |
+
+Two decisions M1 settled, both deviations from the draft text:
+
+1. **`instructionSizeV6(Opcode, bool escaped, uint8_t e)` takes an explicit `escaped` flag.**
+   Under 2/2/4, `e = 0x00` is a *legal* escaped modifier (kind immediate, form `u8` — the only
+   way to encode `mov r3, 200` in one operand byte), so v5's "`modifier == 0` ⇒ base form"
+   convention cannot be reused. Without the flag that instruction sizes as 3 bytes while the
+   encoder emits 4, desynchronising `pc`.
+2. **`CALL` is rejected when unescaped** by both `encodeInstructionV6` and
+   `decodeInstructionV6`, per §2.8 ("always escaped"), rather than silently taking a base form.
+
+M1 verification: `encoding_v6` (34 249 checks) covers field layout and reserved-slot throws, the
+width/form tables, base-form byte-for-byte equivalence with v5, the escaped-size table,
+immediate boundaries (`u8`…`u64`, `i8`…`i64`, bit-exact `double`, zero-byte `bool`/`nil`), CALL,
+the unchanged jump class, encoder range checks, truncated streams, and an exhaustive sweep of
+1 756 accepted / 14 138 rejected `(opcode, modifier)` pairs cross-checked between size, encoder
+and decoder. Full suite: 47/47 (`perf` skipped). §11 items 1, 2, 4 (pool part), 5–10 belong to
+M2–M4.
 
 ---
 
@@ -519,7 +559,10 @@ build/qlang_run --output /tmp/t.qlc tests/scripts/hello.ql   # then round-trip /
 1. **`DecodedInstruction` shape** — it currently carries `a, b, c, imm`; the kind field needs
    to reach the VM (register vs pool vs immediate right operand). Add a `rightKind` field, or
    resolve the operand to a value at decode time? **Default:** add `rightKind` and let each
-   dispatch site read accordingly (keeps decode cheap).
+   dispatch site read accordingly (keeps decode cheap). **Settled by M1:** `rightKind` added,
+   plus a typed immediate carrier on `DecodedInstruction` (`immPayload` tag with `imm` /
+   `immUnsigned` / `immFloat`) — the v5 `imm` alone cannot hold a `u64` or a `double`. Decode
+   stays cheap: no operand is resolved to a value at decode time.
 2. **`conv`/`cast` type-id operand** — today `c` is a 1-byte type id. It stays a plain trailing
    byte (not a kind-selected operand). Confirm no kind field is consulted for it.
    **Default:** confirmed, type id is an ordinary third operand.

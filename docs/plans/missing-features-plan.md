@@ -51,7 +51,7 @@ identities), rejects `addc`/`subc`, and closes **Q6** (§7). A5 is now
 | # | Item | Spec anchor | Scope |
 |---|------|-------------|-------|
 | A3 | `$$` indirect access operator | `05-operators.md` `## operator $$` | large |
-| A5 | Extended instruction encoding + opcode families | `13-bytecodes.md` `## encoding extended`, `## opCode scope`, `### bytecode encoding`, `### extended OpCode eq, lt, gt, lte, gte`; plan `encoding-v6-and-indirect-plan.md` | **new in the 2026-11-06 audit** — spec **finalized**, plan written; large, breaking (`.qlc` v5 → v6) |
+| A5 | Extended instruction encoding + opcode families | `13-bytecodes.md` `## encoding extended`, `## opCode scope`, `### bytecode encoding`, `### extended OpCode eq, lt, gt, lte, gte`; plan `encoding-v6-and-indirect-plan.md` | **new in the 2026-11-06 audit** — spec **finalized**, plan written; large, breaking (`.qlc` v5 → v6). **M1 (additive v6 encoding layer) landed 2026-11-06**; pipeline still emits v5 |
 
 A1 `nop` (Round 39), A2 `?` (Round 39) and A4 `deepcopy` + share-by-default
 value semantics (Rounds 42–45, plan closed Round 45) are **implemented** — see
@@ -694,6 +694,8 @@ spec finalization ──> C1 (strict typing)
 spec finalization ──> A5 (extended encoding)      ✅ done 2026-11-06
 A5 detailed plan                                   ✅ done 2026-11-06
                                                    (encoding-v6-and-indirect-plan.md)
+A5 M1 v6 encoding layer (additive *V6 codec)       ✅ done 2026-11-06
+A5 M2 pipeline switch · M3 flag flow · M4 $$       pending
 A5 (encoding layout) ──✗──> A3 Q6: edge removed 2026-11-06 — Q6 is closed without
                             consuming encoding space, so A3 no longer waits on A5
                             (they share only the `.qlc` v6 bump)
