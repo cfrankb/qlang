@@ -1,7 +1,10 @@
 # Plan: Missing Features — Overview
 
-Created 2026-11-04 (post-Round 38 audit). Overview/roadmap for every
-spec'd-but-unimplemented item tracked in `docs/compliance/status.md`
+Created 2026-11-04 (post-Round 38 audit). **Re-audited 2026-11-05 (post-Round
+52)** — Rounds 39–52 landed A1 `nop`, A2 `?`, C2 enum injection, C6 signals and
+the whole of A4 `deepcopy`/value semantics; those items moved to §D, the phases
+were renumbered, and C8 (module search paths) was added. Overview/roadmap for
+every spec'd-but-unimplemented item tracked in `docs/compliance/status.md`
 (Open Items + Not Yet Implemented). This is an **overview**: each phase gets
 a detailed implementation plan before work starts (precedent: the movi/addi/
 subi plans in `docs/plans/archive/`).
@@ -12,10 +15,12 @@ subi plans in `docs/plans/archive/`).
 
 | # | Item | Spec anchor | Scope |
 |---|------|-------------|-------|
-| A1 | `nop` opcode | `13-bytecodes.md` `## OpCode nop` | trivial |
-| A2 | `?` ternary operator | `05-operators.md` `## operator ?` | small |
 | A3 | `$$` indirect access operator | `05-operators.md` `## operator $$` | large |
-| A4 | `deepcopy` builtin + share-by-default value semantics | `01-types.md` `## value semantics`, `06-functions.md` `### deepcopy`, `10-classes.md` `## deepcopy`, `13-bytecodes.md` `## OpCode deepcopy` | medium (additive) + large (breaking storage change); detailed plan: `deepcopy-plan.md` |
+
+A1 `nop` (Round 39), A2 `?` (Round 39) and A4 `deepcopy` + share-by-default
+value semantics (Rounds 42–45, plan closed Round 45) are **implemented** — see
+§D. The numbering is kept so the round records and `status.md` cross-references
+stay readable.
 
 ### B. Foundations (block other work)
 
@@ -29,12 +34,13 @@ subi plans in `docs/plans/archive/`).
 | # | Item | Spec anchor | Notes |
 |---|------|-------------|-------|
 | C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | draft spec — C++ API "to be provided"; examples show runtime exceptions at call/return sites |
-| C2 | Enum C++ injection API | `02-lexical.md` `## enum` | **implemented (Round 41, 2026-11-05)** — `QLangContext::registerEnum(...)` + `QLangCompiler::addExternalEnums`; see §D and the detailed section |
 | C3 | External-type wrappers: `hasMethod`/`callMethod` | `11-external-types.md` | event-handler contract; `ops->callMethod` has zero VM call sites in v1 |
-| C4 | RTTI validation on external handoff | `11-external-types.md` | **implemented (Phase 3)** — typed `qval_external_*<T>` helpers + `dynamic_cast` check; see §D |
 | C5 | Inheritance (`ObjectOps::base`) | `10-classes.md` v1 restrictions, `EXTERNAL_TYPES.md` §10.3 | reserved, returns null; base-chain walk deferred to v2 |
-| C6 | Signals (`emit`/`connect`/`disconnect`) | `17-signals.md` | **implemented (Round 40, 2026-11-05)** — `QL_SIGNAL` meta, `EMIT` opcode, connection registry, `emitSignal`/`hasSignal`; see §D |
 | C7 | Enum-name string form for enum-valued properties | `EXTERNAL_TYPES.md` §10.5 | no dispatch point sees both field value and type context |
+| C8 | Module search paths + external search callback | `07-api.md` `## module search paths`, `## external search callback` | **new in this audit** — spec text only, no C++ surface (`searchPath`/`searchCallback` appear nowhere in `include/` or `src/`); prerequisite/front end for `external-modules-plan-v3.md` |
+
+C2 enum injection (Round 41), C4 RTTI handoff validation (Phase 3) and C6
+signals (Round 40) are **implemented** — see §D.
 
 ### D. Resolved / no work needed
 
@@ -44,6 +50,30 @@ subi plans in `docs/plans/archive/`).
 - **Instance-call-of-static-method** — spec-silent; documented deviation
   (hidden-anchor design, `docs/compliance/classes.md`).
 - **`|||` logical-or** — intentional extension, deliberately not in the spec.
+- **A1 `nop` opcode** — **implemented (Round 39, 2026-11-04, `7b56ac8`)**.
+  `Opcode::Nop` appended last (identity 68), `Bytecode::name()` → `"nop"`,
+  zero-operand, no-op in the `runFrames()` dispatch, codec round-trip; the
+  compiler never emits it (spec: "takes no action"). 12 `codec_check` cases.
+- **A2 `?` ternary operator** — **implemented (Round 39, 2026-11-04,
+  `7b56ac8`)**. `TokenType::Question`; `parseTernary` at the lowest precedence,
+  right-associative; expression or brace-block branches (a block's `return`
+  yields the value, lowered to a zero-arg closure call). No new opcode. 16
+  `spec_check2` cases.
+- **A4 `deepcopy` + share-by-default value semantics** — **plan complete**
+  (Rounds 42–45, 2026-11-05; `docs/plans/archive/deepcopy-plan.md`). Phase 1
+  `deepcopy` builtin + `DEEPCOPY` (Round 42, `5de7d29`), Phase 2 pointer-backed
+  `array`/`set`/`blob` so assignment and call arguments share (Round 43,
+  `fede1a4`, breaking — migration note `docs/compliance/migration-value-semantics.md`),
+  Phase 3 `__deepcopy__` override (Round 44), Phase 4 tracking closure (Round 45).
+  Deferred by decision, not by omission: `shallowcopy` (open decision #5) and a
+  `copy` parameter specifier (#6).
+- **Table subscript `t[key]`** — **implemented (Round 51, 2026-11-05,
+  `2fc570b`)**. Found as a spec gap in Round 50 (`docs/spec/03-declarations.md`
+  `t["age"] = 33` threw `cannot subscript non-array value`); fixed with
+  `INDEXGET`/`INDEXPUT` (identities 71/72), which dispatch on the runtime base
+  type and route tables through `ObjectOps`, making `t["age"]` and `t.age` the
+  same operation. 17 `spec_check2` + 19 `codec_check` cases +
+  `tests/scripts/table_subscript.ql`.
 - **C4 RTTI validation on external handoff** — implemented in Phase 3
   (`EXTERNAL_TYPES.md` §10.2): the typed handoff helpers
   `qval_external_owned<T>`/`qval_external_borrowed<T>` record `typeid(T)`
@@ -76,38 +106,37 @@ subi plans in `docs/plans/archive/`).
 
 ## Phases
 
-### Phase 1 — Quick wins (independent, low risk)
+### Phase 1 — Warning infrastructure
 
-1. **A1 `nop`** — append `Opcode::Nop` last (`.qlc` opcode numbers unchanged),
-   `Bytecode::name()` → `"nop"`, no-op VM case in all 4 exec loops, codec
-   name. No compiler emission (spec: "takes no action"). Tests: `codec_check`
-   (name + round-trip). Effort: ~half a day.
-2. **A2 `?` ternary** — `?` lexer token, parser rule at the spec's precedence
-   level, codegen to existing branch opcodes (`cmp`/`cmpi` + `jne` + jump —
-   no new opcode), block form with `return`. Tests: `spec_check2` (both
-   branches, nesting, block form, precedence vs `&&`/`||`). Effort: 1–2 days.
-
-### Phase 2 — Warning infrastructure
-
-3. **B1 warnings** — warning emission path distinct from errors (warnings do
+1. **B1 warnings** — warning emission path distinct from errors (warnings do
    not throw; diagnostics route through the gated `trace()` helper per
    AGENTS.md); toggle on `QLangContext` (`setWarningsEnabled(bool)` + a QLang
    native mirroring `set_verbose`). Spec note: "all warnings defered until
    further notice" — the toggle ships with zero active warnings.
-4. **B2 duplicate-declaration warning** — re-land the reverted Round 25 check
+2. **B2 duplicate-declaration warning** — re-land the reverted Round 25 check
    (explicit `local`/`let` targeting a name already declared in the same
    scope → compile warning) on top of the B1 toggle. Tests: `spec_check2`
    (warning emitted, suppressed when toggled off, no warning for plain
    assignment crossing). Effort: 1–2 days total.
 
-### Phase 3 — `$$` indirect operator (largest feature)
+### Phase 2 — `$$` indirect operator (largest feature)
 
-5. **A3 `$$`** — per the spec's implementation notes:
+3. **A3 `$$`** — per the spec's implementation notes:
    - per-frame name map (name → register, binding kind `var`/`const`/
-     `function`/`lambda`, declaration bit);
+     `function`/`lambda`, declaration bit) — the map lives on `Frame`, so the
+     read/write handlers sit in the single `runFrames()` dispatch loop;
    - declaration bit as a flag on existing store/init opcodes (no new opcode
      for declaration state);
-   - two new opcodes `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE` (append last);
+   - **reuse the reserved `Opcode::INDGET` / `Opcode::INDPUT` placeholders**
+     (`QLangBytecode.h:123-124`) rather than adding opcodes: they already carry
+     fixed identities inside the defined range (`kOpcodeUsedCount` is 73,
+     identities 0..72), the `indget`/`indput` mnemonics
+     (`QLangBytecode.cpp:796-797`), the 3-operand default arity and the
+     `qlang_run` pseudo-text — so **no identity is appended and
+     `kOpcodeUsedCount` does not change**. Round 51 deliberately disambiguated
+     `INDEXGET`/`INDEXPUT` from these placeholders. The spec's
+     `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE` names are the same pair; the spec
+     wording should be aligned to the implemented mnemonics.
    - six-stage check pipeline with canonical `indirect variable error:`
      messages (string → identifier lexeme → reserved word → declared/visible
      → binding kind → local-only writes);
@@ -120,9 +149,9 @@ subi plans in `docs/plans/archive/`).
    pipeline stages, resolution order, declaration state, const/function
    rejection. Effort: 1–2 weeks.
 
-### Phase 4 — API surface
+### Phase 3 — API surface
 
-6. **C1 strict typing** — step 1: finalize `16-strict_typing.md` (define the
+4. **C1 strict typing** — step 1: finalize `16-strict_typing.md` (define the
    `QLangContext` API, e.g. `setStrictTypingLevel(0/1/2)`). The spec's
    examples show runtime exceptions at call and return sites, so
    enforcement is **runtime**: the compiler records declared parameter/
@@ -138,63 +167,48 @@ subi plans in `docs/plans/archive/`).
    Tests: `spec_check2` (mismatch per type family, narrowing accepted,
    cross-sign rejected, return-type check, level 0/1/2 matrix). Effort:
    1–2 days spec + ~1 week implementation.
-7. **C2 enum injection** — ✓ **implemented** (Round 41, 2026-11-05).
-   `QLangContext::registerEnum(name, members, baseType = Int)` seeds the
-   `__enum_<Name>` hidden const table and registers the name with the
-   compiler via the new `QLangCompiler::addExternalEnums`, so injected
-   enums fold at compile time and collide with script declarations.
-   26 `test_external` cases. See the detailed section below and §D.
-8. **C3 `hasMethod`/`callMethod` context wrappers** — add
+5. **C3 `hasMethod`/`callMethod` context wrappers** — add
    `QLangContext::hasMethod(obj, name)` / `callMethod(obj, name, args)`
    routing through `getObjectOps` → `ops->callMethod` (present on every ops
    table; the VM does not call it in v1 — method calls are
    `TABGET` → `BoundMethod` → `CALLCLOS`). This is the event-handler
-   contract (`docs/EVENT_HANDLERS.md` §0). Tests: `test_external`
+   contract (`docs/EVENT_HANDLERS.md` §0); `hasSignal`/`emitSignal` (Round 40)
+   already mirror the shape and cite `hasMethod` in a comment, so the pair
+   should land together with the comment made accurate. Tests: `test_external`
    (hasMethod true/false, callMethod dispatch, unknown-method error).
    Effort: small.
-9. **C5 inheritance (`ObjectOps::base`)** — `base` returns null today;
+6. **C5 inheritance (`ObjectOps::base`)** — `base` returns null today;
    `10-classes.md` v1 restrictions reserve the hook and
    `EXTERNAL_TYPES.md` §10.3 defers the base-chain walk to v2. Needs a spec
    first (base-clause syntax, field/method resolution order, constructor
    chaining) — treat like C1 step 1. Effort: medium–large once specified.
-10. **C6 signals (`emit`/`connect`/`disconnect`)** — ✓ **implemented**
-    (Round 40, 2026-11-05). Spec `17-signals.md` finalized (external types
-    only; `QL_SIGNAL` meta with signature deduced from an unimplemented
-    member function; `emit` reserved word; `connect`/`disconnect` builtins;
-    synchronous delivery, step-budget-contained recursion; C++
-    `emitSignal`/`hasSignal`). `EMIT` opcode appended last (`.qlc` v5
-    unchanged); 18 checks in `signal_test`. See §D.
-11. **C7 enum-name string form** — reverse lookup for enum-valued
-    properties. Known blocker (`EXTERNAL_TYPES.md` §10.5): no dispatch
-    point sees both the field value and its type context —
-    `str(e.options)` sees a bare `Int`. Needs a design decision (e.g. an
-    enum-typed property binding that carries the enum table) before
-    implementation. Effort: small–medium once designed.
+7. **C7 enum-name string form** — reverse lookup for enum-valued
+   properties. Known blocker (`EXTERNAL_TYPES.md` §10.5): no dispatch
+   point sees both the field value and its type context —
+   `str(e.options)` sees a bare `Int`. Needs a design decision (e.g. an
+   enum-typed property binding that carries the enum table) before
+   implementation. Effort: small–medium once designed.
+8. **C8 module search paths + external search callback** — **new in the
+   Round 52 re-audit.** Spec `07-api.md` `## module search paths` ("API C++ will
+   provide a means to set the search paths to find modules"; POC modules are
+   single files, so resolution is `[modulename].ql` tried in each directory in
+   order) and `## external search callback` (a host-assigned
+   `string searchCallback(string modulename)` for non-standard filesystems such
+   as Qt `:/...`). Today modules are C++-registered (`ctx.registerModule()`) and
+   resolved at compile time only — no filesystem lookup, no path list, no
+   callback hook (`searchPath`/`searchCallback` appear nowhere in `include/` or
+   `src/`). Work: the `QLangContext` API (`setModuleSearchPaths(...)`,
+   `setSearchCallback(...)`) plus the `import` resolution path; no lexer, parser
+   or VM change is implied. Prerequisite/front end for
+   `docs/plans/external-modules-plan-v3.md` (import/export tables assume a module
+   can be *found* before it can be linked). Tests: `test_module` (+ a
+   `tests/scripts/` regression once `.ql` file loading exists). Effort:
+   small–medium.
 
-### Phase 5 — `deepcopy` + value semantics (A4)
+C2 enum injection (Round 41) and C6 signals (Round 40) are **implemented** — see
+§D and the detailed sections below.
 
-12. **A4 `deepcopy`** — **specified 2026-11-05** (`01-types.md`
-    `## value semantics`, `06-functions.md` `### deepcopy`, `10-classes.md`
-    `## deepcopy`, `13-bytecodes.md` `## OpCode deepcopy`).
-    **Full plan: `docs/plans/deepcopy-plan.md`** (adopted 2026-11-01; Option A —
-    a `deepcopy(x)` builtin mirroring Python `copy.deepcopy`).
-    - **Phase 1 (additive, low risk)** — `deepcopy` builtin + `DEEPCOPY`
-      opcode (append last, `kOpcodeUsedCount` 70 → 71, `.qlc` stays v5; two
-      register operands, no i32 slot — same shape as `mov`); recursive
-      `deepCopyValue` with an identity map so cycles terminate and are
-      preserved; closures/generators/external/bound/typeref share the handle;
-      the compiler lowers `deepcopy(x)` directly to the opcode. Single executor
-      (`runFrames`) — the plan's "all four dispatch loops" note is stale.
-    - **Phase 2 (breaking)** — pointer-back `array`/`set`/`blob` so assignment
-      and call arguments **share** (spec `01-types.md` `## value semantics`).
-      Today they are value-backed, so every `MOV` and call argument deep-copies
-      them — a deviation from the spec the moment the spec text landed.
-    - **Phase 3** — `__deepcopy__` hook (`10-classes.md` `## deepcopy`).
-    - **Phase 4** — migration note (scripts that need an independent copy must
-      now call `deepcopy`).
-    Effort: Phase 1 ~2–3 days; Phase 2 large (storage change, code-wide).
-
-### Phase 6 — Structural (only if a spec decision changes)
+### Phase 4 — Structural (only if a spec decision changes)
 
 - Table key insertion order (would require reworking `TableValue`
   code-wide) — **not planned**: spec says implementation-defined.
@@ -203,8 +217,10 @@ subi plans in `docs/plans/archive/`).
 ## Detailed implementation plans
 
 Per the overview convention, each phase item gets a detailed plan before work
-starts. The two Phase 4 items below have their detailed plans recorded here
-(C6's full plan lives in its own file and is referenced).
+starts. The two entries below are the detailed plans of items that have since
+landed (C2 Round 41, C6 Round 40) and are kept as the design record; C6's full
+plan lives in `docs/plans/archive/signals-implementation-plan.md`. The open
+items (B1/B2, A3, C1, C3, C5, C7, C8) still need theirs.
 
 ### C2 — Enum C++ injection API
 
@@ -221,8 +237,7 @@ accepts injected enums via a dedicated `m_injectedEnumNames` set (using
 `m_globalEnums` there would have weakened block-scoped `local enum`
 invisibility — caught by `spec_check2`).
 Spec: `docs/spec/02-lexical.md` `## enum` ("C++ api needed to inject enums to
-the global context (needs discussion)"). Supersedes the Phase 4 item 7 summary
-above.
+the global context (needs discussion)").
 
 The language-side enum is fully implemented (Round 28): `parseEnum` →
 `compileEnum` stores the members in a hidden const table `__enum_<Name>` and
@@ -330,9 +345,9 @@ main frame already aliases the global slots), `.qlc` format, opcodes.
 
 Status: **implemented** (Round 40, 2026-11-05) — spec `17-signals.md`
 finalized the same day; all steps of the plan landed.
-**Full plan: `docs/plans/signals-implementation-plan.md`** (this entry
-supersedes the Phase 4 item 10 summary above; the linked file carries the
-complete impact assessment, implementation steps, and test cases).
+**Full plan: `docs/plans/archive/signals-implementation-plan.md`** (the linked
+file carries the complete impact assessment, implementation steps, and test
+cases).
 
 Signals let an external (C++) type notify script code of state changes. v1
 scope: **external types only** — user-defined QLang classes have no signal
@@ -358,14 +373,13 @@ declaration syntax. Key design points:
 ```
 B1 (warnings) ──> B2 (dup-decl warning)
 spec finalization ──> C1 (strict typing)
-API definition ──> C2 (enum injection)
 spec writing ──> C5 (inheritance)
-draft finalization ──> C6 (signals)
 design decision ──> C7 (enum-name string form)
-A4 Phase 1 (deepcopy builtin, additive) ──> A4 Phase 2 (share-by-default storage, breaking)
-A4 Phase 1 ──> A4 Phase 3 (__deepcopy__ hook)
-A1, A2, A3, C3: independent of each other
-A4 Phase 1: independent (pure addition); A4 Phase 2 is breaking → standalone round
+C8 (module search paths) ──> external-modules-plan-v3.md (import/export tables)
+A3, C3, C8: independent of each other and of the above
+
+landed since this plan was written: A1 + A2 (Round 39) · C6 (Round 40) ·
+C2 (Round 41) · A4 Phases 1–4 (Rounds 42–45) · C4 (Phase 3 host-API hardening)
 ```
 
 ## Conventions (per AGENTS.md)
@@ -375,4 +389,6 @@ A4 Phase 1: independent (pure addition); A4 Phase 2 is breaking → standalone r
   `docs/compliance/status.md`, append the round to `docs/compliance/history.md`,
   re-verify affected spec-module hashes (never bump a hash before testing).
 - New opcodes append last in the enum; `.qlc` v5 stays the only supported
-  format (bump only if the on-disk encoding changes).
+  format (bump only if the on-disk encoding changes). Before appending, check
+  for an existing reserved placeholder — `kOpcodeUsedCount` is 73 (identities
+  0..72 after Round 51) and `$$` already owns the reserved `INDGET`/`INDPUT`.
