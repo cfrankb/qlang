@@ -1,7 +1,7 @@
 # QLang Compliance — Module Index
 
 Entry point for the compliance reference (migrated from root `SPEC_COMPLIANCE.md`,
-2026-10-29; last audit Round 52, 2026-11-05). Content is verbatim from the
+2026-10-29; last audit Round 54, 2026-11-06). Content is verbatim from the
 original `SPEC_COMPLIANCE.md`. The recorded hashes are checked by the
 `doc_hashes` ctest entry (`cmake/check_doc_hashes.cmake`); re-record them after
 a verified doc edit with `./update-doc-hashes.sh` (`--check` verifies only).
@@ -16,10 +16,10 @@ below (spec hashes tracked in [../spec/README.md](../spec/README.md)); the
 
 | Module | Content | Validates spec module(s) | SHA256 (self) |
 |--------|---------|--------------------------|---------------|
-| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `a9383216b5654895837a3a49ef9e54555da4e4f4056480a6b213e82e835cd4bd` |
+| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `1d1591ead342de6a4afc11872994639275b7744f7b4f21e11d4189195ffed51c` |
 | [coverage.md](coverage.md) | reserved-word coverage, value-type coverage | 02-lexical, 01-types | `789a0b58112961a6f32e98426923c17c88be737f0cfbc3a809ad771b11c898eb` |
 | [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `7aac49b22fc470c9768c13fb0344b6c7d50b69bdeb54e16bbb0db412c25a2a9e` |
-| [history.md](history.md) | audit rounds 7–51 (append-only) | mixed (per round) | `2e30f04c199cd00da113a6e992dd7845297ceb2a083296c76c2878b9d6bde63d` |
+| [history.md](history.md) | audit rounds 7–51 (append-only) | mixed (per round) | `f1579d509e34c9324369ed56d090a2165513559dc266527ca837d4649517304d` |
 | [classes.md](classes.md) | class implementation details, class spec conformance | 10-classes | `c95a835ae11f6e25c87facb30dd7210a18e928b56ab9b3592e25acf805e99b40` |
 | [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `ef01761abee664cdc3b7dd8165cfb968928e01c738605b76b0e8fb4e46e55945` |
 | [migration-value-semantics.md](migration-value-semantics.md) | copy→share migration note for `array`/`set`/`blob` (Round 43) | 01-types | `3b38a16ad6e8f04386092ee2f588adb27d5f1bdfcada749135c7168066547e7d` |

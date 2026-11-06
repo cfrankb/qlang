@@ -208,14 +208,29 @@ never sees a raw C++ exception from an external binding.
 | BoundMethod | none — it is callable (`CALLCLOS`), not an object |
 
 `callMethod` exists on every ops table but the VM does **not** call it in v1
-(method calls are `TABGET` → `BoundMethod` → `CALLCLOS`); it is kept for the
-future event-handler contract (context-level `hasMethod`/`callMethod`
-wrappers). `base` is reserved for inheritance (returns null in v1).
+(method calls are `TABGET` → `BoundMethod` → `CALLCLOS`). It is the host-side
+event-handler entry point: the context-level wrappers `QLangContext::hasMethod`
+/ `QLangContext::callMethod` are **implemented** (2026-11-06, `c4ee131`) and
+reach it through `getObjectOps` — `hasMethod` via `ops->getField`,
+`callMethod` via `ops->callMethod` after `bindThread()` + `processFinalizers()`;
+a missing method or a non-object throws `QLangError` (see
+`docs/EVENT_HANDLERS.md` §4). **Callable is not the same test on every kind:**
+a table/object member is callable when it is a `Type::Function` (the self
+anchor is added by `table_ops::callMethod`), an external member when
+`findMember` reports `kind == 2`. `hasMethod` currently accepts
+`Function` **or** `BoundMethod` on every kind, so a table field holding a
+`BoundMethod` passes the guard and then throws `member 'x' is not a function`
+— open defect, per-kind callable test pending. `base` is reserved for
+inheritance (returns null in v1).
 
 ## 10. Open questions
 
 1. **`hasMethod`/`callMethod` context wrappers** for the event-handler
-   contract (`docs/EVENT_HANDLERS.md`).
+   contract (`docs/EVENT_HANDLERS.md`) — ✓ **implemented** (2026-11-06,
+   `c4ee131`; `test_external` §19–§20). One open detail before it can be called
+   verified: the callable test must be per kind (§9) — `hasMethod` today also
+   accepts a table field holding a `BoundMethod`, which `callMethod` then
+   rejects.
 2. **RTTI validation on handoff** — ✓ **implemented (Phase 3).** The typed
    handoff helpers (`qval_external_owned<T>` / `qval_external_borrowed<T>`)
    record the concrete type and `self()`/`selfMut()` validate the resolved

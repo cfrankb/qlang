@@ -1,3 +1,178 @@
+## Round 54 (2026-11-06)
+
+**A5 extended-encoding spec finalized: the modifier byte settled as 2/2/4, the
+flag model corrected to one-hot, `$$` (Q6) closed without encoding space, and a
+detailed v6 plan written.**
+`docs/spec/13-bytecodes.md`, new `docs/plans/encoding-v6-and-indirect-plan.md`,
+`docs/plans/instruction-format-escape-byte-plan.md`,
+`docs/plans/missing-features-plan.md`, `docs/compliance/{status,history,README}.md`.
+**Docs only — no source, test-source, or `.qlc` change; the engine still ships
+v5.**
+
+- **Trigger.** The AGENTS.md session-start reload, then a request to *explain*
+  the encoding rules behind inventory item A5. Explaining them required reading
+  the implementation, and the two disagreed in places the spec could not settle:
+  `## encoding extended` was an **empty heading**, `## opCode scope` was a
+  malformed table, "shared registers" was referenced but never defined, and the
+  immediate/flag tables contradicted each other and the code. Round 53 had
+  tracked A5 as *draft, finalize before planning*; this round does that
+  finalization and writes the plan.
+- **Modifier byte settled (2/2/4).** `bit 0-1` left operand form (always a
+  register: 1/2 B, 4 B reserved for a future register file, `3` reserved),
+  `bit 2-3` right-operand **kind** (`0` immediate, `1` register, `2` const pool,
+  `3` **reserved**), `bit 4-7` right-operand **form**. Three rules the draft left
+  implicit are now normative: the **base form** of each class is pinned
+  (`e = 0x04` register-right, `0x40` immediate-right, `0x08` const-right, so
+  `mov r3, r5` stays 2 bytes); a per-opcode **permitted-kind** table makes any
+  other combination a **decode error** (copy/ALU/flag-compare accept kinds 0/1/2,
+  `makefunc`/`makegen` kind 2 only, `call` kind 0 with the form fixed to 5, the
+  rest kind 1 only); and the **arity rule** for 3-operand ops — kind 1 is
+  `r[a] = r[b] op r[c]`, kinds 0/2 are in-place `r[a] = r[a] op right`, which is
+  exactly why `add a, imm` *is* `addi`. The jump class keeps the v5 width
+  selector (`jmp8`/`jmp16`/`jmp32`) rather than the 2/2/4 split.
+- **The flag model was wrong, and the correction is the substantive one.** The
+  draft's extended-comparison table listed `lte` → `eq|1|1|0` and `gte` →
+  `eq|1|0|1`, i.e. **two bits set at once**. That is incoherent with the
+  implemented predicates (`QLangVM::flagsSatisfied`, `src/QLangVM.cpp:1063-1074`):
+  `jle` is `(f & (LT|EQ)) != 0`, so after an `lte` that set `eq|lt` for `a > b`
+  it would jump, and `je` (`f == EQ`) would fire after `lte` when `a < b`.
+  Adopting the two-bit states would also make `cmp` + `jle` stop firing on
+  equality. **Resolved:** `CMP_GR`/`CMP_EQ`/`CMP_LT` stay independent relation
+  predicates and a comparator sets **exactly the relations that hold** — at most
+  one bit, and *none* is legal — so the `lte`/`gte` rows are documented as
+  **capability masks** (which relations that comparator can distinguish), not
+  encodable states. `QLangVM::flagsSatisfied` therefore needs **no change**, and
+  the spec's jump table now carries the implemented predicates verbatim.
+- **Opcode reconciliation.** `movi`/`movc` → `mov` with the kind field;
+  `addi`/`subi`/`cmpi` → the in-place kind-0 form of `add`/`sub`/`cmp`;
+  `addc`/`subc` **rejected** (`mov` kind 1 already covers them). The suffix
+  identities stay **decodable** in v6 (coexistence) and are retired by a later
+  bump. `ja`/`jae`/`jb`/`jbe` are **assembler aliases** of
+  `jg`/`jge`/`jl`/`jle` — the flags carry no signedness, so distinct identities
+  would be dead weight (a genuinely unsigned compare stays deferred). The
+  flag-setting comparisons ship as `eqf`/`ltf`/`gtf`/`ltef`/`gtef` (general
+  types; the value-producing `EQ`/`NE`/`LT`/`GT`/`LE`/`GE` are untouched), plus
+  `TST` (`flags = truth(r[a]) ? eq : 0`), which retires `jmpfalse`/`jmptrue`,
+  plus `DECL` for `$$`: **7 opcodes appended last, 73 → 80 of 128**.
+- **Immediates.** Signed and unsigned 1/2/4/8 B, `float` (8 B), `bool` (forms
+  9/10, zero operand bytes) and `nil` (form 11) — the constant pool keeps only
+  what cannot be an immediate (strings, blobs, closure/function constants).
+  `12`–`15` and kind `3` stay **reserved**.
+- **Q6 closed — `$$` needs no encoding space.** The declaration bit is
+  per-*event* runtime state: one register can carry several declaration sites and
+  the same store opcode executes on both the declaring and the re-assigning path,
+  so no instruction bit can express it (this was true of v5's nibbles and stays
+  true of v6's fields). Adopted: compile-time declaration-site ids + a
+  per-function **declaration table** (`site → {reg, name, kind}`) in the `.qlc`
+  v6 function record + a per-frame **bitset** cleared at frame creation, set by
+  the `DECL siteId` marker; `INDGET`/`INDPUT` are ordinary register-class ops;
+  the `$$"literal"` fast path ships only under same-block dominance. Consequence
+  for the roadmap: the Round-53 dependency edge `A5 layout → A3 Q6` is
+  **removed** — A3 and A5 are independent and share only the `.qlc` v6 bump.
+- **Stale documentation corrected** (all verified against the tree first):
+  the "Instruction operand map (8-byte layout)" header is marked **historical** —
+  the struct and `usesI32()` were deleted in Round 37, only the *operand roles*
+  survive; the operand table gained the missing `NOP` (68) and `EMIT` (69) rows;
+  `MOVI`/`ADDI`/`SUBI` gained deprecation notes; the `shared registers` block (a
+  mangled table) became a real subsection; the jump examples were rewritten from
+  pre-v5 **absolute** `i32` targets to the shipped **relative** offsets with byte
+  sizes; the example `eq e=0x00 0c, 5` contradicted its own form table (`0x00` =
+  *unsigned*) and is now `eqf … e=0x40` (signed 1 B). In
+  `instruction-format-escape-byte-plan.md` §4/§5.3/§13.4 are marked superseded
+  and §14's "readers v1..v5" is corrected: the reader accepts **v5 only**
+  (`version != kQlcVersion` rejected, `src/QLangBytecodeIO.cpp:469`) — v1–v4 do
+  not load, and v6 follows the same clean-break precedent.
+- **Verification.** `cmake -B build && cmake --build build` clean; `ctest`
+  **46/46** green — expected, nothing in `src/` or `tests/` changed.
+  `./update-doc-hashes.sh --check` first reported the two drifted rows
+  (`13-bytecodes.md`, `status.md`); with the suites green the rows were
+  re-recorded (3: those two plus `history.md`) and `ctest` re-run — **46/46**
+  with `doc_hashes` now **Passed** rather than Skipped, and `--check` reporting
+  **24 modules verified across 2 indexes**, no drift. `docs/compliance/README.md`
+  "last audit" pointer → Round 54; the `docs/spec/README.md` row description for
+  `13-bytecodes.md` now names the extended-encoding sections. Tally unchanged
+  (1002 counted unit cases + 21 script regressions + the perf gate).
+
+## Round 53 (2026-11-06)
+
+**`missing-features-plan.md` re-audit: C3 landed without a round, an untracked
+extended-encoding spec becomes inventory item A5, four stale spec hashes.**
+`docs/plans/missing-features-plan.md`, `docs/compliance/{status,history,README}.md`,
+`docs/EXTERNAL_TYPES.md`, `docs/EVENT_HANDLERS.md`, `docs/spec/README.md` +
+`docs/compliance/README.md` (hash rows only).
+**Docs only — no source, test-source, or spec-module content change.**
+
+- **Trigger.** The AGENTS.md session-start reload, then a line-by-line audit of
+  `docs/plans/missing-features-plan.md` (last audited 2026-11-05, Round 52)
+  against the working tree and `git log`. Plans are **not** hash-tracked, so
+  nothing in the tooling detects their drift — they have to be re-audited by
+  hand against `history.md` (newest-first) and the `status.md` Open Items.
+- **C3 `hasMethod`/`callMethod` is implemented but untracked.** The pair
+  (`include/qlang/QLangContext.h`, `src/QLangContext.cpp`,
+  `tests/unit/test_external.cpp` §19–§20, 49 → 66 checks, `./build/test_external`
+  green) landed as **`c4ee131`** during this audit — a code commit with no round,
+  no Open-Item flip and no plan update (it also touched
+  `docs/spec/13-bytecodes.md`, so its hash row had to be re-recorded). Moved in
+  the plan from §C (open) to §D (implemented) and dropped from Phase 3 (items
+  renumbered). **Deliberately not marked verified:** `hasMethod` accepts a table
+  field holding a `BoundMethod`, while `table_ops::callMethod` requires
+  `Type::Function` and throws `member 'x' is not a function` — the guard does not
+  protect the call it guards, breaking the `docs/EVENT_HANDLERS.md` §6
+  no-op-on-missing-handler contract. Fix (per-kind callable test: table/object →
+  `Function` only, external → `findMember` `kind == 2`) is its own code commit
+  and its own round; `status.md` records C3 as *implemented, pending the fix*.
+  Plan Q19/Q20 adopted as defaulted.
+- **`1db387d` added an unimplemented encoding spec nobody was tracking.**
+  `docs/spec/13-bytecodes.md` gained `## encoding extended`, `## opCode scope`,
+  `### bytecode encoding` and `### extended OpCode eq, lt, gt, lte, gte`: a
+  modifier byte (left register 2 bits, right-operand kind 2 bits with value 3
+  reserved, right form 4 bits), `addc`/`subc`, the `ja/jb/jae/jbe` family and
+  extended `eq/lt/gt/lte/gte`. None of it is implemented and it is **breaking**
+  (`.qlc` v5 → v6). Added as inventory item **A5** + Phase 2 item 4, with
+  dependency edges `spec finalization → A5` and `A5 layout → A3 Q6` — the plan
+  previously told the next session to settle Q6 (where the `$$` declaration bit
+  lives) *before* touching encoding, which is now backwards, so **Q6 was
+  re-opened** (default unchanged: a VM-side per-frame side table, because the
+  declaration bit is per-event state, not durable).
+- **Anchor drift.** The plan cited `## redeclared variable within a scope`
+  (singular) five times; the spec heading is
+  `## redeclared variables within a scope` (plural, `docs/spec/16-strict_typing.md`).
+  Corrected everywhere.
+- **A deferral reason that no longer exists.** The duplicate-declaration Open
+  Item deferred the diagnostic because the `# warning` section requires warnings
+  to be toggleable — that section was deleted in the `docs/spec/`
+  modularization (`grep` over `docs/spec/` finds no `# warning` section). The
+  live requirement is `16-strict_typing.md` `## redeclared variables within a
+  scope`, which makes the diagnostic **level-dependent** (0 silent / 1 warning /
+  2 error) and therefore dependent on the unimplemented strict-typing level.
+  Reason restated; the work stays deferred, folded into the plan as B1/B2.
+- **`docs/EVENT_HANDLERS.md` documented a method that does not exist.** The
+  host-side call surface used `ctx.getVar(...)`; `QLangContext` exposes
+  `get(name)` (`include/qlang/QLangContext.h`) — corrected, plus a caveat that
+  the documented `hasMethod` guard is currently unreliable for table fields
+  holding a `BoundMethod`. `docs/EXTERNAL_TYPES.md` §9/§10.1 updated to match
+  (both design docs are outside the hash gate).
+- **`status.md` "SPEC.md Changes Since Last Audit" had no 2026-11-06 entry.**
+  The section still described the Round-40 edits as uncommitted and listed
+  nothing after them — the reason `1db387d`'s spec edits were invisible to the
+  next session. A paragraph now records the committed `1db387d` / `c4ee131`
+  spec edits (extended encoding → A5, the `# warning` deletion, the strict-typing
+  dup-decl section, the `03-declarations.md` wording drift) and states that the
+  older "uncommitted" notes describe the state at their own round.
+- **Four stale spec hashes.** `./update-doc-hashes.sh --check` reported
+  `03-declarations.md`, `11-external-types.md`, `13-bytecodes.md` and
+  `16-strict_typing.md` drifted — `1db387d` edited spec content without
+  re-recording (the gate is warn-only since Round 49, so CI stayed green).
+  Suites re-run first, then the rows re-recorded (AGENTS.md: testing proves
+  correctness, the hash merely detects change).
+- **Verification.** `cmake -B build && cmake --build build` clean; `ctest`
+  **46/46** green (`doc_hashes` Skipped by design); `./build/test_external` all
+  checks passed; `./update-doc-hashes.sh` re-recorded **6 rows** (the four spec
+  files plus `status.md` and `history.md`) and `--check` then reported **24
+  modules verified across 2 indexes**, no drift. `docs/compliance/README.md`
+  "last audit" pointer → Round 53. Tally unchanged (the 66-check `test_external`
+  is working-tree only).
+
 ## Round 52 (2026-11-05)
 
 **Spec↔compliance reload audit: an untracked `.gitattributes`, tallies left one

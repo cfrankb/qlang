@@ -7,8 +7,15 @@ IMPORTANT: every time a change is made to the opcodes or bytecode encoding, alwa
 
 ## Instruction operand map (8-byte layout)
 
-Implemented in `include/qlang/QLangBytecode.h` (see
-[../plans/qlc-codec-plan.md](../plans/qlc-codec-plan.md)).
+**Historical — the 8-byte struct was deleted in Round 37 (`.qlc` v5).** The instructions are
+now a flat byte stream decoded by `include/qlang/QLangBytecode.h` / `src/QLangBytecode.cpp`
+(see [../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md)
+and `## encoding extended` below). What survives is the **operand roles**: `a`/`b`/`c` below
+name the logical operands of each opcode, which is what the disassembler prints and what the
+tables in this document are written against. The `i32` column is dead — 32-bit parameters are
+now ordinary operands whose width is selected by the modifier byte.
+
+See also [../plans/qlc-codec-plan.md](../plans/qlc-codec-plan.md).
 
 ```cpp
 struct Instruction {
@@ -28,11 +35,12 @@ Note: `b`/`c` are the two 16-bit halves of `i32`; they are declared as an
 anonymous struct inside the union (bare `int16_t b, c` members of a union
 would alias the same storage).
 
-8 bytes, alignment 4, no padding. Rule: any opcode that needs a 32-bit
-parameter uses `i32`; all others use `a`/`b`/`c` as `int16_t`. The single
-source of truth is `usesI32(Opcode)` in `QLangBytecode.h`. Current `i32`
-users: `JMP`, `JMPIFFALSE`, `JMPIFTRUE`, `CONTINUE`, `BREAK` (pc targets),
-and `MOVI`/`ADDI` (32-bit integer literal; destination register in `a`).
+(pre-v5) 8 bytes, alignment 4, no padding. Rule: any opcode that needed a 32-bit
+parameter used `i32`; all others used `a`/`b`/`c` as `int16_t`. The former
+`usesI32(Opcode)` source of truth is deleted — the width of every operand is
+now selected by the modifier byte (`### bytecode encoding`). The opcodes that
+once used the `i32` slot are `JMP`, `JMPIFFALSE`, `JMPIFTRUE`, `CONTINUE`,
+`BREAK` (pc targets) and `MOVI`/`ADDI` (32-bit integer literal).
 
 Source location (line/col) is NOT in the instruction: it lives in the
 parallel `Function::loc` side-table (`std::vector<std::pair<uint16_t,
@@ -78,8 +86,10 @@ Conventions:
 | JMPIFTRUE | cond reg | — | — | pc target | |
 | CONTINUE | — | — | — | pc target | loop test label |
 | BREAK | — | — | — | pc target | loop exit label |
+| NOP | — | — | — | | no operands, no action (identity 68) |
 | CALLFN | dest reg | function index | arg count | | args in r[a+1..a+c] |
 | CALLCLOS | closure / dest reg | — | arg count | | b unused |
+| EMIT | object reg | signal-name const index | arg count | | identity 69; args in r[a+1..a+c] |
 | RETURN | result reg | — | — | | |
 | MAKEFUNC | dest reg | closure const index | — | | |
 | MAKEGEN | dest reg | function const index | — | | |
@@ -154,6 +164,12 @@ proposal
 ````
 net saving. -1 constant in pool. -2 Instructions.
 
+**Deprecated by `## encoding extended` (2026-11-06).** `movi`/`movc` are the same instruction
+as `mov` with a right-operand *kind* of immediate / constant pool: the `i`/`c` suffix is folded
+into the modifier byte and the separate identities are removed in a later version. The
+"fits in 32 bits ⇒ immediate, otherwise ⇒ pool" rule survives unchanged — it becomes the
+compiler's immediate-form selection (`### bytecode encoding`).
+
 
 ## OpCode addi
 
@@ -203,99 +219,157 @@ opcode `subi`
 
 net savings: -3 instructions
 
+`addi`/`subi` are likewise folded into `add`/`sub` with an immediate right operand — the
+in-place semantics (`r[a] = r[a] op imm`) are exactly what the non-register kinds mean
+(`### bytecode encoding`). **Deprecated**, same removal schedule as `movi`.
+
 ## alternate conditional jump OpCode
 
-proposed jump OpCode: `je`, `jl`, `jle`, `jg`, `jge`
-proposed comparator: `cmp`, `cmpi`
+jump OpCode: `je`, `jl`, `jle`, `jg`, `jge`, `jne` (+ the `ja`/`jae`/`jb`/`jbe` aliases)
+comparator: `cmp`, and the flag-setting `eqf`, `ltf`, `gtf`, `ltef`, `gtef`, `tst`
+(`### extended OpCode eq, lt, gt, lte, gte`). `cmpi` is `cmp` with an immediate right operand
+(`### bytecode encoding`), not a separate opcode in the extended encoding.
 
-|shared registers||
+### shared registers
+
+The frame carries three comparison flags — `CMP_GR`, `CMP_EQ`, `CMP_LT`
+(`include/qlang/QLangVM.h`). They are the "shared registers" referred to throughout this
+document; the implementation calls them *flags*, and they live in the frame, so a nested call
+starts from a clean state.
+
+|shared register|relation it records|
 |-|-|
-|gr|    greater than
-|eq|    equal
-|lt|    lesser than
+|gr|greater than|
+|eq|equal|
+|lt|lesser than|
+
+**Flag model (normative).** Each flag is an *independent relation predicate*. A comparator
+wipes the three bits and then sets exactly the bits whose relation holds:
+`gr = (a > b)`, `eq = (a == b)`, `lt = (a < b)`. Because the three relations are mutually
+exclusive, **at most one bit is ever set** — and it can be *none* of them, which means "this
+comparator's relation does not hold" (see the `*f` family below). `cmp` compares a total
+order, so after `cmp` **exactly one** bit is set.
+
+The `a >= b`, `a <= b`, `a != b` entries in the jump table below are *jump conditions*, not
+flag states — they are how the `j*` opcodes read the (single) set bit. The implemented
+predicates are (`QLangVM::flagsSatisfied`, `src/QLangVM.cpp`):
+
+|jump|predicate on the flag bits `f`|
+|-|-|
+|`je`|`f == eq`|
+|`jne`|`(f & eq) == 0`|
+|`jg`|`f == gr`|
+|`jge`|`(f & (gr \| eq)) != 0`|
+|`jl`|`f == lt`|
+|`jle`|`(f & (lt \| eq)) != 0`|
 
 
-cmp compares Instruction.a and Instruction.b and sets `gr`, `eq` and `lt`. The
-flags are wiped first, then each bit is set independently from the actual
-relation: `gr = (a > b)`, `eq = (a == b)`, `lt = (a < b)`. The three relations
-are mutually exclusive and exhaustive, so **exactly one** bit is set after a
-cmp/cmpi. (The `a >= b`, `a <= b`, `a != b` patterns below are *jump
-conditions*, not flag states — they are how the j* opcodes read a single set
-bit.)
-
-cmp opCode can only be used if a,b are both `int`
-cmpi opCode can only be used if a is `int` (i32 is always int)
-
-see which opcode can be used with which types (applies to column). 
+`cmp` can only be used if both operands are `int`; with an immediate right operand the
+immediate is always `int`. The general (non-`int`) relations are the `*f` family below.
 
 |opCode|relation|gr|eq|lt|
 |-|-|-|-|-|
 |cmp a,b|a > b|1|-|-|
 |cmp a,b|a == b|-|1|-|
 |cmp a,b|a < b|-|-|1|
-
-|opCode|relation|gr|eq|lt|
-|-|-|-|-|-|
-|cmpi a,i32|a > i32|1|-|-|
-|cmpi a,i32|a == i32|-|1|-|
-|cmpi a,i32|a < i32|-|-|1|
-
+|cmp a,imm|a > imm|1|-|-|
+|cmp a,imm|a == imm|-|1|-|
+|cmp a,imm|a < imm|-|-|1|
 
 |opCode|description|jumps when|meaning|
 |-|-|-|-|
-|jg|jump greater|gr|a > b
-|jge|jump greater equal|gr or eq|a >= b
-|jl|jump lesser|lt|a < b
-|jle|jump lesser equal|lt or eq|a <= b
-|je|jump equal|eq|a == b
-|jne|jump not equal|eq not set|a != b
-|ja|jump greater|gr only set|byte, word, dword (not implemented)
-|jae|jump greater equal|gr or eq|byte, word, dword (not implemented)
-|jb|jump lesser|lt only set|byte, word, dword (not implemented)
-|jbe|jump lesser equal|lt or eq|byte, word, dword (not implemented)
+|jg|jump greater|gr|a > b|
+|jge|jump greater equal|gr or eq|a >= b|
+|jl|jump lesser|lt|a < b|
+|jle|jump lesser equal|lt or eq|a <= b|
+|je|jump equal|eq|a == b|
+|jne|jump not equal|eq not set|a != b|
+|ja|jump above|gr|alias of `jg`|
+|jae|jump above equal|gr or eq|alias of `jge`|
+|jb|jump below|lt|alias of `jl`|
+|jbe|jump below equal|lt or eq|alias of `jle`|
 
-address is stored in Instruction.i32
+`ja`/`jae`/`jb`/`jbe` are **assembler-level aliases only**: the flags record the relation the
+comparator computed, and QLang compares `int`/`unsigned`/`qword` within their own types, so
+there is no unsigned-specific flag state for a distinct jump to test. They carry no distinct
+encoding and no opcode identity; disassembly prints the canonical `jg`/`jge`/`jl`/`jle`. A
+genuinely unsigned relation on mixed-signedness operands is deferred to a future version.
+
+The jump target is a **relative** offset (jmp8 / jmp16 / jmp32, `### bytecode encoding`), not
+the pre-v5 absolute `i32` pc target.
+
 
 ### OpCode jg
+
+current — compare into a temporary, branch on its truthiness (2 instructions, 1 temporary):
+
 ```
-  0054  gt           09, 0c, 0d ; r9 = (r12 > r13)
-  0055  jmpfalse     09,  5c         ; if !truth(r9) pc = 005c
+0054  gt           09, 0c, 0d ; r9 = (r12 > r13)          # 4 bytes
+0058  jmpfalse     09, 04     ; if !truth(r9) pc += 4     # 3 bytes, -> 005f
 ```
 
-alternate, if r12 and r13 
+extended — flags, no temporary (2 instructions, 0 temporaries):
+
 ```
-  0054  cmp          0c, 0d ;  r12 > r13   (update shared registers)
-  0055  jg           005c   ; pc=005c
+0054  gtf          0c, 0d     ; flags = cmp(r12, r13)     # 3 bytes
+0057  jg           04         ; pc += 4                   # 2 bytes, -> 005d
 ```
 
 ### OpCode je
+
+current:
+
 ```
-  004c  eq           06, 09, 0c ; r6 = (r9 == r12)
-  004d  jmpfalse     06. 5c         ; if !truth(r6) pc = 005c
+004c  eq           06, 09, 0c ; r6 = (r9 == r12)          # 4 bytes
+0050  jmpfalse     06, 04     ; if !truth(r6) pc += 4     # 3 bytes, -> 0057
 ```
 
-alternate, if r12 and r9 
-```
-  004c  cmp            09, 0c ;  r9 == r12
-  004d  je     005c         ; pc = 005c
-```
+extended:
 
+```
+004c  eqf          09, 0c     ; flags = (r9 == r12)       # 3 bytes
+004f  je           04         ; pc += 4                   # 2 bytes, -> 0055
+```
 
 ### OpCode jl
-```
-  0068  lt           09, 0d ; r14 = (r9 < r13)
-  0069  jmpfalse     5c         ; if !truth(r14) pc = 005c
-```
-alternate, if r13 and r9 
+
+current:
 
 ```
-  0068  cmp           09, 0d ; r9 < r13
-  0069  jl     005c         ; pc = 005c
+0068  lt           0e, 09, 0d ; r14 = (r9 < r13)          # 4 bytes
+006c  jmpfalse     0e, 04     ; if !truth(r14) pc += 4    # 3 bytes, -> 0073
 ```
 
+extended:
 
-OpCode `jge` and `jle` work exactly like `jg` and `jl`.
-`jne` is the opposite of `je`.
+```
+0068  ltf          09, 0d     ; flags = cmp(r9, r13)      # 3 bytes
+006b  jl           04         ; pc += 4                   # 2 bytes, -> 0071
+```
+
+### OpCode tst (replaces jmpfalse / jmptrue)
+
+`jmpfalse`/`jmptrue` branch on the *truthiness* of a register, which the flags cannot express
+on their own. `tst` bridges the gap: it sets `eq` from `truth(r[a])` and clears the other two
+bits, so the flag jumps become reachable from any value.
+
+```
+current
+0040  jmptrue      06, 04     ; if truth(r6) pc += 4      # 3 bytes
+
+extended
+0040  tst          06         ; flags = truth(r6) ? eq : 0 # 2 bytes
+0042  je           04         ; pc += 4                   # 2 bytes, -> 0046
+```
+
+The pair is one byte longer for a bare truthiness test, so the compiler keeps `jmpfalse`/
+`jmptrue` there until they are removed; it is a win whenever the condition is already a
+comparison (`eqf` + `jne` replaces `eq` + `jmpfalse` **and** frees a register) or when the
+flags feed a second branch. Both pairs decode; `jmpfalse`/`jmptrue` are **deprecated**
+(`## future plans`).
+
+OpCode `jge` and `jle` work exactly like `jg` and `jl`; `jne` is the complement of `je`.
+
 
 ## opCode divi
 
@@ -618,125 +692,236 @@ better encoding
 
 ## encoding extended
 
+Normative summary of the instruction encoding beyond the base (unescaped) forms. Two versions
+are described in this document and it matters which one a passage refers to:
+
+- **Shipped — `.qlc` v5** (Round 37): flat byte stream, `pc` = byte offset, opcode top bit =
+  escape flag + one modifier byte, the modifier's two **nibbles** (low = left-operand form,
+  high = right-operand form), signed `Int` immediates only. Authoritative record:
+  [../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md).
+- **Specified below — `.qlc` v6, not implemented** (inventory item **A5**,
+  [../plans/missing-features-plan.md](../plans/missing-features-plan.md)): the modifier byte
+  re-split into **2/2/4** fields, a right-operand **kind** selector (immediate / register /
+  const pool), the full immediate set (signed, unsigned, float, bool, nil), the flag-setting
+  comparison family, `tst`, and the removal of the `i`/`c` suffix opcodes. Detailed
+  implementation plan: [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md).
+
 ## opCode scope
 
-|opCode family|type|
-|-|-|
-|mov, movi, movc|copy 
-|add, addi, addc| add
-|sub, subi, subc| sub
-|jmp|jump
-|ja, jb, jae, jbe|conditional jump
-| jl, jg, jle, jge|conditional jump
-| je, jne|conditional jump
-|cmp, cmpi|comparison (numbers only)
-|eq, lt, gt, lte, gte|comparison (general)
+| opCode family | type | v6 spelling |
+|---------------|------|-------------|
+| mov, movi, movc | copy | `mov` — the right-operand *kind* selects register / immediate / const pool; `movi`, `movc` are deprecated |
+| add, addi, addc | add | `add` — same kind selector; `addi` deprecated, `addc` never added |
+| sub, subi, subc | sub | `sub` — same kind selector; `subi` deprecated, `subc` never added |
+| jmp | jump | `jmp` (jmp8 / jmp16 / jmp32 relative) |
+| ja, jb, jae, jbe | conditional jump | assembler aliases of `jg`, `jl`, `jge`, `jle` — no distinct encoding |
+| jl, jg, jle, jge | conditional jump | unchanged; test the shared-register flags |
+| je, jne | conditional jump | unchanged; test the shared-register flags |
+| cmp, cmpi | comparison (numbers only) | `cmp` — `cmpi` is `cmp` with an immediate right operand, deprecated |
+| eq, lt, gt, lte, gte | comparison (general) | flag-setting `eqf`, `ltf`, `gtf`, `ltef`, `gtef` (`### extended OpCode eq, lt, gt, lte, gte`) |
+| tst | truthiness test | sets `eq` from `truth(r[a])`; replaces `jmpfalse` / `jmptrue` |
 
 ### bytecode encoding
 
-[docs/plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md)
+[../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md)
+(v5, shipped) · [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md)
+(v6, specified)
 
-there should be only one pool of registers and one pool of constants. extended addressing is 2 byte, default addresings is 1 byte. if OpCode top bit is not set then both left and right operand are using 1 byte encoding
+there should be only one pool of registers and one pool of constants. extended addressing is
+2 byte, default addressing is 1 byte. if OpCode top bit is not set then both left and right
+operand are using 1 byte encoding
 
 127 OpCode limit (hard limit)
 
 ```
 top bit of opCode byte is set to denote variants
 
-opCode 1 byte (0-127) are opCode value. if top opCode top bit is set then an extra byte is added next to it .
+opCode 1 byte (0-127) are opCode value. if the opCode top bit is set then an extra byte (e)
+is added next to it.
+
 extra byte (e):
-- if opCode jmp and conditional jmp (jne, je, ja etc)
-   e = 0 => jmp16 (2 byte) relative address
-   e = 1 => jmp32 (4 byte) relative  address
-- if opCode mov, movi, movc, addi/addc, subi/subc,  cmp/cmpi, eq, lt, gt, etc
-   bit 0-1 left operand (always a register)
-      value 0 register 0-255
-      value 1 extended register (2 bytes)
-      value 2 extended register (4 bytes) // 
-   bit 2-3 (right operand type)
-      value 0 right operand immediate
-      value 1 right operand register
-      value 2 right operand const pool
-      value 3 reserved
-   bit 4-7 right operand
-      if constant (immediate)
-         value 0 => 1 byte   (unsigned)
-         value 1 => 2 bytes  (unsigned)
-         value 2 => 4 bytes  (unsigned)
-         value 3 => 8 bytes  (unsigned)
-         value 4 => 1 byte   (signed)
-         value 5 => 2 bytes  (signed)
-         value 6 => 4 bytes  (signed)
-         value 7 => 8 bytes  (signed)
-         value 8 => 8 bytes  (float) // future version
-         value 9 => 0 byte   (bool:false)  // future version
-         value 10 => 0 byte   (bool:true)  // future version
-         value 11 => 0 byte  (nil)   // future version
-         value 12 reserved
-         value 13 reserved
-         value 14 reserved
-         value 15 reserved
-      else if register
-        value 0 register 0-255 (1 byte)
-        value 1 extended register (2 bytes)
-        value 2 extended register (4 bytes) // future version
-      else if constant
-        value 0 constant 0-255 (1 byte)
-        value 1 extended constant (2 bytes)
-        value 2 extended constant (4 bytes) // future version
+
+- if opCode is jmp or a conditional jump (jmp, je, jne, jl, jle, jg, jge, continue, break)
+    e is the offset-width selector, NOT the 2/2/4 layout below
+    (base, no escape)  => jmp8  (1 byte)  relative address, +/-127
+    e = 0              => jmp16 (2 bytes) relative address
+    e = 1              => jmp32 (4 bytes) relative address
+  a deprecated jmpfalse / jmptrue additionally carries its 1-byte condition register.
+
+- otherwise (mov, add, sub, cmp, eqf/ltf/gtf/ltef/gtef, tst, ...) e is read as three fields:
+
+  bit 0-1 left operand (always a register)
+     value 0 register 0-255            (1 byte)
+     value 1 extended register         (2 bytes)
+     value 2 extended register         (4 bytes, future version)
+     value 3 reserved
+  bit 2-3 right operand kind
+     value 0 right operand immediate
+     value 1 right operand register
+     value 2 right operand const pool
+     value 3 reserved
+  bit 4-7 right operand form, interpreted by the kind
+
+    kind 0 (immediate)
+       value 0  => 1 byte  (unsigned)
+       value 1  => 2 bytes (unsigned)
+       value 2  => 4 bytes (unsigned)
+       value 3  => 8 bytes (unsigned)
+       value 4  => 1 byte  (signed)     <- the base form
+       value 5  => 2 bytes (signed)
+       value 6  => 4 bytes (signed)
+       value 7  => 8 bytes (signed)
+       value 8  => 8 bytes (float)
+       value 9  => 0 byte  (bool: false)   the form IS the value, no operand bytes
+       value 10 => 0 byte  (bool: true)    the form IS the value, no operand bytes
+       value 11 => 0 byte  (nil)           the form IS the value, no operand bytes
+       value 12 reserved
+       value 13 reserved
+       value 14 reserved
+       value 15 reserved
+    kind 1 (register)
+       value 0 => 1 byte  register 0-255
+       value 1 => 2 bytes extended register
+       value 2 => 4 bytes extended register (future version)
+       value 3-15 reserved
+    kind 2 (const pool)
+       value 0 => 1 byte  constant 0-255
+       value 1 => 2 bytes extended constant
+       value 2 => 4 bytes extended constant (future version)
+       value 3-15 reserved
+
+  a kind or form that is reserved, or a kind the opCode does not accept, is a decode error:
+  the reader rejects the file. the third operand c of a 3-operand op has no form field and
+  stays a 1-byte register.
+
+  arity: for a 3-operand op, kind 1 is the full form r[a] = r[b] op r[c]; kind 0 or 2 is the
+  in-place form r[a] = r[a] op right (this is what addi / subi mean today).
+
+  call is the one documented exception: always escaped, kind 0 with the form fixed to 5
+  (2-byte signed function id), followed by the 1-byte argument count.
 ```
+
+the base (unescaped) form is equivalent to a fixed `e` per class: register-right `e = 0x04`,
+immediate-right `e = 0x40`, const-right `e = 0x08`. the escape is emitted only when an operand
+exceeds its 1-byte default.
+
+immediates replace constant-pool entries: `bool`, `nil` and `float` literals no longer occupy a
+pool slot (`## constant pool`), which is the point of the wider immediate set.
+
 ### extended OpCode eq, lt, gt, lte, gte
 
-`opCode eq` is different from `shared registers eq`
+`opCode eq` is different from `shared registers eq`: the first is an instruction, the second is
+a flag bit. The flag-setting family is spelled with an `f` suffix in assembly and disassembly
+(`eqf`, `ltf`, `gtf`, `ltef`, `gtef`) because `eq`/`lt`/`gt`/`le`/`ge` already denote the
+**value-producing** comparisons (`r[a] = (r[b] == r[c])`), which stay — they are needed wherever
+a comparison is a value rather than a branch condition. There is no `nef`: "not equal" is
+`eqf` + `jne`.
 
-`shared registers` are defined elsewhere in this document
+The `*f` family compares **general** values (the same relation rules as the value-producing
+comparisons, including `ObjectOps` dispatch for strings, tables and external objects); `cmp`
+stays `int`-only (`## alternate conditional jump OpCode`).
 
-|opCode|reg eq|reg lt|reg gt|
-|-|-|-|-|
-|eq|1|0|0
-|lt|0|1|0
-|gt|0|0|1
-|lte|1|1|0
-|gte|1|0|1
+The table lists, for each opCode, **which flags it may set** — it is a capability mask, not a
+flag state. Each flag is an independent relation predicate and at most one is ever set
+(`### shared registers`); "none set" means the tested relation does not hold.
 
-once the extended eq, lt and gt have set the `shared registers` then a follow up conditional jump is possible (je, jne, ja, jb, jbe, jl, jg etc).
+|opCode|may set eq|may set lt|may set gt|sets when the relation holds|
+|-|-|-|-|-|
+|eqf|1|0|0|`eq` if a == b, else none|
+|ltf|0|1|0|`lt` if a < b, else none|
+|gtf|0|0|1|`gt` if a > b, else none|
+|ltef|1|1|0|`lt` if a < b, `eq` if a == b, else none|
+|gtef|1|0|1|`gt` if a > b, `eq` if a == b, else none|
 
+A simultaneous two-bit state (`lte` setting `eq` **and** `lt` together) is **rejected**: it is
+lossy and it breaks the implemented jump predicates — `je` tests `f == eq`, so it would stop
+firing for `a == b` after `lte`, and `jle` would fire for `a == b` after `cmp` only by
+accident. The mask reading needs no change to `QLangVM::flagsSatisfied`.
 
-```
-current reg, reg (comparuson)
-
-0075  eq           11, 0c, 0d ; r17 = (r12 == r13)
-0079  jmpfalse     11, 03 -> 007f ; if !truth(r17) pc += 3
-
-
-new encoding
-
-0074 eq   e=0x04     0c, 0d; r12 == r13
-0079 jne             03 -> 007f ; pc += 3
-
-
-if the right operand is an immediate
-
-new encoding
-
-0074 eq   e=0x00     0c, 5; r12 == 5
-0079 jne             03 -> 007f ; pc += 3
-
-
+once the extended comparisons have set the `shared registers` a follow up conditional jump is
+possible (`je`, `jne`, `jl`, `jle`, `jg`, `jge`, and the `ja`/`jb`/`jae`/`jbe` aliases).
 
 ```
-these new encodings reduce the number of active temporary registers
+current reg, reg (comparison)
+
+0075  eq           11, 0c, 0d ; r17 = (r12 == r13)      # 4 bytes
+0079  jmpfalse     11, 03     ; if !truth(r17) pc += 3  # 3 bytes, -> 007f
+
+new encoding, right operand is a register (kind 1, form 0)
+
+0075  eqf          0c, 0d     ; flags = (r12 == r13)    # 3 bytes
+0078  jne          03         ; pc += 3                 # 2 bytes, -> 007d
+
+new encoding, right operand is a signed 1-byte immediate (kind 0, form 4)
+
+0075  eqf   e=0x40 0c, 05    ; flags = (r12 == 5)       # 3 bytes (base form, no e emitted)
+0078  jne          03         ; pc += 3                 # 2 bytes, -> 007d
+```
+
+these new encodings reduce the number of active temporary registers: the comparison writes
+flags instead of a register, so the temporary `r17` disappears, and the right operand no longer
+needs a register of its own.
+
 
 ## constant pool
 
 constant in the pool must have unique values. duplicated entries should be folded into a single one.
+
+the pool holds what cannot be an immediate: **strings**, **blobs** and the **closure / function
+constants** used by `makefunc` / `makegen`. `int` literals left the pool with `movi` (Round
+30/34); `bool`, `nil` and `float` literals leave it with the v6 immediate forms
+(`### bytecode encoding`), which is the "freeing slots in the constant pool" goal.
 
 
 ## bytecode encoding and tests
 
 all tests will have to validated again whenever new encoding guidelines are implemented.
 
+## future plans
+
+Phasing of the extended encoding. Full design, impact assessment and verification gate:
+[../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md).
+
+**Phase 1 — `.qlc` v6.**
+
+- the modifier byte becomes the 2/2/4 layout (`### bytecode encoding`), which carries a
+  right-operand **kind**: immediate / register / const pool.
+- `mov`, `movc` and `movi` are reconciled as `mov` with the extra byte; `add`/`addi`,
+  `sub`/`subi` and `cmp`/`cmpi` the same way. `addc`/`subc` are never added — kind 2 already
+  means "const pool".
+- immediates include signed, unsigned, float, bool and nil, thus freeing slots in the constant
+  pool (`## constant pool`).
+- the flag-setting comparisons `eqf`/`ltf`/`gtf`/`ltef`/`gtef` and `tst` are added
+  (`### extended OpCode eq, lt, gt, lte, gte`, `### OpCode tst`).
+- `ja`/`jae`/`jb`/`jbe` exist as assembler aliases only.
+- the deprecated spellings (`movi`, `movc`, `addi`, `subi`, `cmpi`, `jmpfalse`, `jmptrue`) keep
+  decoding, so a v6 stream may contain either spelling; the compiler emits only the new ones.
+
+**Phase 2 — compiler follow-up.** the compiler stops emitting the deprecated spellings, widened
+right operands are extended beyond the `## opCode scope` families, and the pool is re-measured.
+
+**Phase 3 — removal.** long-term the `i`/`c` suffix opcodes are removed, together with
+`jmpfalse` and `jmptrue` (`tst` + `je`/`jne` subsume them). This is a second version bump with
+no layout change, and it can only land once nothing emits the old spellings.
+
+reducing temporary registers is a priority: the flag comparisons and the in-place immediate
+forms exist to remove the compare-to-temporary + `jmpfalse` shape and the arithmetic
+temporaries (`### egregious examples`).
+
+**`$$` inside the new framework — resolved 2026-11-06.** the declaration bit is *not* encoded.
+It is per-*event* state (whether a declaration has executed in this frame), not
+per-instruction state, so no operand field can express it — spare or not. It becomes a
+per-frame bitset indexed by declaration-site id, set by a `DECL siteId` marker opcode executed
+where the declaration executes, with the frame name map and the declaration table as function
+metadata in the `.qlc` v6 function record. `indget`/`indput` are ordinary register-class
+opcodes. `kind 3` and immediate forms 12–15 therefore stay reserved. See
+[../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md) §7 and
+[05-operators.md](05-operators.md) `## operator $$`.
+
+
 ## bytecode serialization
+
+only retain a serializer and decoder for the current qlc codec.
 
 see [SERIALIZATION.md](../SERIALIZATION.md)
 

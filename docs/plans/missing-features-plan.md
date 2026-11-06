@@ -11,15 +11,38 @@ This is an **overview**: each phase gets a detailed implementation plan before
 work starts (precedent: the movi/addi/subi plans in `docs/plans/archive/`).
 
 **Updated 2026-11-06 — warnings are now owned by strict typing (C1).** The
-uncommitted spec edits delete `11-external-types.md` `# warning` (the
+spec edits committed in `1db387d` delete `11-external-types.md` `# warning` (the
 toggleable-warnings section B1 was anchored to, incl. "all warnings defered
 until further notice") and add `16-strict_typing.md`
-`## redeclared variable within a scope`: a duplicate `local`/`let` in one scope
+`## redeclared variables within a scope`: a duplicate `local`/`let` in one scope
 is silent at level 0, `warning: duplicated variable "a" declaration within
 scope` at level 1, `error: …` at level 2. B1/B2 are therefore folded into C1
 (Phase 3 item 2); the B numbering is kept for `status.md` cross-references.
 `05-operators.md` `## operator $$` still calls the duplicate an unconditional
 "compile warning" — spec drift, **Q28**.
+
+**Re-audited again 2026-11-06 (post-`1db387d`).** Three changes since the
+Round-52 audit: (1) **C3 `hasMethod`/`callMethod` is implemented** (`c4ee131`,
+committed mid-audit with no round of its own) — moved to §D, with one defect to
+fix before it can be called verified; (2) `13-bytecodes.md` gained `## encoding extended` /
+`## opCode scope` / `### extended OpCode eq, lt, gt, lte, gte` (committed in
+`1db387d`) — a new instruction-encoding proposal plus opcode families that
+exist nowhere in `include/` or `src/` and were tracked by neither this plan nor
+`status.md` → new inventory item **A5**, and it invalidates **Q6**'s premise;
+(3) the spec heading is `## redeclared variables within a scope` (plural) — the
+anchor wording used throughout this plan is corrected.
+
+**A5 spec finalized 2026-11-06; detailed plan written.** The draft sections
+listed in the inventory row are now normative (`13-bytecodes.md` `## encoding
+extended`, `## opCode scope`, `### bytecode encoding`,
+`### extended OpCode eq, lt, gt, lte, gte`) and the detailed implementation plan
+exists: **`docs/plans/encoding-v6-and-indirect-plan.md`**. It settles the
+modifier byte as `bit 0-1` left register / `bit 2-3` right-operand **kind** /
+`bit 4-7` right-operand **form**, adds the full immediate set (signed, unsigned,
+`float`, `bool`, `nil`), reconciles `movi`/`movc`/`addi`/`subi`/`cmpi` into the
+unsuffixed opcodes, specifies `ja`/`jae`/`jb`/`jbe` as **aliases** (not new
+identities), rejects `addc`/`subc`, and closes **Q6** (§7). A5 is now
+*specified and planned*, still unimplemented.
 
 ## Inventory
 
@@ -28,18 +51,47 @@ scope` at level 1, `error: …` at level 2. B1/B2 are therefore folded into C1
 | # | Item | Spec anchor | Scope |
 |---|------|-------------|-------|
 | A3 | `$$` indirect access operator | `05-operators.md` `## operator $$` | large |
+| A5 | Extended instruction encoding + opcode families | `13-bytecodes.md` `## encoding extended`, `## opCode scope`, `### bytecode encoding`, `### extended OpCode eq, lt, gt, lte, gte`; plan `encoding-v6-and-indirect-plan.md` | **new in the 2026-11-06 audit** — spec **finalized**, plan written; large, breaking (`.qlc` v5 → v6) |
 
 A1 `nop` (Round 39), A2 `?` (Round 39) and A4 `deepcopy` + share-by-default
 value semantics (Rounds 42–45, plan closed Round 45) are **implemented** — see
 §D. The numbering is kept so the round records and `status.md` cross-references
 stay readable.
 
+**A5** was specified but unimplemented and untracked until the 2026-11-06 audit
+(the same class of gap Round 50 flagged for `07-api.md`'s module-search
+sections). The draft rewrites the escaped modifier byte — `bit 0-1` left operand
+(always a register), `bit 2-3` right-operand **kind** (immediate / register /
+const pool / `value 3 reserved`), `bit 4-7` right-operand form — where the
+implementation still uses low nibble = left form, high nibble = right form
+(`escapedInstructionSize`, `src/QLangBytecode.cpp:121-172`); it named opcode
+families `addc`/`subc`, conditional jumps `ja`/`jb`/`jae`/`jbe` and extended
+comparisons `eq`/`lt`/`gt`/`lte`/`gte` that set the "shared registers" flags
+(only `EQ`/`LT`/`GT` exist today; no `ADDC`/`SUBC`/`JA`/`JB`/`JAE`/`JBE`/`LTE`/
+`GTE`), and it renumbered the immediate forms (`9`/`10` = bool false/true, `11` =
+nil, `12`–`15` reserved). Adopting it changes the on-disk encoding → `.qlc`
+version bump.
+
+Those ambiguities are resolved (`encoding-v6-and-indirect-plan.md`): the
+modifier byte is **2/2/4** with the base form pinned to `e = 0x04` (register
+right) / `0x40` (immediate right) / `0x08` (const right); the jump class keeps
+the v5 width selector instead of the 2/2/4 split; a per-opcode **permitted-kind**
+table makes any other combination a decode error; `addc`/`subc` are **rejected**
+(`mov` with kind 1 already covers them); `ja`/`jae`/`jb`/`jbe` are **assembler
+aliases** of `jg`/`jge`/`jl`/`jle` (the flags carry no signedness, so distinct
+identities would be dead weight); the extended comparisons ship as
+`eqf`/`ltf`/`gtf`/`ltef`/`gtef` (7 new opcodes, 73 → 80 of 128) and set the
+existing **one-hot** flags — the spec's `lte`/`gte` rows are *capability masks*,
+not two-bit states; `jmpfalse`/`jmptrue` are phased out behind `TST`; and the
+immediates (`bool`/`nil`/`float` included) free constant-pool slots. **Q6** is
+closed by §7 of the plan: the declaration bit is **not** encoded.
+
 ### B. Foundations (now owned by C1 — strict typing)
 
 | # | Item | Spec anchor | Blocks |
 |---|------|-------------|--------|
-| B1 | Warning emission infrastructure | *was* `11-external-types.md` `# warning` — **section deleted (2026-11-06, uncommitted)**; no standalone anchor remains | B2 (as a C1 dependency: level 1 must be able to warn) |
-| B2 | Duplicate-declaration diagnostic (level-dependent) | `16-strict_typing.md` `## redeclared variable within a scope` (new), `03-declarations.md` dup-decl example ("possible warning or error depending on strict typing guidelines"), `05-operators.md` `## operator $$` (declaration-state rules — wording drift, **Q28**) | — |
+| B1 | Warning emission infrastructure | *was* `11-external-types.md` `# warning` — **section deleted (`1db387d`, 2026-11-06)**; no standalone anchor remains | B2 (as a C1 dependency: level 1 must be able to warn) |
+| B2 | Duplicate-declaration diagnostic (level-dependent) | `16-strict_typing.md` `## redeclared variables within a scope` (new), `03-declarations.md` dup-decl example ("possible warning or error depending on strict typing guidelines"), `05-operators.md` `## operator $$` (declaration-state rules — wording drift, **Q28**) | — |
 
 The former dependency `B1 ──> B2` (warnings must be toggleable before the
 dup-decl check can re-land) is superseded: the strict-typing level is the
@@ -51,13 +103,13 @@ warning toggle still exists is **Q27**.
 | # | Item | Spec anchor | Notes |
 |---|------|-------------|-------|
 | C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | draft spec — C++ API "to be provided"; examples show runtime exceptions at call/return sites; **now also owns the duplicate-declaration diagnostic (B2) and warning emission (B1)** |
-| C3 | External-type wrappers: `hasMethod`/`callMethod` | `11-external-types.md` | event-handler contract; `ops->callMethod` has zero VM call sites in v1 |
 | C5 | Inheritance (`ObjectOps::base`) | `10-classes.md` v1 restrictions, `EXTERNAL_TYPES.md` §10.3 | reserved, returns null; base-chain walk deferred to v2 |
 | C7 | Enum-name string form for enum-valued properties | `EXTERNAL_TYPES.md` §10.5 | no dispatch point sees both field value and type context |
 | C8 | Module search paths + external search callback | `07-api.md` `## module search paths`, `## external search callback` | **new in this audit** — spec text only, no C++ surface (`searchPath`/`searchCallback` appear nowhere in `include/` or `src/`); prerequisite/front end for `external-modules-plan-v3.md` |
 
-C2 enum injection (Round 41), C4 RTTI handoff validation (Phase 3) and C6
-signals (Round 40) are **implemented** — see §D.
+C2 enum injection (Round 41), C3 `hasMethod`/`callMethod` (`c4ee131`,
+2026-11-06), C4 RTTI handoff validation (Phase 3) and C6 signals (Round 40) are
+**implemented** — see §D.
 
 ### D. Resolved / no work needed
 
@@ -110,6 +162,29 @@ signals (Round 40) are **implemented** — see §D.
   (the draft's "base type is metadata only" was wrong: `compileEnum` types
   members per the declared base and `m_enums` stores typed `QLangValue`s).
   26 `test_external` cases. See the detailed section below.
+- **C3 `hasMethod`/`callMethod` context wrappers** — **implemented
+  (`c4ee131`, 2026-11-06 — committed with no round of its own; recorded in
+  `docs/compliance/history.md` Round 53)**.
+  `QLangContext::hasMethod(obj, name)` resolves the member through
+  `getObjectOps` → `ops->getField` and reports whether it is callable;
+  `QLangContext::callMethod(obj, name, args)` drains finalizers (the
+  `emitSignal`/`callClosure` safe point) and dispatches `ops->callMethod`,
+  which supplies self / the statics anchor as the script-visible first
+  argument. Host-only (**Q19** resolved as the default: the VM path stays
+  `TABGET` → `BoundMethod` → `CALLCLOS`); unknown method or a value without
+  `ObjectOps` throws `QLangError` (**Q20** resolved as the default, mirroring
+  `emitSignal`). The `hasSignal` comment now reads "mirrors hasMethod above,
+  which this pair predates". `test_external` §19–20 (49 → 66 checks).
+  **Not yet verified** — one defect blocks the flip: `hasMethod` accepts
+  `Function` **or** `BoundMethod`, but `table_ops::callMethod`
+  (`src/QLangObjects.cpp:188`) and `QLangContext::callClosure` both require
+  `Type::Function`, so a table field holding a `BoundMethod` passes the guard
+  and then throws — breaking the `docs/EVENT_HANDLERS.md` §6 guard contract.
+  Fix: per-kind callable test (table/object → `Function` only; external →
+  `findMember(kind == 2)` instead of `getField` + a swallowed `QLangError`),
+  plus a `BoundMethod`-field test. Landed **without a detailed plan**, against
+  this document's own convention — recorded as an exception (small API item,
+  design fully pinned by Q19/Q20 defaults).
 - **C6 signals** — implemented in Round 40 (2026-11-05; spec
   `17-signals.md` finalized the same day). `QL_SIGNAL(name)` meta with the
   signature deduced from a declared, unimplemented member function; `emit`
@@ -164,13 +239,20 @@ now names is the level-1 duplicate-declaration diagnostic in
 
 ### A3 — `$$` indirect operator
 
-- **Q6 where the declaration bit lives** — spec note 2 puts it "on the existing
-  store/init opcode", but the instruction format has no spare bit: the base
-  (non-escaped) form carries no modifier byte, and the escaped modifier's two
-  nibbles are fully consumed by the operand-width forms
-  (`src/QLangBytecode.cpp:134-170`). Either a VM-side per-frame side table
-  (no encoding change, `.qlc` untouched) or a format widening (breaking,
-  version bump). **Default:** the side table.
+- **Q6 where the declaration bit lives** — **closed 2026-11-06**
+  (`encoding-v6-and-indirect-plan.md` §7). Spec note 2 put it "on the existing
+  store/init opcode", but the declaration bit is per-*event* state (**Q7**), not
+  per-instruction, so no encoding bit can express it: one register can carry
+  several declaration sites, and the same store opcode executes on both the
+  declaring and the re-assigning path. The A5 finalization did **not** change
+  this — v6 does name spare space (`bit 2-3 = 3`, immediate forms `12`–`15`),
+  but that space is deliberately left **reserved** rather than spent on it.
+  **Adopted:** compile-time declaration-site ids + a per-function **declaration
+  table** (`site → {reg, name, kind}`) in the `.qlc` v6 function record, a
+  per-frame **declaration bitset** cleared at frame creation, and a new
+  `DECL siteId` marker opcode executed where the declaration executes. A3 is
+  therefore **independent of A5's encoding layout** (it only shares the `.qlc` v6
+  bump); `INDGET`/`INDPUT` are ordinary register-class ops.
 - **Q7 declaration-bit granularity** — per register or per declaration site?
   Registers are reused across branches and loop iterations, and the spec's
   branch example (`$$a = 1` legal only if `cond` ran) is per-*event* state.
@@ -241,17 +323,24 @@ now names is the level-1 duplicate-declaration diagnostic in
   ("declaration state") still says "a later explicit `local`/`let` for the same
   name is a compile warning", i.e. unconditional, while the level table makes
   it silent/warning/error by level. Spec edit aligning the sentence to
-  `16-strict_typing.md` `## redeclared variable within a scope` (then re-hash).
+  `16-strict_typing.md` `## redeclared variables within a scope` (then re-hash).
   **Default:** align the wording; one shared check (**Q5**).
 
-### C3 — `hasMethod` / `callMethod`
+### C3 — `hasMethod` / `callMethod` (resolved 2026-11-06)
 
-- **Q19 who may call `ops->callMethod`** — it is present on every ops table but
-  has zero VM call sites in v1 (method calls are `TABGET` → `BoundMethod` →
-  `CALLCLOS`). Host-only wrapper, or reroute VM dispatch through it?
-  **Default:** host-only; the VM path is unchanged.
-- **Q20 unknown-method failure** — throw `QLangError` or return nil?
-  **Default:** throw, mirroring `emitSignal` (`include/qlang/QLangContext.h:261`).
+Both defaults were adopted as-is when the wrappers landed — recorded here rather
+than deleted, since the landing cites them.
+
+- **Q19 who may call `ops->callMethod`** — **resolved: host-only.**
+  `QLangContext::callMethod` is the only caller; the VM path is unchanged
+  (`TABGET` → `BoundMethod` → `CALLCLOS`).
+- **Q20 unknown-method failure** — **resolved: throw `QLangError`**, mirroring
+  `emitSignal`. A value without `ObjectOps` and a non-callable/missing member
+  each throw; errors raised inside the method propagate.
+- **New open detail (not a spec question)** — what "callable" means per kind:
+  today `hasMethod` says yes to `Function` **or** `BoundMethod`, but the table
+  ops only invoke `Function` (see §D, C3). The guard and the dispatch must agree
+  before this item can be flipped to verified in `status.md`.
 
 ### C5 — inheritance (`ObjectOps::base`)
 
@@ -297,7 +386,7 @@ now names is the level-1 duplicate-declaration diagnostic in
 The former items 1 (B1 warning infrastructure) and 2 (B2 duplicate-declaration
 warning) no longer stand alone: the `# warning` section they were anchored to
 is deleted and the diagnostic is now specified by strict-typing level
-(`16-strict_typing.md` `## redeclared variable within a scope`). Both land
+(`16-strict_typing.md` `## redeclared variables within a scope`). Both land
 inside C1 — see Phase 3 item 2. The B numbering is kept for `status.md`
 cross-references.
 
@@ -308,14 +397,18 @@ cross-references.
      `function`/`lambda`, declaration bit) — the map lives on `Frame`, so the
      read/write handlers sit in the single `runFrames()` dispatch loop; frame-wide
      vs block-scoped coverage is **Q8**;
-   - declaration bit as a flag on existing store/init opcodes (no new opcode
-     for declaration state) — **not encodable in the current instruction
-     format**, see **Q6**/**Q7**; the default is a VM-side per-frame side table
-     keyed by declaration site instead;
+   - declaration bit as a flag on existing store/init opcodes (spec note 2) —
+     **rejected**: the bit is per-*event* state, so it cannot ride an
+     instruction (**Q6** closed, **Q7**). Adopted design: compile-time
+     declaration-site ids + a per-function **declaration table**
+     (`site → {reg, name, kind}`) + a per-frame **bitset**, set by a new
+     `DECL siteId` marker opcode (`encoding-v6-and-indirect-plan.md` §7.2–§7.3);
    - **reuse the reserved `Opcode::INDGET` / `Opcode::INDPUT` placeholders**
      (`QLangBytecode.h:123-124`) rather than adding opcodes: they already carry
      fixed identities inside the defined range (`kOpcodeUsedCount` is 73,
-     identities 0..72), the `indget`/`indput` mnemonics
+     identities 0..72 — A5 raises it to 80 with `eqf`…`gtef` + `TST` + `DECL`,
+     which appends after them and does not move these identities), the
+     `indget`/`indput` mnemonics
      (`QLangBytecode.cpp:796-797`), the 3-operand default arity (**Q10** decides
      whether to keep it) and the `qlang_run` pseudo-text — so **no identity is
      appended and `kOpcodeUsedCount` does not change**. Round 51 deliberately
@@ -334,8 +427,28 @@ cross-references.
      open (**Q11**).
  Tests: dedicated suite (precedent: `class_static_test`) covering all six
  pipeline stages, resolution order, declaration state, const/function
- rejection. Open questions: **Q6–Q11** — Q6 (declaration-bit encoding) gates the
- whole design. Effort: 1–2 weeks.
+ rejection. Open questions: **Q7–Q11** — **Q6 is closed** (2026-11-06), so
+ nothing gates the design any more; `DECL` is the only new opcode A3 needs.
+ Effort: 1–2 weeks.
+4. **A5 extended instruction encoding + opcode families** — **new in the
+   2026-11-06 re-audit** (spec committed in `1db387d`, untracked before that);
+   spec **finalized** and planned the same day.
+   **Full plan: `docs/plans/encoding-v6-and-indirect-plan.md`.**
+   Rewrite the escaped modifier byte to the `bit 0-1` left register /
+   `bit 2-3` right-operand kind / `bit 4-7` right-operand form layout, ship the
+   full immediate set (signed/unsigned 1/2/4/8 B, `float`, `bool`, `nil`),
+   reconcile `movi`/`movc`/`addi`/`subi`/`cmpi` into the unsuffixed opcodes, add
+   the flag-setting `eqf`/`ltf`/`gtf`/`ltef`/`gtef` plus `TST` (which retires
+   `jmpfalse`/`jmptrue`) and `DECL`, and spell `ja`/`jae`/`jb`/`jbe` as assembler
+   aliases. `addc`/`subc` are dropped. Touches `QLangBytecode.{h,cpp}`
+   (encode/decode/size), the VM dispatch loops, the compiler's fusion sites and
+   `qlang_run`'s disassembly; **changes the on-disk encoding → `.qlc` v5 → v6**
+   (v5-only reader today, so a clean break per the Round 37 precedent). The
+   three draft defects are fixed (empty `## encoding extended` heading filled,
+   `## opCode scope` table repaired, "shared registers" defined and its flag
+   model made normative). Sequencing: **independent of A3** — A3's **Q6** is
+   closed and needs no encoding space, only the same `.qlc` v6 bump, so the two
+   can land in either order or together. Effort: 1–2 weeks.
 
 ### Phase 3 — API surface (absorbs the former Phase 1)
 
@@ -361,7 +474,7 @@ cross-references.
    strict-typing level: level 0 silent, level 1
    `warning: duplicated variable "a" declaration within scope`, level 2
    `error: duplicated variable "a" declaration within scope`
-   (`16-strict_typing.md` `## redeclared variable within a scope`). Level 1
+   (`16-strict_typing.md` `## redeclared variables within a scope`). Level 1
    needs the warning emission path — distinct from errors, never throws,
    routed through the gated `trace()` helper per AGENTS.md (the former B1;
    **Q3**) — and no independent toggle (**Q27**). The `$$` spec's
@@ -370,30 +483,19 @@ cross-references.
    level 1, error at level 2, no diagnostic for plain assignment crossing).
    Open questions: **Q5** (what counts as a duplicate once block scopes
    exist). Effort: ~1 day on top of C1.
-3. **C3 `hasMethod`/`callMethod` context wrappers** — add
-   `QLangContext::hasMethod(obj, name)` / `callMethod(obj, name, args)`
-   routing through `getObjectOps` → `ops->callMethod` (present on every ops
-   table; the VM does not call it in v1 — method calls are
-   `TABGET` → `BoundMethod` → `CALLCLOS`). This is the event-handler
-   contract (`docs/EVENT_HANDLERS.md` §0); `hasSignal`/`emitSignal` (Round 40)
-   already mirror the shape and cite `hasMethod` in a comment, so the pair
-   should land together with the comment made accurate. Open questions:
-   **Q19–Q20** (host-only wrapper vs rerouting VM dispatch; the unknown-method
-   failure mode). Tests: `test_external` (hasMethod true/false, callMethod
-   dispatch, unknown-method error). Effort: small.
-4. **C5 inheritance (`ObjectOps::base`)** — `base` returns null today;
+3. **C5 inheritance (`ObjectOps::base`)** — `base` returns null today;
    `10-classes.md` v1 restrictions reserve the hook and
    `EXTERNAL_TYPES.md` §10.3 defers the base-chain walk to v2. Needs a spec
    first — **Q21** is the whole design (base-clause syntax, resolution order,
    constructor chaining, single vs multiple inheritance) — treat like C1 step 1.
    Effort: medium–large once specified.
-5. **C7 enum-name string form** — reverse lookup for enum-valued
+4. **C7 enum-name string form** — reverse lookup for enum-valued
    properties. Known blocker (`EXTERNAL_TYPES.md` §10.5): no dispatch
    point sees both the field value and its type context —
    `str(e.options)` sees a bare `Int`. **Q22** is the design decision (enum
    table on the property binding vs a value tag) and must be settled before
    implementation. Effort: small–medium once designed.
-6. **C8 module search paths + external search callback** — **new in the
+5. **C8 module search paths + external search callback** — **new in the
    Round 52 re-audit.** Spec `07-api.md` `## module search paths` ("API C++ will
    provide a means to set the search paths to find modules"; POC modules are
    single files, so resolution is `[modulename].ql` tried in each directory in
@@ -411,8 +513,9 @@ cross-references.
    resolution contract. Tests: `test_module` (+ a `tests/scripts/` regression
    once `.ql` file loading exists). Effort: small–medium.
 
-C2 enum injection (Round 41) and C6 signals (Round 40) are **implemented** — see
-§D and the detailed sections below.
+C2 enum injection (Round 41), C6 signals (Round 40) and C3
+`hasMethod`/`callMethod` (`c4ee131`, 2026-11-06, pending the `BoundMethod`
+guard fix) are **implemented** — see §D and the detailed sections below.
 
 ### Phase 4 — Structural (only if a spec decision changes)
 
@@ -425,11 +528,17 @@ C2 enum injection (Round 41) and C6 signals (Round 40) are **implemented** — s
 Per the overview convention, each phase item gets a detailed plan before work
 starts. The two entries below are the detailed plans of items that have since
 landed (C2 Round 41, C6 Round 40) and are kept as the design record; C6's full
-plan lives in `docs/plans/archive/signals-implementation-plan.md`. The open
-items (A3, C1 — incl. the folded B1/B2 dup-decl work, C3, C5, C7, C8) still
-need theirs — each one opens by
+plan lives in `docs/plans/archive/signals-implementation-plan.md`. **A5 has its
+plan** — `docs/plans/encoding-v6-and-indirect-plan.md` (2026-11-06, finalized
+together with the spec; it also carries the A3/**Q6** design, so A3 needs only
+its check-pipeline and test-plan detail). The remaining open items (A3, C1 —
+incl. the folded B1/B2 dup-decl work, C5, C7, C8) still need theirs — each one
+opens by
 closing the **Q#**s its item points at (adopting the default is a valid answer;
-it just has to be recorded).
+it just has to be recorded). **C3 is the one exception**: it landed
+(`c4ee131`, 2026-11-06) with no detailed plan of its own — acceptable for an
+item this size only because Q19/Q20 had already pinned the design, and recorded
+here so the exception is not read as a new precedent.
 
 ### C2 — Enum C++ injection API
 
@@ -582,21 +691,30 @@ declaration syntax. Key design points:
 ```
 C1 (levels + warning emission) ──> B2 (dup-decl diagnostic, Phase 3 item 2)
 spec finalization ──> C1 (strict typing)
+spec finalization ──> A5 (extended encoding)      ✅ done 2026-11-06
+A5 detailed plan                                   ✅ done 2026-11-06
+                                                   (encoding-v6-and-indirect-plan.md)
+A5 (encoding layout) ──✗──> A3 Q6: edge removed 2026-11-06 — Q6 is closed without
+                            consuming encoding space, so A3 no longer waits on A5
+                            (they share only the `.qlc` v6 bump)
 spec writing ──> C5 (inheritance)
 design decision ──> C7 (enum-name string form)
 C8 (module search paths) ──> external-modules-plan-v3.md (import/export tables)
-A3, C3, C8: independent of each other and of the above
+A3, A5, C8: otherwise independent of each other and of the above
 
 open questions gate the work (see §Open questions):
   Q1–Q4  ──> C1 warning shape    Q5   ──> B2 dup-decl rule
-  Q6     ──> A3 encoding design  Q7–Q11 ──> A3 details
+  Q6     ──> A3 encoding design (closed 2026-11-06)  Q7–Q11 ──> A3 details
+  A5: no open Q# — six implementation defaults stand (§12 of the v6 plan)
   Q12    ──> C1 step 2           Q13–Q18 ──> C1 spec finalization
   Q27    ──> C1 toggle decision  Q28  ──> $$ spec wording (spec edit → re-hash)
-  Q19–Q20 ──> C3 API shape       Q21 ──> C5 spec, Q22 ──> C7 design
+  Q19–Q20 ──> C3 API shape (resolved 2026-11-06, adopted as defaulted)
+  Q21 ──> C5 spec, Q22 ──> C7 design
   Q23    ──> C8 scope            Q24–Q26 ──> C8 resolution contract
 
 landed since this plan was written: A1 + A2 (Round 39) · C6 (Round 40) ·
 C2 (Round 41) · A4 Phases 1–4 (Rounds 42–45) · C4 (Phase 3 host-API hardening)
+· C3 (`c4ee131`, 2026-11-06, pending the hasMethod/callMethod guard fix)
 ```
 
 ## Conventions (per AGENTS.md)
@@ -609,3 +727,6 @@ C2 (Round 41) · A4 Phases 1–4 (Rounds 42–45) · C4 (Phase 3 host-API harden
   format (bump only if the on-disk encoding changes). Before appending, check
   for an existing reserved placeholder — `kOpcodeUsedCount` is 73 (identities
   0..72 after Round 51) and `$$` already owns the reserved `INDGET`/`INDPUT`.
+  A5 is the pending bump: v6 appends `eqf`/`ltf`/`gtf`/`ltef`/`gtef` + `TST` +
+  `DECL` (73 → 80 of 128) and retires the `i`/`c` suffix identities in a later
+  bump, keeping them decodable in v6 (`encoding-v6-and-indirect-plan.md` §3, §6).

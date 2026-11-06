@@ -1,9 +1,12 @@
 # Instruction Format — Escape-Byte Encoding Plan
 
-Status: **Proposed** (design settled in review; this-version scope confirmed, §13)
+Status: **Implemented** (`.qlc` v5, Round 37) — §4, §5.3 and §13.4 are **superseded** by
+`docs/plans/encoding-v6-and-indirect-plan.md` (`.qlc` v6, specified 2026-11-06, not
+implemented); everything else in this document remains the authoritative record of the shipped
+format
 Supersedes: Phase 2–4 (fixed-width 4/8 B) of `docs/plans/instruction-format-optimization-plan.md`
 Builds on: Phase 1 (line/col side-table, `.qlc` v4) — **DONE** (Round 36)
-Reference spec: `docs/spec/13-bytecodes.md` (operand map)
+Reference spec: `docs/spec/13-bytecodes.md` (operand map, `## encoding extended`)
 
 ---
 
@@ -45,6 +48,12 @@ The escape bit is a pure "modifier follows" flag; it does not extend the opcode 
 ---
 
 ## 4. Modifier byte `e`
+
+> **Superseded by `docs/plans/encoding-v6-and-indirect-plan.md` §2 (`.qlc` v6, specified
+> 2026-11-06).** The nibble split below (bits 0–3 left form / bits 4–7 right form) is what v5
+> ships. v6 re-splits the byte into **2/2/4** — left form (0–1), right-operand **kind** (2–3:
+> immediate / register / const pool / reserved), right-operand form (4–7) — which is what makes
+> the `i`/`c` suffix opcodes redundant. §4.1 (jump class) is unchanged in v6.
 
 `e` is interpreted **per opcode class**. Three classes:
 
@@ -121,6 +130,13 @@ compiler appends constants in first-use order; an index ≤255 is addressed with
 ≥256 with 2 bytes (4-byte reserved for future). No reordering or partitioning is required.
 
 ### 5.3 Immediates (width × signedness → QLang type)
+
+> **Superseded by `docs/plans/encoding-v6-and-indirect-plan.md` §2.3 (`.qlc` v6).** v6 ships
+> the whole table — unsigned (0–3) and 8-byte signed (7) included — plus three new zero-byte
+> forms: `8` = `float` (8 B), `9`/`10` = `bool` false/true, `11` = `nil`. The base form stays
+> value 4 (1-byte signed `Int`). Effect: `bool`, `nil` and `float` literals leave the constant
+> pool.
+
 | `e` right | Bytes | Signed | QLang type | This version |
 |-----------|-------|--------|------------|--------------|
 | 0 | 1 | unsigned | `Unsigned` | future |
@@ -261,14 +277,19 @@ Specifically:
    immediate, and 1-byte relative jump (jmp8). The escape+modifier widens any of them.
 4. **Immediates: signed `Int` only** (1/2/4-byte, sign-extended). `Unsigned`/`Long`/`Qword` and
    the unsigned forms are reserved in the encoding for future versions.
+   → **Superseded:** v6 ships them, plus `float`/`bool`/`nil` (`encoding-v6-and-indirect-plan.md`
+   §2.3). Items 1–3 above stand unchanged in v6.
 
 ## 14. Open questions / future work
 
 1. **Extended `c` operand:** 3-operand ops currently force `c` to a 1-byte register. Defer until
-   a real need appears.
-2. **`.qlc` version:** v4 → v5. Confirm the reader's accepted range becomes v1..v5.
+   a real need appears. (Still deferred in v6 — `encoding-v6-and-indirect-plan.md` §2.6.)
+2. **`.qlc` version:** v4 → v5. **Resolved as a clean break, not a range:** the reader accepts
+   v5 **only** (`version != kQlcVersion` is rejected, `src/QLangBytecodeIO.cpp:469`) — v1..v4
+   streams do not load. v6 follows the same precedent.
 3. **Future versions (out of scope now):** unsigned / 8-byte immediates (`Unsigned`/`Long`/
-   `Qword`), 4-byte register/constant addressing, extended `c` operand.
+   `Qword`), 4-byte register/constant addressing, extended `c` operand. → the immediates are
+   **in scope for v6**; the two addressing items stay open.
 
 ## 15. Summary
 

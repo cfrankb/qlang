@@ -17,7 +17,7 @@ Status: **POC-stage design.** Consumes `SPEC.md` (classes),
 | Concern | Lives in |
 |---|---|
 | `ObjectOps` dispatch (`getField`/`setField`/`callMethod`/`toStr`) | **QLang** — `EXTERNAL_TYPES.md` §9 |
-| `QLangContext` wrappers: `getVar`, `hasMethod`, `callMethod` | **QLang** — the C++ API |
+| `QLangContext` wrappers: `get`, `hasMethod`, `callMethod` | **QLang** — the C++ API |
 | VM step counter (instruction budget primitive) | **QLang** — `SERIALIZATION.md` §7 |
 | Ownership model (weak/shared refs, engine authoritative) | **QLang** — `EXTERNAL_TYPES.md` §3 |
 | Structured `QLangError` at the boundary | **QLang** — `EXTERNAL_TYPES.md` §8 |
@@ -138,9 +138,17 @@ key) a lookup.
 
 The QLang API supplies the verbs; the engine supplies the wiring.
 
-**QLang API (the library):** `ctx.getVar`, `ctx.hasMethod`, `ctx.callMethod`
-— thin wrappers over `ObjectOps`. They are generic; they know nothing about
-handlers, levels, or types.
+**QLang API (the library):** `ctx.get`, `ctx.hasMethod`, `ctx.callMethod`
+— thin wrappers over `ObjectOps` (`get` reads a global by name; there is no
+`getVar`). They are generic; they know nothing about handlers, levels, or types.
+
+`hasMethod` / `callMethod` are **implemented** (2026-11-06, `c4ee131` —
+`EXTERNAL_TYPES.md` §9, `test_external` §19–§20). **Guard caveat while that
+lands:** `hasMethod` treats a field holding a `BoundMethod` as callable, but
+`callMethod` on a table/object requires a `Type::Function`, so a handler table
+field bound to another object's method passes the guard and then throws
+`member 'x' is not a function` — the §6 "miss is a silent no-op" contract holds
+for *absent* methods today, not for that one shape.
 
 **Engine wiring (this doc):** which level objects to hold, how to select a
 handler (by type tag or event name), and the policy of guarding + budgeting
@@ -148,9 +156,9 @@ each call.
 
 ```cpp
 // QLang API calls, used by engine wiring:
-QLangValue typeHandlers = ctx.getVar("typeHandlers");   // engine holds these
-QLangValue mapHandlers  = ctx.getVar("mapHandlers");
-QLangValue gameHandlers = ctx.getVar("gameHandlers");
+QLangValue typeHandlers = ctx.get("typeHandlers");      // engine holds these
+QLangValue mapHandlers  = ctx.get("mapHandlers");
+QLangValue gameHandlers = ctx.get("gameHandlers");
 
 // type event:  engine resolves by type tag, then calls the entry method
 if (auto h = lookupType(typeHandlers, typeTag))         // engine logic

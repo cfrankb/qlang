@@ -6,6 +6,8 @@ Documentation is modular under `docs/` (migrated 2026-10-29 from the monolithic 
 - **Compliance:** `docs/compliance/` — modular validation sets; `docs/compliance/README.md` is the entry point.
 - **Instruction:** Do not append large blocks to the legacy root stubs. Create targeted `.md` files in `docs/` subdirectories. Consult directory `README.md` files as your entry points.
 
+plans that are fully implemented should be moved to `docs/plans/archive`.
+
 ## Ponytail
 
 Follow the Ponytail rules in [ponytail/AGENTS.md](https://github.com/DietrichGebert/ponytail/blob/main/AGENTS.md) for all code changes.   
