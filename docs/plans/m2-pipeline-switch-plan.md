@@ -1,7 +1,7 @@
 # M2 — Switch the Pipeline to v6 (Discard the v5 Codec)
 
-Status: **In progress — S1 done (codec-only, uncommitted).** Baseline `HEAD = 0b4a4fb`
-("encoding: v6 modifier byte (M1) — 2/2/4 layout, kind/form tables, \*V6 codec +
+Status: **In progress — S1 committed (`3bc55c7`), S2 + S3 done (uncommitted).** Baseline
+`HEAD = 0b4a4fb` ("encoding: v6 modifier byte (M1) — 2/2/4 layout, kind/form tables, \*V6 codec +
 `encoding_v6` suite").
 Parent plan: [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md) — this file
 executes its **§6.1 milestone M2** and cites its sections (§2 layout, §3 coexistence, §6
@@ -184,6 +184,23 @@ the version error.
 
 *Verify:* the 21-script suite, especially `cmp.ql` (flag semantics must be identical) and
 `ext_regs.ql` (dword operands).
+
+> **DONE (uncommitted).** `operandValue` is a **private static member** of `QLangVM`
+> (`QLangVM.h`, declared after `flagsSatisfied`) rather than a file-static: `Frame` and
+> `RegFile` are private nested types, so a free function in the anonymous namespace cannot name
+> it. Its definition sits just after that namespace closes (`QLangVM.cpp`, after the
+> `} // namespace` at the end of `callBuiltin`) so it still sees `freshContainerValue`.
+> `MOVC`/`MOVI`/`MOV` collapsed into one case, `CMP`/`CMPI` into one case, `ADDI`/`SUBI` keep
+> `doBinary` and take their right operand from the helper, and the ALU family gained the §2.6
+> branch. *Verification:* the script suite is still red for the S4 reason (the compiler emits
+> v5 modifiers), so S3 was verified with a throwaway harness (`/tmp/vm_s3_check.cpp`, **23
+> checks, all pass**) that assembles v6 streams with `encodeInstruction` and runs them through
+> the real dispatch loop: immediate forms `i8/i16/i32/i64/u32/float/true/nil`, pool and register
+> right operands, pool-container cloning on store (incl. nested) vs. no clone for ALU, in-place
+> `add`/`sub` with immediate and pool right operands, 3-operand `add`/`mul`, and `cmp`
+> (immediate and register kinds) plus legacy `cmpi` driving `je`/`jne`/`jg` both taken and not
+> taken. `ctest` is unchanged at 6/46 (40 failures, all `invalid CALL escape modifier` /
+> `right-operand kind not permitted` — the S4-owned v5-modifier streams).
 
 ### S4 — Compiler plumbing (still emitting the old spellings)
 

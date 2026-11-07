@@ -138,6 +138,17 @@ private:
   // True when the flag pattern `f` satisfies the conditional jump `op`.
   static bool flagsSatisfied(Opcode op, int f);
 
+  // Materialize the right operand of a decoded v6 instruction (plan
+  // docs/plans/encoding-v6-and-indirect-plan.md §2.2/§2.3): the modifier's kind
+  // field says whether `b` names a register, a constant-pool index, or is
+  // unused because the immediate is inline. `cloneContainers` is true only
+  // where the value is *stored* into a register (mov/movc), so a pool literal
+  // cannot be aliased and mutated; ALU/compare operands are read-only and are
+  // returned without copying (plan decision D6).
+  static QLangValue operandValue(const DecodedInstruction &i, Frame &frame,
+                                 const std::vector<QLangValue> &consts,
+                                 bool cloneContainers);
+
   // Truthiness of a value per SPEC §boolean evaluation: nil/eof false;
   // string/array/table/blob/set empty => false; number 0 => false;
   // generator true; function/lambda evaluated by its return value (the

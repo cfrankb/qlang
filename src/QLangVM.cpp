@@ -940,6 +940,49 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
 
 } // namespace
 
+// Right-operand materialization for the dispatch loop (plan §2.2/§2.3). A
+// member (Frame is private) defined after the anonymous namespace above, whose
+// freshContainerValue it still sees.
+QLangValue QLangVM::operandValue(const DecodedInstruction &i, Frame &frame,
+                                 const std::vector<QLangValue> &consts,
+                                 bool cloneContainers) {
+  switch (i.rightKind) {
+  case RightKind::Register:
+    return frame.regs[i.b];
+  case RightKind::ConstPool:
+    return cloneContainers ? freshContainerValue(consts[i.b]) : consts[i.b];
+  case RightKind::Immediate:
+    break; // materialized from the payload fields below
+  case RightKind::Reserved:
+    break; // unreachable: the decoder rejects it before dispatch (plan §2.2)
+  }
+  switch (i.immPayload) {
+  case ImmPayload::Signed:
+    // Only `i64` widens to Long; the 1/2/4-byte forms stay Int (plan §2.3).
+    return i.immForm == ImmForm::I64
+               ? QLangValue::Long(i.imm)
+               : QLangValue::Int(static_cast<int32_t>(i.imm));
+  case ImmPayload::Unsigned:
+    return i.immForm == ImmForm::U64
+               ? QLangValue::Qword(i.immUnsigned)
+               : QLangValue::Unsigned(static_cast<uint32_t>(i.immUnsigned));
+  case ImmPayload::Float:
+    return QLangValue::Float(i.immFloat);
+  case ImmPayload::True:
+    return QLangValue::Bool(1);
+  case ImmPayload::False:
+    return QLangValue::Bool(0);
+  case ImmPayload::Nil:
+    return QLangValue();
+  case ImmPayload::None:
+    break;
+  }
+  // A decoded immediate always names a payload; reaching here means a stream
+  // built without the decoder.
+  throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                   "instruction has no right operand");
+}
+
 QLangVM::QLangVM(const CompiledProgram &program, QLangContext &scope)
     : m_prog(program), m_scope(scope) {
   adoptGlobals(program);
@@ -1954,15 +1997,12 @@ RunResult QLangVM::runFrames() {
 
     switch (op) {
     case Opcode::MOVC:
-      // Containers are cloned out of the pool so a register mutation cannot
-      // reach the literal (see freshContainerValue).
-      frame.regs[i.a] = freshContainerValue(consts[i.b]);
-      break;
     case Opcode::MOVI:
-      frame.regs[i.a] = QLangValue::Int(static_cast<int32_t>(i.imm));
-      break;
     case Opcode::MOV:
-      frame.regs[i.a] = frame.regs[i.b];
+      // One materializer for the three spellings: the modifier's kind field
+      // decides register / pool / inline literal, and a pool value is cloned
+      // because it is stored into a register (see freshContainerValue).
+      frame.regs[i.a] = operandValue(i, frame, consts, true);
       break;
     case Opcode::DEEPCOPY: {
       // r[a] = independent recursive copy of r[b] (SPEC §functions
@@ -2379,14 +2419,14 @@ RunResult QLangVM::runFrames() {
       return RunResult::Yielded;
     }
     case Opcode::ADDI:
-      frame.regs[i.a] = doBinary(Opcode::ADD, frame.regs[i.a],
-                                 QLangValue::Int(static_cast<int32_t>(i.imm)),
-                                 this);
+      frame.regs[i.a] =
+          doBinary(Opcode::ADD, frame.regs[i.a],
+                   operandValue(i, frame, consts, false), this);
       break;
     case Opcode::SUBI:
-      frame.regs[i.a] = doBinary(Opcode::SUB, frame.regs[i.a],
-                                 QLangValue::Int(static_cast<int32_t>(i.imm)),
-                                 this);
+      frame.regs[i.a] =
+          doBinary(Opcode::SUB, frame.regs[i.a],
+                   operandValue(i, frame, consts, false), this);
       break;
     case Opcode::ADD:
     case Opcode::SUB:
@@ -2408,16 +2448,23 @@ RunResult QLangVM::runFrames() {
     case Opcode::MOD:
     case Opcode::POW:
     case Opcode::INx:
-      frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
+      // Arity rule (plan §2.6): a right operand that is not a register means
+      // the in-place 2-operand form r[a] = r[a] op right (the stream carries no
+      // trailing `c`); the register form keeps r[b], r[c].
+      if (isInPlaceForm(op, i.rightKind)) {
+        QLangValue rhs = operandValue(i, frame, consts, false);
+        frame.regs[i.a] = doBinaryVm(op, frame.regs[i.a], rhs);
+      } else {
+        frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
+      }
       break;
     case Opcode::CMP:
-      frame.flags = cmpFlags(frame.regs[i.a], frame.regs[i.b], this);
+    case Opcode::CMPI: {
+      // cmp always compares against r[a]; only the right operand's kind varies.
+      QLangValue rhs = operandValue(i, frame, consts, false);
+      frame.flags = cmpFlags(frame.regs[i.a], rhs, this);
       break;
-    case Opcode::CMPI:
-      frame.flags =
-          cmpFlags(frame.regs[i.a], QLangValue::Int(static_cast<int32_t>(i.imm)),
-                   this);
-      break;
+    }
     case Opcode::JE:
     case Opcode::JNE:
     case Opcode::JG:
