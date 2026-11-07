@@ -1,9 +1,9 @@
 # M2 — Switch the Pipeline to v6 (Discard the v5 Codec)
 
 Status: **In progress — S1 committed (`3bc55c7`), S2 (`35edb7a`), S3 (`e0a8323`), S4 (`337584c`),
-S6 done (uncommitted); S5 not started** (S6 was taken first because it is the AGENTS.md-mandated
-companion of the S1–S4 encoding change and is independent of S5: it renders whatever kind/form the
-emitter produces, so it is correct both before and after the pool shrinks). Baseline
+S6 (`d577612`); S5 done (uncommitted)** (S6 was taken first because it is the AGENTS.md-mandated companion of
+the S1–S4 encoding change and is independent of S5: it renders whatever kind/form the emitter
+produces, so it is correct both before and after the pool shrinks). Baseline
 `HEAD = 0b4a4fb` ("encoding: v6 modifier byte (M1) — 2/2/4 layout, kind/form tables, \*V6 codec +
 `encoding_v6` suite").
 Parent plan: [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md) — this file
@@ -297,6 +297,46 @@ stay pool entries.
 diff showing bool/nil/float entries gone (§11 item 10) — record the before/after numbers in the
 commit message.
 
+> **DONE (uncommitted).** The helpers exist as specified (`emitImmI`/`emitImmF`/`emitImmB`/
+> `emitImmNil`/`emitPool`), plus `emitLiteralImm(op, a, LiteralImm)` and
+> `emitLiteral(op, a, value)` = `literalImmOf` else `emitPool(op, a, emitConst(value))` — the one
+> call site every literal load now goes through. The old positional `emitImm` is **deleted**; the
+> explicit-descriptor entry point is `FnEmitter::emitRight(op, a, const RawInstr &right, line,
+> col)`, which copies `kind`/`form`/`payload`/`imm*`/`b` from a `RawInstr` built by the caller.
+> `literalImmOf` (now `static`, next to its neighbours) is the D3 selector: `Int` within ±2³¹ →
+> narrowest of `i8`/`i16`/`i32`, `Float` → form 8, `Bool` → 9/10, `nil` → 11, anything else
+> `nullopt` → pool. `foldNegLiteral` folds float literals as well as ints now
+> (`isNumericLiteral`/`negateLiteral`), so `-1.5` is a single float immediate. **Zero**
+> `MOVI`/`MOVC`/`ADDI`/`SUBI`/`CMPI` references and zero `emitImm(` call sites remain in
+> `QLangCompiler.cpp`; the deprecated identities still decode and execute (§3). The dead
+> `RawInstr::hasRight` field S4 added (set, never read) was removed.
+> **Encoding consequence worth recording:** `defaultRightKind(MOV) == Register`, so a *pool* `mov`
+> names a kind the opcode would never mean on its own and must be announced — `mov e=0x08, r,
+> pool[NN]` is 4 bytes where the old `movc` base form was 3. Measured below.
+> **Two pre-existing selection limits surfaced (not S5 regressions, both follow-ups):**
+> (a) `inferType`/`updateVarType` records only `Array`/`Table` for variables, so
+> `emitCmpJumpFalseExpr` fuses `cmp` + immediate only for **literal-vs-literal** conditions — a
+> variable-vs-literal guard still emits register `cmp` + flag jump; (b) compound `+=`/`-=` in-place
+> folding stays **Int**-only, so a float RHS is loaded with `mov` (float immediate) and the ALU op
+> remains 3-operand register-right.
+> *Verification:* build green; `ctest` **45 passed / 1 skipped (`perf`) = 100 %** (`codec_check`
+> **164 checks**). Corpus (§11 item 1): all **21** `tests/scripts/*.ql` run against a `git worktree`
+> of `d577612` — **stdout byte-identical (2 255 B), exit codes identical (all 0)**. Pool diff
+> (§11 item 10, throwaway harness `/tmp/poolstat.cpp` built against both trees; 18 scripts compile
+> standalone, 3 need the `math` module): pool entries **515 → 477 (−38)**, `bool` **5 → 0**, `nil`
+> **27 → 0**, `float` **6 → 0**, while `string` 441, `array` 15, `table` 5, `function` 15 and
+> `unsigned` 1 are unchanged — exactly the D3 set. Code bytes **52 604 → 53 618 (+1 014, +1.9 %)**:
+> the 11-byte float immediate and the pool-`mov` modifier byte cost more than the pool slot they
+> free (`ext_consts.ql` 807 → 1 063 B for 258 pool loads). Disassembly shapes confirmed:
+> `mov e=0xb0, 00, nil` (3 B), `e=0xa0` `true`, `e=0x90` `false`, `e=0x50` `300` (`i16`),
+> `e=0x80` `1.5` (11 B), `e=0x08 … pool[00]`, register `mov 06, 00` base, `call e=0x50`.
+> `--asm-level 0..5` well-formed on `hello.ql`, `cmp.ql`, `ext_regs.ql`, `ext_consts.ql`,
+> `jump_widths.ql` (§11 item 9; `imm_kinds.ql` is S7). `.qlc` write → load → run round-trip for all
+> 21 scripts: stdout identical, exit 0. **S7 overlap done here because the run had to be
+> trustworthy:** the hand-built malformed images in `codec_check.cpp` still declared version 5, so
+> every `rejects()` case passed vacuously — they now write version 6 and the version probe asserts
+> that **5** is rejected.
+
 ### S6 — Disassembler and demos (same change, AGENTS.md mandate)
 
 `examples/qlang_run.cpp`
@@ -317,7 +357,7 @@ at least keep compiling and printing sane operands.
 *Verify:* `--asm-level 0..5` well-formed (§11 item 9) on `hello.ql`, `cmp.ql`, `ext_regs.ql`,
 `ext_consts.ql`, `jump_widths.ql`, `imm_kinds.ql`.
 
-> **DONE (uncommitted).** `operandText()` is driven by `rightKind`, not by `isImmediateOpcode`:
+> **DONE (`d577612`).** `operandText()` is driven by `rightKind`, not by `isImmediateOpcode`:
 > two new helpers, `doubleText()` (shortest round-tripping `%.*g`, so `3.5` prints as `3.5` and
 > not `3.500000`) and `immediateText()` (switches on `DecodedInstruction::immPayload` → signed
 > decimal / unsigned decimal / float / `true` / `false` / `nil`), then the operand list is

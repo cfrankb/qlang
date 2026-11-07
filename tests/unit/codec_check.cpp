@@ -238,9 +238,11 @@ static void testProgram() {
 }
 
 // ---------------------------------------------------------------------------
-// MOVI: Int literals must compile to MOVI (signed immediate, no pool slot);
-// everything else stays in the pool. The v5 format round-trips MOVI
-// instruction-for-instruction (testProgram's code/offset comparison covers it).
+// mov + right-operand kind (M2/S5): a literal compiles to one `mov` whose
+// right operand is an inline immediate when the value's type has a v6 form for
+// it (Int / Float / Bool / nil, plan decision D3) and a constant-pool read
+// otherwise. The deprecated `movi` / `movc` identities are no longer emitted —
+// they only still decode (plan §3 coexistence rule).
 // ---------------------------------------------------------------------------
 static CompiledProgram compileSrc(const char *src) {
   QLangContext ctx;
@@ -249,7 +251,7 @@ static CompiledProgram compileSrc(const char *src) {
   return compiler.compile();
 }
 
-// Decode every instruction in a function's v5 code stream.
+// Decode every instruction in a function's code stream.
 static std::vector<DecodedInstruction> decodeAll(const Function &fn) {
   std::vector<DecodedInstruction> out;
   out.reserve(fn.instrOffsets.size());
@@ -261,11 +263,66 @@ static std::vector<DecodedInstruction> decodeAll(const Function &fn) {
   return out;
 }
 
-static bool hasMovi(const Function &fn, int32_t imm) {
+// First instruction with `op`, an immediate right operand of `form` and signed
+// value `imm`; `out` receives it (size, kind, in-place arity) for further
+// assertions.
+static bool findImm(const Function &fn, Opcode op, ImmForm form, int64_t imm,
+                    DecodedInstruction &out) {
   for (const auto &i : decodeAll(fn))
-    if (i.op == Opcode::MOVI && i.imm == imm)
+    if (i.op == op && i.rightKind == RightKind::Immediate &&
+        i.immForm == form && i.imm == imm) {
+      out = i;
+      return true;
+    }
+  return false;
+}
+
+static bool hasImm(const Function &fn, Opcode op, ImmForm form, int64_t imm) {
+  DecodedInstruction d;
+  return findImm(fn, op, form, imm, d);
+}
+
+// An immediate whose form *is* the value (true / false / nil): it carries no
+// operand bytes, so only the form and the payload tag identify it. `size`
+// receives the instruction length (§11 item 4: 3 bytes).
+static bool hasZeroImm(const Function &fn, Opcode op, ImmForm form,
+                       ImmPayload payload, size_t *size = nullptr) {
+  for (const auto &i : decodeAll(fn))
+    if (i.op == op && i.rightKind == RightKind::Immediate &&
+        i.immForm == form && i.immPayload == payload) {
+      if (size)
+        *size = i.size;
+      return true;
+    }
+  return false;
+}
+
+static bool hasFloatImm(const Function &fn, Opcode op, double value) {
+  for (const auto &i : decodeAll(fn))
+    if (i.op == op && i.rightKind == RightKind::Immediate &&
+        i.immForm == ImmForm::Float && i.immFloat == value)
       return true;
   return false;
+}
+
+// True when `fn` contains `op` with a constant-pool right operand (kind 2).
+static bool hasPoolRight(const Function &fn, Opcode op) {
+  for (const auto &i : decodeAll(fn))
+    if (i.op == op && i.rightKind == RightKind::ConstPool)
+      return true;
+  return false;
+}
+
+// The v6 compiler emits only the unified spellings; the `i`/`c` identities
+// survive as decoder-only aliases (plan §3).
+static bool noDeprecatedSpellings(const CompiledProgram &p) {
+  for (const auto &fn : p.functions)
+    for (const auto &i : decodeAll(fn))
+      if (i.op == Opcode::MOVI || i.op == Opcode::MOVC ||
+          i.op == Opcode::ADDI || i.op == Opcode::SUBI ||
+          i.op == Opcode::CMPI)
+        return false;
+  return true;
 }
 
 static bool poolHasInt(const Function &fn, int32_t v) {
@@ -275,53 +332,87 @@ static bool poolHasInt(const Function &fn, int32_t v) {
   return false;
 }
 
-static void testMovi() {
+// Number of pool entries of a given type (the pool-shrink assertions).
+static int poolCountType(const Function &fn, QLangValue::Type t) {
+  int n = 0;
+  for (const auto &c : fn.constants)
+    if (c.type() == t)
+      n++;
+  return n;
+}
+
+static void testMovImmediate() {
   try {
-    // Int literal -> MOVI, no Int(42) pool slot (the pool shrinks).
+    // Int literal -> `mov r, i8 42`, no Int(42) pool slot (the pool shrinks).
     CompiledProgram p = compileSrc("local x = 42\n");
-    check(hasMovi(p.functions[0], 42), "movi: int literal emits MOVI");
-    check(!poolHasInt(p.functions[0], 42), "movi: no Int pool slot");
+    DecodedInstruction d;
+    check(findImm(p.functions[0], Opcode::MOV, ImmForm::I8, 42, d),
+          "mov: int literal emits a signed immediate");
+    check(!poolHasInt(p.functions[0], 42), "mov: no Int pool slot");
+    check(noDeprecatedSpellings(p), "mov: no movi/movc emitted");
 
-    // Bool literal -> stays in the pool as Bool, no MOVI.
+    // Bool literal -> the zero-byte true form, 3 bytes, no pool entry
+    // (§11 item 4).
     CompiledProgram pb = compileSrc("local b = true\n");
-    bool noMovi = true;
-    bool poolHasBool = false;
-    for (const auto &i : decodeAll(pb.functions[0]))
-      if (i.op == Opcode::MOVI)
-        noMovi = false;
-    for (const auto &c : pb.functions[0].constants)
-      if (c.type() == QLangValue::Type::Bool && c.asInt() == 1)
-        poolHasBool = true;
-    check(noMovi, "movi: bool literal not MOVI");
-    check(poolHasBool, "movi: bool literal in pool");
+    size_t boolSize = 0;
+    check(hasZeroImm(pb.functions[0], Opcode::MOV, ImmForm::True,
+                     ImmPayload::True, &boolSize),
+          "mov: bool literal emits the true form");
+    check(boolSize == 3, "mov: bool immediate costs 3 bytes");
+    check(poolCountType(pb.functions[0], QLangValue::Type::Bool) == 0,
+          "mov: bool literal leaves the pool");
 
-    // Typed decl: MOVI into the target register + in-place CONV.
+    // nil -> the zero-byte nil form, no pool entry. A function with no return
+    // statement is the construct that stores nil directly (the implicit
+    // `return nil` lands in reg 0), so this looks at function #1.
+    CompiledProgram pn = compileSrc("def f() {\n}\n");
+    size_t nilSize = 0;
+    check(hasZeroImm(pn.functions[1], Opcode::MOV, ImmForm::Nil,
+                     ImmPayload::Nil, &nilSize),
+          "mov: nil stores as the nil form");
+    check(nilSize == 3, "mov: nil immediate costs 3 bytes");
+    check(poolCountType(pn.functions[1], QLangValue::Type::Nil) == 0,
+          "mov: nil leaves the pool");
+
+    // Float literal -> the 8-byte float form, no pool entry.
+    CompiledProgram pf = compileSrc("local f = 1.5\n");
+    check(hasFloatImm(pf.functions[0], Opcode::MOV, 1.5),
+          "mov: float literal emits the float form");
+    check(poolCountType(pf.functions[0], QLangValue::Type::Float) == 0,
+          "mov: float literal leaves the pool");
+
+    // Typed decl: immediate into the target register + in-place CONV.
     CompiledProgram pt = compileSrc("local a:byte = 0\n");
-    check(hasMovi(pt.functions[0], 0), "movi: typed decl emits MOVI");
+    check(hasImm(pt.functions[0], Opcode::MOV, ImmForm::I8, 0),
+          "mov: typed decl emits a signed immediate");
 
-    // 64-bit literal (Qword) -> pool, no MOVI.
+    // 64-bit literal (Qword) -> pool read: the immediate forms must not change
+    // the value's type tag (D3).
     CompiledProgram pq = compileSrc("local q = 9223372036854775807\n");
-    bool qNoMovi = true;
-    for (const auto &i : decodeAll(pq.functions[0]))
-      if (i.op == Opcode::MOVI)
-        qNoMovi = false;
-    check(qNoMovi, "movi: 64-bit literal not MOVI");
+    check(hasPoolRight(pq.functions[0], Opcode::MOV),
+          "mov: 64-bit literal stays a pool read");
 
-    // .qlc written at format version 5 (kQlcVersion); the reader accepts v5
-    // only (v1-v4 and v6+ are rejected).
+    // String literal -> pool read (strings never become immediates).
+    CompiledProgram ps = compileSrc("local s = \"abc\"\n");
+    check(hasPoolRight(ps.functions[0], Opcode::MOV),
+          "mov: string literal is a pool read");
+
+    // .qlc written at format version 6 (kQlcVersion); the reader accepts v6
+    // only (v1-v5 and v7+ are rejected).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "movi: writeQlc (v5)");
+    check(writeQlc(os, p, {}), "mov: writeQlc (v6)");
     std::string bytes = os.str();
     uint32_t version = static_cast<uint32_t>(static_cast<uint8_t>(bytes[4])) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[5])) << 8) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[6])) << 16) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[7])) << 24);
-    check(version == 5, "movi: format version 5");
+    check(version == 6, "mov: format version 6");
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("movi: readQlc v5 (") + err + ")");
+    check(readQlc(is, back, slots, err),
+          std::string("mov: readQlc v6 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -329,18 +420,17 @@ static void testMovi() {
         const auto &b = back.functions[0];
         same = a.code == b.code && a.instrOffsets == b.instrOffsets;
       }
-      check(same, "movi: round-trip instruction equality");
+      check(same, "mov: round-trip instruction equality");
     }
   } catch (const QLangError &e) {
-    check(false, std::string("movi: " ) + e.what());
+    check(false, std::string("mov: ") + e.what());
   }
 }
 
 // ---------------------------------------------------------------------------
-// MOVI (step 4.4): compiler-generated Ints (loop counters, class-metadata
-// markers, per-field indices) also compile to MOVI, so the main function's
-// constant pool holds no Type::Int at all. User literals were already MOVI
-// (Round 30); this removes the last compiler-generated pool entries.
+// Compiler-generated Ints (loop counters, class-metadata markers, per-field
+// indices) also store as `mov` immediates, so the main function's constant
+// pool holds no Type::Int at all.
 // ---------------------------------------------------------------------------
 static bool poolHasAnyInt(const Function &fn) {
   for (const auto &c : fn.constants)
@@ -349,11 +439,11 @@ static bool poolHasAnyInt(const Function &fn) {
   return false;
 }
 
-static void testCompilerMovi() {
+static void testCompilerMov() {
   try {
     // for-loop (unit/zero/direction/counter) + a two-field class (markers +
-    // name->index metadata). Every compiler-generated Int is MOVI; the pool
-    // must contain no Type::Int entries.
+    // name->index metadata). Every compiler-generated Int is a `mov`
+    // immediate; the pool must contain no Type::Int entries.
     const char *src =
         "for x = 1 to 3 {\n"
         "  local s = 0\n"
@@ -365,52 +455,54 @@ static void testCompilerMovi() {
         "local c = C()\n";
     CompiledProgram p = compileSrc(src);
     check(!poolHasAnyInt(p.functions[0]),
-          "compiler-movi: no Type::Int in main pool (for + class)");
-    // The for-loop's compiler-generated constants are present as MOVI.
-    check(hasMovi(p.functions[0], 1) && hasMovi(p.functions[0], 0) &&
-          hasMovi(p.functions[0], -1),
-          "compiler-movi: for step/zero/direction emitted as MOVI");
+          "compiler-mov: no Type::Int in main pool (for + class)");
+    // The for-loop's compiler-generated constants are `mov` immediates.
+    check(hasImm(p.functions[0], Opcode::MOV, ImmForm::I8, 1) &&
+              hasImm(p.functions[0], Opcode::MOV, ImmForm::I8, 0) &&
+              hasImm(p.functions[0], Opcode::MOV, ImmForm::I8, -1),
+          "compiler-mov: for step/zero/direction emitted as immediates");
+    check(noDeprecatedSpellings(p), "compiler-mov: no movi/movc emitted");
   } catch (const QLangError &e) {
-    check(false, std::string("compiler-movi: ") + e.what());
+    check(false, std::string("compiler-mov: ") + e.what());
   }
 }
 
 // ---------------------------------------------------------------------------
-// ADDI: compound `+=` with an Int-literal RHS compiles to ADDI (signed
-// immediate, no pool slot); non-Int RHS stays pooled + ADD. The v5 format
-// round-trips ADDI instruction-for-instruction (code/offset comparison).
+// add, kind 0: compound `+=` with a literal RHS compiles to the 2-operand
+// in-place form `add r, imm` (plan §2.6) — no pool slot, no third operand.
+// A float RHS is now an immediate too (it left the pool in S5).
 // ---------------------------------------------------------------------------
-static bool hasAddi(const Function &fn, int32_t imm) {
-  for (const auto &i : decodeAll(fn))
-    if (i.op == Opcode::ADDI && i.imm == imm)
-      return true;
-  return false;
-}
-
-static void testAddi() {
+static void testAddInPlace() {
   try {
-    // Int literal RHS -> ADDI with i32 == 12, no Int(12) pool slot.
+    // Int literal RHS -> `add r, i8 12`, no Int(12) pool slot.
     CompiledProgram p = compileSrc("local a = 10\na += 12\n");
-    check(hasAddi(p.functions[0], 12), "addi: int literal emits ADDI");
-    check(!poolHasInt(p.functions[0], 12), "addi: no Int pool slot");
+    DecodedInstruction d;
+    check(findImm(p.functions[0], Opcode::ADD, ImmForm::I8, 12, d),
+          "add: int literal RHS emits a signed immediate");
+    check(isInPlaceForm(d.op, d.rightKind) && d.size == 4,
+          "add: immediate RHS is the in-place form (4 bytes)");
+    check(!poolHasInt(p.functions[0], 12), "add: no Int pool slot");
 
-    // Float literal RHS -> stays pooled + ADD, no ADDI.
+    // Float literal RHS: the in-place fold stays Int-only, so the literal is
+    // loaded as an inline float immediate and the add keeps its 3-operand form.
+    // What matters for S5 is that the float never reaches the pool.
     CompiledProgram pf = compileSrc("local f = 1.5\nf += 1.5\n");
-    bool noAddi = true;
-    for (const auto &i : decodeAll(pf.functions[0]))
-      if (i.op == Opcode::ADDI)
-        noAddi = false;
-    check(noAddi, "addi: float literal not ADDI");
+    check(hasFloatImm(pf.functions[0], Opcode::MOV, 1.5),
+          "add: float literal RHS loads as the float form");
+    check(poolCountType(pf.functions[0], QLangValue::Type::Float) == 0,
+          "add: float RHS leaves the pool");
+    check(noDeprecatedSpellings(pf), "add: no addi emitted");
 
-    // .qlc round-trip of an ADDI program (v5 format).
+    // .qlc round-trip of an in-place add program.
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "addi: writeQlc (v5)");
+    check(writeQlc(os, p, {}), "add: writeQlc");
     std::string bytes = os.str();
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("addi: readQlc v5 (") + err + ")");
+    check(readQlc(is, back, slots, err),
+          std::string("add: readQlc (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -418,49 +510,48 @@ static void testAddi() {
         const auto &b = back.functions[0];
         same = a.code == b.code && a.instrOffsets == b.instrOffsets;
       }
-      check(same, "addi: round-trip instruction equality");
+      check(same, "add: round-trip instruction equality");
     }
   } catch (const QLangError &e) {
-    check(false, std::string("addi: ") + e.what());
+    check(false, std::string("add: ") + e.what());
   }
 }
 
 // ---------------------------------------------------------------------------
-// SUBI: compound `-=` with an Int-literal RHS compiles to SUBI (signed
-// immediate, no pool slot); non-Int RHS stays pooled + SUB. The v5 format
-// round-trips SUBI instruction-for-instruction (code/offset comparison).
+// sub, kind 0: compound `-=` with a literal RHS compiles to the in-place
+// `sub r, imm` (plan §2.6). Both the Int and the Float RHS are inline
+// immediates now, so neither costs a pool slot (plan decision D3).
 // ---------------------------------------------------------------------------
-static bool hasSubi(const Function &fn, int32_t imm) {
-  for (const auto &i : decodeAll(fn))
-    if (i.op == Opcode::SUBI && i.imm == imm)
-      return true;
-  return false;
-}
-
-static void testSubi() {
+static void testSubInPlace() {
   try {
-    // Int literal RHS -> SUBI with i32 == 12, no Int(12) pool slot.
+    // Int literal RHS -> `sub r, i8 12`, no Int(12) pool slot.
     CompiledProgram p = compileSrc("local a = 10\na -= 12\n");
-    check(hasSubi(p.functions[0], 12), "subi: int literal emits SUBI");
-    check(!poolHasInt(p.functions[0], 12), "subi: no Int pool slot");
+    DecodedInstruction d;
+    check(findImm(p.functions[0], Opcode::SUB, ImmForm::I8, 12, d),
+          "sub: int literal RHS emits a signed immediate");
+    check(isInPlaceForm(d.op, d.rightKind) && d.size == 4,
+          "sub: immediate RHS is the in-place form (4 bytes)");
+    check(!poolHasInt(p.functions[0], 12), "sub: no Int pool slot");
 
-    // Float literal RHS -> stays pooled + SUB, no SUBI.
+    // Float literal RHS: Int-only fold, so an inline float immediate plus the
+    // 3-operand sub — and no pool entry.
     CompiledProgram pf = compileSrc("local f = 1.5\nf -= 1.5\n");
-    bool noSubi = true;
-    for (const auto &i : decodeAll(pf.functions[0]))
-      if (i.op == Opcode::SUBI)
-        noSubi = false;
-    check(noSubi, "subi: float literal not SUBI");
+    check(hasFloatImm(pf.functions[0], Opcode::MOV, 1.5),
+          "sub: float literal RHS loads as the float form");
+    check(poolCountType(pf.functions[0], QLangValue::Type::Float) == 0,
+          "sub: float RHS leaves the pool");
+    check(noDeprecatedSpellings(pf), "sub: no subi emitted");
 
-    // .qlc round-trip of a SUBI program (v5 format).
+    // .qlc round-trip of an in-place sub program.
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "subi: writeQlc (v5)");
+    check(writeQlc(os, p, {}), "sub: writeQlc");
     std::string bytes = os.str();
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("subi: readQlc v5 (") + err + ")");
+    check(readQlc(is, back, slots, err),
+          std::string("sub: readQlc (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -468,18 +559,19 @@ static void testSubi() {
         const auto &b = back.functions[0];
         same = a.code == b.code && a.instrOffsets == b.instrOffsets;
       }
-      check(same, "subi: round-trip instruction equality");
+      check(same, "sub: round-trip instruction equality");
     }
   } catch (const QLangError &e) {
-    check(false, std::string("subi: ") + e.what());
+    check(false, std::string("sub: ") + e.what());
   }
 }
 
 // ---------------------------------------------------------------------------
-// CMP/CMPI + j*: an Int-vs-Int (literal) comparison in `if` fuses to
-// cmp/cmpi + a conditional jump (no comparison-result temp, no pool slot for
-// the boolean); non-Int comparisons stay on the legacy EQ/GT + JMPIFFALSE
-// path. The v5 format round-trips the new opcodes instruction-for-instruction.
+// cmp + j*: an Int-vs-Int comparison in `if` fuses to one `cmp` plus a flag
+// jump (no comparison-result temp, no pool slot for the boolean). The right
+// operand's *kind* is what distinguishes the old spellings: a literal is an
+// inline immediate (what `cmpi` used to mean), a variable stays a register.
+// Non-Int comparisons are not fused at all (legacy EQ/GT + JMPIFFALSE).
 // ---------------------------------------------------------------------------
 static bool hasAnyOp(const Function &fn, std::initializer_list<Opcode> ops) {
   for (const auto &i : decodeAll(fn))
@@ -489,36 +581,55 @@ static bool hasAnyOp(const Function &fn, std::initializer_list<Opcode> ops) {
   return false;
 }
 
+// True when `fn` has no `cmp` with the given right-operand kind.
+static bool noCmpKind(const Function &fn, RightKind kind) {
+  for (const auto &i : decodeAll(fn))
+    if (i.op == Opcode::CMP && i.rightKind == kind)
+      return false;
+  return true;
+}
+
 static void testCmpJump() {
   try {
-    // Int literal comparison in `if` -> CMPI + a j* (no CMP, both literals;
-    // no JMPIFFALSE for the condition).
+    // Literal comparison in `if` -> `cmp r, i8 3` + a j* (no comparison-result
+    // temp, no JMPIFFALSE for the condition, no `cmpi`).
     CompiledProgram p = compileSrc("local r = 0\nif (5 > 3) { r = 1 }\n");
-    check(hasAnyOp(p.functions[0], {Opcode::CMPI}),
-          "cmp: int literal if emits CMPI");
+    check(hasImm(p.functions[0], Opcode::CMP, ImmForm::I8, 3),
+          "cmp: literal operand emits an inline immediate");
+    check(noCmpKind(p.functions[0], RightKind::Register),
+          "cmp: literal comparison has no register-right cmp");
     check(hasAnyOp(p.functions[0],
                    {Opcode::JE, Opcode::JNE, Opcode::JG, Opcode::JGE,
                     Opcode::JL, Opcode::JLE}),
           "cmp: int literal if emits a j*");
     check(!hasAnyOp(p.functions[0], {Opcode::JMPIFFALSE, Opcode::JMPIFTRUE}),
           "cmp: int literal if not JMPIFFALSE");
+    check(noDeprecatedSpellings(p), "cmp: no cmpi emitted");
 
-    // Float comparison -> legacy path (no CMP/CMPI/j* for the condition).
+    // The loop-bound guard compares two registers (kind 1): `cmp x, end` + a
+    // flag jump. (`if` does not fuse variable operands — inferType only records
+    // Array/Table for a variable — so the loop is the register-right cmp path.)
+    CompiledProgram pr = compileSrc("for x = 1 to 3 {\n}\n");
+    check(!noCmpKind(pr.functions[0], RightKind::Register),
+          "cmp: loop guard compares register-to-register");
+
+    // Float comparison -> legacy path (no CMP/j* for the condition).
     CompiledProgram pf = compileSrc("local r = 0\nif (1.5 < 2.5) { r = 1 }\n");
     check(!hasAnyOp(pf.functions[0],
                     {Opcode::CMP, Opcode::CMPI, Opcode::JE, Opcode::JNE,
                      Opcode::JG, Opcode::JGE, Opcode::JL, Opcode::JLE}),
           "cmp: float comparison not fused");
 
-    // .qlc round-trip of a fused program (v5 format).
+    // .qlc round-trip of a fused program.
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "cmp: writeQlc (v5)");
+    check(writeQlc(os, p, {}), "cmp: writeQlc");
     std::string bytes = os.str();
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
-    check(readQlc(is, back, slots, err), std::string("cmp: readQlc v5 (") + err + ")");
+    check(readQlc(is, back, slots, err),
+          std::string("cmp: readQlc (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -536,6 +647,8 @@ static void testCmpJump() {
 // ---------------------------------------------------------------------------
 // Constant pool dedup (SPEC §bytecodes "constant pool"): constants in the
 // pool must have unique values; duplicated entries fold into a single one.
+// Since S5 only the pool-resident types (strings, blobs, containers, closures)
+// reach the pool at all, so the shrink is asserted alongside the dedup.
 // ---------------------------------------------------------------------------
 static bool poolHasDuplicates(const Function &fn) {
   for (size_t i = 0; i < fn.constants.size(); i++)
@@ -543,14 +656,6 @@ static bool poolHasDuplicates(const Function &fn) {
       if (valueEq(fn.constants[i], fn.constants[j]))
         return true;
   return false;
-}
-
-static int poolCountType(const Function &fn, QLangValue::Type t) {
-  int n = 0;
-  for (const auto &c : fn.constants)
-    if (c.type() == t)
-      n++;
-  return n;
 }
 
 static void testPoolDedup() {
@@ -565,15 +670,23 @@ static void testPoolDedup() {
     check(!poolHasDuplicates(p.functions[0]),
           "pool-dedup: no duplicate pool entries (strings)");
 
-    // Repeated nil -> one pool entry (call-scratch clears, one per call).
+    // nil and float literals left the pool (plan decision D3): the call-scratch
+    // clears store the zero-byte nil form, so two calls leave no nil entry at
+    // all, and the float operands are inline immediates.
     CompiledProgram pn = compileSrc(
         "def f(x) { return x }\n"
         "f(1.5 + 2.5)\n"
         "f(3.5 + 4.5)\n");
-    check(poolCountType(pn.functions[0], QLangValue::Type::Nil) == 1,
-          "pool-dedup: repeated nil folds to one entry");
+    check(poolCountType(pn.functions[0], QLangValue::Type::Nil) == 0,
+          "pool-dedup: nil clears leave no pool entry");
+    check(poolCountType(pn.functions[0], QLangValue::Type::Float) == 0,
+          "pool-dedup: float operands leave no pool entry");
+    check(hasZeroImm(pn.functions[0], Opcode::MOV, ImmForm::Nil,
+                     ImmPayload::Nil),
+          "pool-dedup: nil clears use the nil immediate");
 
-    // Repeated float/bool literals -> one entry each; distinct values stay.
+    // Repeated float/bool literals leave no pool entries at all, so there is
+    // nothing left to dedup: every store carries the value inline.
     CompiledProgram pf = compileSrc(
         "local a = 1.5\n"
         "local b = 1.5\n"
@@ -581,10 +694,18 @@ static void testPoolDedup() {
         "local d = true\n"
         "local e = true\n"
         "local f = false\n");
-    check(poolCountType(pf.functions[0], QLangValue::Type::Float) == 2,
-          "pool-dedup: repeated floats fold (2 unique, not 3)");
-    check(poolCountType(pf.functions[0], QLangValue::Type::Bool) == 2,
-          "pool-dedup: repeated bools fold (2 unique, not 3)");
+    check(poolCountType(pf.functions[0], QLangValue::Type::Float) == 0,
+          "pool-dedup: float literals leave the pool");
+    check(poolCountType(pf.functions[0], QLangValue::Type::Bool) == 0,
+          "pool-dedup: bool literals leave the pool");
+    check(hasFloatImm(pf.functions[0], Opcode::MOV, 1.5) &&
+              hasFloatImm(pf.functions[0], Opcode::MOV, 2.5),
+          "pool-dedup: both float values are inline immediates");
+    check(hasZeroImm(pf.functions[0], Opcode::MOV, ImmForm::True,
+                     ImmPayload::True) &&
+              hasZeroImm(pf.functions[0], Opcode::MOV, ImmForm::False,
+                         ImmPayload::False),
+          "pool-dedup: both bool values are inline immediates");
     check(!poolHasDuplicates(pf.functions[0]),
           "pool-dedup: no duplicate pool entries (float/bool)");
 
@@ -883,11 +1004,11 @@ struct Bin {
 };
 
 // A valid file: one empty "main" function, no natives/vars, 1 register.
-// v5 layout: code blob (empty) + offset table (empty) + loc table (empty).
+// v6 layout: code blob (empty) + offset table (empty) + loc table (empty).
 static std::string minimalFile() {
   Bin f;
   f.b += "QLC1";
-  f.u32(5); // version
+  f.u32(6); // version
   f.u32(1); // funcCount
   f.str("main");
   f.i32(0); // paramCount
@@ -920,7 +1041,7 @@ static void rejects(const std::string &name, const std::string &bytes) {
 static std::string fileWithOneInstr() {
   Bin f;
   f.b += "QLC1";
-  f.u32(5); // version
+  f.u32(6); // version
   f.u32(1); // funcCount
   f.str("main");
   f.i32(0); // paramCount
@@ -954,7 +1075,7 @@ static void testMalformed() {
   rejects("malformed: bad magic", badMagic);
 
   std::string badVersion = minimalFile();
-  badVersion[4] = 4; // v5 is the current format; v4 must be rejected
+  badVersion[4] = 5;  // v6 is current; the previous format must be rejected
   rejects("malformed: unsupported version", badVersion);
 
   rejects("malformed: truncated", minimalFile().substr(0, 10));
@@ -978,7 +1099,7 @@ static void testMalformed() {
   // Truncated instruction: codeSize=3, but the ADD at offset 0 needs 4 bytes.
   Bin truncInstr;
   truncInstr.b += "QLC1";
-  truncInstr.u32(5);
+  truncInstr.u32(6); // version
   truncInstr.u32(1);
   truncInstr.str("main");
   truncInstr.i32(0);
@@ -1004,7 +1125,7 @@ static void testMalformed() {
   // Dangling closure: pool holds a Function value with funcIndex 5.
   Bin dangling;
   dangling.b += "QLC1";
-  dangling.u32(5);
+  dangling.u32(6); // version
   dangling.u32(1);
   dangling.str("main");
   dangling.i32(0);
@@ -1029,7 +1150,7 @@ static void testMalformed() {
                         const char *nameB) {
     Bin f;
     f.b += "QLC1";
-    f.u32(5);
+    f.u32(6); // version
     f.u32(1);
     f.str("main");
     f.i32(0);
@@ -1061,7 +1182,7 @@ static void testMalformed() {
   auto valueFile = [&](std::function<void(Bin &)> emit) {
     Bin f;
     f.b += "QLC1";
-    f.u32(5);
+    f.u32(6); // version
     f.u32(1);
     f.str("main");
     f.i32(0);
@@ -1229,10 +1350,10 @@ local w = ab[1]
 int main() {
   testValues();
   testProgram();
-  testMovi();
-  testCompilerMovi();
-  testAddi();
-  testSubi();
+  testMovImmediate();
+  testCompilerMov();
+  testAddInPlace();
+  testSubInPlace();
   testCmpJump();
   testPoolDedup();
   testNop();

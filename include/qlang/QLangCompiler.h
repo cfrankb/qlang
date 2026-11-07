@@ -56,6 +56,18 @@ struct RegisterReport {
   std::vector<std::pair<int, int>> slotRanges; // active call-arg slot ranges
 };
 
+// A QLang literal the v6 encoding can carry as an inline right operand
+// (plan decision D3): `Int` within int32 (forms i8/i16/i32), `Float`, `Bool`
+// and `nil` (the zero-byte forms). The value tag has to survive the trip
+// exactly — a 64-bit literal is a Qword/Long and a container is shared, so
+// those stay in the constant pool.
+struct LiteralImm {
+  ImmForm form = ImmForm::Reserved;
+  ImmPayload payload = ImmPayload::None;
+  int64_t value = 0;
+  double dbl = 0;
+};
+
 // One unencoded instruction in the per-function raw stream. Jump targets
 // are instruction indices (not byte offsets); finish() resolves them to
 // relative byte offsets and picks the narrowest jump width.
@@ -111,6 +123,29 @@ struct FnEmitter {
     r.kind = defaultRightKind(op);
     if (r.kind == RightKind::Immediate)
       r.payload = ImmPayload::Signed;
+    raw.push_back(r);
+    return raw.size() - 1;
+  }
+
+  // Emit an instruction whose right operand is described explicitly (plan
+  // step S5): `right` carries the kind, the immediate form and the payload.
+  // The kind may differ from the opcode's base form (a `mov` reading the
+  // constant pool, an in-place ALU against a literal), which is exactly what
+  // the modifier byte exists to announce.
+  size_t emitRight(Opcode op, int32_t a, const RawInstr &right,
+                   uint16_t line = 0, uint16_t col = 0) {
+    RawInstr r;
+    r.op = op;
+    r.a = a;
+    r.kind = right.kind;
+    r.form = right.form;
+    r.payload = right.payload;
+    r.imm = right.imm;
+    r.immUnsigned = right.immUnsigned;
+    r.immFloat = right.immFloat;
+    r.b = right.b; // register / constant-pool index for kinds 1 and 2
+    r.line = line;
+    r.col = col;
     raw.push_back(r);
     return raw.size() - 1;
   }
@@ -264,10 +299,23 @@ private:
   int emitConst(const QLangValue &value);
 
   void emit(Opcode op, int a, int b = 0, int c = 0);
-  // Emit an instruction with a 32-bit immediate in the i32 slot (MOVI).
-  // Separate from emit(): a 3-arg emit() overload would be ambiguous with
-  // the defaulted b/c parameters.
-  void emitImm(Opcode op, int a, int32_t imm);
+  // Right-operand forms of the unified v6 opcodes (plan step S5). The `i`/`c`
+  // suffixed identities are no longer emitted: the modifier byte's kind field
+  // says what the right operand is, so `mov`/`add`/`sub`/`cmp` cover the
+  // immediate and the constant-pool spelling too (the in-place arity rule
+  // drops the trailing `c` for a non-register ALU/compare right operand).
+  // Separate names rather than overloads: a trailing `int` parameter would be
+  // ambiguous with emit()'s defaulted b/c.
+  void emitImmI(Opcode op, int a, int32_t imm);   // narrowest signed form
+  void emitImmF(Opcode op, int a, double value);  // form 8
+  void emitImmB(Opcode op, int a, bool value);    // forms 10 / 9
+  void emitImmNil(Opcode op, int a);              // form 11, no pool entry
+  void emitPool(Opcode op, int a, int poolIdx);   // kind 2 (constant pool)
+  // Emit an already-selected inline immediate (see LiteralImm).
+  void emitLiteralImm(Opcode op, int a, const LiteralImm &imm);
+  // Emit `op a, <literal>`: an inline immediate when the literal's type
+  // round-trips exactly through one (see LiteralImm), otherwise a pool read.
+  void emitLiteral(Opcode op, int a, const QLangValue &value);
   // Branch-site fusion (SPEC §bytecodes: alternate conditional jump): emit
   // `cmp ra, rb` + the "jump if `rel` is false" conditional jump (JE/JNE/JG/
   // JGE/JL/JLE), leaving the jump target as 0 for the caller to patch.

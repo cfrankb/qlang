@@ -190,8 +190,11 @@ std::pair<uint8_t, bool> FnEmitter::computeModifier(const RawInstr &r) {
 
   // A base form carries no modifier, so it can only mean the opcode's own
   // right-operand kind with 1-byte operands and, for an immediate, the signed
-  // 1-byte form. Anything else has to be announced by a modifier — and a
-  // modifier of 0 is a legal escaped modifier, hence the explicit flag.
+  // 1-byte form. A kind the emitter chose explicitly (emitRight) is therefore
+  // base only when it happens to be the opcode's own: a pool `mov` names a kind
+  // the opcode would never mean on its own, so it needs a modifier to say so.
+  // Anything else has to be announced by a modifier too, and a modifier of 0 is
+  // a legal escaped modifier, hence the explicit flag.
   bool base = r.kind == defaultRightKind(r.op) && left == OperandWidth::Byte;
   if (r.kind == RightKind::Immediate) {
     ImmForm form = immFormOf(r);
@@ -232,10 +235,11 @@ static const char *kConstFieldMetaKey = "__const_fields__";
 // reject values that violate the type inferred from the field's default.
 static const char *kFieldTypeMetaKey = "__field_types__";
 
-// Forward declaration: defined further down, used by the encoding-guideline
+// Forward declarations: defined further down, used by the encoding-guideline
 // helpers below (inPlaceReg/foldSelfArith/compileArgsToSlots).
+static std::optional<LiteralImm> literalImmOf(const QLangValue &v);
 static bool isIntLiteral(const ExprPtr &e);
-static std::optional<int32_t> foldNegLiteral(const ExprPtr &e);
+static std::optional<LiteralImm> foldNegLiteral(const ExprPtr &e);
 
 // True when e is a call to the builtin range(a, b) with exactly two arguments.
 // On success, outStart/outEnd are set to the two argument expressions so the
@@ -466,7 +470,7 @@ void QLangCompiler::endOfStatement()
 // release) and return it to the pool.
 void QLangCompiler::releaseTemp(int r)
 {
-  emit(Opcode::MOVC, r, emitConst(QLangValue()), 0);
+  emitImmNil(Opcode::MOV, r);
   freeRegister(r);
 }
 // Drop freed registers in [lo, hi): those slots are about to be reserved for
@@ -701,7 +705,7 @@ int QLangCompiler::inPlaceReg(const ExprPtr &e) const {
 
 bool QLangCompiler::foldSelfArith(const ExprPtr &e, const std::string &name,
                                   int r) {
-  // `x = x + k` / `x = x - k` -> inc/dec/addi/subi in place (SPEC
+  // `x = x + k` / `x = x - k` -> inc/dec/add/sub in place (SPEC
   // §bytecodes: encoding guidelines — favor int immediates over
   // temporaries). `+` is commutative so the variable may be on either side;
   // `-` only folds when the variable is the left operand.
@@ -726,12 +730,12 @@ bool QLangCompiler::foldSelfArith(const ExprPtr &e, const std::string &name,
     if (k == 1)
       emit(Opcode::INC, r, r);
     else
-      emitImm(Opcode::ADDI, r, k);
+      emitImmI(Opcode::ADD, r, static_cast<int32_t>(k));
   } else {
     if (k == 1)
       emit(Opcode::DEC, r, r);
     else
-      emitImm(Opcode::SUBI, r, k);
+      emitImmI(Opcode::SUB, r, static_cast<int32_t>(k));
   }
   return true;
 }
@@ -752,19 +756,17 @@ void QLangCompiler::compileArgsToSlots(const std::vector<ExprPtr> &args,
         emit(Opcode::MOV, slot, direct, 0);
       continue;
     }
-    if (isIntLiteral(arg)) {
-      emitImm(Opcode::MOVI, slot, arg->literal.asInt());
+    // A literal lands in its slot as one inline immediate when its type has a
+    // form for it (int/float/bool/nil), otherwise as one pool read.
+    if (arg->kind == ExprKind::Literal) {
+      emitLiteral(Opcode::MOV, slot, arg->literal);
       continue;
     }
-    // `-(literal)` folds to one MOVI straight into the slot — no temp, no
+    // `-(literal)` folds to one immediate straight into the slot — no temp, no
     // MOV (SPEC §bytecodes: encoding guidelines — avoid temporary registers).
     auto negFold = foldNegLiteral(arg);
     if (negFold) {
-      emitImm(Opcode::MOVI, slot, *negFold);
-      continue;
-    }
-    if (arg->kind == ExprKind::Literal) {
-      emit(Opcode::MOVC, slot, emitConst(arg->literal), 0);
+      emitLiteralImm(Opcode::MOV, slot, *negFold);
       continue;
     }
     if (scratch < 0)
@@ -812,39 +814,163 @@ void QLangCompiler::emit(Opcode op, int a, int b, int c) {
   m_emitter.emit(op, a, b, c, 0, line, col);
 }
 
-void QLangCompiler::emitImm(Opcode op, int a, int32_t imm) {
-  m_emitter.emit(op, a, 0, 0, imm,
-                 static_cast<uint16_t>(m_curLine),
-                 static_cast<uint16_t>(m_curCol));
+void QLangCompiler::emitImmI(Opcode op, int a, int32_t imm) {
+  RawInstr r;
+  r.kind = RightKind::Immediate;
+  r.payload = ImmPayload::Signed; // form picked by narrowestSignedForm
+  r.imm = imm;
+  m_emitter.emitRight(op, a, r, static_cast<uint16_t>(m_curLine),
+                      static_cast<uint16_t>(m_curCol));
 }
 
-// True when e is a Type::Int literal: the only literals eligible for MOVI
-// (the value tag must match the constant-pool path — a `true` literal is
-// Bool, not Int, and 64-bit literals are Qword/Long, not Int).
+void QLangCompiler::emitImmF(Opcode op, int a, double value) {
+  RawInstr r;
+  r.kind = RightKind::Immediate;
+  r.form = ImmForm::Float;
+  r.payload = ImmPayload::Float;
+  r.immFloat = value;
+  m_emitter.emitRight(op, a, r, static_cast<uint16_t>(m_curLine),
+                      static_cast<uint16_t>(m_curCol));
+}
+
+void QLangCompiler::emitImmB(Opcode op, int a, bool value) {
+  RawInstr r;
+  r.kind = RightKind::Immediate;
+  r.form = value ? ImmForm::True : ImmForm::False;
+  r.payload = value ? ImmPayload::True : ImmPayload::False;
+  m_emitter.emitRight(op, a, r, static_cast<uint16_t>(m_curLine),
+                      static_cast<uint16_t>(m_curCol));
+}
+
+void QLangCompiler::emitImmNil(Opcode op, int a) {
+  RawInstr r;
+  r.kind = RightKind::Immediate;
+  r.form = ImmForm::Nil;
+  r.payload = ImmPayload::Nil;
+  m_emitter.emitRight(op, a, r, static_cast<uint16_t>(m_curLine),
+                      static_cast<uint16_t>(m_curCol));
+}
+
+void QLangCompiler::emitPool(Opcode op, int a, int poolIdx) {
+  RawInstr r;
+  r.kind = RightKind::ConstPool;
+  r.b = poolIdx;
+  m_emitter.emitRight(op, a, r, static_cast<uint16_t>(m_curLine),
+                      static_cast<uint16_t>(m_curCol));
+}
+
+void QLangCompiler::emitLiteralImm(Opcode op, int a, const LiteralImm &imm) {
+  switch (imm.payload) {
+  case ImmPayload::Float:
+    emitImmF(op, a, imm.dbl);
+    return;
+  case ImmPayload::True:
+    emitImmB(op, a, true);
+    return;
+  case ImmPayload::False:
+    emitImmB(op, a, false);
+    return;
+  case ImmPayload::Nil:
+    emitImmNil(op, a);
+    return;
+  case ImmPayload::None:
+  case ImmPayload::Unsigned:
+    break; // never produced by literalImmOf / foldNegLiteral
+  }
+  emitImmI(op, a, static_cast<int32_t>(imm.value)); // ImmPayload::Signed
+}
+
+void QLangCompiler::emitLiteral(Opcode op, int a, const QLangValue &value) {
+  auto imm = literalImmOf(value);
+  if (imm)
+    return emitLiteralImm(op, a, *imm);
+  emitPool(op, a, emitConst(value));
+}
+
+// The immediate a literal is encoded as, or nullopt when it has to stay in the
+// constant pool (plan decision D3). The QLangValue type tag must survive the
+// trip exactly, because the VM materializes the immediate from the form alone:
+// `Int` stays Int for the signed 1/2/4-byte forms, `Float`/`Bool`/`Nil` map to
+// their zero- or fixed-width forms, and everything else (String, Blob, Array,
+// Table, Set, closures, and the 64-bit/unsigned tags whose type depends on how
+// the value was produced) is a pool read.
+static std::optional<LiteralImm> literalImmOf(const QLangValue &v) {
+  using Type = QLangValue::Type;
+  LiteralImm out;
+  switch (v.type()) {
+  case Type::Int: {
+    int64_t n = v.asInt();
+    if (n < INT32_MIN || n > INT32_MAX)
+      return std::nullopt; // not reachable for an Int, kept as a guard
+    out.form = narrowestSignedForm(n);
+    out.payload = ImmPayload::Signed;
+    out.value = n;
+    return out;
+  }
+  case Type::Float:
+    out.form = ImmForm::Float;
+    out.payload = ImmPayload::Float;
+    out.dbl = v.asFloat();
+    return out;
+  case Type::Bool:
+    out.form = v.asInt() ? ImmForm::True : ImmForm::False;
+    out.payload = v.asInt() ? ImmPayload::True : ImmPayload::False;
+    return out;
+  case Type::Nil:
+    out.form = ImmForm::Nil;
+    out.payload = ImmPayload::Nil;
+    return out;
+  default:
+    return std::nullopt;
+  }
+}
+
+// True when e is a Type::Int literal (the shape the arithmetic folds and the
+// Int-only comparison fusion recognize).
 static bool isIntLiteral(const ExprPtr &e) {
   return e && e->kind == ExprKind::Literal &&
          e->literal.type() == QLangValue::Type::Int;
 }
 
-// Fold a unary-minus over an Int literal to a compile-time int32 so the
-// compiler can emit one MOVI with a negative immediate instead of
-// MOVI + NEG (+ MOV). Also folds one level of double negation (`-(-5)`
-// -> 5). Returns std::nullopt for anything else (float literals,
-// variables, other operators) or when the result overflows int32
-// (e.g. `-(-2147483648)`), in which case the caller falls back to the
-// MOVI + NEG sequence.
-static std::optional<int32_t> foldNegLiteral(const ExprPtr &e) {
+// True when e is a numeric literal (Int or Float) that a unary minus can fold
+// into at compile time.
+static bool isNumericLiteral(const ExprPtr &e) {
+  if (!e || e->kind != ExprKind::Literal) return false;
+  auto t = e->literal.type();
+  return t == QLangValue::Type::Int || t == QLangValue::Type::Float;
+}
+
+// Negate a numeric literal, keeping its type tag (Int stays Int, Float stays
+// Float). Returns std::nullopt when an Int result leaves the int32 range the
+// signed immediate forms cover.
+static std::optional<QLangValue> negateLiteral(const QLangValue &v) {
+  if (v.type() == QLangValue::Type::Float)
+    return QLangValue::Float(-v.asFloat());
+  int64_t n = -static_cast<int64_t>(v.asInt());
+  if (n < INT32_MIN || n > INT32_MAX) return std::nullopt;
+  return QLangValue::Int(static_cast<int32_t>(n));
+}
+
+// Fold a unary minus over a numeric literal to a single compile-time immediate
+// so the compiler emits one store instead of a load plus NEG (SPEC §bytecodes:
+// encoding guidelines — avoid temporary registers when possible). Float
+// literals fold too: the v6 float immediate form carries the sign. Also folds
+// one level of double negation (`-(-5)` -> 5). Returns std::nullopt for
+// anything else (bool/nil literals, variables, other operators) or when the
+// result overflows int32 (e.g. `-(-2147483648)`), in which case the caller
+// falls back to the load + NEG sequence.
+static std::optional<LiteralImm> foldNegLiteral(const ExprPtr &e) {
   if (!e || e->kind != ExprKind::Unary || e->uop.type != TokenType::Minus)
     return std::nullopt;
   const ExprPtr &o = e->operand;
-  if (isIntLiteral(o)) {
-    int64_t v = -static_cast<int64_t>(o->literal.asInt());
-    if (v < INT32_MIN || v > INT32_MAX) return std::nullopt;
-    return static_cast<int32_t>(v);
+  if (isNumericLiteral(o)) {
+    auto neg = negateLiteral(o->literal);
+    if (!neg) return std::nullopt;
+    return literalImmOf(*neg);
   }
-  if (o && o->kind == ExprKind::Unary &&
-      o->uop.type == TokenType::Minus && isIntLiteral(o->operand)) {
-    return o->operand->literal.asInt(); // -(-x) == x, always in range
+  if (o && o->kind == ExprKind::Unary && o->uop.type == TokenType::Minus &&
+      isNumericLiteral(o->operand)) {
+    return literalImmOf(o->operand->literal); // -(-x) == x
   }
   return std::nullopt;
 }
@@ -896,7 +1022,7 @@ int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
   }
   int jumpIdx;
   if (isIntLiteral(cond->right)) {
-    emitImm(Opcode::CMPI, ra, cond->right->literal.asInt());
+    emitLiteral(Opcode::CMP, ra, cond->right->literal);
     // Flag jump (JE/JNE/JG/JGE/JL/JLE): target in `a`, patched by caller.
     emit(cmpJumpIfFalse(rel), 0, 0, 0);
     jumpIdx = static_cast<int>(m_emitter.size()) - 1;
@@ -1249,7 +1375,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   // Implicit `return nil`. The RETURN opcode returns reg 0, but a prior
   // statement may have left a value there; force reg 0 to nil so a function
   // with no return statement returns nil (spec: return value defaults to nil).
-  emit(Opcode::MOVC, 0, emitConst(QLangValue())); // reg 0 = nil
+  emitImmNil(Opcode::MOV, 0); // reg 0 = nil
   emit(Opcode::RETURN, 0);
 
   Function fn;
@@ -1340,7 +1466,7 @@ int QLangCompiler::staticsTableReg() {
     return 0;
   int r = tmpRegister();
   int keyR = tmpRegister();
-  emit(Opcode::MOVC, keyR, emitConst(QLangValue::String("__statics__")));
+  emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String("__statics__")));
   emit(Opcode::TABGET, r, 0, keyR);
   return r;
 }
@@ -1396,15 +1522,15 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
 
 void QLangCompiler::compileDeclaration(const StmtPtr &s) {
   int r = declareVar(s->name, true);
-  if (isIntLiteral(s->value)) {
-    // `local a = 0` -> one MOVI into the target register (SPEC
-    // §bytecodes: MOVI) instead of MOV tmp + MOV.
-    emitImm(Opcode::MOVI, r, s->value->literal.asInt());
+  if (s->value && s->value->kind == ExprKind::Literal) {
+    // `local a = 0` -> one store of the literal into the target register
+    // (SPEC §bytecodes: encoding guidelines) instead of MOV tmp + MOV.
+    emitLiteral(Opcode::MOV, r, s->value->literal);
   } else if (!s->value) {
     // `local z` -> implicit int, default 0 (SPEC §declarations).
     // A typed valueless decl (`local b:byte`) gets zero of that type via
     // the CONV emitted below.
-    emitImm(Opcode::MOVI, r, 0);
+    emitImmI(Opcode::MOV, r, 0);
   } else {
     // Compile the RHS directly into the declared register (SPEC
     // §bytecodes: encoding guidelines — always copy directly to the
@@ -1441,7 +1567,7 @@ void QLangCompiler::compileConst(const StmtPtr &s) {
   if (s->value)
     compileExpr(s->value, r);
   else
-    emit(Opcode::MOVC, r, emitConst(QLangValue()));
+    emitImmNil(Opcode::MOV, r);
   updateVarType(s->name, s->value);
   // Enforce a typed declaration (e.g. local b:byte = 32).
   if (s->declaredType)
@@ -1458,7 +1584,7 @@ void QLangCompiler::compileAssignment(const StmtPtr &s) {
       m_classStaticNames.count(s->name)) {
     int staticsR = staticsTableReg();
     int keyR = tmpRegister();
-    emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(s->name)));
+    emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(s->name)));
     int t = tmpRegister();
     compileExpr(s->assignValue, t);
     const std::string &op = s->assignOp.text;
@@ -1491,10 +1617,9 @@ void QLangCompiler::compileAssignment(const StmtPtr &s) {
                                                   : binOp(op.substr(0, op.size() - 1));
       if ((opCode == Opcode::ADD || opCode == Opcode::SUB) &&
           isIntLiteral(s->assignValue)) {
-        // `cap += 12` / `cap -= 12` -> ADDI/SUBI in-place (SPEC §bytecodes:
-        // new OpCode addi/subi).
-        emitImm(opCode == Opcode::ADD ? Opcode::ADDI : Opcode::SUBI, cur,
-                s->assignValue->literal.asInt());
+        // `cap += 12` -> `add cur, i8 12` in place (SPEC §2.6 in-place form).
+        emitImmI(opCode == Opcode::ADD ? Opcode::ADD : Opcode::SUB, cur,
+                 s->assignValue->literal.asInt());
       } else {
         int t = tmpRegister();
         compileExpr(s->assignValue, t);
@@ -1536,11 +1661,12 @@ void QLangCompiler::compileAssignment(const StmtPtr &s) {
     return;
   }
   if (op == "=") {
-    if (isIntLiteral(s->assignValue)) {
-      // `a = 0` -> one MOVI into the target register (SPEC §bytecodes: MOVI).
-      emitImm(Opcode::MOVI, r, s->assignValue->literal.asInt());
+    if (s->assignValue && s->assignValue->kind == ExprKind::Literal) {
+      // `a = 0` -> one store of the literal into the target register
+      // (SPEC §bytecodes: encoding guidelines).
+      emitLiteral(Opcode::MOV, r, s->assignValue->literal);
     } else if (foldSelfArith(s->assignValue, s->name, r)) {
-      // `a = a + 1` -> inc a / `a = a - 4` -> subi a, 4 (in place).
+      // `a = a + 1` -> inc a / `a = a - 4` -> `add a, i8 -4` (in place).
     } else {
       // Compile the RHS directly into the target register (SPEC
       // §bytecodes: encoding guidelines — always copy directly to the
@@ -1554,10 +1680,9 @@ void QLangCompiler::compileAssignment(const StmtPtr &s) {
                                                 : binOp(op.substr(0, op.size() - 1));
     if ((opCode == Opcode::ADD || opCode == Opcode::SUB) &&
         isIntLiteral(s->assignValue)) {
-      // `a += 12` / `a -= 12` -> ADDI/SUBI in-place (SPEC §bytecodes:
-      // new OpCode addi/subi).
-      emitImm(opCode == Opcode::ADD ? Opcode::ADDI : Opcode::SUBI, r,
-              s->assignValue->literal.asInt());
+      // `a += 12` -> `add r, i8 12` in place (SPEC §2.6 in-place form).
+      emitImmI(opCode == Opcode::ADD ? Opcode::ADD : Opcode::SUB, r,
+               s->assignValue->literal.asInt());
     } else {
       int t = tmpRegister();
       compileExpr(s->assignValue, t);
@@ -1671,10 +1796,10 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     if (hasStep) {
       compileExpr(s->stepExpr, stepReg);
     } else {
-      emitImm(Opcode::MOVI, stepReg, 1);
+      emitImmI(Opcode::MOV, stepReg, 1);
     }
     int zeroReg = tmpRegister();
-    emitImm(Opcode::MOVI, zeroReg, 0);
+    emitImmI(Opcode::MOV, zeroReg, 0);
 
     // direction = (end > start) ? 1 : -1
     int subReg = tmpRegister();
@@ -1682,13 +1807,13 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     int posReg = tmpRegister();
     emit(Opcode::GT, posReg, subReg, zeroReg);
     int dirReg = tmpRegister();
-    emitImm(Opcode::MOVI, dirReg, -1);
+    emitImmI(Opcode::MOV, dirReg, -1);
     int dPosLabel = static_cast<int>(m_emitter.size());
     emit(Opcode::JMPIFTRUE, posReg, 0);
     int dDoneLabel = static_cast<int>(m_emitter.size());
     emit(Opcode::JMP, 0);
     m_emitter.patchJump(dPosLabel, dPosLabel + 2);
-    emitImm(Opcode::MOVI, dirReg, 1);
+    emitImmI(Opcode::MOV, dirReg, 1);
     m_emitter.patchJump(dDoneLabel, dPosLabel + 3);
 
     // No explicit step: advance in the loop's natural direction (unit step).
@@ -1864,23 +1989,23 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
       if (hasStep) {
         compileExpr(s->stepExpr, stepReg);
       } else {
-        emitImm(Opcode::MOVI, stepReg, 1);
+        emitImmI(Opcode::MOV, stepReg, 1);
       }
       int zeroReg = tmpRegister();
-      emitImm(Opcode::MOVI, zeroReg, 0);
+      emitImmI(Opcode::MOV, zeroReg, 0);
       // Natural direction from the (runtime) bounds.
       int subReg = tmpRegister();
       emit(Opcode::SUB, subReg, endReg, startReg);
       int posReg = tmpRegister();
       emit(Opcode::GT, posReg, subReg, zeroReg);
       int dirReg = tmpRegister();
-      emitImm(Opcode::MOVI, dirReg, -1);
+      emitImmI(Opcode::MOV, dirReg, -1);
       int dPosLabel = static_cast<int>(m_emitter.size());
       emit(Opcode::JMPIFTRUE, posReg, 0);
       int dDoneLabel = static_cast<int>(m_emitter.size());
       emit(Opcode::JMP, 0);
       m_emitter.patchJump(dPosLabel, dPosLabel + 2);
-      emitImm(Opcode::MOVI, dirReg, 1);
+      emitImmI(Opcode::MOV, dirReg, 1);
       m_emitter.patchJump(dDoneLabel, dPosLabel + 3);
 
       // step == 0 -> infinite loop: body + increment forever, no guard.
@@ -1976,7 +2101,7 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
   // for i in <collection> ... next i : iterate array elements / table keys.
   int x = declareVar(s->loopVar); // loopVar holds each element/key
   int idx = tmpRegister();        // index counter
-  emitImm(Opcode::MOVI, idx, 0);
+  emitImmI(Opcode::MOV, idx, 0);
   int colReg = tmpRegister();
   compileExpr(s->forEnd, colReg); // load the collection once
   int lenReg = tmpRegister();
@@ -2195,7 +2320,7 @@ void QLangCompiler::compileReturn(const StmtPtr &s) {
   if (s->returnValue) {
     compileExpr(s->returnValue, 0);
   } else {
-    emit(Opcode::MOVC, 0, emitConst(QLangValue())); // nil
+    emitImmNil(Opcode::MOV, 0); // nil
   }
   emit(Opcode::RETURN, 0);
 }
@@ -2207,7 +2332,7 @@ void QLangCompiler::compileYield(const StmtPtr &s) {
   if (s->yieldValue) {
     compileExpr(s->yieldValue, 0);
   } else {
-    emit(Opcode::MOVC, 0, emitConst(QLangValue())); // nil
+    emitImmNil(Opcode::MOV, 0); // nil
   }
   emit(Opcode::YIELD, 0);
 }
@@ -2225,9 +2350,8 @@ void QLangCompiler::compileEmit(const StmtPtr &s) {
   emit(Opcode::EMIT, senderReg, sigConstIdx, argCount);
   // Clear the arg slots so they do not keep a reference alive past the
   // statement (Phase 7 finalizers need the true final release).
-  int nilC = m_emitter.addConst(QLangValue());
   for (int j = 0; j < argCount; j++)
-    emit(Opcode::MOVC, senderReg + 1 + j, nilC, 0);
+    emitImmNil(Opcode::MOV, senderReg + 1 + j);
   releaseTemp(senderReg);
 }
 
@@ -2435,7 +2559,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       }
       // A field: `name = value` or `const name = value`.
       int keyR = tmpRegister();
-      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(st->name)));
+      emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(st->name)));
       int valR = tmpRegister();
       compileExpr(st->kind == StmtKind::Assignment ? st->assignValue
                                                    : st->value,
@@ -2478,7 +2602,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       closure->funcIndex = funcIndex;
       int constIdx = emitConst(QLangValue::Function(closure));
       int keyR = tmpRegister();
-      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(st->name)));
+      emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(st->name)));
       int funcR = tmpRegister();
       emit(Opcode::MAKEFUNC, funcR, constIdx);
       emit(Opcode::TABPUT, 0, keyR, funcR);
@@ -2503,7 +2627,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
     emit(Opcode::TABCREATE, staticsReg);
     for (auto &sf : staticFieldDecls) {
       int keyR = tmpRegister();
-      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(sf.first)));
+      emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(sf.first)));
       int valR = tmpRegister();
       compileExpr(sf.second, valR);
       emit(Opcode::TABPUT, staticsReg, keyR, valR);
@@ -2526,7 +2650,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       closure->funcIndex = funcIndex;
       int constIdx = emitConst(QLangValue::Function(closure));
       int keyR = tmpRegister();
-      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(sm.name)));
+      emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(sm.name)));
       int funcR = tmpRegister();
       emit(Opcode::MAKEFUNC, funcR, constIdx);
       emit(Opcode::TABPUT, staticsReg, keyR, funcR);
@@ -2540,22 +2664,22 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       emit(Opcode::TABCREATE, sconstReg);
       for (const auto &cn : staticConstNames) {
         int keyR = tmpRegister();
-        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(cn)));
+        emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(cn)));
         int valR = tmpRegister();
-        emitImm(Opcode::MOVI, valR, 1);
+        emitImmI(Opcode::MOV, valR, 1);
         emit(Opcode::TABPUT, sconstReg, keyR, valR);
         freeRegister(keyR);
         freeRegister(valR);
       }
       int sckeyR = tmpRegister();
-      emit(Opcode::MOVC, sckeyR,
-           emitConst(QLangValue::String("__static_const__")));
+      emitPool(Opcode::MOV, sckeyR,
+               emitConst(QLangValue::String("__static_const__")));
       emit(Opcode::TABPUT, staticsReg, sckeyR, sconstReg);
       freeRegister(sckeyR);
       freeRegister(sconstReg);
     }
     int skeyR = tmpRegister();
-    emit(Opcode::MOVC, skeyR, emitConst(QLangValue::String("__statics__")));
+    emitPool(Opcode::MOV, skeyR, emitConst(QLangValue::String("__statics__")));
     emit(Opcode::TABPUT, 0, skeyR, staticsReg);
     freeRegister(skeyR);
     freeRegister(staticsReg);
@@ -2570,16 +2694,16 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
     emit(Opcode::TABCREATE, cfieldsReg);
     for (const auto &cn : constNames) {
       int keyR = tmpRegister();
-      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(cn)));
+      emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(cn)));
       int valR = tmpRegister();
-      emitImm(Opcode::MOVI, valR, 1);
+      emitImmI(Opcode::MOV, valR, 1);
       emit(Opcode::TABPUT, cfieldsReg, keyR, valR);
       freeRegister(keyR);
       freeRegister(valR);
     }
     int cfkeyR = tmpRegister();
-    emit(Opcode::MOVC, cfkeyR,
-         emitConst(QLangValue::String(kConstFieldMetaKey)));
+    emitPool(Opcode::MOV, cfkeyR,
+             emitConst(QLangValue::String(kConstFieldMetaKey)));
     emit(Opcode::TABPUT, 0, cfkeyR, cfieldsReg);
     freeRegister(cfkeyR);
     freeRegister(cfieldsReg);
@@ -2593,17 +2717,17 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
     emit(Opcode::TABCREATE, ftypesReg);
     for (const auto &ft : fieldTypes) {
       int keyR = tmpRegister();
-      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(ft.first)));
+      emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(ft.first)));
       int valR = tmpRegister();
       QLangValue tv(ft.second);
-      emit(Opcode::MOVC, valR, emitConst(QLangValue::String(tv.typeName())));
+      emitPool(Opcode::MOV, valR, emitConst(QLangValue::String(tv.typeName())));
       emit(Opcode::TABPUT, ftypesReg, keyR, valR);
       freeRegister(keyR);
       freeRegister(valR);
     }
     int ftkeyR = tmpRegister();
-    emit(Opcode::MOVC, ftkeyR,
-         emitConst(QLangValue::String(kFieldTypeMetaKey)));
+    emitPool(Opcode::MOV, ftkeyR,
+             emitConst(QLangValue::String(kFieldTypeMetaKey)));
     emit(Opcode::TABPUT, 0, ftkeyR, ftypesReg);
     freeRegister(ftkeyR);
     freeRegister(ftypesReg);
@@ -2618,15 +2742,15 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
     emit(Opcode::TABCREATE, fieldsReg);
     for (size_t i = 0; i < fieldNames.size(); i++) {
       int keyR = tmpRegister();
-      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(fieldNames[i])));
+      emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(fieldNames[i])));
       int valR = tmpRegister();
-      emitImm(Opcode::MOVI, valR, static_cast<int32_t>(i));
+      emitImmI(Opcode::MOV, valR, static_cast<int32_t>(i));
       emit(Opcode::TABPUT, fieldsReg, keyR, valR);
       freeRegister(keyR);
       freeRegister(valR);
     }
     int fkeyR = tmpRegister();
-    emit(Opcode::MOVC, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));
+    emitPool(Opcode::MOV, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));
     emit(Opcode::TABPUT, 0, fkeyR, fieldsReg);
     freeRegister(fkeyR);
     freeRegister(fieldsReg);
@@ -2735,7 +2859,7 @@ void QLangCompiler::compileEnum(const StmtPtr &s) {
   TableValue kv = std::make_shared<std::map<std::string, QLangValue>>();
   for (const auto &m : members)
     (*kv)[m.first] = m.second;
-  emit(Opcode::MOVC, r, emitConst(QLangValue::Table(kv)));
+  emitPool(Opcode::MOV, r, emitConst(QLangValue::Table(kv)));
   m_enums[s->name] = std::move(members);
   if (!m_inFunction)
     m_globalEnums.insert(s->name);
@@ -2899,10 +3023,9 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
 
   switch (e->kind) {
   case ExprKind::Literal:
-    if (isIntLiteral(e))
-      emitImm(Opcode::MOVI, dest, e->literal.asInt()); // no pool slot needed
-    else
-      emit(Opcode::MOVC, dest, emitConst(e->literal));
+    // One instruction: an inline immediate when the literal's type has a v6
+    // form for it (int/float/bool/nil), otherwise a constant-pool read.
+    emitLiteral(Opcode::MOV, dest, e->literal);
     break;
   case ExprKind::Variable: {
     // Bare static member name inside a method body of a class with statics:
@@ -2910,7 +3033,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     if (!m_classStaticNames.empty() && m_classStaticNames.count(e->name)) {
       int staticsR = staticsTableReg();
       int keyR = tmpRegister();
-      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(e->name)));
+      emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(e->name)));
       emit(Opcode::TABGET, dest, staticsR, keyR);
       break;
     }
@@ -3022,13 +3145,13 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       if (rrTmp)
         freeRegister(rr);
     } else {
-      // Constant folding: `-(literal)` -> one MOVI with a negative
-      // immediate instead of MOVI + NEG (+ MOV) (SPEC §bytecodes:
-      // encoding guidelines — avoid temporary registers when possible).
+      // Constant folding: `-(literal)` -> one store of a negative immediate
+      // instead of a load plus NEG (and a MOV) (SPEC §bytecodes: encoding
+      // guidelines — avoid temporary registers when possible).
       if (e->uop.type == TokenType::Minus) {
         auto folded = foldNegLiteral(e);
         if (folded) {
-          emitImm(Opcode::MOVI, dest, *folded);
+          emitLiteralImm(Opcode::MOV, dest, *folded);
           break;
         }
       }
@@ -3159,11 +3282,12 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
                   std::to_string(argCount));
         int staticsR = tmpRegister();
         int skR = tmpRegister();
-        emit(Opcode::MOVC, skR, emitConst(QLangValue::String("__statics__")));
+        emitPool(Opcode::MOV, skR,
+                 emitConst(QLangValue::String("__statics__")));
         // __proto_<class> is a named register: read it in place.
         emit(Opcode::TABGET, staticsR, regOf("__proto_" + cname), skR);
         int keyR = tmpRegister();
-        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(e->callee)));
+        emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(e->callee)));
         int funcReg = tmpRegister();
         emit(Opcode::TABGET, funcReg, staticsR, keyR);
         // Shift user args down by one to make room for the anchor at argBase.
@@ -3208,8 +3332,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         compileExpr(e->calleeMember->memberBase, baseR);
       }
       int keyR = tmpRegister();
-      emit(Opcode::MOVC, keyR,
-           emitConst(QLangValue::String(e->calleeMember->memberName)));
+      emitPool(Opcode::MOV, keyR,
+               emitConst(QLangValue::String(e->calleeMember->memberName)));
       int funcReg = tmpRegister();
       emit(Opcode::TABGET, funcReg, baseR, keyR);
       if (prependSelf) {
@@ -3241,7 +3365,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // Copy methods from prototype to instance.
       for (const auto &mname : rec.methodNames) {
         int keyR = tmpRegister();
-        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(mname)));
+        emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(mname)));
         int valR = tmpRegister();
         emit(Opcode::TABGET, valR, protoReg, keyR);
         emit(Opcode::TABPUT, instanceReg, keyR, valR);
@@ -3254,7 +3378,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // writes below, like the method copies.
       for (const auto &fname : rec.fieldNames) {
         int keyR = tmpRegister();
-        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(fname)));
+        emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(fname)));
         int valR = tmpRegister();
         emit(Opcode::TABGET, valR, protoReg, keyR);
         emit(Opcode::TABPUT, instanceReg, keyR, valR);
@@ -3266,7 +3390,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // and every sibling mutate the same class-level map.
       if (!rec.staticFields.empty() || !rec.staticMethodFuncIndices.empty()) {
         int skeyR = tmpRegister();
-        emit(Opcode::MOVC, skeyR, emitConst(QLangValue::String("__statics__")));
+        emitPool(Opcode::MOV, skeyR,
+                 emitConst(QLangValue::String("__statics__")));
         int svalR = tmpRegister();
         emit(Opcode::TABGET, svalR, protoReg, skeyR);
         emit(Opcode::TABPUT, instanceReg, skeyR, svalR);
@@ -3278,9 +3403,10 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // a "class instance" (enforcement key present) while metadata is written.
       {
         int ckeyR = tmpRegister();
-        emit(Opcode::MOVC, ckeyR, emitConst(QLangValue::String(kClassMetaKey)));
+        emitPool(Opcode::MOV, ckeyR,
+                 emitConst(QLangValue::String(kClassMetaKey)));
         int cvalR = tmpRegister();
-        emit(Opcode::MOVC, cvalR, emitConst(QLangValue::String(e->callee)));
+        emitPool(Opcode::MOV, cvalR, emitConst(QLangValue::String(e->callee)));
         emit(Opcode::TABPUT, instanceReg, ckeyR, cvalR);
         freeRegister(ckeyR);
         freeRegister(cvalR);
@@ -3291,8 +3417,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // setField would otherwise reject the non-declared metadata key.
       if (!rec.constFields.empty()) {
         int cfkeyR = tmpRegister();
-        emit(Opcode::MOVC, cfkeyR,
-             emitConst(QLangValue::String(kConstFieldMetaKey)));
+        emitPool(Opcode::MOV, cfkeyR,
+                 emitConst(QLangValue::String(kConstFieldMetaKey)));
         int cfvalR = tmpRegister();
         emit(Opcode::TABGET, cfvalR, protoReg, cfkeyR);
         emit(Opcode::TABPUT, instanceReg, cfkeyR, cfvalR);
@@ -3304,8 +3430,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // the const-field metadata above).
       if (!rec.fieldTypes.empty()) {
         int ftkeyR = tmpRegister();
-        emit(Opcode::MOVC, ftkeyR,
-             emitConst(QLangValue::String(kFieldTypeMetaKey)));
+        emitPool(Opcode::MOV, ftkeyR,
+                 emitConst(QLangValue::String(kFieldTypeMetaKey)));
         int ftvalR = tmpRegister();
         emit(Opcode::TABGET, ftvalR, protoReg, ftkeyR);
         emit(Opcode::TABPUT, instanceReg, ftkeyR, ftvalR);
@@ -3318,7 +3444,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // "class instance".
       if (!rec.fieldNames.empty()) {
         int fkeyR = tmpRegister();
-        emit(Opcode::MOVC, fkeyR, emitConst(QLangValue::String(kFieldMetaKey)));
+        emitPool(Opcode::MOV, fkeyR,
+                 emitConst(QLangValue::String(kFieldMetaKey)));
         int fvalR = tmpRegister();
         emit(Opcode::TABGET, fvalR, protoReg, fkeyR);
         emit(Opcode::TABPUT, instanceReg, fkeyR, fvalR);
@@ -3383,9 +3510,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // finalizers need the true final release; same pattern as the MAKEGEN
       // arg-register clearing above).
       {
-        int nilC = m_emitter.addConst(QLangValue());
         for (int j = 0; j < newArgCount; j++)
-          emit(Opcode::MOVC, newArgBase + j, nilC, 0);
+          emitImmNil(Opcode::MOV, newArgBase + j);
       }
       break;
     }
@@ -3400,7 +3526,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         emit(Opcode::MAKEGEN, dest, constIdx, argCount);
         // Clear arg regs so they don't leak into the next instruction.
         for (int j = 0; j < argCount; j++)
-          emit(Opcode::MOVC, argBase + j, m_emitter.addConst(QLangValue()), 0);
+          emitImmNil(Opcode::MOV, argBase + j);
       } else if (!m_functions[static_cast<size_t>(fi) - 1].captures.empty()) {
         // Phase 1: def function with captures — the closure value (cells
         // bound at def time) is the name's value in this scope; dispatch
@@ -3522,10 +3648,11 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       elems.reserve(e->elements.size());
       for (auto &el : e->elements)
         elems.push_back(evalConstExpr(el));
-      emit(Opcode::MOVC, dest, emitConst(QLangValue::Array(std::move(elems))));
+      emitPool(Opcode::MOV, dest,
+               emitConst(QLangValue::Array(std::move(elems))));
       break;
     }
-    emit(Opcode::MOVC, dest, emitConst(QLangValue::Array()));
+    emitPool(Opcode::MOV, dest, emitConst(QLangValue::Array()));
     for (auto &el : e->elements) {
       int t = tmpRegister();
       compileExpr(el, t);
@@ -3550,7 +3677,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       TableValue kv = std::make_shared<std::map<std::string, QLangValue>>();
       for (auto &item : e->items)
         kv->operator[](evalConstKey(item.first)) = evalConstExpr(item.second);
-      emit(Opcode::MOVC, dest, emitConst(QLangValue::Table(kv)));
+      emitPool(Opcode::MOV, dest, emitConst(QLangValue::Table(kv)));
       break;
     }
     // Runtime table construction.
@@ -3561,7 +3688,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       // Static identifier keys are Variable expressions - emit as string constant.
       // Dynamic keys ($expr) are compiled as expressions.
       if (item.first->kind == ExprKind::Variable)
-        emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(item.first->name)));
+        emitPool(Opcode::MOV, keyR,
+                 emitConst(QLangValue::String(item.first->name)));
       else
         compileExpr(item.first, keyR);
       int valR = tmpRegister();
@@ -3621,7 +3749,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         bool found = false;
         for (const auto &m : eit->second) {
           if (m.first == e->memberName) {
-            emit(Opcode::MOVC, dest, emitConst(m.second));
+            emitPool(Opcode::MOV, dest, emitConst(m.second));
             found = true;
             break;
           }
@@ -3655,10 +3783,10 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       emit(Opcode::MOV, baseR, regOf("__proto_" + cname));
       int staticsR = tmpRegister();
       int skR = tmpRegister();
-      emit(Opcode::MOVC, skR, emitConst(QLangValue::String("__statics__")));
+      emitPool(Opcode::MOV, skR, emitConst(QLangValue::String("__statics__")));
       emit(Opcode::TABGET, staticsR, baseR, skR);
       int keyR = tmpRegister();
-      emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(e->memberName)));
+      emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(e->memberName)));
       emit(Opcode::TABGET, dest, staticsR, keyR);
       break;
     }
@@ -3672,7 +3800,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       compileExpr(e->memberBase, baseR);
     }
     int keyR = tmpRegister();
-    emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(e->memberName)));
+    emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(e->memberName)));
     emit(Opcode::TABGET, dest, baseR, keyR);
     break;
   }
@@ -3851,7 +3979,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     int templateReg = dest + 1;
     int exprStartReg = dest + 2;
 
-    emit(Opcode::MOVC, templateReg, emitConst(QLangValue::String(fmt)));
+    emitPool(Opcode::MOV, templateReg, emitConst(QLangValue::String(fmt)));
 
     // Each interpolated expression lands directly in its slot (simple
     // operands without a temp; complex ones share one scratch register).
@@ -4021,7 +4149,7 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
     if (target->indexExpr)
       compileExpr(target->indexExpr, idxR);
     else
-      emitImm(Opcode::MOVI, idxR, 0); // ab[] -> append
+      emitImmI(Opcode::MOV, idxR, 0); // ab[] -> append
     int valR = tmpRegister();
     if (target->indexExpr && isCompound) {
       // read-modify-write for compound ops (e.g. a[i] += v, t["n"] += v)
@@ -4031,10 +4159,9 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
                       : (op.text == "--") ? Opcode::DEC
                                           : binOp(op.text.substr(0, op.text.size() - 1));
       if ((opCode == Opcode::ADD || opCode == Opcode::SUB) && isIntLiteral(value)) {
-        // `a[i] += 12` / `a[i] -= 12` -> ADDI/SUBI in-place (SPEC §bytecodes:
-        // new OpCode addi/subi).
-        emitImm(opCode == Opcode::ADD ? Opcode::ADDI : Opcode::SUBI, tmpR,
-                value->literal.asInt());
+        // `a[i] += 12` -> `add tmpR, i8 12` in place (SPEC §2.6 in-place form).
+        emitImmI(opCode == Opcode::ADD ? Opcode::ADD : Opcode::SUB, tmpR,
+                 value->literal.asInt());
       } else {
         compileExpr(value, valR);
         emit(opCode, tmpR, tmpR, valR);
@@ -4065,7 +4192,8 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
         baseR = declareVar(baseName);
     }
     int keyR = tmpRegister();
-    emit(Opcode::MOVC, keyR, emitConst(QLangValue::String(target->memberName)));
+    emitPool(Opcode::MOV, keyR,
+             emitConst(QLangValue::String(target->memberName)));
     int valR = tmpRegister();
     if (isCompound) {
       int tmpR = tmpRegister();
@@ -4074,10 +4202,9 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
                       : (op.text == "--") ? Opcode::DEC
                                           : binOp(op.text.substr(0, op.text.size() - 1));
       if ((opCode == Opcode::ADD || opCode == Opcode::SUB) && isIntLiteral(value)) {
-        // `t.k += 12` / `t.k -= 12` -> ADDI/SUBI in-place (SPEC §bytecodes:
-        // new OpCode addi/subi).
-        emitImm(opCode == Opcode::ADD ? Opcode::ADDI : Opcode::SUBI, tmpR,
-                value->literal.asInt());
+        // `t.k += 12` -> `add tmpR, i8 12` in place (SPEC §2.6 in-place form).
+        emitImmI(opCode == Opcode::ADD ? Opcode::ADD : Opcode::SUB, tmpR,
+                 value->literal.asInt());
       } else {
         compileExpr(value, valR);
         emit(opCode, tmpR, tmpR, valR);
