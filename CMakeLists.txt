@@ -167,14 +167,8 @@ add_executable(codec_check tests/unit/codec_check.cpp)
 target_link_libraries(codec_check PRIVATE qlang)
 add_test(NAME codec COMMAND codec_check)
 
-# Escape-byte instruction encoding/decoding round-trip + invalid-input tests
-# (docs/plans/instruction-format-escape-byte-implementation-plan.md Step 7b).
-add_executable(encoding_test tests/unit/encoding_test.cpp)
-target_link_libraries(encoding_test PRIVATE qlang)
-add_test(NAME encoding COMMAND encoding_test)
-
-# `.qlc` v6 modifier-byte (2/2/4) tables, immediate forms, permitted kinds and
-# size/encode/decode agreement
+# Instruction encoding: 2/2/4 modifier byte, immediate forms, permitted kinds
+# and size/encode/decode agreement
 # (docs/plans/encoding-v6-and-indirect-plan.md §2, verification §11).
 add_executable(encoding_v6_test tests/unit/encoding_v6_test.cpp)
 target_link_libraries(encoding_v6_test PRIVATE qlang)

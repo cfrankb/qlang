@@ -1,9 +1,9 @@
-// `.qlc` v6 modifier-byte tests: the 2/2/4 field split, the right-operand kind
-// table, the full immediate set (signed / unsigned / float / zero-byte bool and
-// nil) and the in-place arity rule
+// Instruction-encoding tests: the 2/2/4 modifier-byte field split, the
+// right-operand kind table, the full immediate set (signed / unsigned / float /
+// zero-byte bool and nil) and the in-place arity rule
 // (docs/plans/encoding-v6-and-indirect-plan.md §2, verification §11 items 1-4
-// and 7). The shipped v5 codec is covered by tests/unit/encoding_test.cpp; both
-// coexist until the pipeline switches over (plan §6 phase 1).
+// and 7). This is the only codec; the retired two-nibble encoding and its suite
+// were removed with `.qlc` v6 (plan §6 phase 1).
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -102,7 +102,7 @@ static void roundTrip(const DecodedInstruction &in, const std::string &name,
                       size_t expectedSize) {
   size_t size = 0;
   try {
-    size = instructionSizeV6(in.op, in.escaped, in.modifier);
+    size = instructionSize(in.op, in.escaped, in.modifier);
   } catch (const QLangError &e) {
     check(false, name + ": size threw (" + e.what() + ")");
     return;
@@ -113,7 +113,7 @@ static void roundTrip(const DecodedInstruction &in, const std::string &name,
 
   std::vector<uint8_t> buf;
   try {
-    encodeInstructionV6(buf, in);
+    encodeInstruction(buf, in);
   } catch (const QLangError &e) {
     check(false, name + ": encode threw (" + e.what() + ")");
     return;
@@ -126,7 +126,7 @@ static void roundTrip(const DecodedInstruction &in, const std::string &name,
 
   DecodedInstruction out;
   try {
-    decodeInstructionV6(buf.data(), 0, buf.size(), out);
+    decodeInstruction(buf.data(), 0, buf.size(), out);
   } catch (const QLangError &e) {
     check(false, name + ": decode threw (" + e.what() + ")");
     return;
@@ -174,44 +174,46 @@ static void roundTrip(const DecodedInstruction &in, const std::string &name,
   check(ok, name + ": fields after round-trip");
 }
 
-// Encode the same instruction with both codecs and require identical bytes.
-static void sameBytesAsV5(const DecodedInstruction &in,
-                          const std::string &name) {
-  std::vector<uint8_t> v5, v6;
+// Encode `in` and require exactly `expect` bytes. A round-trip alone cannot
+// catch a layout change (encoder and decoder move together), so the base forms
+// are pinned to literal wire bytes here.
+static void bytesAre(const DecodedInstruction &in,
+                     const std::vector<uint8_t> &expect,
+                     const std::string &name) {
+  std::vector<uint8_t> buf;
   try {
-    encodeInstruction(v5, in);
-    encodeInstructionV6(v6, in);
+    encodeInstruction(buf, in);
   } catch (const QLangError &e) {
     check(false, name + ": encode threw (" + e.what() + ")");
     return;
   }
-  check(v5 == v6, name + ": base form byte-identical to v5");
+  check(buf == expect, name + ": wire bytes");
 }
 
 int main() {
   // --- 1. Modifier-byte field layout (plan §2.1, spec `### bytecode encoding`)
-  check(makeModifierV6(OperandWidth::Byte, RightKind::Register, 0) == 0x04,
+  check(makeModifier(OperandWidth::Byte, RightKind::Register, 0) == 0x04,
         "modifier: register right = 0x04");
-  check(makeModifierV6(OperandWidth::Byte, RightKind::Immediate,
-                       static_cast<uint8_t>(ImmForm::I8)) == 0x40,
+  check(makeModifier(OperandWidth::Byte, RightKind::Immediate,
+                     static_cast<uint8_t>(ImmForm::I8)) == 0x40,
         "modifier: immediate i8 = 0x40");
-  check(makeModifierV6(OperandWidth::Byte, RightKind::ConstPool, 0) == 0x08,
+  check(makeModifier(OperandWidth::Byte, RightKind::ConstPool, 0) == 0x08,
         "modifier: constant right = 0x08");
-  check(makeModifierV6(OperandWidth::Byte, RightKind::Immediate,
-                       static_cast<uint8_t>(ImmForm::I16)) == 0x50,
+  check(makeModifier(OperandWidth::Byte, RightKind::Immediate,
+                     static_cast<uint8_t>(ImmForm::I16)) == 0x50,
         "modifier: immediate i16 = 0x50 (the CALL modifier)");
-  check(makeModifierV6(OperandWidth::Word, RightKind::Immediate,
-                       static_cast<uint8_t>(ImmForm::I16)) == 0x51,
+  check(makeModifier(OperandWidth::Word, RightKind::Immediate,
+                     static_cast<uint8_t>(ImmForm::I16)) == 0x51,
         "modifier: word left + i16 = 0x51");
-  check(makeModifierV6(OperandWidth::Byte, RightKind::Immediate,
-                       static_cast<uint8_t>(ImmForm::U8)) == 0x00,
+  check(makeModifier(OperandWidth::Byte, RightKind::Immediate,
+                     static_cast<uint8_t>(ImmForm::U8)) == 0x00,
         "modifier: immediate u8 = 0x00 (legal, so 0 is not a base-form "
         "marker)");
-  check(makeModifierV6(OperandWidth::Byte, RightKind::Immediate,
-                       static_cast<uint8_t>(ImmForm::Nil)) == 0xB0,
+  check(makeModifier(OperandWidth::Byte, RightKind::Immediate,
+                     static_cast<uint8_t>(ImmForm::Nil)) == 0xB0,
         "modifier: immediate nil = 0xB0");
-  check(makeModifierV6(OperandWidth::DWord, RightKind::ConstPool,
-                       static_cast<uint8_t>(OperandWidth::Word)) == 0x1A,
+  check(makeModifier(OperandWidth::DWord, RightKind::ConstPool,
+                     static_cast<uint8_t>(OperandWidth::Word)) == 0x1A,
         "modifier: dword left + word constant = 0x1A");
 
   // Every legal field triple survives assemble -> disassemble.
@@ -228,8 +230,8 @@ int main() {
                                      : form > static_cast<uint8_t>(
                                            OperandWidth::DWord))
       continue;
-    check(makeModifierV6(left, kind, form) == e,
-            "modifier fields round-trip for e=0x" + std::to_string(i));
+    check(makeModifier(left, kind, form) == e,
+          "modifier fields round-trip for e=0x" + std::to_string(i));
     triples++;
   }
   check(triples == 3 * (12 + 3 + 3),
@@ -237,33 +239,33 @@ int main() {
             std::to_string(triples));
 
   check(throws([] {
-            return makeModifierV6(OperandWidth::Reserved, RightKind::Register,
-                                  0);
+            return makeModifier(OperandWidth::Reserved, RightKind::Register,
+                                0);
           }),
-        "makeModifierV6 rejects the reserved left form");
+        "makeModifier rejects the reserved left form");
   check(throws([] {
-            return makeModifierV6(OperandWidth::Byte, RightKind::Reserved, 0);
+            return makeModifier(OperandWidth::Byte, RightKind::Reserved, 0);
           }),
-        "makeModifierV6 rejects the reserved kind (D7)");
+        "makeModifier rejects the reserved kind (D7)");
   for (int form = 12; form <= 15; form++)
     check(throws([form] {
-              return makeModifierV6(OperandWidth::Byte, RightKind::Immediate,
-                                    static_cast<uint8_t>(form));
+              return makeModifier(OperandWidth::Byte, RightKind::Immediate,
+                                  static_cast<uint8_t>(form));
             }),
-            "makeModifierV6 rejects reserved immediate form " +
+            "makeModifier rejects reserved immediate form " +
                 std::to_string(form));
   for (int form = 3; form <= 15; form++) {
     check(throws([form] {
-              return makeModifierV6(OperandWidth::Byte, RightKind::Register,
-                                    static_cast<uint8_t>(form));
+              return makeModifier(OperandWidth::Byte, RightKind::Register,
+                                  static_cast<uint8_t>(form));
             }),
-            "makeModifierV6 rejects register addressing form " +
+            "makeModifier rejects register addressing form " +
                 std::to_string(form));
     check(throws([form] {
-              return makeModifierV6(OperandWidth::Byte, RightKind::ConstPool,
-                                    static_cast<uint8_t>(form));
+              return makeModifier(OperandWidth::Byte, RightKind::ConstPool,
+                                  static_cast<uint8_t>(form));
             }),
-            "makeModifierV6 rejects constant addressing form " +
+            "makeModifier rejects constant addressing form " +
                 std::to_string(form));
   }
 
@@ -319,22 +321,22 @@ int main() {
   for (const BaseCase &c : kBase) {
     check(defaultRightKind(c.op) == c.kind,
           "default kind of op " + std::to_string(static_cast<int>(c.op)));
-    check(baseModifierV6(c.op) == c.e,
+    check(baseModifier(c.op) == c.e,
           "base modifier of op " + std::to_string(static_cast<int>(c.op)) +
               " == 0x40/0x08/0x04 class value");
   }
-  check(baseModifierV6(Opcode::CALL) == 0x50, "CALL always carries e = 0x50");
+  check(baseModifier(Opcode::CALL) == 0x50, "CALL always carries e = 0x50");
   for (Opcode op : {Opcode::JMP, Opcode::JMPIFFALSE, Opcode::JMPIFTRUE,
                     Opcode::CONTINUE, Opcode::BREAK, Opcode::JE, Opcode::JNE,
                     Opcode::JG, Opcode::JGE, Opcode::JL, Opcode::JLE,
                     Opcode::Nop})
-    check(baseModifierV6(op) == kNoBaseModifier,
+    check(baseModifier(op) == kNoBaseModifier,
           "no base modifier for op " + std::to_string(static_cast<int>(op)));
   // The kind a base form means must agree with the modifier it is equivalent
   // to, otherwise the two spellings of the same instruction decode differently.
   for (int i = 0; i < kOpcodeUsedCount; i++) {
     Opcode op = static_cast<Opcode>(i);
-    uint8_t e = baseModifierV6(op);
+    uint8_t e = baseModifier(op);
     if (e == kNoBaseModifier)
       continue;
     check(modifierRightKind(e) == defaultRightKind(op),
@@ -431,7 +433,7 @@ int main() {
   for (const SizeCase &c : kSizes) {
     size_t size = 0;
     try {
-      size = escapedInstructionSizeV6(c.op, c.e);
+      size = escapedInstructionSize(c.op, c.e);
     } catch (const QLangError &err) {
       check(false, caseName("escaped size rejected", c.op, c.e) + " (" +
                        err.what() + ")");
@@ -474,7 +476,7 @@ int main() {
       {Opcode::JMPIFFALSE, 0x03, "invalid jump modifier"},
   };
   for (const BadCase &c : kBad) {
-    check(throws([&] { return escapedInstructionSizeV6(c.op, c.e); }),
+    check(throws([&] { return escapedInstructionSize(c.op, c.e); }),
           caseName(c.why, c.op, c.e) + " rejected by the size table");
     // The same modifier must be rejected by the encoder and by the decoder, so
     // a malformed stream fails at load (plan §8, §11 item 7).
@@ -485,7 +487,7 @@ int main() {
     d.jumpOffset = 7;
     check(throws([&] {
               std::vector<uint8_t> buf;
-              encodeInstructionV6(buf, d);
+              encodeInstruction(buf, d);
             }),
           caseName(c.why, c.op, c.e) + " rejected by the encoder");
     std::vector<uint8_t> buf;
@@ -495,18 +497,18 @@ int main() {
     buf.resize(16, 0); // enough operand bytes to reach the validation
     check(throws([&] {
               DecodedInstruction out;
-              decodeInstructionV6(buf.data(), 0, buf.size(), out);
+              decodeInstruction(buf.data(), 0, buf.size(), out);
             }),
           caseName(c.why, c.op, c.e) + " rejected by the decoder");
   }
 
-  // --- 7. Base forms: unchanged from v5, byte for byte
+  // --- 7. Base forms: literal wire bytes (op byte, then 1-byte operands)
   {
     DecodedInstruction d = ins(Opcode::MOV, false, 0);
     d.a = 3;
     d.b = 5;
     roundTrip(d, "base mov r3, r5", 3);
-    sameBytesAsV5(d, "mov");
+    bytesAre(d, {static_cast<uint8_t>(Opcode::MOV), 3, 5}, "mov");
   }
   {
     DecodedInstruction d = ins(Opcode::ADD, false, 0);
@@ -514,21 +516,21 @@ int main() {
     d.b = 2;
     d.c = 4;
     roundTrip(d, "base add r1, r2, r4", 4);
-    sameBytesAsV5(d, "add");
+    bytesAre(d, {static_cast<uint8_t>(Opcode::ADD), 1, 2, 4}, "add");
   }
   {
     DecodedInstruction d = ins(Opcode::MOVI, false, 0);
     d.a = 2;
     d.imm = -5;
     roundTrip(d, "base movi r2, -5", 3);
-    sameBytesAsV5(d, "movi");
+    bytesAre(d, {static_cast<uint8_t>(Opcode::MOVI), 2, 0xFB}, "movi");
   }
   {
     DecodedInstruction d = ins(Opcode::MOVC, false, 0);
     d.a = 1;
     d.b = 9;
     roundTrip(d, "base movc r1, pool[9]", 3);
-    sameBytesAsV5(d, "movc");
+    bytesAre(d, {static_cast<uint8_t>(Opcode::MOVC), 1, 9}, "movc");
   }
   {
     DecodedInstruction d = ins(Opcode::ARRGET, false, 0);
@@ -536,7 +538,7 @@ int main() {
     d.b = 2;
     d.c = 3;
     roundTrip(d, "base arrget r1, r2, r3", 4);
-    sameBytesAsV5(d, "arrget");
+    bytesAre(d, {static_cast<uint8_t>(Opcode::ARRGET), 1, 2, 3}, "arrget");
   }
   {
     DecodedInstruction d = ins(Opcode::SEQGET, false, 0);
@@ -544,31 +546,31 @@ int main() {
     d.b = 5;
     d.c = 6;
     roundTrip(d, "base seqget r4, r5, 6", 4);
-    sameBytesAsV5(d, "seqget");
+    bytesAre(d, {static_cast<uint8_t>(Opcode::SEQGET), 4, 5, 6}, "seqget");
   }
   {
     DecodedInstruction d = ins(Opcode::RETURN, false, 0);
     d.a = 7;
     roundTrip(d, "base return r7", 2);
-    sameBytesAsV5(d, "return");
+    bytesAre(d, {static_cast<uint8_t>(Opcode::RETURN), 7}, "return");
   }
   {
     DecodedInstruction d = ins(Opcode::Nop, false, 0);
     roundTrip(d, "base nop", 1);
-    sameBytesAsV5(d, "nop");
+    bytesAre(d, {static_cast<uint8_t>(Opcode::Nop)}, "nop");
   }
   {
     DecodedInstruction d = ins(Opcode::JMP, false, 0);
     d.jumpOffset = -3;
     roundTrip(d, "base jmp -3", 2);
-    sameBytesAsV5(d, "jmp");
+    bytesAre(d, {static_cast<uint8_t>(Opcode::JMP), 0xFD}, "jmp");
   }
   {
     DecodedInstruction d = ins(Opcode::JMPIFFALSE, false, 0);
     d.a = 2;
     d.jumpOffset = 5;
     roundTrip(d, "base jmpfalse r2, +5", 3);
-    sameBytesAsV5(d, "jmpfalse");
+    bytesAre(d, {static_cast<uint8_t>(Opcode::JMPIFFALSE), 2, 5}, "jmpfalse");
   }
 
   // --- 8. Immediate forms, boundary values (plan §2.3, D8)
@@ -621,11 +623,11 @@ int main() {
     DecodedInstruction d = ins(Opcode::MOV, true, e);
     d.a = 12;
     std::vector<uint8_t> buf;
-    encodeInstructionV6(buf, d);
+    encodeInstruction(buf, d);
     check(buf.size() == 3, "zero-byte immediate e=0x" +
                                std::to_string(e) + " encodes in 3 bytes");
     DecodedInstruction out;
-    decodeInstructionV6(buf.data(), 0, buf.size(), out);
+    decodeInstruction(buf.data(), 0, buf.size(), out);
     check(out.immPayload != ImmPayload::None && out.rightKind ==
                                                RightKind::Immediate,
           "zero-byte immediate e=0x" + std::to_string(e) +
@@ -738,7 +740,7 @@ int main() {
     d.c = 3;
     roundTrip(d, "call r5, native 0, 3 args", 6);
     std::vector<uint8_t> buf;
-    encodeInstructionV6(buf, d);
+    encodeInstruction(buf, d);
     check(buf.size() == 6 && buf[0] == (static_cast<uint8_t>(Opcode::CALL) |
                                         kOpcodeEscape) &&
               buf[1] == 0x50 && buf[2] == 5 && buf[5] == 3,
@@ -763,18 +765,18 @@ int main() {
             d.a = 1;
             d.b = 2;
             std::vector<uint8_t> buf;
-            encodeInstructionV6(buf, d);
+            encodeInstruction(buf, d);
           }),
         "an unescaped call is rejected by the encoder");
   check(throws([] {
             std::vector<uint8_t> buf = {static_cast<uint8_t>(Opcode::CALL), 1,
                                         2, 0, 0};
             DecodedInstruction out;
-            decodeInstructionV6(buf.data(), 0, buf.size(), out);
+            decodeInstruction(buf.data(), 0, buf.size(), out);
           }),
         "an unescaped call is rejected by the decoder");
 
-  // --- 11. Jump class is unchanged from v5 (plan §2.7)
+  // --- 11. Jump class keeps the historical widths (plan §2.7)
   {
     DecodedInstruction d = ins(Opcode::JMP, true, 0x00);
     d.jumpOffset = -32767;
@@ -863,7 +865,7 @@ int main() {
       d.b = INT32_C(32768); // the one case that needs a distinct value
     check(throws([&] {
               std::vector<uint8_t> buf;
-              encodeInstructionV6(buf, d);
+              encodeInstruction(buf, d);
             }),
           std::string(c.why) + " rejected by the encoder");
   }
@@ -895,7 +897,7 @@ int main() {
   for (const TruncCase &c : kTruncs)
     check(throws([&] {
               DecodedInstruction out;
-              decodeInstructionV6(c.buf.data(), 0, c.buf.size(), out);
+              decodeInstruction(c.buf.data(), 0, c.buf.size(), out);
             }),
           std::string(c.why) + " rejected by the decoder");
 
@@ -909,7 +911,7 @@ int main() {
       uint8_t e = static_cast<uint8_t>(j);
       size_t size = 0;
       try {
-        size = escapedInstructionSizeV6(op, e);
+        size = escapedInstructionSize(op, e);
       } catch (const QLangError &) {
         continue; // the table rejects the pair; encoder and decoder must too
       }
@@ -923,7 +925,7 @@ int main() {
       d.jumpOffset = 7;
       std::vector<uint8_t> buf;
       try {
-        encodeInstructionV6(buf, d);
+        encodeInstruction(buf, d);
       } catch (const QLangError &err) {
         check(false, caseName("size accepts but encode rejects", op, j) +
                          " (" + err.what() + ")");
@@ -933,7 +935,7 @@ int main() {
             caseName("encoded length != table size", op, j));
       DecodedInstruction out;
       try {
-        decodeInstructionV6(buf.data(), 0, buf.size(), out);
+        decodeInstruction(buf.data(), 0, buf.size(), out);
       } catch (const QLangError &err) {
         check(false, caseName("encode accepts but decode rejects", op, j) +
                          " (" + err.what() + ")");
@@ -963,7 +965,7 @@ int main() {
       uint8_t e = static_cast<uint8_t>(j);
       bool sizeOk = true;
       try {
-        escapedInstructionSizeV6(op, e);
+        escapedInstructionSize(op, e);
       } catch (const QLangError &) {
         sizeOk = false;
       }
@@ -975,7 +977,7 @@ int main() {
       d.c = 3;
       check(throws([&] {
                 std::vector<uint8_t> buf;
-                encodeInstructionV6(buf, d);
+                encodeInstruction(buf, d);
               }),
             caseName("encoder accepted a pair the table rejects", op, j));
       std::vector<uint8_t> buf(16, 0);
@@ -983,7 +985,7 @@ int main() {
       buf[1] = e;
       check(throws([&] {
                 DecodedInstruction out;
-                decodeInstructionV6(buf.data(), 0, buf.size(), out);
+                decodeInstruction(buf.data(), 0, buf.size(), out);
               }),
             caseName("decoder accepted a pair the table rejects", op, j));
       rejected++;
@@ -991,6 +993,26 @@ int main() {
   }
   std::cout << "rejected (opcode, modifier) pairs cross-checked: " << rejected
             << "\n";
+
+  // --- 15. Address-width and jump-width helpers (carried over from the
+  // retired encoding suite; the emitter picks operand and offset widths with
+  // these, so they are part of the encoding contract).
+  check(baseInstructionSize(Opcode::MOV) == 3, "baseInstructionSize MOV == 3");
+  check(baseInstructionSize(Opcode::MOVI) == 3, "baseInstructionSize MOVI == 3");
+  check(baseInstructionSize(Opcode::JMP) == 2, "baseInstructionSize JMP == 2");
+  check(baseInstructionSize(Opcode::ADD) == 4, "baseInstructionSize ADD == 4");
+  check(minJumpSize(5) == 2, "minJumpSize(5) == 2");
+  check(minJumpSize(500) == 4, "minJumpSize(500) == 4");
+  check(minJumpSize(100000) == 6, "minJumpSize(100000) == 6");
+  check(minJumpSize(-127) == 2, "minJumpSize(-127) == 2");
+  check(minJumpSize(-128) == 4, "minJumpSize(-128) == 4");
+  check(registerAddressSize(0) == 1, "registerAddressSize(0) == 1");
+  check(registerAddressSize(255) == 1, "registerAddressSize(255) == 1");
+  check(registerAddressSize(256) == 2, "registerAddressSize(256) == 2");
+  check(registerAddressSize(65535) == 2, "registerAddressSize(65535) == 2");
+  check(constantAddressSize(0) == 1, "constantAddressSize(0) == 1");
+  check(constantAddressSize(255) == 1, "constantAddressSize(255) == 1");
+  check(constantAddressSize(256) == 2, "constantAddressSize(256) == 2");
 
   std::cout << (fails == 0 ? "ALL PASS" : "FAILURES") << ": " << passes
             << " passed, " << fails << " failed\n";

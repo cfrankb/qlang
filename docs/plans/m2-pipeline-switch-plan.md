@@ -1,6 +1,6 @@
 # M2 — Switch the Pipeline to v6 (Discard the v5 Codec)
 
-Status: **Plan — awaiting approval. Nothing implemented.** Baseline `HEAD = 0b4a4fb`
+Status: **In progress — S1 done (codec-only, uncommitted).** Baseline `HEAD = 0b4a4fb`
 ("encoding: v6 modifier byte (M1) — 2/2/4 layout, kind/form tables, \*V6 codec +
 `encoding_v6` suite").
 Parent plan: [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md) — this file
@@ -63,6 +63,11 @@ Each step ends with a green build; S1–S4 switch the **encoding**, S5 switches 
 selection**. Splitting them means a corpus regression in S5 cannot be an encoding bug.
 
 ### S1 — v6 becomes the only codec
+
+> **DONE (uncommitted).** `encoding_v6` 34 265 checks pass; `codec` 133/135 (the two
+> failures are `invalid CALL escape modifier` from the still-v5 emitter — S4).
+> `tests/unit/encoding_test.cpp` is orphaned (no CMake target) and still needs
+> `git rm tests/unit/encoding_test.cpp`.
 
 `include/qlang/QLangBytecode.h`
 

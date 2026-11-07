@@ -32,8 +32,13 @@ void FnEmitter::finish(Function &fn) {
   for (size_t i = 0; i < raw.size(); i++) {
     if (raw[i].jumpTarget >= 0)
       sizes[i] = isConditionalJumpOpcode(raw[i].op) ? 7 : 6;
-    else
-      sizes[i] = instructionSize(raw[i].op, computeModifier(raw[i]));
+    else {
+      // FIXME(M2/S4): computeModifier still produces the retired two-nibble
+      // modifier, so these sizes are wrong until the emitter carries a real
+      // right-operand kind. The `mod != 0` argument is the escaped flag.
+      uint8_t mod = computeModifier(raw[i]);
+      sizes[i] = instructionSize(raw[i].op, mod != 0, mod);
+    }
   }
 
   auto recomputeOffsets = [&]() {

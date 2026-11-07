@@ -239,19 +239,18 @@ inline constexpr uint8_t kOpcodeUsedCount = 73; // defined identities 0..72
 // `.qlc` v6 modifier byte (docs/plans/encoding-v6-and-indirect-plan.md §2,
 // docs/spec/13-bytecodes.md `### bytecode encoding`).
 //
-// v5 reads the modifier byte as two nibbles (low = left-operand form, high =
-// right-operand form). v6 re-splits the same byte into three fields:
+// The modifier byte is split into three fields (`.qlc` v5 read it as two
+// nibbles; that layout is gone):
 //
 //   bit 0-1  left operand (always a register): addressing width
 //   bit 2-3  right-operand *kind*: immediate / register / const pool
 //   bit 4-7  right-operand *form*: interpreted by the kind
 //
 // The kind field is what folds the `i`/`c` suffix opcodes (movi, movc, addi,
-// subi, cmpi) into the unsuffixed opcodes. The tables and the `*V6` entry
-// points below are the v6 encoding; the v5 codec (`instructionSize`,
-// `encodeInstruction`, `decodeInstruction`) stays in force until the compiler,
-// VM, codec and disassembler switch over together (plan §6 phase 1), so both
-// exist side by side during the migration.
+// subi, cmpi) into the unsuffixed opcodes: those identities still *decode*
+// (plan §3) but are no longer emitted. The tables and the entry
+// points below are the only encoding — size, encoder and decoder all read the
+// same tables, so they cannot drift apart.
 // ---------------------------------------------------------------------------
 
 // Modifier bits 2-3: what the right operand *is*.
@@ -303,14 +302,14 @@ inline constexpr uint8_t kModifierLeftMask = 0x03;
 inline constexpr uint8_t kModifierKindMask = 0x0C;
 inline constexpr uint8_t kModifierFormMask = 0xF0;
 
-// `baseModifierV6` sentinel: the jump class does not use the 2/2/4 layout (its
+// `baseModifier` sentinel: the jump class does not use the 2/2/4 layout (its
 // modifier byte is an offset-width selector) and a zero-operand instruction has
 // no modifier at all.
 inline constexpr uint8_t kNoBaseModifier = 0xFF;
 
-// Assemble / read the three fields of a v6 modifier byte. `makeModifierV6`
+// Assemble / read the three fields of the modifier byte. `makeModifier`
 // throws when a field value is reserved or the form is invalid for the kind.
-uint8_t makeModifierV6(OperandWidth left, RightKind kind, uint8_t form);
+uint8_t makeModifier(OperandWidth left, RightKind kind, uint8_t form);
 OperandWidth modifierLeftForm(uint8_t e);
 RightKind modifierRightKind(uint8_t e);
 uint8_t modifierRightForm(uint8_t e);
@@ -330,7 +329,7 @@ RightKind defaultRightKind(Opcode op);
 // register-right 0x04, immediate-right 0x40, const-right 0x08), or
 // kNoBaseModifier for the jump class and zero-operand opcodes. CALL has no base
 // form; it returns the modifier CALL always carries (kind 0, form 5).
-uint8_t baseModifierV6(Opcode op);
+uint8_t baseModifier(Opcode op);
 
 // Bitmask of the right-operand kinds an opcode accepts (plan §2.5): bit 0 =
 // immediate, bit 1 = register, bit 2 = const pool. A modifier naming a kind
@@ -352,8 +351,11 @@ struct DecodedInstruction {
   // v6: what the right operand is. For a base form this is `defaultRightKind`
   // of the opcode; for an escaped form it is the modifier's kind field.
   RightKind rightKind = RightKind::Register;
-  // v6: which payload field carries an immediate right operand.
+  // v6: which payload field carries an immediate right operand, and which
+  // immediate form it was read from (the payload alone cannot tell an `Int`
+  // `i16` from a `Long` `i64`). None / ImmForm::Reserved when there is none.
   ImmPayload immPayload = ImmPayload::None;
+  ImmForm immForm = ImmForm::Reserved;
   int32_t a = 0;          // left operand (register or constant index)
   int32_t b = 0;          // right operand (register, constant, or unused)
   int32_t c = 0;          // third operand (register; 3-operand ALU only)
@@ -370,21 +372,18 @@ bool isJumpOpcode(Opcode op);
 bool isImmediateOpcode(Opcode op);
 bool isRegConstOpcode(Opcode op);
 
-// Size computation (v5, shipped: `.qlc` v5 modifier nibbles)
+// Size computation. The base (unescaped) form carries no modifier byte.
 size_t baseInstructionSize(Opcode op);
-size_t escapedInstructionSize(Opcode op, uint8_t modifier);
-size_t instructionSize(Opcode op, uint8_t modifier = 0);
-
-// Size computation (v6, specified: 2/2/4 modifier byte). The base form is
-// identical in both versions, so `baseInstructionSize` is shared; only the
-// escaped forms differ. Unlike `instructionSize`, the escaped form cannot be
-// announced by a modifier of 0: under the 2/2/4 split `e = 0x00` is a legal
-// escaped modifier (kind immediate, form unsigned 1 byte — the only way to
-// encode `mov r3, 200` in one operand byte), so the escape bit is passed
-// explicitly. Size, encoder and decoder must agree byte-for-byte or `pc`
-// desynchronises (plan §10).
-size_t escapedInstructionSizeV6(Opcode op, uint8_t e);
-size_t instructionSizeV6(Opcode op, bool escaped, uint8_t e);
+// Size of an escaped form from its modifier byte: validates every field
+// against the width/form tables and the §2.5 permitted-kind table, so a
+// malformed modifier throws instead of desynchronising `pc`.
+size_t escapedInstructionSize(Opcode op, uint8_t e);
+// The escaped form cannot be announced by a modifier of 0: under the 2/2/4
+// split `e = 0x00` is a legal escaped modifier (kind immediate, form unsigned
+// 1 byte — the only way to encode `mov r3, 200` in one operand byte), so the
+// escape bit is passed explicitly. Size, encoder and decoder must agree
+// byte-for-byte or `pc` desynchronises (plan §10).
+size_t instructionSize(Opcode op, bool escaped, uint8_t e);
 
 // Jump width selection
 size_t minJumpSize(int32_t offset);
@@ -394,23 +393,15 @@ size_t minJumpSize(int32_t offset);
 size_t registerAddressSize(int32_t index);  // 1 or 2
 size_t constantAddressSize(int32_t index);  // 1 or 2
 
-// Encode one instruction into a byte buffer (v5, shipped encoding)
+// Encode / decode one instruction. The stream framing is a flat byte array
+// with the opcode top bit as the escape flag and one modifier byte; the right
+// operand is read through its kind (register / const pool / immediate of any
+// form, including the zero-byte bool and nil) and the in-place arity rule for
+// a non-register right operand (plan §2.6). CALL is rejected when unescaped
+// (plan §2.8).
 void encodeInstruction(std::vector<uint8_t>& out, const DecodedInstruction& in);
-
-// Decode one instruction from a byte buffer at position pc (v5, shipped
-// encoding)
 void decodeInstruction(const uint8_t* code, size_t pc, size_t codeSize,
                        DecodedInstruction& out);
-
-// Encode / decode one instruction with the v6 modifier byte (plan §2). The
-// stream framing is unchanged — flat byte array, opcode top bit = escape, one
-// modifier byte — only the interpretation of that byte differs, plus the
-// immediate payload forms (signed / unsigned / float / zero-byte bool and nil)
-// and the in-place arity rule for a non-register right operand.
-void encodeInstructionV6(std::vector<uint8_t>& out,
-                         const DecodedInstruction& in);
-void decodeInstructionV6(const uint8_t* code, size_t pc, size_t codeSize,
-                         DecodedInstruction& out);
 
 // A compiled user-defined function: its instruction stream, constant pool, and
 // calling metadata. Index 0 of Bytecode::functions is the implicit "main"
