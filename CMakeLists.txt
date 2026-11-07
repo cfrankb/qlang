@@ -267,6 +267,7 @@ set(QL_SCRIPTS
   encode_repro.ql
   ext_consts.ql
   ext_regs.ql
+  flags.ql
   helpers.ql
   hello.ql
   imm_kinds.ql

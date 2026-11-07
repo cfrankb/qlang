@@ -1,6 +1,7 @@
 # M3 — Flag Flow: `eqf`/`ltf`/`gtf`/`ltef`/`gtef`, `tst` and the Flag Jumps
 
-Status: **in progress — S1 landed (`4ead571`), S2–S4 landed (uncommitted).** Baseline `HEAD = 28707db` ("perf: re-record
+Status: **in progress — S1 landed (`4ead571`), S2–S4 landed (`0086112` + `1e47009`), S5 landed
+(`a1984fa`), S6 landed (uncommitted).** Baseline `HEAD = 28707db` ("perf: re-record
 baseline after the decoder fast path"). M1 **DONE 2026-11-06** (Round 55), M2 **DONE 2026-11-07**
 (Round 56 + the Round 57 decoder fast path). Suite at this baseline: ctest **47** entries,
 `encoding_v6` **34 470** checks (sweep tallies 1 756 accepted / 14 138 rejected
@@ -452,11 +453,11 @@ instructions and one fewer live temp for every non-Int guard).
 
 - New `tests/scripts/flags.ql`, added to the explicit `QL_SCRIPTS` list
   (`CMakeLists.txt:244-266` — deliberately **not** a `file(GLOB)`, so a new script is a
-  deliberate CMake edit) → ctest **48 → 49**:
+  deliberate CMake edit) → ctest **49 → 50** (the S4 correction applies here too):
   String `<`/`==`/`!=` in `if` and `while` position, Float vs Int, Array and Table
   comparisons in control position, object `__str__` comparison, mixed String/Int `==`, a loop
-  whose guard is a string compare (proves `ltf` + `jne` iterating), and truthiness / `&&` / `||`
-  cases that must **still** take the `jmpfalse` path (D4).
+  whose guard is a string compare (proves the dual pair `gtef` + `jge` iterating), and
+  truthiness / `&&` / `||` cases that must **still** take the `jmpfalse` path (D4).
 - Corpus: every `tests/scripts/*.ql` stdout byte-identical to `28707db` (§11 item 1);
   `--output` → load → run round-trip for all scripts (§11 item 2); `--asm-level 0–5` well-formed
   on `flags.ql`, `cmp.ql`, `hello.ql`, `imm_kinds.ql`, `jump_widths.ql` (§11 item 9).
@@ -468,6 +469,57 @@ instructions and one fewer live temp for every non-Int guard).
 
 *Exit criteria:* all of the above recorded with numbers, in this file, under a `> **DONE**` note
 per step (M2's convention).
+
+> **DONE (uncommitted), 2026-11-07.** `tests/scripts/flags.ql` (new) + one line in the
+> explicit `QL_SCRIPTS` list (`CMakeLists.txt:269`). ctest **49 → 50**, **50/50 green**.
+> **1 324 → 1 324** unit checks unchanged; the script is behavioural: 39 counted branches
+> (`hits`) plus 9 checkpoint assertions, 2 string-guarded loops (`scanned=2`, `ticks=2`), 3
+> else-side probes (`misses=6`), exit 0 on every assertion, non-zero from `assert` otherwise.
+> Shape follows `imm_kinds.ql` (header names the plan + the `--asm` command, assertions carry
+> the reason). **Plan corrections:** (a) `while` blocks close with `end`, not `next` — the
+> `next` spelling is `for`-only; (b) a string built by *appending* never reaches a shorter
+> sentinel (`substr(s, 0, len-1)` + `+ "a"` loops forever), so the `!=` loop prepends from a
+> list instead.
+>
+> **Emitted shape** (`--asm-level 1/3`, 418 instructions / 377 in `main`, 71 constants,
+> 5 functions): **50 flag compares** (`eqf` 22, `gtef` 10, `gtf` 7, `ltef` 7, `ltf` 4) each
+> immediately followed by one of **50 flag jumps** (`jne` 13, `jge` 10, `je` 9, `jg` 7,
+> `jle` 7, `jl` 4) — the pair count matching is the structural proof of the fusion;
+> `tst` **0** (D4); **`cmp`/`cmpi` 0** — every `if`/`while` condition here is non-`Int`, and
+> the two compound guards (`i < len(names) && …`, `a && b`) take the `compileExpr` path, so
+> the Int fusion is not reached at all; **`jmpfalse` 10** for truthiness, `&&`, `||` and `!`
+> (§11 item 6 — the deprecated spelling is still emitted). Immediate-right compares are
+> escaped (`gtef e=0x40, r13, 3`, `gtf e=0x80, r13, 2.5`, `eqf e=0x40, r23, 3`), pool-right
+> ones read `e=0x08, …, pool[00]`/`pool[01]` — **§11 item 10**: those two entries are the ones
+> the `mov`s of `"apple"`/`"banana"` already created (each appears exactly once in the pool),
+> so the only new entry is the genuinely new literal `"applesauce"` (`pool[2f]`).
+>
+> **Corpus vs `28707db`** (`/tmp/qlang-m3base` worktree, §11 items 1/2/9):
+> - stdout **and** exit code byte-identical for all **22** pre-existing scripts; `flags.ql`
+>   runs clean (exit 0) — **23/23**, 0 diffs.
+> - `.qlc` v6 round-trip: new binary `--output` → load → run reproduces the direct-run stdout
+>   for all **23**; images compiled at `28707db` still load and run identically on the new
+>   binary for all **22** → **45/45**. Forward direction is rejected by design (the baseline
+>   reader stops at its own `kOpcodeUsedCount` = 73: `qlc: invalid opcode` for `flags.qlc`,
+>   `right-operand kind not permitted` for `hello.qlc`) — v6 gained identities, not a version
+>   bump, so old readers cannot read new streams; recorded, not a regression.
+> - `--asm-level` **0–5** on `flags.ql`, `cmp.ql`, `hello.ql`, `imm_kinds.ql`,
+>   `jump_widths.ql` and **0/1/4** on the other 18: **84** new listings, all exit 0,
+>   non-empty, header present from level 1 up, instruction lines ≥ the profile's entry count —
+>   **0 problems**; **78** listings through the baseline binary, all well-formed. The 7
+>   scripts S5 left untouched (`ext_consts`, `ext_regs`, `jump_widths`, `test_assert`,
+>   `test_assert2`, `test_cast`, `test_cast2`) produce **byte-identical** listings old vs new
+>   (21 pairs, run without `--profile`, which appends to the `.qla`).
+>
+> **Perf** (Release, `build/perf_bench`, Round 57 baseline): **PASS 12/12 stages**.
+> `perf_stress` execute **10.233 / 10.294 / 10.464 / 10.657 / 10.734 ms** over five runs
+> (baseline **10.382**, i.e. −1.4 % … +3.4 %, straddling it) → **baseline not re-recorded**.
+> `money`/`cast` stages −8.5 % … +2.0 %. `hello.ql` parse/compile/execute measured
+> +38 % … +66 % on this machine in the same session (0.106 / 0.168 / 0.059 ms against
+> 0.072 / 0.115 / 0.041) while the first run of the day measured −1.7 % / −9.5 % / −6.5 % —
+> machine drift, not M3: all three stay under the harness's **0.50 ms absolute** floor, which
+> is why the gate passes, and the entry stream only shrank (215 → 211). Re-run the gate on a
+> quiet machine in CI before trusting the `hello.ql` percentages either way.
 
 ### S7 — Documentation (only after the suite is green)
 
@@ -512,7 +564,7 @@ Keep the plan-file status edits in the docs commit, not in the feature commits. 
 
 ```bash
 cmake -B build && cmake --build build
-ctest --test-dir build                      # 49 after S4, 50 after S6 (see S4's correction)
+ctest --test-dir build                      # 50 after S6 (49 after S4; see S4's correction)
 build/qlang_run --asm /tmp/flags.qla --asm-level 5 tests/scripts/flags.ql
 build/qlang_run --output /tmp/t.qlc tests/scripts/flags.ql   # then round-trip /tmp/t.qlc
 ```
