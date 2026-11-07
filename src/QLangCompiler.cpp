@@ -740,12 +740,51 @@ bool QLangCompiler::foldSelfArith(const ExprPtr &e, const std::string &name,
   return true;
 }
 
+// True when compiling `e` never emits a CALL. A call reads its arguments from
+// dest+1..dest+argCount, so a call-shaped expression must not be compiled to a
+// destination inside an active call-arg slot range: its own arg slots would
+// land on the enclosing call's remaining slots. Every other expression shape
+// writes its destination register directly, so it can land in the slot itself.
+static bool isCallFree(const ExprPtr &e) {
+  if (!e)
+    return true;
+  switch (e->kind) {
+  case ExprKind::Literal:
+  case ExprKind::Variable:
+    return true;
+  case ExprKind::Binary:
+    return isCallFree(e->left) && isCallFree(e->right);
+  case ExprKind::Unary:
+    return isCallFree(e->operand);
+  case ExprKind::Array:
+    for (const auto &el : e->elements)
+      if (!isCallFree(el))
+        return false;
+    return true;
+  case ExprKind::Table:
+    for (const auto &[k, v] : e->items)
+      if (!isCallFree(k) || !isCallFree(v))
+        return false;
+    return true;
+  case ExprKind::Index:
+    return isCallFree(e->indexBase) && isCallFree(e->indexExpr);
+  case ExprKind::Member:
+    return isCallFree(e->memberBase);
+  case ExprKind::Cast:
+    return isCallFree(e->castOperand);
+  default:
+    return false; // Call, Closure, FString, Ternary
+  }
+}
+
 void QLangCompiler::compileArgsToSlots(const std::vector<ExprPtr> &args,
                                        int slotBase) {
-  // Simple operands land directly in their slot; complex ones share a single
-  // scratch register (allocated on first use) so an N-arg call costs at most
-  // one temp instead of N (SPEC §bytecodes: encoding guidelines — universal
-  // scratch pad register).
+  // Arguments land in their slot by increasing cost: a plain variable or a
+  // literal is stored directly; any other expression that cannot emit a CALL
+  // (isCallFree), or the last argument of the list, compiles straight into the
+  // slot; everything else shares a single scratch register (allocated on first
+  // use) so an N-arg call costs at most one temp instead of N (SPEC §bytecodes:
+  // encoding guidelines — universal scratch pad register).
   int scratch = -1;
   for (size_t i = 0; i < args.size(); i++) {
     const ExprPtr &arg = args[i];
@@ -769,11 +808,23 @@ void QLangCompiler::compileArgsToSlots(const std::vector<ExprPtr> &args,
       emitLiteralImm(Opcode::MOV, slot, *negFold);
       continue;
     }
-    if (scratch < 0)
-      scratch = tmpRegister();
-    compileExpr(arg, scratch);
-    if (slot != scratch)
-      emit(Opcode::MOV, slot, scratch, 0);
+    // An argument that can be compiled straight into its slot needs neither a
+    // scratch nor a copy: a call-free expression writes its destination
+    // directly, and the last argument's nested call spills its own slots above
+    // the range (every enclosing range sits below the call's dest, so nothing
+    // of this call lives there). Landing in the slot also leaves no stale copy
+    // behind, which is what Phase 3 H2 needs: `release(x)` must drop the last
+    // reference (SPEC §bytecodes: encoding guidelines — avoid temporary
+    // registers).
+    int target = slot;
+    if (!isCallFree(arg) && i + 1 < args.size()) {
+      if (scratch < 0)
+        scratch = tmpRegister();
+      target = scratch;
+    }
+    compileExpr(arg, target);
+    if (slot != target)
+      emit(Opcode::MOV, slot, target, 0);
   }
   // Clear the shared scratch so it does not keep a reference alive past the
   // call (Phase 3 H2: release() must drop the last reference; a leaked temp

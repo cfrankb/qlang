@@ -236,6 +236,18 @@ add_executable(value_semantics tests/unit/value_semantics.cpp)
 target_link_libraries(value_semantics PRIVATE qlang)
 add_test(NAME value_semantics COMMAND value_semantics)
 
+# Emitted-instruction budget gate (SPEC §bytecodes "encoding guidelines"): the
+# entry-function instruction count of each budgeted script (the perf corpus)
+# must stay within its ceiling, so a codegen growth fails ctest instead of being
+# found by comparing two .qla dumps by hand. Lower a ceiling when the stream
+# legitimately shrinks; raising one needs a reason in docs/compliance/.
+add_executable(codegen_size_check tests/unit/codegen_size_check.cpp)
+target_link_libraries(codegen_size_check PRIVATE qlang)
+target_compile_definitions(codegen_size_check PRIVATE
+  QLANG_TEST_SCRIPTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts"
+)
+add_test(NAME codegen_size COMMAND codegen_size_check)
+
 # Script-level regression suite (tests/scripts/). Each .ql script is driven
 # by qlang_run (the smoke-test app); a non-zero exit code fails the suite.
 # Explicit list (Phase 5, F7) — no file(GLOB), so a new script is a deliberate

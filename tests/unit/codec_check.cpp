@@ -672,9 +672,11 @@ static void testPoolDedup() {
     check(!poolHasDuplicates(p.functions[0]),
           "pool-dedup: no duplicate pool entries (strings)");
 
-    // nil and float literals left the pool (plan decision D3): the call-scratch
-    // clears store the zero-byte nil form, so two calls leave no nil entry at
-    // all, and the float operands are inline immediates.
+    // nil and float literals left the pool (plan decision D3): the float
+    // operands are inline immediates, and a scratch clear (when one exists)
+    // stores the zero-byte nil form, never a pool entry. A call-free argument
+    // (`1.5 + 2.5`) compiles straight into its call-arg slot, so no scratch is
+    // allocated and no clear is emitted at all.
     CompiledProgram pn = compileSrc(
         "def f(x) { return x }\n"
         "f(1.5 + 2.5)\n"
@@ -683,9 +685,23 @@ static void testPoolDedup() {
           "pool-dedup: nil clears leave no pool entry");
     check(poolCountType(pn.functions[0], QLangValue::Type::Float) == 0,
           "pool-dedup: float operands leave no pool entry");
-    check(hasZeroImm(pn.functions[0], Opcode::MOV, ImmForm::Nil,
+    check(!hasZeroImm(pn.functions[0], Opcode::MOV, ImmForm::Nil,
+                      ImmPayload::Nil),
+          "pool-dedup: call-free arg lands in its slot (no scratch clear)");
+
+    // A call-shaped argument before the last one still needs the shared scratch:
+    // its own arg slots would land on the enclosing call's remaining slots. That
+    // scratch is cleared with the nil immediate, so it still leaves no entry.
+    CompiledProgram ps = compileSrc(
+        "def f(x, y) { return x }\n"
+        "def g() { return 1.5 }\n"
+        "f(g(), 2.5)\n"
+        "f(g(), 3.5)\n");
+    check(poolCountType(ps.functions[0], QLangValue::Type::Nil) == 0,
+          "pool-dedup: scratch clears leave no pool entry");
+    check(hasZeroImm(ps.functions[0], Opcode::MOV, ImmForm::Nil,
                      ImmPayload::Nil),
-          "pool-dedup: nil clears use the nil immediate");
+          "pool-dedup: scratch clears use the nil immediate");
 
     // Repeated float/bool literals leave no pool entries at all, so there is
     // nothing left to dedup: every store carries the value inline.
