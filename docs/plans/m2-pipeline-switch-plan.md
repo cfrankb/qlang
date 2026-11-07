@@ -1,8 +1,8 @@
 # M2 — Switch the Pipeline to v6 (Discard the v5 Codec)
 
-Status: **In progress — S1 committed (`3bc55c7`), S2 + S3 done (uncommitted).** Baseline
-`HEAD = 0b4a4fb` ("encoding: v6 modifier byte (M1) — 2/2/4 layout, kind/form tables, \*V6 codec +
-`encoding_v6` suite").
+Status: **In progress — S1 committed (`3bc55c7`), S2 (`35edb7a`), S3 (`e0a8323`), S4 done
+(uncommitted).** Baseline `HEAD = 0b4a4fb` ("encoding: v6 modifier byte (M1) — 2/2/4 layout,
+kind/form tables, \*V6 codec + `encoding_v6` suite").
 Parent plan: [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md) — this file
 executes its **§6.1 milestone M2** and cites its sections (§2 layout, §3 coexistence, §6
 phasing, §8 file format, §9 pool, §10 impact, §11 verification gate, §12 open questions).
@@ -235,6 +235,31 @@ the version error.
 *Verify:* **the whole script suite must pass with v6 bytes while the compiler still emits
 `movi`/`movc`/`addi`/`subi`/`cmpi`** (they encode as v6 base forms via `defaultRightKind`).
 This is the milestone's cheapest high-value checkpoint.
+
+> **DONE (uncommitted).** `RawInstr` carries `kind`/`form`/`payload`/`immUnsigned`/`immFloat`;
+> `emit` derives `kind = defaultRightKind(op)` (and `payload = Signed` for an immediate kind), so
+> every existing call site keeps its historical encoding, and `emitJump` builds the struct by
+> field instead of by aggregate order. `computeModifier` returns `pair<uint8_t, bool>` and is
+> driven by `r.kind`, not by `isImmediateOpcode`: `CALL` → `makeModifier(left, Immediate, I16)`
+> always escaped, `baseOperandCount(op) == 0` → never escaped, `== 1` → the modifier only widens
+> the left index with kind/form pinned to their base values, otherwise the base form requires
+> `kind == defaultRightKind(op) && left == Byte && (immediate ? form == I8 : right == Byte)`.
+> `finish()` sizes with `instructionSize(op, escaped, mod)` and mirrors the modifier's kind/form
+> back into the `DecodedInstruction`; the jump path is byte-for-byte unchanged.
+> **Codec change:** `baseOperandCount` was promoted from a file-static to a public declaration in
+> `QLangBytecode.h` — the emitter must know whether an opcode *has* a right operand before it
+> picks a modifier, and `INC`/`DEC`/`RETURN`/`YIELD`/`TABCREATE`/`TABFINALIZE`/`DELETEx` are
+> emitted as `emit(op, r, r)`, so a naive right-width computation produced a modifier the codec
+> rejects ("invalid escape modifier for a single-operand opcode") for any register > 255.
+> *Verification:* `ctest` **45/46 pass, 1 skipped (`perf`)** — the only failure left is the
+> S7-owned `movi: format version 5` assert (`codec_check.cpp:319`; its `readQlc` round-trip
+> already passes). A throwaway emitter harness (`/tmp/emitter_s4_check.cpp`, **73 checks, all
+> pass**) covers base forms, escape-by-immediate-form (`i8/i16/i32`), escape-by-left/right width,
+> single-operand opcodes at `r300/r400/r600`, the §2.6 in-place `add`/`mul` (no trailing `c`),
+> `mov` with `u8`/`true`/`nil`/`float` immediates, `call` at `e=0x50`/`0x51`, jump width
+> selection (modifier always 0/1), pool dedup, and the three rejected combinations. Disassembly
+> of `tests/scripts/cmp.ql` shows the expected v6 sizes (`movi` 3 B, `lt` 4 B, `movc`/`mov` 3 B,
+> `call` 6 B) and a `.qlc` write → re-run round-trip reproduces the script output exactly.
 
 ### S5 — Unified kinds + immediate selection (the pool shrinks)
 

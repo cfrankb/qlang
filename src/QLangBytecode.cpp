@@ -61,8 +61,9 @@ static bool isConditionalJump(Opcode op) {
 // Size computation
 // ---------------------------------------------------------------------------
 
-// Number of operand bytes (excluding opcode byte) for a base-form instruction.
-static size_t baseOperandCount(Opcode op) {
+// Number of operand bytes (excluding opcode byte) for a base-form instruction
+// (declared in QLangBytecode.h: the emitter reads it to pick a modifier).
+size_t baseOperandCount(Opcode op) {
   if (isJumpOpcode(op)) {
     // JMPIFFALSE/JMPIFTRUE have a condition register + offset
     if (op == Opcode::JMPIFFALSE || op == Opcode::JMPIFTRUE)

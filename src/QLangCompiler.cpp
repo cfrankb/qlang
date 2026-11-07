@@ -11,6 +11,29 @@
 
 namespace qlang {
 
+namespace {
+
+// Addressing width of an operand index. The emitter never uses the 4-byte
+// form: register and constant indices stay capped at 65 535.
+OperandWidth indexWidth(int32_t index, const char *message) {
+  if (index < 0 || index > 65535)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0, message);
+  return (index <= 255) ? OperandWidth::Byte : OperandWidth::Word;
+}
+
+// Narrowest signed immediate form holding `v`. The emitter never produces a
+// 64-bit literal (plan decision D3), so anything past the 4-byte form is an
+// error rather than a widening.
+ImmForm narrowestSignedForm(int64_t v) {
+  if (v >= -128 && v <= 127) return ImmForm::I8;
+  if (v >= -32768 && v <= 32767) return ImmForm::I16;
+  if (v >= INT32_MIN && v <= INT32_MAX) return ImmForm::I32;
+  throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                   "immediate out of int32 range");
+}
+
+} // namespace
+
 // ---------------------------------------------------------------------------
 // Raw instruction emitter: accumulates instructions in a vector, then
 // encodes them into the flat byte stream at finish() time. (The struct
@@ -33,11 +56,8 @@ void FnEmitter::finish(Function &fn) {
     if (raw[i].jumpTarget >= 0)
       sizes[i] = isConditionalJumpOpcode(raw[i].op) ? 7 : 6;
     else {
-      // FIXME(M2/S4): computeModifier still produces the retired two-nibble
-      // modifier, so these sizes are wrong until the emitter carries a real
-      // right-operand kind. The `mod != 0` argument is the escaped flag.
-      uint8_t mod = computeModifier(raw[i]);
-      sizes[i] = instructionSize(raw[i].op, mod != 0, mod);
+      auto [mod, escaped] = computeModifier(raw[i]);
+      sizes[i] = instructionSize(raw[i].op, escaped, mod);
     }
   }
 
@@ -103,8 +123,20 @@ void FnEmitter::finish(Function &fn) {
       di.escaped = sizes[i] > baseInstructionSize(raw[i].op);
       di.modifier = (sizes[i] >= 6) ? 1 : 0;
     } else {
-      di.modifier = computeModifier(raw[i]);
-      di.escaped = di.modifier != 0;
+      auto [mod, escaped] = computeModifier(raw[i]);
+      di.escaped = escaped;
+      di.modifier = mod;
+      // The encoder re-reads the kind and the form from the modifier; mirror
+      // them back into the instruction so it describes the bytes it produced.
+      di.rightKind =
+          escaped ? modifierRightKind(mod) : defaultRightKind(raw[i].op);
+      if (di.rightKind == RightKind::Immediate) {
+        di.immPayload = raw[i].payload;
+        di.immForm = escaped ? static_cast<ImmForm>(modifierRightForm(mod))
+                             : ImmForm::I8;
+      }
+      di.immUnsigned = raw[i].immUnsigned;
+      di.immFloat = raw[i].immFloat;
     }
     encodeInstruction(fn.code, di);
   }
@@ -116,57 +148,70 @@ void FnEmitter::finish(Function &fn) {
   fn.constants = std::move(consts);
 }
 
-uint8_t FnEmitter::computeModifier(const RawInstr &r) {
+ImmForm FnEmitter::immFormOf(const RawInstr &r) {
+  if (r.form != ImmForm::Reserved)
+    return r.form;
+  return narrowestSignedForm(r.imm);
+}
+
+std::pair<uint8_t, bool> FnEmitter::computeModifier(const RawInstr &r) {
   // CALL: b is a signed 16-bit function ID (negative = native, index =
-  // -1 - b; non-negative = builtin), not a register. Always escaped with the
-  // right field fixed to 2 (signed 16-bit form).
+  // -1 - b; non-negative = builtin), not a register. Always escaped: only a
+  // modifier byte can say that the right operand is a signed 16-bit immediate
+  // (plan §2.8).
   if (r.op == Opcode::CALL) {
-    if (r.a < 0 || r.a > 65535)
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                       "register index out of range");
+    OperandWidth left = indexWidth(r.a, "register index out of range");
     if (r.b < INT16_MIN || r.b > INT16_MAX)
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "function ID out of range");
     if (r.c < 0 || r.c > 255)
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "argument count out of range");
-    uint8_t leftForm = (r.a > 255) ? 1 : 0;
-    return static_cast<uint8_t>((2 << 4) | leftForm);
+    return {makeModifier(left, RightKind::Immediate,
+                         static_cast<uint8_t>(ImmForm::I16)),
+            true};
   }
-  if (isImmediateOpcode(r.op)) {
-    if (r.a < 0 || r.a > 65535)
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                       "register index out of range");
-    if (r.imm < INT32_MIN || r.imm > INT32_MAX)
-      throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                       "immediate out of int32 range");
-    uint8_t leftForm = (r.a > 255) ? 1 : 0;
-    uint8_t immForm;
-    if (r.imm >= -128 && r.imm <= 127)
-      immForm = 4;
-    else if (r.imm >= -32768 && r.imm <= 32767)
-      immForm = 5;
-    else
-      immForm = 6;
-    if (leftForm == 0 && immForm == 4)
-      return 0; // base form
-    return static_cast<uint8_t>((immForm << 4) | leftForm);
+
+  OperandWidth left = indexWidth(r.a, "register index out of range");
+  size_t nOps = baseOperandCount(r.op);
+
+  // `nop` has no operand at all, so it cannot carry a modifier either.
+  if (nOps == 0)
+    return {0, false};
+
+  // A single-operand opcode has no right operand, so the modifier can only
+  // widen the left index; the kind and form fields must stay at their base
+  // values or the codec rejects the instruction.
+  if (nOps == 1) {
+    if (left == OperandWidth::Byte)
+      return {0, false};
+    return {makeModifier(left, RightKind::Register, 0), true};
   }
-  // RegConst
-  if (r.a < 0 || r.a > 65535)
-    throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                     "register index out of range");
-  if (r.b < 0 || r.b > 65535)
-    throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                     "register index out of range");
-  if (r.c < 0 || r.c > 255)
+
+  // A base form carries no modifier, so it can only mean the opcode's own
+  // right-operand kind with 1-byte operands and, for an immediate, the signed
+  // 1-byte form. Anything else has to be announced by a modifier — and a
+  // modifier of 0 is a legal escaped modifier, hence the explicit flag.
+  bool base = r.kind == defaultRightKind(r.op) && left == OperandWidth::Byte;
+  if (r.kind == RightKind::Immediate) {
+    ImmForm form = immFormOf(r);
+    if (base && form == ImmForm::I8)
+      return {0, false};
+    return {makeModifier(left, r.kind, static_cast<uint8_t>(form)), true};
+  }
+
+  // Register / constant-pool right operand: the form field is its width.
+  OperandWidth right = indexWidth(
+      r.b, r.kind == RightKind::ConstPool ? "constant index out of range"
+                                          : "register index out of range");
+  // The third operand is in the stream only while the arity rule leaves the
+  // 3-operand form in place (plan §2.6).
+  if (nOps == 3 && !isInPlaceForm(r.op, r.kind) && (r.c < 0 || r.c > 255))
     throw QLangError(QLangErrorKind::Runtime, 0, 0,
                      "third operand must be a 1-byte register");
-  uint8_t leftForm = (r.a > 255) ? 1 : 0;
-  uint8_t rightForm = (r.b > 255) ? 1 : 0;
-  if (leftForm == 0 && rightForm == 0)
-    return 0; // base form
-  return static_cast<uint8_t>((rightForm << 4) | leftForm);
+  if (base && right == OperandWidth::Byte)
+    return {0, false};
+  return {makeModifier(left, r.kind, static_cast<uint8_t>(right)), true};
 }
 
 // Reserved prototype/instance key holding the closed-field schema: a table

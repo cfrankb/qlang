@@ -59,10 +59,25 @@ struct RegisterReport {
 // One unencoded instruction in the per-function raw stream. Jump targets
 // are instruction indices (not byte offsets); finish() resolves them to
 // relative byte offsets and picks the narrowest jump width.
+//
+// The right operand is described the way the v6 modifier byte describes it
+// (docs/spec/13-bytecodes.md `### bytecode encoding`): `kind` says what it is
+// (register / constant pool / inline literal) and `form` how wide it is.
+// `emit` derives both from the opcode identity, so a raw stream built from the
+// existing call sites keeps its historical encoding; the immediate and pool
+// variants added in plan step S5 set them explicitly.
 struct RawInstr {
   Opcode op;
   int32_t a = 0, b = 0, c = 0;
+  RightKind kind = RightKind::Register;
+  // Immediate form of a kind-0 right operand. ImmForm::Reserved means "pick
+  // the narrowest signed form that fits `imm`".
+  ImmForm form = ImmForm::Reserved;
+  // Which payload field carries the immediate (None when there is none).
+  ImmPayload payload = ImmPayload::None;
   int64_t imm = 0;
+  uint64_t immUnsigned = 0;
+  double immFloat = 0;
   int32_t jumpTarget = -1; // instruction index; -1 = not a jump
   uint16_t line = 0, col = 0;
 };
@@ -79,15 +94,36 @@ struct FnEmitter {
 
   size_t size() const { return raw.size(); }
 
+  // Register-right emission (the historical shape). The right-operand kind
+  // follows the opcode identity, because a base form carries no modifier byte
+  // to state it in: movi/addi/subi/cmpi mean an immediate, movc/makefunc/
+  // makegen a pool index, everything else a register.
   size_t emit(Opcode op, int32_t a = 0, int32_t b = 0, int32_t c = 0,
               int64_t imm = 0, uint16_t line = 0, uint16_t col = 0) {
-    raw.push_back(RawInstr{op, a, b, c, imm, -1, line, col});
+    RawInstr r;
+    r.op = op;
+    r.a = a;
+    r.b = b;
+    r.c = c;
+    r.imm = imm;
+    r.line = line;
+    r.col = col;
+    r.kind = defaultRightKind(op);
+    if (r.kind == RightKind::Immediate)
+      r.payload = ImmPayload::Signed;
+    raw.push_back(r);
     return raw.size() - 1;
   }
 
   size_t emitJump(Opcode op, int32_t target, int32_t a = 0,
                   uint16_t line = 0, uint16_t col = 0) {
-    raw.push_back(RawInstr{op, a, 0, 0, 0, target, line, col});
+    RawInstr r;
+    r.op = op;
+    r.a = a;
+    r.jumpTarget = target;
+    r.line = line;
+    r.col = col;
+    raw.push_back(r);
     return raw.size() - 1;
   }
 
@@ -123,9 +159,16 @@ private:
     return op == Opcode::JMPIFFALSE || op == Opcode::JMPIFTRUE;
   }
 
-  // Pick the modifier byte (and base vs escaped form) for a non-jump
-  // instruction from its operand widths and immediate range.
-  static uint8_t computeModifier(const RawInstr &r);
+  // Pick the modifier byte for a non-jump instruction from its operand widths
+  // and immediate form, and report whether the instruction has to carry the
+  // escape bit. Under the 2/2/4 layout a modifier of 0x00 is a *legal* escaped
+  // modifier (kind immediate, form unsigned 1 byte), so the flag — not the
+  // byte — is the only base-form signal.
+  static std::pair<uint8_t, bool> computeModifier(const RawInstr &r);
+
+  // Effective immediate form of a raw instruction: the explicit one, or the
+  // narrowest signed form that fits `imm`.
+  static ImmForm immFormOf(const RawInstr &r);
 };
 
 // Walks a parsed AST and emits register-machine bytecode. Each script variable

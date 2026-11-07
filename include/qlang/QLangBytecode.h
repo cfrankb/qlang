@@ -373,6 +373,15 @@ bool isImmediateOpcode(Opcode op);
 bool isRegConstOpcode(Opcode op);
 
 // Size computation. The base (unescaped) form carries no modifier byte.
+//
+// Number of operand bytes of a base-form instruction (the opcode byte
+// excluded): 0 for `nop`, 1 for the single-operand opcodes, 2 for the
+// two-operand ones, 3 for the rest. The emitter needs it to know whether an
+// opcode even *has* a right operand (and a third one) before choosing a
+// modifier for it: a modifier naming a right operand the opcode does not
+// have is a decode error.
+size_t baseOperandCount(Opcode op);
+// Total size of a base form: the opcode byte plus `baseOperandCount`.
 size_t baseInstructionSize(Opcode op);
 // Size of an escaped form from its modifier byte: validates every field
 // against the width/form tables and the §2.5 permitted-kind table, so a
