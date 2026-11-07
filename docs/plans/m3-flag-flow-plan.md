@@ -1,6 +1,6 @@
 # M3 — Flag Flow: `eqf`/`ltf`/`gtf`/`ltef`/`gtef`, `tst` and the Flag Jumps
 
-Status: **in progress — S1 landed (uncommitted).** Baseline `HEAD = 28707db` ("perf: re-record
+Status: **in progress — S1 landed (`4ead571`), S2–S3 landed (uncommitted).** Baseline `HEAD = 28707db` ("perf: re-record
 baseline after the decoder fast path"). M1 **DONE 2026-11-06** (Round 55), M2 **DONE 2026-11-07**
 (Round 56 + the Round 57 decoder fast path). Suite at this baseline: ctest **47** entries,
 `encoding_v6` **34 470** checks (sweep tallies 1 756 accepted / 14 138 rejected
@@ -146,7 +146,7 @@ selection. A regression in S5 therefore cannot be an encoding bug.
 
 ### S1 — Identities and codec tables
 
-> **DONE (uncommitted), 2026-11-07.** The six identities appended last (73–78),
+> **DONE (`4ead571`), 2026-11-07.** The six identities appended last (73–78),
 > `kOpcodeUsedCount` **73 → 79**; `EQF`…`GTEF` in the 2-operand list and `isAluOrFlagCompare`,
 > `TST` in the 1-operand list and *not* in the ALU family (D5); mnemonics `eqf`/`ltf`/`gtf`/
 > `ltef`/`gtef`/`tst`. No `OpMeta` fast-path edit was needed — it inherits the tables.
@@ -189,6 +189,33 @@ selection. A regression in S5 therefore cannot be an encoding bug.
 
 ### S2 — VM: the flag compares and `TST`
 
+> **DONE (uncommitted), 2026-11-07.** `QLangVM::flagCompare` (`src/QLangVM.cpp:1117`,
+> declared next to `cmpFlags`) — a **member**, not static as `cmpFlags` is, because
+> `valueEqual`/`displayString` carry the `__str__` dispatch. The masks are implemented
+> with the two existing functions and nothing else (D3): `EQF` → `valueEqual`;
+> `LTF`/`GTF` → `cmp(a, b, "<" | ">", this)` sign test; `LTEF`/`GTEF` → the same call
+> with `"<="` / `">="`, mapping `c < 0 → LT`, `c == 0 → EQ`, `c > 0 → GR` so the result
+> stays one-hot or zero. Dispatch: one case group beside `CMP`/`CMPI`
+> (`src/QLangVM.cpp:2496`) taking the right operand through
+> `operandValue(i, frame, consts, false)` (register / pool / immediate, no clone, D6)
+> and never reading `i.c`; `TST` (`:2510`) is `isTrue(r[a]) ? CMP_EQ : 0`.
+> `flagsSatisfied`, the six flag jumps and `JMPIFFALSE`/`JMPIFTRUE` are untouched.
+> The six `-Wswitch` warnings S1 left in the exec loop are gone; the only unhandled
+> identities in that switch are now the M4 placeholders `INDGET`/`INDPUT`, as before M3.
+> `ctest` **47/47** green. Corpus: all **22** `tests/scripts/*.ql` byte-identical
+> **stdout and exit code** against a `git worktree` of `28707db` (§11 item 1, taken
+> early because S2 is the first step that executes new code).
+> Semantics proven ahead of S4 by a throwaway harness (`/tmp`, not committed):
+> **287 checks, 0 failures** — 5 comparators × {less, equal, greater} ×
+> {register, immediate, pool} × 6 jumps = **270** taken/not-taken assertions, which
+> include the none-set state (`ltf` with `a > b` fires `jne` only; `ltef` with
+> `a == b` fires `je` **and** `jle`, never `jl`/`jg`/`jge`), `tst` truthy/falsy × 6
+> jumps, the `cmp`-throws-on-`String` regression, and error-text parity with the
+> value-producing ops (`operator '<=' cannot compare table and int`, D3).
+> `pseudoText()` had no case for the six identities when this step finished (level 4
+> printed an empty pseudo-op, reading no operands, so nothing desynchronised); S3
+> landed in the same pass, as AGENTS.md requires.
+
 `src/QLangVM.cpp` (+ `include/qlang/QLangVM.h` if the helper is a member, as `cmpFlags` is):
 
 - `int flagCompare(Opcode op, const QLangValue &a, const QLangValue &b)` next to `cmpFlags`
@@ -225,6 +252,34 @@ been).
 *Exit criteria:* `--asm-level 0–5` well-formed on a hand-built stream containing each of the six
 opcodes in each permitted kind (the S4 harness can dump it); no out-of-bounds operand read
 (`--asm-level 4` on the S4 stream under ASan if the build config allows).
+
+> **DONE (uncommitted), 2026-11-07.** `pseudoText()` gained a `flagCmp` lambda
+> (`examples/qlang_run.cpp:360`) and six cases beside `CMP`/`CMPI` (`:544`–`:561`):
+> `EQF`…`GTEF` print `flags = (r[a] <op> right())`, `TST` prints
+> `flags = truth(r[a]) ? eq : 0` — byte-for-byte the spec's own listings
+> (`eqf 0c, 0d ; flags = (r12 == r13)`, `tst 06 ; flags = truth(r6) ? eq : 0`).
+> **Plan correction:** `sources()` cannot be used here. It implements the 3-operand
+> ALU convention, and for kind 1 (`Register`) `isInPlaceForm` is **false**, so it would
+> print `r[b]` / `r[c]` — but `c` is not in a flag compare's stream (§2.6): the left
+> operand is always `r[a]` and the right one is kind-selected, i.e. `cmp`'s shape. The
+> new lambda therefore calls `right()` directly, as the `cmp` / `cmpi` lines do.
+> `operandText()` needed **no** change (verified on real output, not assumed: it is
+> driven entirely by `baseOperandCount` + `rightKind` + `isInPlaceForm`); `operandMask()`
+> does not exist in the tree (the deviation M2 recorded). `disassemble()` also needed
+> nothing — the level-3 pool note keys off `rightKind`, so `eqf r0, pool[0]` gets its
+> `# 10`. `examples/hello.cpp` is generic (only `Opcode::CALL` is special-cased) and was
+> left alone; it still runs clean.
+> Gate (§11 item 9): a throwaway harness (`/tmp`, not committed) hand-built a
+> 38-instruction program — the five comparators × {register, immediate, pool}, the
+> immediate payload shapes `i8`/`i32`/`u16`/`float`/`true`/`nil` (item 4), string and
+> float operands, `tst` feeding the six flag jumps, and `cmp` for contrast — serialized
+> it with `writeQlc`, and drove the real `qlang_run` over the `.qlc` at `--asm-level`
+> **0–5**: all six listings well-formed, exit 0, and no third operand printed. Under an
+> out-of-source ASan build (`Debug`, `-fsanitize=address`) all six levels are clean and
+> byte-identical to the normal build — no out-of-bounds operand read.
+> No regression to existing listings: HEAD's `qlang_run.cpp` compiled against the current
+> library produced **identical** `.qla`, stdout and exit code for all **22**
+> `tests/scripts/*.ql` × levels 0–5 — **132** pairs, **0** differences. `ctest` **47/47**.
 
 ### S4 — Flag matrix harness (parent §11 item 5) — before any emission
 

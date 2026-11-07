@@ -135,6 +135,15 @@ private:
   // The assignment at the call site is the "wipe" — only the matching bits
   // are set here.
   static int cmpFlags(const QLangValue &a, const QLangValue &b, QLangVM *vm);
+  // Set the flags from two *general* values (SPEC §bytecodes "extended OpCode
+  // eq, lt, gt, lte, gte"): EQF applies the `==` value-equality rules (so a
+  // string vs an object goes through its __str__), LTF/GTF/LTEF/GTEF the
+  // `<`/`>`/`<=`/`>=` ordering rules, both with the same op-name strings the
+  // value-producing comparisons use, so the error text is identical. Unlike
+  // cmpFlags these are partial relations: at most one bit is set and "none"
+  // means the tested relation does not hold. Needs the VM for the object-aware
+  // dispatch, hence a member rather than the static cmpFlags.
+  int flagCompare(Opcode op, const QLangValue &a, const QLangValue &b);
   // True when the flag pattern `f` satisfies the conditional jump `op`.
   static bool flagsSatisfied(Opcode op, int f);
 

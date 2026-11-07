@@ -1103,6 +1103,34 @@ int QLangVM::cmpFlags(const QLangValue &a, const QLangValue &b, QLangVM *vm) {
   return f;
 }
 
+// Flag-setting comparisons over general values (SPEC §bytecodes "extended
+// OpCode eq, lt, gt, lte, gte"; plan docs/plans/m3-flag-flow-plan.md D3). They
+// reuse the value-comparison rules verbatim — valueEqual for `==` (ObjectOps
+// `__str__` dispatch included), cmp with the same op-name strings for the
+// orderings — so the messages and the object/array/table ordering are
+// inherited, not reimplemented.
+//
+// The spec's table is a *capability mask*: each comparator sets only the bit of
+// the relation it tests, so the result is one-hot or zero and flagsSatisfied
+// needs no change. `ltef`/`gtef` therefore never set two bits at once (the spec
+// rejects that state: `je` tests `f == eq` and would stop firing for a == b).
+int QLangVM::flagCompare(Opcode op, const QLangValue &a, const QLangValue &b) {
+  switch (op) {
+  case Opcode::EQF: return valueEqual(a, b) ? CMP_EQ : 0;
+  case Opcode::LTF: return cmp(a, b, "<", this) < 0 ? CMP_LT : 0;
+  case Opcode::GTF: return cmp(a, b, ">", this) > 0 ? CMP_GR : 0;
+  case Opcode::LTEF: {
+    int c = cmp(a, b, "<=", this);
+    return c < 0 ? CMP_LT : c == 0 ? CMP_EQ : 0;
+  }
+  case Opcode::GTEF: {
+    int c = cmp(a, b, ">=", this);
+    return c > 0 ? CMP_GR : c == 0 ? CMP_EQ : 0;
+  }
+  default: return 0;
+  }
+}
+
 bool QLangVM::flagsSatisfied(Opcode op, int f) {
   // The bits are set independently and are mutually exclusive (a>b, a==b,
   // a<b are exhaustive), so `f` is exactly one of GR/EQ/LT. The >= / <=
@@ -2465,6 +2493,27 @@ RunResult QLangVM::runFrames() {
       frame.flags = cmpFlags(frame.regs[i.a], rhs, this);
       break;
     }
+    case Opcode::EQF:
+    case Opcode::LTF:
+    case Opcode::GTF:
+    case Opcode::LTEF:
+    case Opcode::GTEF: {
+      // The flag compares have cmp's operand shape (left register + a right
+      // operand selected by its kind: register, immediate or pool entry) but
+      // the general relation rules, so a String/Float/Array/Table/object
+      // comparison can set the flags without a boolean temporary. The
+      // in-place arity rule means `c` is not in the stream — never read it.
+      QLangValue rhs = operandValue(i, frame, consts, false);
+      frame.flags = flagCompare(op, frame.regs[i.a], rhs);
+      break;
+    }
+    case Opcode::TST:
+      // Truthiness into the flags (SPEC §bytecodes "OpCode tst"): eq from
+      // truth(r[a]), the other two bits cleared, so the flag jumps are
+      // reachable from any value. Emission stays on jmpfalse/jmptrue in v6
+      // (plan M3 D4); the opcode exists so Phase 3 has a target.
+      frame.flags = isTrue(frame.regs[i.a]) ? CMP_EQ : 0;
+      break;
     case Opcode::JE:
     case Opcode::JNE:
     case Opcode::JG:

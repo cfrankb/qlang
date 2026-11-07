@@ -350,6 +350,17 @@ namespace
       sources(l, r);
       ss << rn(ins.a) << " = (" << l << " " << op << " " << r << ")";
     };
+    // The flag-setting compares (`eqf`..`gtef`) keep `cmp`'s operand shape --
+    // the left operand is always r[a], the right one is selected by its kind
+    // -- but they write the flags instead of a register, so neither `bin` nor
+    // `cmp` fits: both print a destination that is never written. `sources()`
+    // is wrong here as well: it implements the 3-operand ALU convention
+    // (r[a] = r[b] op r[c]), while the §2.6 arity rule keeps `c` out of a
+    // flag compare's stream.
+    auto flagCmp = [&ss, &rn, &right, &ins](const char *op)
+    {
+      ss << "flags = (" << rn(ins.a) << " " << op << " " << right() << ")";
+    };
 
     switch (ins.op)
     {
@@ -526,6 +537,27 @@ namespace
       break;
     case Opcode::CMPI:
       ss << "cmpi " << rn(ins.a) << ", " << right();
+      break;
+    // The flag-flow family (SPEC §bytecodes "extended OpCode eq, lt, gt, lte,
+    // gte" and "### OpCode tst"): the pseudo-mnemonic names the flags as the
+    // destination, matching the spec's own listings.
+    case Opcode::EQF:
+      flagCmp("==");
+      break;
+    case Opcode::LTF:
+      flagCmp("<");
+      break;
+    case Opcode::GTF:
+      flagCmp(">");
+      break;
+    case Opcode::LTEF:
+      flagCmp("<=");
+      break;
+    case Opcode::GTEF:
+      flagCmp(">=");
+      break;
+    case Opcode::TST:
+      ss << "flags = truth(" << rn(ins.a) << ") ? eq : 0";
       break;
     case Opcode::CALLFN:
     {
