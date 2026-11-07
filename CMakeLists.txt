@@ -162,14 +162,17 @@ add_executable(signal_test tests/unit/signal_test.cpp)
 target_link_libraries(signal_test PRIVATE qlang)
 add_test(NAME signal COMMAND signal_test)
 
-# .qlc codec round-trip + malformed-input robustness (docs/SERIALIZATION.md §9).
+# .qlc codec round-trip + v6 load-time validation + the deprecated-spelling
+# stream + malformed-input robustness (docs/SERIALIZATION.md §9).
 add_executable(codec_check tests/unit/codec_check.cpp)
 target_link_libraries(codec_check PRIVATE qlang)
 add_test(NAME codec COMMAND codec_check)
 
-# Instruction encoding: 2/2/4 modifier byte, immediate forms, permitted kinds
-# and size/encode/decode agreement
-# (docs/plans/encoding-v6-and-indirect-plan.md §2, verification §11).
+# Instruction encoding: 2/2/4 modifier byte, immediate forms, permitted kinds,
+# golden wire bytes and size/encode/decode agreement
+# (docs/plans/encoding-v6-and-indirect-plan.md §2, verification §11). This is
+# the only instruction-encoding suite: the v5 `encoding` target retired with
+# the v5 codec (docs/plans/m2-pipeline-switch-plan.md S7).
 add_executable(encoding_v6_test tests/unit/encoding_v6_test.cpp)
 target_link_libraries(encoding_v6_test PRIVATE qlang)
 add_test(NAME encoding_v6 COMMAND encoding_v6_test)
@@ -245,6 +248,7 @@ set(QL_SCRIPTS
   ext_regs.ql
   helpers.ql
   hello.ql
+  imm_kinds.ql
   jump_widths.ql
   len.ql
   money.ql

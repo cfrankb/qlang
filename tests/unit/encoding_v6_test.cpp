@@ -190,6 +190,78 @@ static void bytesAre(const DecodedInstruction &in,
   check(buf == expect, name + ": wire bytes");
 }
 
+// Little-endian operand bytes of `v`, `n` bytes wide (the golden vectors spell
+// their operand bytes out explicitly).
+static std::vector<uint8_t> le(uint64_t v, size_t n) {
+  std::vector<uint8_t> out;
+  for (size_t i = 0; i < n; i++)
+    out.push_back(static_cast<uint8_t>((v >> (8 * i)) & 0xFF));
+  return out;
+}
+
+// The 8 wire bytes of a double (bit-exact, so -0.0 and NaN spell themselves).
+static std::vector<uint8_t> leDouble(double d) {
+  uint64_t bits = 0;
+  std::memcpy(&bits, &d, sizeof(bits));
+  return le(bits, 8);
+}
+
+// `head` followed by `tail` (a golden vector = fixed prefix + operand bytes).
+static std::vector<uint8_t> cat(std::vector<uint8_t> head,
+                                const std::vector<uint8_t> &tail) {
+  head.insert(head.end(), tail.begin(), tail.end());
+  return head;
+}
+
+// Encode a whole program, recording the byte offset every instruction starts
+// at (`offs` ends with the stream length).
+static void encodeAll(const std::vector<DecodedInstruction> &prog,
+                      std::vector<uint8_t> &code, std::vector<size_t> &offs) {
+  for (const DecodedInstruction &d : prog) {
+    offs.push_back(code.size());
+    encodeInstruction(code, d);
+  }
+  offs.push_back(code.size());
+}
+
+// Walk a whole stream with the size table and the decoder and require that
+// both agree with the length the encoder produced at *every* pc, not only at
+// pc 0 (plan §11 item 3: a size that is right once and wrong later
+// desynchronises pc in a real program).
+static void checkTiling(const std::vector<uint8_t> &code,
+                        const std::vector<size_t> &offs,
+                        const std::vector<DecodedInstruction> &prog,
+                        const std::string &name) {
+  size_t pc = 0, j = 0;
+  while (pc < code.size()) {
+    std::string where = name + " at pc " + std::to_string(pc);
+    DecodedInstruction out;
+    try {
+      decodeInstruction(code.data(), pc, code.size(), out);
+    } catch (const QLangError &e) {
+      check(false, where + ": decode threw (" + e.what() + ")");
+      return;
+    }
+    size_t want = instructionSize(out.op, out.escaped, out.modifier);
+    size_t encoded = (j + 1 < offs.size()) ? offs[j + 1] - offs[j] : 0;
+    check(want == out.size, where + ": size table == decoded length");
+    check(want == encoded, where + ": size table == encoded length");
+    check(j < prog.size() && out.op == prog[j].op &&
+              out.escaped == prog[j].escaped,
+          where + ": the walk stays on an instruction boundary");
+    if (want == 0) {
+      check(false, where + ": a zero length would loop forever");
+      return;
+    }
+    pc += want;
+    j++;
+  }
+  check(pc == code.size(), name + ": the walk tiles the stream exactly");
+  check(j == prog.size(), name + ": " + std::to_string(prog.size()) +
+                              " instructions visited, got " +
+                              std::to_string(j));
+}
+
 int main() {
   // --- 1. Modifier-byte field layout (plan §2.1, spec `### bytecode encoding`)
   check(makeModifier(OperandWidth::Byte, RightKind::Register, 0) == 0x04,
@@ -1013,6 +1085,254 @@ int main() {
   check(constantAddressSize(0) == 1, "constantAddressSize(0) == 1");
   check(constantAddressSize(255) == 1, "constantAddressSize(255) == 1");
   check(constantAddressSize(256) == 2, "constantAddressSize(256) == 2");
+
+  // --- 16. Golden wire bytes of the representative forms (parent plan §2.9).
+  // Round-tripping cannot catch a layout change (encoder and decoder move
+  // together), so the plan's own byte sequences are pinned literally here.
+  {
+    const uint8_t movE =
+        static_cast<uint8_t>(static_cast<uint8_t>(Opcode::MOV) | kOpcodeEscape);
+    const uint8_t addE =
+        static_cast<uint8_t>(static_cast<uint8_t>(Opcode::ADD) | kOpcodeEscape);
+    const uint8_t cmpE =
+        static_cast<uint8_t>(static_cast<uint8_t>(Opcode::CMP) | kOpcodeEscape);
+    const uint8_t jmpE =
+        static_cast<uint8_t>(static_cast<uint8_t>(Opcode::JMP) | kOpcodeEscape);
+    const uint8_t callE = static_cast<uint8_t>(
+        static_cast<uint8_t>(Opcode::CALL) | kOpcodeEscape);
+
+    struct GoldenCase {
+      Opcode op;
+      bool escaped;
+      uint8_t e;
+      int32_t a, b, c;
+      int64_t imm;
+      uint64_t u;
+      double f;
+      int32_t off;
+      std::vector<uint8_t> bytes;
+      const char *name;
+    };
+    static const uint8_t mov = static_cast<uint8_t>(Opcode::MOV);
+    static const uint8_t add = static_cast<uint8_t>(Opcode::ADD);
+    static const uint8_t cmp = static_cast<uint8_t>(Opcode::CMP);
+    static const uint8_t jmp = static_cast<uint8_t>(Opcode::JMP);
+
+    const GoldenCase golden[] = {
+        // mov: the base form and every immediate class
+        {Opcode::MOV, false, 0, 3, 7, 0, 0, 0, 0, 0, {mov, 3, 7},
+         "mov r3, r7 (base)"},
+        {Opcode::MOV, true, 0x00, 3, 0, 0, 0, 200, 0, 0, {movE, 0x00, 3, 0xC8},
+         "mov r3, 200 (kind 0, form 0)"},
+        {Opcode::MOV, true, 0x50, 3, 0, 0, 500, 0, 0, 0,
+         {movE, 0x50, 3, 0xF4, 0x01}, "mov r3, 500 (i16)"},
+        {Opcode::MOV, true, 0x20, 3, 0, 0, 0, 4000000000ULL, 0, 0,
+         cat({movE, 0x20, 3}, le(4000000000ULL, 4)),
+         "mov r3, 4000000000 (u32)"},
+        {Opcode::MOV, true, 0x80, 3, 0, 0, 0, 0, 1.5, 0,
+         cat({movE, 0x80, 3}, leDouble(1.5)), "mov r3, 1.5 (float)"},
+        {Opcode::MOV, true, 0xA0, 3, 0, 0, 0, 0, 0, 0, {movE, 0xA0, 3},
+         "mov r3, true (zero-byte form)"},
+        {Opcode::MOV, true, 0xB0, 3, 0, 0, 0, 0, 0, 0, {movE, 0xB0, 3},
+         "mov r3, nil (zero-byte form)"},
+        // mov: the pool kind and both extended addressing widths. The
+        // `mov r300, r7` row needs e = 0x05 (word left, byte right); the
+        // plan's §2.9 row prints 0x14, which is the *right* operand widened
+        // instead (byte left, word right) and cannot hold 300 in its left
+        // operand.
+        {Opcode::MOV, true, 0x18, 3, 300, 0, 0, 0, 0, 0,
+         {movE, 0x18, 3, 0x2C, 0x01}, "mov r3, pool[300] (word constant)"},
+        {Opcode::MOV, true, 0x05, 300, 7, 0, 0, 0, 0, 0,
+         {movE, 0x05, 0x2C, 0x01, 7}, "mov r300, r7 (word left)"},
+        // add: three operands, then the in-place form (no trailing `c`)
+        {Opcode::ADD, false, 0, 3, 4, 5, 0, 0, 0, 0, {add, 3, 4, 5},
+         "add r3, r4, r5 (base)"},
+        {Opcode::ADD, true, 0x40, 3, 0, 0, 12, 0, 0, 0, {addE, 0x40, 3, 12},
+         "add r3, 12 (in place)"},
+        {Opcode::ADD, true, 0x80, 3, 0, 0, 0, 0, 2.5, 0,
+         cat({addE, 0x80, 3}, leDouble(2.5)), "add r3, 2.5 (in place)"},
+        // cmp: register right and immediate right
+        {Opcode::CMP, false, 0, 6, 9, 0, 0, 0, 0, 0, {cmp, 6, 9},
+         "cmp r6, r9 (base)"},
+        {Opcode::CMP, true, 0x40, 6, 0, 0, 0, 0, 0, 0, {cmpE, 0x40, 6, 0},
+         "cmp r6, 0 (immediate right)"},
+        // call: always escaped, id in `b` as int16, then the argument count
+        {Opcode::CALL, true, 0x50, 1, 7, 2, 0, 0, 0, 0,
+         {callE, 0x50, 1, 0x07, 0x00, 2}, "call f, 2 args"},
+        // the jump class: the three widths of §2.7
+        {Opcode::JMP, false, 0, 0, 0, 0, 0, 0, 0, 5, {jmp, 5}, "jmp +5 (jmp8)"},
+        {Opcode::JMP, true, 0x00, 0, 0, 0, 0, 0, 0, 500,
+         {jmpE, 0x00, 0xF4, 0x01}, "jmp +500 (jmp16)"},
+        {Opcode::JMP, true, 0x01, 0, 0, 0, 0, 0, 0, 100000,
+         {jmpE, 0x01, 0xA0, 0x86, 0x01, 0x00}, "jmp +100000 (jmp32)"},
+    };
+    for (const GoldenCase &g : golden) {
+      DecodedInstruction d = ins(g.op, g.escaped, g.e);
+      d.a = g.a;
+      d.b = g.b;
+      d.c = g.c;
+      d.imm = g.imm;
+      d.immUnsigned = g.u;
+      d.immFloat = g.f;
+      d.jumpOffset = g.off;
+      std::string name = std::string(g.name) + " (§2.9)";
+      bytesAre(d, g.bytes, name);
+      roundTrip(d, name, g.bytes.size());
+    }
+  }
+
+  // --- 17. One stream tiled by every (kind, addressing form) pair and by the
+  // jump widths (§11 item 3, ported from the retired encoding suite).
+  {
+    std::vector<DecodedInstruction> prog;
+    auto emit = [&prog](const DecodedInstruction &d) { prog.push_back(d); };
+
+    // The base forms of the three right-operand classes.
+    DecodedInstruction d = ins(Opcode::MOV, false, 0);
+    d.a = 5;
+    d.b = 9;
+    emit(d); // 3
+    d = ins(Opcode::MOVC, false, 0);
+    d.a = 5;
+    d.b = 9;
+    emit(d); // 3
+    d = ins(Opcode::MOVI, false, 0);
+    d.a = 5;
+    d.imm = -5;
+    emit(d); // 3
+
+    // kind 0: every immediate form, in enum order.
+    static const uint8_t kForms[] = {0x00, 0x10, 0x20, 0x30, 0x40, 0x50,
+                                     0x60, 0x70, 0x80, 0x90, 0xA0, 0xB0};
+    for (uint8_t e : kForms) {
+      d = ins(Opcode::MOV, true, e);
+      d.a = 5;
+      d.imm = -5; // the signed forms
+      d.immUnsigned = 5; // the unsigned forms
+      d.immFloat = 1.5; // form 8
+      emit(d);
+    }
+
+    // kind 2 with the extended constant widths, kind 1 with the extended
+    // register widths.
+    d = ins(Opcode::MOV, true, 0x18);
+    d.a = 5;
+    d.b = 300;
+    emit(d); // 5
+    d = ins(Opcode::MOV, true, 0x28);
+    d.a = 5;
+    d.b = 70000;
+    emit(d); // 7
+    d = ins(Opcode::MOV, true, 0x05);
+    d.a = 300;
+    d.b = 9;
+    emit(d); // 5
+    d = ins(Opcode::MOV, true, 0x14);
+    d.a = 5;
+    d.b = 400;
+    emit(d); // 5
+    d = ins(Opcode::MOV, true, 0x06);
+    d.a = 70000;
+    d.b = 9;
+    emit(d); // 7
+
+    // A 3-operand ALU op in both arities, and a non-ALU op that keeps `c`.
+    d = ins(Opcode::ADD, false, 0);
+    d.a = 1;
+    d.b = 2;
+    d.c = 3;
+    emit(d); // 4
+    d = ins(Opcode::ADD, true, 0x04);
+    d.a = 1;
+    d.b = 2;
+    d.c = 3;
+    emit(d); // 5
+    d = ins(Opcode::ADD, true, 0x40);
+    d.a = 1;
+    d.imm = 12;
+    emit(d); // 4, in place
+    d = ins(Opcode::ADD, true, 0x08);
+    d.a = 1;
+    d.b = 9;
+    emit(d); // 4, in place against a constant
+    d = ins(Opcode::ADD, true, 0x80);
+    d.a = 1;
+    d.immFloat = 2.5;
+    emit(d); // 11, in place
+    d = ins(Opcode::CONV, true, 0x04);
+    d.a = 1;
+    d.b = 2;
+    d.c = 5;
+    emit(d); // 5, `c` is the target type
+    d = ins(Opcode::MAKEGEN, true, 0x08);
+    d.a = 1;
+    d.b = 6;
+    d.c = 2;
+    emit(d); // 5, `c` is the argument count
+
+    // cmp with an immediate, call, and the single- and zero-operand shapes.
+    d = ins(Opcode::CMP, true, 0x60);
+    d.a = 6;
+    d.imm = 1000;
+    emit(d); // 7
+    d = ins(Opcode::CALL, true, 0x50);
+    d.a = 2;
+    d.b = 7;
+    d.c = 2;
+    emit(d); // 6
+    d = ins(Opcode::RETURN, false, 0);
+    d.a = 0;
+    emit(d); // 2
+    d = ins(Opcode::Nop, false, 0);
+    emit(d); // 1
+
+    std::vector<uint8_t> code;
+    std::vector<size_t> offs;
+    encodeAll(prog, code, offs);
+    check(code.size() == offs.back(), "stream: the offsets cover every byte");
+    checkTiling(code, offs, prog, "every (kind, form) pair");
+
+    // The jump widths back to back: the emitter picks a width with minJumpSize,
+    // so the width it chose must be the width the walk consumes.
+    std::vector<DecodedInstruction> jumps;
+    struct JumpCase {
+      Opcode op;
+      bool escaped;
+      uint8_t e;
+      int32_t a;
+      int32_t off;
+    };
+    static const JumpCase kJumps[] = {
+        {Opcode::JMP, false, 0, 0, 2},
+        {Opcode::JMP, true, 0x00, 0, 500},
+        {Opcode::JMP, true, 0x01, 0, 100000},
+        {Opcode::JMPIFFALSE, false, 0, 1, 3},
+        {Opcode::JMPIFTRUE, true, 0x00, 1, 500},
+        {Opcode::JE, true, 0x01, 0, 100000},
+        {Opcode::CONTINUE, false, 0, 0, -2},
+    };
+    for (const JumpCase &c : kJumps) {
+      // minJumpSize is what the emitter calls: the width of a plain jump. Only
+      // JMPIFFALSE/JMPIFTRUE add a 1-byte condition register, and only the
+      // escaped form adds the modifier byte.
+      bool cond = c.op == Opcode::JMPIFFALSE || c.op == Opcode::JMPIFTRUE;
+      check(instructionSize(c.op, c.escaped, c.e) ==
+                minJumpSize(c.off) + (cond ? 1 : 0),
+            "jump width of op " + std::to_string(static_cast<int>(c.op)) +
+                " matches the emitter's choice");
+      d = ins(c.op, c.escaped, c.e);
+      d.a = c.a;
+      d.jumpOffset = c.off;
+      jumps.push_back(d);
+    }
+    d = ins(Opcode::RETURN, false, 0);
+    d.a = 0;
+    jumps.push_back(d);
+    code.clear();
+    offs.clear();
+    encodeAll(jumps, code, offs);
+    checkTiling(code, offs, jumps, "the three jump widths");
+  }
 
   std::cout << (fails == 0 ? "ALL PASS" : "FAILURES") << ": " << passes
             << " passed, " << fails << " failed\n";

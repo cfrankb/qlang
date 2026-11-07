@@ -423,6 +423,57 @@ at least keep compiling and printing sane operands.
 
 *Verify:* `ctest --test-dir build` fully green (M1 baseline: 47/47 with `perf` skipped).
 
+> **DONE (working tree; one `git rm` still outstanding — see below).**
+> **Retired suite.** `tests/unit/encoding_test.cpp` lost its CMake target in S1 and is orphaned.
+> Both of its unique cases are ported into `encoding_v6_test.cpp`: the truncated-stream decode
+> errors (§13 — truncated `i32`/`float` immediate, extended index, third operand, `jmp32` offset,
+> `call` id and argc) and the jump-width tiling (§17, folded into the (kind, form) sweep). The
+> file itself still needs `git rm tests/unit/encoding_test.cpp && rm -f build/encoding_test` —
+> the agent shell denies `rm`, so this is a manual step. Nothing builds it, so the suite is green
+> either way.
+> **`encoding_v6_test`** gained §16, the §2.9 golden wire bytes (fixed prefix + little-endian
+> operand bytes per row, `mov`/`add`/`cmp`/`jmp`/`call`, escaped and unescaped), and §17, one
+> stream tiled by **every** (kind, form) pair plus the three jump widths, walked pc-by-pc to
+> assert `instructionSize(op, escaped, e)` equals the encoder's own emitted length at every
+> offset (§11 item 3). 34 249 → **34 466** checks.
+> **`codec_check`** gained `testV6LoadValidation()` (20 checks: the §2.9 golden stream loads and
+> round-trips; versions 3/4/5/7 rejected; `kind = 3`, left form 7 and right forms 12–15 rejected;
+> a kind not permitted for the opcode (`arrput` + immediate) rejected; an unescaped `CALL`
+> rejected; the size guard refuses an oversized `codeSize` while the widest legal instruction —
+> `CONV`, 15 B — still loads) and `testDeprecatedSpellings()` (15 checks: a two-pass assembler
+> emits 24 instructions using `movi`/`movc`/`addi`/`subi`/`cmpi`/`jmptrue`/`jmpfalse`, writes
+> them through `writeQlc`, re-reads them with `readQlc` and **executes** them — §11 item 6).
+> 164 → **199** checks. The version assertions (5 → 6) and the malformed-version probe byte had
+> already moved during the S5 overlap, so there was nothing left to change there.
+> **`tests/scripts/imm_kinds.ql`** (new, registered in `QL_SCRIPTS`) drives every immediate form
+> end to end; `--asm-level 4` over it shows `e=0x40/0x50/0x60/0x80/0x90/0xa0/0xb0` plus the pool
+> fallback `e=0x08`.
+> **Plan deviations:** (a) the plan's boundaries "255/256, 65 535/65 536" do not straddle a v6
+> form — v6 dropped `u8`/`u16`/`u32`, so the real ones are **127/128** (`i8`→`i16`) and
+> **32 767/32 768** (`i16`→`i32`); 255 is `i16` and 65 536 is `i32`, and the script says so.
+> (b) ±2³¹: `2147483647` is the last `i32`, `2147483648` falls back to the pool and
+> `-2147483648` compiles to `pool` + `neg`; `-2147483649` wraps inside `neg`, so the script
+> asserts nothing past the `i32` range. (c) `cmp` against an immediate is **not** fused —
+> `z == 7` emits `mov e=0x40, tmp, 7` then `cmp r, tmp` — so the script asserts the behaviour,
+> while the in-place `add`/`sub` immediates (which *are* fused, `add e=0x40, r0, 5`) are checked
+> directly. (d) unsigned and qword literals (`44u`, `4294967295u`) are never immediate-folded;
+> they always take the pool.
+> *Verification:* `cmake -B build && cmake --build build` clean (Release, no new warnings).
+> `ctest --test-dir build` **46/47 pass** — every unit suite and all 22 script tests, including
+> the new `script_imm_kinds`. The one failure is `perf`, which S7 neither owns nor affects (the
+> working tree touches no `src/` or `include/` file): this build dir is `Release`, so the gate
+> runs instead of skipping (77), and `tests/perf/baseline.json` was last written before the v6
+> switch (`c9acf81`) — `perf_stress.ql` execute is +31 % against it, which is what the wider
+> encoding costs. Re-baseline with `./build/perf_bench --update-baseline`, or use a non-Release
+> build dir.
+> *Formatting:* the new code keeps the compact one-row-per-case braced tables the file already
+> uses. `clang-format --dry-run` flags those rows, but it flags 158 of them at `HEAD` in
+> `encoding_v6_test.cpp` and 394 in `src/QLangCompiler.cpp` — the tree is not clang-format clean,
+> so running `-i` here would explode every table one field per line and rewrite untouched code
+> (AGENTS.md: match the tree, minimise diffs). Only the three added lines over the 80-column
+> limit were re-wrapped; `clang-format -i --lines=…` on the added ranges was tried and reverted.
+
+
 ### S8 — Documentation (only after the suite is green)
 
 * `docs/SERIALIZATION.md` §4: magic `QLC1` version **6**, "readers accept 6 only", the 2/2/4

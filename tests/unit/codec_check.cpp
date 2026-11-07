@@ -1,5 +1,7 @@
 // .qlc codec check: value round-trips, program round-trip with native wiring,
-// and a malformed-input robustness suite (docs/SERIALIZATION.md §9).
+// v6 load-time validation (modifier fields, permitted kinds, the size guard),
+// the deprecated-spelling stream, and a malformed-input robustness suite
+// (docs/SERIALIZATION.md §9, docs/plans/m2-pipeline-switch-plan.md §11).
 #include <climits>
 #include <cstdint>
 #include <cstring>
@@ -1347,6 +1349,334 @@ local w = ab[1]
   }
 }
 
+// ---------------------------------------------------------------------------
+// v6 load-time validation (plan §8 "Validation", §11 item 7): readQlc decodes
+// every instruction of every function, so a malformed modifier byte is a *load*
+// error — the VM is never handed a stream whose pc would desynchronise. The
+// encoder refuses to produce any of these images, so each is hand-assembled.
+// ---------------------------------------------------------------------------
+
+// A one-function program ("main") wrapping a hand-encoded code stream.
+static CompiledProgram programWithCode(std::vector<uint8_t> code,
+                                       std::vector<size_t> offsets,
+                                       int registerCount = 8) {
+  CompiledProgram p;
+  Function f;
+  f.name = "main";
+  f.registerCount = registerCount;
+  f.code = std::move(code);
+  f.instrOffsets = std::move(offsets);
+  f.loc.assign(f.instrOffsets.size(), {1, 0});
+  p.functions.push_back(std::move(f));
+  p.registerCount = registerCount;
+  return p;
+}
+
+static std::string writeImage(const CompiledProgram &p) {
+  std::ostringstream os(std::ios::binary);
+  if (!writeQlc(os, p, {}))
+    return {};
+  return os.str();
+}
+
+static bool readImage(const std::string &bytes, CompiledProgram &p,
+                      std::string &err) {
+  std::istringstream is(bytes, std::ios::binary);
+  std::vector<std::pair<int, std::string>> slots;
+  return readQlc(is, p, slots, err);
+}
+
+static void testV6LoadValidation() {
+  // mov r3, 200 / mov r3, true / return r3 — the plan §2.9 golden bytes.
+  const std::vector<uint8_t> code = {
+      static_cast<uint8_t>(Opcode::MOV) | kOpcodeEscape, 0x00, 0x03, 0xC8,
+      static_cast<uint8_t>(Opcode::MOV) | kOpcodeEscape, 0xA0, 0x03,
+      static_cast<uint8_t>(Opcode::RETURN), 0x03};
+  const std::vector<size_t> offs = {0, 4, 7};
+
+  const std::string image = writeImage(programWithCode(code, offs));
+  check(!image.empty(), "v6-load: writeQlc accepted a hand-encoded stream");
+  check(image.compare(0, 4, "QLC1") == 0, "v6-load: magic QLC1");
+  const uint32_t written =
+      static_cast<uint32_t>(static_cast<uint8_t>(image[4])) |
+      (static_cast<uint32_t>(static_cast<uint8_t>(image[5])) << 8) |
+      (static_cast<uint32_t>(static_cast<uint8_t>(image[6])) << 16) |
+      (static_cast<uint32_t>(static_cast<uint8_t>(image[7])) << 24);
+  check(kQlcVersion == 6 && written == 6,
+        "v6-load: the image declares version 6");
+
+  CompiledProgram back;
+  std::string err;
+  check(readImage(image, back, err), "v6-load: round-trip (" + err + ")");
+  check(back.functions.size() == 1 && back.functions[0].code == code &&
+            back.functions[0].instrOffsets == offs,
+        "v6-load: the code bytes and the offset table survived");
+
+  // The reader is single-version: v5 (the format M2 replaced) and every other
+  // number are refused with a version error, no migration shim (decision D4).
+  for (uint32_t bad : {3u, 4u, 5u, 7u}) {
+    std::string m = image;
+    for (int i = 0; i < 4; i++)
+      m[4 + i] = static_cast<char>((bad >> (8 * i)) & 0xFF);
+    CompiledProgram p;
+    std::string e;
+    check(!readImage(m, p, e) && e.find("version") != std::string::npos,
+          "v6-load: version " + std::to_string(bad) +
+              " rejected with a version error");
+  }
+
+  // One malformed modifier field per image. The first instruction's modifier
+  // byte is at code[1]; every field below is reserved (decision D7).
+  auto rejectsModifier = [&](uint8_t e, const std::string &name) {
+    std::vector<uint8_t> c = code;
+    c[1] = e;
+    CompiledProgram p;
+    std::string why;
+    check(!readImage(writeImage(programWithCode(c, offs)), p, why), name);
+  };
+  rejectsModifier(0x0C, "v6-load: reserved right kind (3) rejected at load");
+  rejectsModifier(0x07, "v6-load: reserved left addressing form (3) rejected");
+  for (uint32_t form = 12; form <= 15; form++)
+    rejectsModifier(static_cast<uint8_t>(form << 4),
+                    "v6-load: reserved immediate form " + std::to_string(form) +
+                        " rejected at load");
+
+  // A kind the opcode does not permit (plan §2.5): ARRPUT writes through a
+  // register, so an immediate right operand is outside its permitted set.
+  {
+    std::vector<uint8_t> c = {
+        static_cast<uint8_t>(Opcode::ARRPUT) | kOpcodeEscape, 0x00, 0x01, 0x02};
+    CompiledProgram p;
+    std::string why;
+    check(!readImage(writeImage(programWithCode(c, {0})), p, why),
+          "v6-load: a kind the opcode does not permit is rejected");
+  }
+
+  // CALL has no base form: its function id is int16, so the escape bit is part
+  // of the opcode's definition (plan §2.8).
+  {
+    std::vector<uint8_t> c = {static_cast<uint8_t>(Opcode::CALL), 0x01, 0x02,
+                              0x00};
+    CompiledProgram p;
+    std::string why;
+    check(!readImage(writeImage(programWithCode(c, {0})), p, why),
+          "v6-load: an unescaped CALL is rejected");
+  }
+
+  // The code-size guard (kMaxInstructions * 15, raised from v5's * 7 because a
+  // v6 instruction is up to 15 bytes): a stream claiming more is refused before
+  // any of it is read.
+  {
+    Bin f;
+    f.b += "QLC1";
+    f.u32(kQlcVersion);
+    f.u32(1);
+    f.str("main");
+    f.i32(0);      // paramCount
+    f.i32(1);      // registerCount
+    f.u8(0);       // isGenerator
+    f.u32(0);      // captures
+    f.u32(0xFFFFFFFFu); // codeSize: larger than any legal stream
+    f.u32(0);      // offCount
+    f.u32(0);      // locCount
+    f.u32(0);      // constants
+    f.u32(0);      // natives
+    f.u32(0);      // vars
+    f.u32(0);      // constVars
+    f.i32(1);      // registerCount
+    CompiledProgram p;
+    std::string why;
+    check(!readImage(f.b, p, why) && why.find("too large") != std::string::npos,
+          "v6-load: an oversized code stream is refused");
+  }
+
+  // The guard is not too tight either: the widest legal instruction — a dword
+  // left operand plus an 8-byte immediate plus a third operand — must load.
+  {
+    size_t best = 0;
+    uint8_t bestE = 0;
+    for (uint32_t e = 0; e <= 0xFF; e++) {
+      size_t s = 0;
+      try {
+        s = escapedInstructionSize(Opcode::CONV, static_cast<uint8_t>(e));
+      } catch (const QLangError &) {
+        continue;
+      }
+      if (s > best) {
+        best = s;
+        bestE = static_cast<uint8_t>(e);
+      }
+    }
+    check(best == 15, "v6-load: the widest instruction is 15 bytes");
+    std::vector<uint8_t> c(best, 0);
+    c[0] = static_cast<uint8_t>(Opcode::CONV) | kOpcodeEscape;
+    c[1] = bestE;
+    CompiledProgram p;
+    std::string why;
+    check(readImage(writeImage(programWithCode(c, {0})), p, why),
+          "v6-load: a 15-byte instruction loads (" + why + ")");
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The deprecated spellings still execute (plan §3 coexistence, §11 item 6): M2
+// deleted the v5 *encoding*, not the v5 *opcodes*. `movi`/`movc`/`addi`/`subi`/
+// `cmpi` are no longer emitted, but a stream that uses them — together with the
+// `jmpfalse`/`jmptrue` truthiness jumps, which stay in use — must still load,
+// decode and run with the historical semantics.
+// ---------------------------------------------------------------------------
+static void testDeprecatedSpellings() {
+  struct Item {
+    DecodedInstruction d;
+    int jumpTo = -1;  // instruction index a jump targets, -1 for none
+  };
+  std::vector<Item> items;
+
+  // A base (unescaped) instruction: 1-byte operands, 1-byte signed immediate.
+  auto addBase = [&](Opcode op, int a, int b, int64_t imm) {
+    DecodedInstruction d;
+    d.op = op;
+    d.a = a;
+    d.b = b;
+    d.imm = imm;
+    items.push_back({d, -1});
+  };
+  // An escaped jmp16 (modifier 0): a 2-byte relative offset, preceded by the
+  // condition register for the truthiness jumps only.
+  auto addJump = [&](Opcode op, int a, int target) {
+    DecodedInstruction d;
+    d.op = op;
+    d.escaped = true;
+    d.modifier = 0;
+    d.a = a;
+    items.push_back({d, target});
+  };
+
+  const int R0 = 0, R1 = 1, R2 = 2, R9 = 9, R10 = 10, R11 = 11, R12 = 12,
+            R13 = 13, R14 = 14, R15 = 15, R16 = 16;
+
+  addBase(Opcode::MOVI, R0, 0, 10);   // 0  r0 = 10
+  addBase(Opcode::ADDI, R0, 0, 5);    // 1  r0 = r0 + 5
+  addBase(Opcode::SUBI, R0, 0, 3);    // 2  r0 = r0 - 3
+  addBase(Opcode::MOVC, R1, 0, 0);    // 3  r1 = pool[0] (array)
+  addBase(Opcode::MOVC, R2, 1, 0);    // 4  r2 = pool[1] (nil, falsy)
+  addBase(Opcode::MOVI, R9, 0, 1);    // 5  r9 = 1 (truthy)
+  addJump(Opcode::JMPIFTRUE, R9, 8);  // 6  taken -> skip 7
+  addBase(Opcode::MOVI, R10, 0, 1);   // 7  must not run
+  addJump(Opcode::JMPIFFALSE, R9, 10);  // 8  not taken (r9 truthy)
+  addBase(Opcode::MOVI, R11, 0, 2);   // 9  runs
+  addJump(Opcode::JMPIFFALSE, R2, 12);  // 10 taken (nil) -> skip 11
+  addBase(Opcode::MOVI, R12, 0, 1);   // 11 must not run
+  addJump(Opcode::JMPIFTRUE, R2, 14);   // 12 not taken (nil)
+  addBase(Opcode::MOVI, R13, 0, 4);   // 13 runs
+  addBase(Opcode::CMPI, R0, 0, 12);   // 14 cmpi r0, 12 -> equal
+  addJump(Opcode::JE, 0, 17);         // 15 taken -> skip 16
+  addBase(Opcode::MOVI, R14, 0, 1);   // 16 must not run
+  addBase(Opcode::CMPI, R0, 0, 20);   // 17 cmpi r0, 20 -> less
+  addJump(Opcode::JE, 0, 20);         // 18 not taken
+  addBase(Opcode::MOVI, R15, 0, 3);   // 19 runs
+  addBase(Opcode::CMPI, R0, 0, 5);    // 20 cmpi r0, 5 -> greater
+  addJump(Opcode::JG, 0, 23);         // 21 taken -> skip 22
+  addBase(Opcode::MOVI, R16, 0, 1);   // 22 must not run
+  addBase(Opcode::RETURN, R0, 0, 0);  // 23 return r0
+
+  // Two-pass assembly: the sizes first (a jump's width is fixed by its
+  // modifier), then the relative offsets, then the bytes.
+  std::vector<size_t> sizes(items.size()), offs(items.size());
+  for (size_t k = 0; k < items.size(); k++) {
+    std::vector<uint8_t> tmp;
+    encodeInstruction(tmp, items[k].d);
+    sizes[k] = tmp.size();
+  }
+  size_t total = 0;
+  for (size_t k = 0; k < items.size(); k++) {
+    offs[k] = total;
+    total += sizes[k];
+  }
+  std::vector<uint8_t> code;
+  for (size_t k = 0; k < items.size(); k++) {
+    if (items[k].jumpTo >= 0)
+      items[k].d.jumpOffset = static_cast<int32_t>(
+          offs[static_cast<size_t>(items[k].jumpTo)] - (offs[k] + sizes[k]));
+    encodeInstruction(code, items[k].d);
+  }
+  check(code.size() == total, "legacy: the stream tiles without gaps");
+
+  // Load it back through the codec: the deprecated identities (and the pool
+  // entries they read) must survive a .qlc round-trip, not just an in-memory
+  // stream. pool[0] is an array (so `movc` has to clone it), pool[1] a nil.
+  CompiledProgram built = programWithCode(code, offs, 17);
+  built.functions[0].constants = {
+      QLangValue::Array({QLangValue::Int(1), QLangValue::Int(2)}),
+      QLangValue()};
+  CompiledProgram prog;
+  {
+    std::string why;
+    check(readImage(writeImage(built), prog, why),
+          "legacy: the image loads (" + why + ")");
+  }
+  if (prog.functions.empty()) {
+    check(false, "legacy: no function to run");
+    return;
+  }
+  const Function &fn = prog.functions[0];
+  check(fn.registerCount == 17 && fn.constants.size() == 2,
+        "legacy: the frame size and the pool survived the round-trip");
+
+  int movi = 0, movc = 0, addi = 0, subi = 0, cmpi = 0, jpf = 0, jpt = 0;
+  for (size_t off : fn.instrOffsets) {
+    DecodedInstruction d;
+    decodeInstruction(fn.code.data(), off, fn.code.size(), d);
+    switch (d.op) {
+    case Opcode::MOVI: movi++; break;
+    case Opcode::MOVC: movc++; break;
+    case Opcode::ADDI: addi++; break;
+    case Opcode::SUBI: subi++; break;
+    case Opcode::CMPI: cmpi++; break;
+    case Opcode::JMPIFFALSE: jpf++; break;
+    case Opcode::JMPIFTRUE: jpt++; break;
+    default: break;
+    }
+  }
+  check(movi == 9 && movc == 2 && addi == 1 && subi == 1 && cmpi == 3 &&
+            jpf == 2 && jpt == 2,
+        "legacy: every deprecated spelling still decodes");
+
+  QLangContext ctx;
+  try {
+    QLangVM vm(prog, ctx);
+    vm.run();
+  } catch (const QLangError &e) {
+    check(false, std::string("legacy: the stream threw (") + e.what() + ")");
+    return;
+  }
+
+  const auto &slots = ctx.globalSlots();
+  auto reg = [&](int r) -> const QLangValue & {
+    return slots[static_cast<size_t>(r)];
+  };
+  using T = QLangValue::Type;
+  check(reg(R0).type() == T::Int && reg(R0).asInt() == 12,
+        "legacy: movi + addi + subi");
+  check(reg(R1).type() == T::Array &&
+            reg(R1).asArray().get() != fn.constants[0].asArray().get(),
+        "legacy: movc clones a pool container (decision D6)");
+  check(fn.constants[0].asArray()->size() == 2 &&
+            (*fn.constants[0].asArray())[0].asInt() == 1,
+        "legacy: the pool array was not mutated");
+  check(reg(R2).type() == T::Nil, "legacy: movc reads a nil pool entry");
+  check(reg(R10).type() == T::Nil, "legacy: jmptrue taken skips the next op");
+  check(reg(R11).type() == T::Int && reg(R11).asInt() == 2,
+        "legacy: jmpfalse not taken on a truthy register");
+  check(reg(R12).type() == T::Nil, "legacy: jmpfalse taken on nil");
+  check(reg(R13).type() == T::Int && reg(R13).asInt() == 4,
+        "legacy: jmptrue not taken on nil");
+  check(reg(R14).type() == T::Nil, "legacy: cmpi equal -> je taken");
+  check(reg(R15).type() == T::Int && reg(R15).asInt() == 3,
+        "legacy: cmpi less -> je not taken");
+  check(reg(R16).type() == T::Nil, "legacy: cmpi greater -> jg taken");
+}
+
 int main() {
   testValues();
   testProgram();
@@ -1361,6 +1691,8 @@ int main() {
   testDeepcopyLowering();
   testIndexSubscript();
   testIndexLowering();
+  testV6LoadValidation();
+  testDeprecatedSpellings();
   testMalformed();
   std::cout << (fails == 0 ? "all codec checks passed\n"
                            : "codec checks FAILED\n");
