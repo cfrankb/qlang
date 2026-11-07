@@ -361,7 +361,7 @@ milestones; each keeps `ctest --test-dir build` green.
 |---|-----------|-------|--------|
 | **M1** | v6 encoding layer, **additive** | 2/2/4 modifier byte, kind/form tables, permitted-kind + in-place-arity rules, full immediate set, `CALL` as kind 0 / form 5, jump class untouched, new `*V6` codec + `encoding_v6` test suite. v5 codec, `kQlcVersion = 5` and the shipped pipeline are **not** modified. | **DONE 2026-11-06** |
 | **M2** | Switch the pipeline | Compiler emits unified `mov`/`add`/`sub`/`cmp` kinds with immediate selection, VM decodes v6, `.qlc` v5 → v6, disassembler (`examples/qlang_run.cpp`) | **DONE 2026-11-07** |
-| **M3** | Flag flow | `eqf`/`ltf`/`gtf`/`ltef`/`gtef` + `tst`, flag jumps, `ja`/`jae`/`jb`/`jbe` aliases (§4) | pending |
+| **M3** | Flag flow | `eqf`/`ltf`/`gtf`/`ltef`/`gtef` + `tst`, flag jumps, `ja`/`jae`/`jb`/`jbe` aliases (§4) | pending — plan written: [m3-flag-flow-plan.md](m3-flag-flow-plan.md) |
 | **M4** | `$$` (A3) | Declaration table, frame name map + bitset, `DECL`, two-operand `INDGET`/`INDPUT`, `$$"literal"` fast path (§7) | pending |
 
 Two decisions M1 settled, both deviations from the draft text:
