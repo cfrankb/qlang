@@ -2504,6 +2504,15 @@ void QLangCompiler::compileImport(const StmtPtr &s) {
       auto it = mod->funcs.find(fname);
       if (it != mod->funcs.end())
         m_nativeFuncsResolved[static_cast<size_t>(idx)] = it->second;
+      // Record the provenance (module -> func) once per name; the first
+      // binding wins, mirroring the slot above (a re-import of the same name
+      // resolves to the same native slot).
+      ImportedModuleFunc imp{mod->name, fname, false};
+      bool seen = false;
+      for (const auto &e : m_importedModuleFuncs)
+        if (!e.fromClass && e.func == fname) { seen = true; break; }
+      if (!seen)
+        m_importedModuleFuncs.push_back(std::move(imp));
     }
   }
 }
@@ -2649,6 +2658,9 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       m_inStaticMethod = false;
       int funcIndex = buildFunction(st->name, st->params, st->captures, st->body);
       m_classStaticNames.clear();
+      // Record the class method's provenance so tools never list it as a
+      // main-module export.
+      m_importedModuleFuncs.push_back({s->className, st->name, true});
       auto closure = std::make_shared<Closure>();
       closure->funcIndex = funcIndex;
       int constIdx = emitConst(QLangValue::Function(closure));
@@ -2696,6 +2708,8 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       int funcIndex = buildFunction(sm.name, params, sm.captures, sm.body);
       m_inStaticMethod = false;
       m_classStaticNames.clear();
+      // Record the static method's provenance (see the instance-method note).
+      m_importedModuleFuncs.push_back({s->className, sm.name, true});
       sm.funcIndex = funcIndex;
       auto closure = std::make_shared<Closure>();
       closure->funcIndex = funcIndex;
@@ -2816,6 +2830,9 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
   protoFn.registerCount = m_nextReg;
   m_emitter.finish(protoFn);
   m_functions.push_back(std::move(protoFn));
+  // Record the prototype function's provenance (see the method notes).
+  m_importedModuleFuncs.push_back(
+      {s->className, s->className + "_prototype", true});
   m_emitter = std::move(savedEmitter);
   m_regs = std::move(savedRegs);
   m_constVars = std::move(savedConstVars);

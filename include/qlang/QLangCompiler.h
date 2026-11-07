@@ -241,6 +241,20 @@ public:
   const std::unordered_map<std::string, int> &nativeFuncIds() const { return m_nativeFuncIds; }
   const std::vector<QLangContext::NativeFunc> &nativeFuncsResolved() const { return m_nativeFuncsResolved; }
 
+  // One entry per name bound by an `import` statement (module provenance for
+  // diagnostics/disassembly; `module` is the alias when `import x as y` was
+  // used). `fromClass` marks a class method or prototype function: it is
+  // compiled through the same path but is not an importable module function.
+  // Populated by compile(); empty before it is called.
+  struct ImportedModuleFunc {
+    std::string module;
+    std::string func;
+    bool fromClass = false;
+  };
+  const std::vector<ImportedModuleFunc> &importedModuleFuncs() const {
+    return m_importedModuleFuncs;
+  }
+
   CompiledProgram compile();
 
   // Register-allocator breakdown at the end of compile() (see
@@ -431,6 +445,8 @@ private:
   std::unordered_set<std::string> m_moduleFuncNames;
   // Registered modules (populated by addModules, used by import compilation).
   std::vector<QLangContext::Module> m_moduleFuncs;
+  // Module provenance of every `import`-bound name (see ImportedModuleFunc).
+  std::vector<ImportedModuleFunc> m_importedModuleFuncs;
   // Compiled user functions (index 0 is reserved for the implicit "main"
   // function and is filled in at the end of compile()). `def` bodies and
   // arrow-closure bodies are appended here as they are compiled.

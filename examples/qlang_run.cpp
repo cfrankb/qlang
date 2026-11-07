@@ -30,6 +30,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -79,6 +80,9 @@ namespace
               << "                        5 = level 4 + end-of-compile register breakdown\n"
               << "                            (per register: named var / free pool / quarantine /\n"
               << "                             deferred / live temp / call-arg slot / unallocated)\n"
+              << "                            + module breakdown: imported module\n"
+              << "                             functions (native slot, call counts)\n"
+              << "                             and main's exportable defs\n"
               << "  --rotate            append a YYYYMMDDHHMM timestamp to --output/--asm file names\n"
               << "                        (e.g. cmp.qlc -> cmp_202611010513.qlc)\n"
               << "  -h, --help          show this help and exit\n"
@@ -183,8 +187,26 @@ namespace
   //       in the main program's frame, where the compiler's allocator left it
   //       (named var / dead-temp pool / dead-named pool / quarantine /
   //       deferred / live temp / call-arg slot / unallocated gap) plus a
-  //       category summary
+  //       category summary, followed by a module breakdown (level 5 only): the
+  //       functions the
+  //       `import` statements bound (module -> native slot -> call count) and
+  //       the main module's exportable top-level `def`s (QLang has no
+  //       `export` syntax yet, so "exports" lists what the main module
+  //       defines; class methods/prototypes and closures are excluded)
   // ---------------------------------------------------------------------------
+
+  // One `import`-bound function (module provenance from the compiler; see
+  // QLangCompiler::ImportedModuleFunc). `slot` is the native slot the name
+  // resolves to (-1 when the compiler never assigned one). `fromClass` marks
+  // a class method or prototype function: it shares the compiler's
+  // function-building path but is neither an import nor a main-module export.
+  struct ModuleImport
+  {
+    std::string module;
+    std::string func;
+    int slot = -1;
+    bool fromClass = false;
+  };
 
   // Builtin id (CALL operand b, >= 0) -> name. Order mirrors the Builtin enum
   // in QLangBytecode.h.
@@ -798,7 +820,8 @@ namespace
   }
 
   std::string disassemble(const CompiledProgram &prog, const std::vector<std::string> &srcLines,
-                          int level, const RegisterReport *report = nullptr)
+                          int level, const RegisterReport *report = nullptr,
+                          const std::vector<ModuleImport> &imports = {})
   {
     std::ostringstream ss;
     if (level >= 1)
@@ -1013,6 +1036,100 @@ namespace
       ss << "  high water: m_nextReg=" << report->registerCount
          << "  m_nextNamedReg=" << report->nextNamedReg << "\n";
     }
+    // Level 5: module breakdown. Imports are the names the `import`
+    // statements bound (module provenance + native slot from the driver);
+    // exports are the main module's top-level `def`s (no `export` syntax
+    // exists yet, so this lists what the main module defines and could hand
+    // to another module). Call counts are scanned from the instruction
+    // streams: a native call is `call rA, -1-slot, argc` (negative b), a
+    // user call `callfn rA, fnIdx, argc`; `emit` dispatches a method through
+    // a function index in b, so it counts toward the callee too.
+    if (level >= 5)
+    {
+      std::map<int, int> nativeCalls; // native slot -> CALL count
+      std::map<int, int> fnCalls;     // function index -> CALLFN/EMIT count
+      for (const auto &f : prog.functions)
+        for (size_t j = 0; j < f.instrOffsets.size(); j++)
+        {
+          DecodedInstruction k;
+          decodeInstruction(f.code.data(), f.instrOffsets[j], f.code.size(), k);
+          if (k.op == Opcode::CALL && k.b < 0)
+            nativeCalls[-1 - k.b]++;
+          else if ((k.op == Opcode::CALLFN || k.op == Opcode::EMIT) && k.b >= 0)
+            fnCalls[k.b]++;
+        }
+      std::unordered_set<std::string> classFuncs; // class methods/prototypes
+      std::vector<std::string> importLines;
+      std::unordered_set<std::string> listed, listedSlots;
+      for (const auto &im : imports)
+      {
+        if (im.fromClass)
+        {
+          classFuncs.insert(im.func);
+          continue;
+        }
+        if (!listed.insert(im.func).second)
+          continue; // first binding wins (mirrors the compiler)
+        std::ostringstream line;
+        line << "    " << std::left << std::setw(16) << im.func << " <- "
+             << std::setw(12) << im.module;
+        if (im.slot >= 0)
+        {
+          listedSlots.insert(std::to_string(im.slot));
+          auto cit = nativeCalls.find(im.slot);
+          line << "native slot " << std::setw(4) << im.slot << "("
+               << (cit == nativeCalls.end() ? 0 : cit->second) << " calls)";
+        }
+        else
+          line << "(not referenced)";
+        importLines.push_back(line.str());
+      }
+      std::sort(importLines.begin(), importLines.end());
+      ss << "\n";
+      ss << "================================================================\n";
+      ss << "module breakdown (main)\n";
+      ss << "================================================================\n";
+      ss << "  imports:\n";
+      if (importLines.empty())
+        ss << "    (none)\n";
+      for (const auto &l : importLines)
+        ss << l << "\n";
+      // Native slots used by the program that no import line covered: a
+      // host-registered function called without `import`, or a .qlc image
+      // whose provenance is the slot table itself.
+      for (const auto &[slot, count] : nativeCalls)
+      {
+        if (listedSlots.count(std::to_string(slot)))
+          continue;
+        std::string name = "?";
+        for (const auto &im : imports)
+          if (im.slot == slot)
+            name = im.func;
+        ss << "    " << std::left << std::setw(16) << name << " <- "
+           << std::setw(12) << "?"
+           << "native slot " << std::setw(4) << slot << "(" << count << " calls)\n";
+      }
+      ss << "  exports (main):\n";
+      bool anyExport = false;
+      for (size_t i = 1; i < prog.functions.size(); i++)
+      {
+        const auto &f = prog.functions[i];
+        if (f.name == "closure" || f.name == "ternary" || f.isGenerator ||
+            classFuncs.count(f.name))
+          continue; // closures, generator bodies and class members are not
+                    // top-level defs of main
+        anyExport = true;
+        auto cit = fnCalls.find(static_cast<int>(i));
+        ss << "    " << std::left << std::setw(19) << f.name << "fn#" << i
+           << "  params " << std::setw(3) << f.paramCount << "("
+           << (cit == fnCalls.end() ? 0 : cit->second) << " calls)  exportable\n";
+      }
+      if (!anyExport)
+        ss << "    (none)\n";
+      ss << "  note: QLang has no `export` syntax yet (spec 09-modules); the\n";
+      ss << "        list shows what the main module defines and could export.\n";
+      ss << "\n";
+    }
     return ss.str();
   }
 
@@ -1214,6 +1331,9 @@ int main(int argc, char **argv)
   // so the pointer stays valid for the disassembly below.
   RegisterReport reportStorage;
   const RegisterReport *report = nullptr;
+  // Module provenance for the level-5 module breakdown: `import`-bound names
+  // with their native slots (.ql), or the image's native-slot table (.qlc).
+  std::vector<ModuleImport> moduleImports;
   size_t stmtCount = 0;
   const auto t0 = Clock::now();
   auto t1 = t0; // parse/compile boundary (== t0 for .qlc input)
@@ -1227,6 +1347,10 @@ int main(int argc, char **argv)
       std::fprintf(stderr, "%s: %s: %s\n", kAppName, file.c_str(), err.c_str());
       return 3;
     }
+    // The image's native-slot table is all the provenance a .qlc carries:
+    // list each slot as an import of unknown module.
+    for (const auto &[slot, name] : nativeSlots)
+      moduleImports.push_back({"?", name, slot, false});
     // The file stores native function NAMES only; re-resolve them against
     // this context's natives and module functions (a missing name is a
     // load-time error).
@@ -1317,6 +1441,14 @@ int main(int argc, char **argv)
     nativeIds.insert(compiler.nativeFuncIds().begin(), compiler.nativeFuncIds().end());
     reportStorage = compiler.registerReport();
     report = &reportStorage;
+    for (const auto &imp : compiler.importedModuleFuncs())
+    {
+      int slot = -1;
+      auto nit = compiler.nativeFuncIds().find(imp.func);
+      if (nit != compiler.nativeFuncIds().end())
+        slot = -1 - nit->second;
+      moduleImports.push_back({imp.module, imp.func, slot, imp.fromClass});
+    }
   }
   const auto t2 = Clock::now();
 
@@ -1346,7 +1478,8 @@ int main(int argc, char **argv)
       while (std::getline(ls, line))
         srcLines.push_back(line);
     }
-    const std::string text = disassemble(compiled, srcLines, asmLevel, report);
+    const std::string text =
+        disassemble(compiled, srcLines, asmLevel, report, moduleImports);
     std::ofstream out(asmOut, std::ios::trunc);
     if (!out)
     {
