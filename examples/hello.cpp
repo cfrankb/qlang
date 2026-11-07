@@ -4,6 +4,8 @@
 // QLangContext, walks the AST, compiles it to register-machine bytecode and
 // dumps it, then runs it through the VM and reports final variable values.
 
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <string>
 
@@ -108,6 +110,41 @@ static void printStmt(const StmtPtr &s, int indent)
   }
 }
 
+// The immediate right operand of a decoded instruction as text: the payload
+// says which field carries it and the form what it is (the 2/2/4 modifier byte,
+// docs/spec/13-bytecodes.md `### bytecode encoding`).
+static std::string immText(const DecodedInstruction &ins)
+{
+  switch (ins.immPayload)
+  {
+  case ImmPayload::Signed:
+    return std::to_string(ins.imm);
+  case ImmPayload::Unsigned:
+    return std::to_string(ins.immUnsigned);
+  case ImmPayload::Float:
+  {
+    // Shortest decimal text that reads back as the same double.
+    char b[40];
+    for (int prec = 1; prec <= 17; prec++)
+    {
+      std::snprintf(b, sizeof b, "%.*g", prec, ins.immFloat);
+      if (std::strtod(b, nullptr) == ins.immFloat)
+        break;
+    }
+    return std::string(b);
+  }
+  case ImmPayload::True:
+    return "true";
+  case ImmPayload::False:
+    return "false";
+  case ImmPayload::Nil:
+    return "nil";
+  case ImmPayload::None:
+    break;
+  }
+  return "?";
+}
+
 static void dumpBytecode(const CompiledProgram &cp)
 {
   if (cp.functions.empty())
@@ -125,16 +162,44 @@ static void dumpBytecode(const CompiledProgram &cp)
     DecodedInstruction ins;
     decodeInstruction(fn.code.data(), fn.instrOffsets[i], fn.code.size(), ins);
     std::cout << "  " << i << ": " << Bytecode::name(ins.op);
-    if (ins.op == Opcode::MOVC)
-      std::cout << " r[" << ins.a << "] = const[" << ins.b << "] ("
-                << consts[ins.b].typeName() << ")";
-    else if (isJumpOpcode(ins.op))
+    if (isJumpOpcode(ins.op))
+    {
       std::cout << " -> " << ins.jumpOffset;
-    else if (isImmediateOpcode(ins.op))
-      std::cout << " r[" << ins.a << "] imm=" << ins.imm;
-    else
-      std::cout << " r[" << ins.a << "] r[" << ins.b << "] r["
-                << ins.c << "]";
+    }
+    else if (baseOperandCount(ins.op) > 0)
+    {
+      std::cout << " r[" << ins.a << "]";
+      if (ins.op == Opcode::CALL)
+      {
+        // b is the signed function id (negative = native call), c the
+        // argument count; neither is read through the kind.
+        std::cout << " fn[" << ins.b << "] r[" << ins.c << "]";
+      }
+      else
+      {
+        size_t nOps = baseOperandCount(ins.op);
+        if (nOps >= 2)
+        {
+          switch (ins.rightKind)
+          {
+          case RightKind::Immediate:
+            std::cout << " imm=" << immText(ins);
+            break;
+          case RightKind::ConstPool:
+            std::cout << " = const[" << ins.b << "]";
+            if (ins.b >= 0 && static_cast<size_t>(ins.b) < consts.size())
+              std::cout << " (" << consts[ins.b].typeName() << ")";
+            break;
+          case RightKind::Register:
+          case RightKind::Reserved:
+            std::cout << " r[" << ins.b << "]";
+            break;
+          }
+        }
+        if (nOps == 3 && !isInPlaceForm(ins.op, ins.rightKind))
+          std::cout << " r[" << ins.c << "]";
+      }
+    }
     std::cout << "\n";
   }
   std::cout << "\nConstants:\n";

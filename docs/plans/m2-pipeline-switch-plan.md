@@ -1,8 +1,11 @@
 # M2 — Switch the Pipeline to v6 (Discard the v5 Codec)
 
-Status: **In progress — S1 committed (`3bc55c7`), S2 (`35edb7a`), S3 (`e0a8323`), S4 done
-(uncommitted).** Baseline `HEAD = 0b4a4fb` ("encoding: v6 modifier byte (M1) — 2/2/4 layout,
-kind/form tables, \*V6 codec + `encoding_v6` suite").
+Status: **In progress — S1 committed (`3bc55c7`), S2 (`35edb7a`), S3 (`e0a8323`), S4 (`337584c`),
+S6 done (uncommitted); S5 not started** (S6 was taken first because it is the AGENTS.md-mandated
+companion of the S1–S4 encoding change and is independent of S5: it renders whatever kind/form the
+emitter produces, so it is correct both before and after the pool shrinks). Baseline
+`HEAD = 0b4a4fb` ("encoding: v6 modifier byte (M1) — 2/2/4 layout, kind/form tables, \*V6 codec +
+`encoding_v6` suite").
 Parent plan: [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md) — this file
 executes its **§6.1 milestone M2** and cites its sections (§2 layout, §3 coexistence, §6
 phasing, §8 file format, §9 pool, §10 impact, §11 verification gate, §12 open questions).
@@ -313,6 +316,51 @@ at least keep compiling and printing sane operands.
 
 *Verify:* `--asm-level 0..5` well-formed (§11 item 9) on `hello.ql`, `cmp.ql`, `ext_regs.ql`,
 `ext_consts.ql`, `jump_widths.ql`, `imm_kinds.ql`.
+
+> **DONE (uncommitted).** `operandText()` is driven by `rightKind`, not by `isImmediateOpcode`:
+> two new helpers, `doubleText()` (shortest round-tripping `%.*g`, so `3.5` prints as `3.5` and
+> not `3.500000`) and `immediateText()` (switches on `DecodedInstruction::immPayload` → signed
+> decimal / unsigned decimal / float / `true` / `false` / `nil`), then the operand list is
+> `a [, right] [, c]` with the arity taken from `baseOperandCount(op)` and the trailing `c`
+> dropped when `isInPlaceForm(op, rightKind)` — the same rule the encoder applies, so the
+> listing can never read past an in-place instruction. `CALL` keeps its own branch (its signed
+> function id travels in `b`, not in `imm`): `dest, id, argc`. Kind 2 prints `pool[NN]`, kind 1
+> (and the reserved kind, which the codec rejects before this point) prints `rN`.
+> `pseudoText()` gained `right()` / `sources()` (the latter honours the in-place rule), the
+> `bin`/`cmp` lambdas now read their sources through it, and `MOV`/`MOVC`/`MOVI`,
+> `DEEPCOPY`/`ADDI`/`SUBI`/`CONV`/`CAST`/`NEG`/`NOT`/`EVALKEY`/`ARRAPP*`/`ARRLEN`/`LEN`,
+> `LAND`/`LOR`/`INx`, `CMP` and `CMPI` were merged or rewritten around `right()`.
+> **Three pre-existing gaps fixed:** `SUBI`, `JNE` and `Nop` had no `pseudoText` case at all, so
+> their pseudo column was empty; they now print `r3 = r3 - 5`, `pc += off` and `noop`.
+> The level-3 constant note is keyed on `rightKind == ConstPool` instead of an opcode list
+> (`emit` is special-cased: its `b` is a pool index although its kind stays register), and the
+> header/usage wording is "QLC1 v6". `examples/hello.cpp` gained `immText()` and its
+> `dumpBytecode()` prints the right operand by kind (`imm=…` / `= const[i] (type)` / `rN`) with
+> the same in-place arity rule.
+> **Plan deviations:** there is no `operandMask()` in the tree (the fields are read directly at
+> the two decode sites in `disassemble()`); `tests/scripts/imm_kinds.ql` does not exist yet
+> (S7 creates it), so form coverage came from a throwaway hand-encoded image instead;
+> `CALLCLOS` now prints all three stream operands (it printed `a, c` before, hiding the callee
+> register).
+> *Verification:* `ctest` **45/46 pass, 1 skipped (`perf`)** — unchanged from the S4 baseline, the
+> only failure still being the S7-owned `movi: format version 5` assert. `--asm-level 0..5` is
+> well-formed on `hello.ql`, `cmp.ql`, `ext_regs.ql`, `ext_consts.ql`, `jump_widths.ql` (and on
+> every other `tests/scripts/*.ql`). A throwaway harness (`/tmp/asm_s6_check.cpp`, built with
+> `g++ -std=c++20 -Iinclude … build/libqlang.a`) hand-encodes a 2-function v6 `.qlc` covering
+> **every (kind, form) pair** — `u8/i8/u16/i16/u32/i32/u64/i64/float/true/false/nil`, pool and
+> register right operands, `Word`/`DWord` left and right widths (`r70000`, `pool[65000]`), an
+> out-of-range pool index, the deprecated `movi`/`addi`/`subi`/`cmpi`, in-place `add`/`sub`
+> versus 3-operand `add`, `cmp` against an immediate and against a register, `conv`/`cast`
+> keeping their type id, jumps of all three widths including a negative offset, `call` with a
+> positive and a negative id, `nop` — writes it through `writeQlc`, re-reads it (`readQlc`
+> round-trip ok), **executes it** (`qlang_run`, exit 0) and disassembles it at all six levels;
+> `mov e=0xa0, 0a, true`, `mov e=0xb0, 0c, nil`, `mov e=0x30, 07, 4000000001`,
+> `mov e=0x32, 11170, 18446744073709551615`, `add e=0x60, 06, 3 ; r6 = r6 + 3` and
+> `cmp e=0x60, 06, 100 ; cmp r6, 100` all render. `./build/qlang_example` still runs.
+> *Formatting:* the two `examples/` files use Allman braces throughout (116 brace-only lines in
+> `qlang_run.cpp` at `HEAD`), so the new code matches the file; running `clang-format -i` on
+> them would rewrite ~1 900 untouched lines, which AGENTS.md ("minimize unnecessary diffs")
+> argues against. New lines stay within the 80-column limit.
 
 ### S7 — Tests
 

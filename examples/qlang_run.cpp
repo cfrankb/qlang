@@ -1,5 +1,5 @@
 // qlang_run — small driver that runs a .ql (QLang) script or a .qlc
-// (compiled QLC1 v5 image) with a selectable diagnostic trace level,
+// (compiled QLC1 v6 image) with a selectable diagnostic trace level,
 // optional stage timing, and bytecode output.
 //
 //   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>]
@@ -25,6 +25,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <fstream>
 #include <iomanip>
@@ -55,7 +56,7 @@ namespace
 
   void printHelp(const char *prog)
   {
-    std::cout << "Run a QLang (.ql) script or a compiled .qlc image (QLC1 v5).\n"
+    std::cout << "Run a QLang (.ql) script or a compiled .qlc image (QLC1 v6).\n"
               << "\n"
               << "usage: " << prog << " [options] <file.ql|file.qlc>\n"
               << "\n"
@@ -240,8 +241,50 @@ namespace
     }
   }
 
+  // Shortest decimal text that reads back as the same double (1.5, 0.1,
+  // 3e+100), so a float immediate prints exactly as many digits as it needs.
+  std::string doubleText(double d)
+  {
+    char b[40];
+    for (int prec = 1; prec <= 17; prec++)
+    {
+      std::snprintf(b, sizeof b, "%.*g", prec, d);
+      if (std::strtod(b, nullptr) == d)
+        break;
+    }
+    return std::string(b);
+  }
+
+  // The immediate right operand of a decoded instruction as text. The payload
+  // says which field carries it and the form what it is (plan §2.3), so the
+  // signed `Int` forms, the unsigned forms, the `float`, the zero-byte
+  // `true`/`false`/`nil` and the `Long`/`Qword` forms all print distinctly.
+  // Returns "?" when the instruction has no immediate (e.g. CALL, whose
+  // function id is carried in `b`).
+  std::string immediateText(const DecodedInstruction &ins)
+  {
+    switch (ins.immPayload)
+    {
+    case ImmPayload::Signed:
+      return std::to_string(ins.imm);
+    case ImmPayload::Unsigned:
+      return std::to_string(ins.immUnsigned);
+    case ImmPayload::Float:
+      return doubleText(ins.immFloat);
+    case ImmPayload::True:
+      return "true";
+    case ImmPayload::False:
+      return "false";
+    case ImmPayload::Nil:
+      return "nil";
+    case ImmPayload::None:
+      break;
+    }
+    return "?";
+  }
+
   // Pseudo-mnemonic: the register-level meaning of one instruction (level 4),
-  // e.g. "r1 = pool[0]" for `movc 1 0`.
+  // e.g. "r1 = pool[0]" for `mov r1, pool[0]`.
   std::string pseudoText(const CompiledProgram &prog, const DecodedInstruction &ins)
   {
     std::ostringstream ss;
@@ -262,40 +305,78 @@ namespace
     {
       return std::string(QLangValue(static_cast<QLangValue::Type>(t)).typeName());
     };
-    auto bin = [&ss, &rn, &ins](const char *op)
+    // The right operand as a register-level expression, selected by its kind
+    // (plan §2.2): a register prints as a register, a pool index as pool[N], an
+    // immediate as its value.
+    auto right = [&rn, &ins]() -> std::string
     {
-      ss << rn(ins.a) << " = " << rn(ins.b) << " " << op << " " << rn(ins.c);
+      switch (ins.rightKind)
+      {
+      case RightKind::Immediate:
+        return immediateText(ins);
+      case RightKind::ConstPool:
+        return "pool[" + std::to_string(ins.b) + "]";
+      case RightKind::Register:
+      case RightKind::Reserved:
+        break;
+      }
+      return rn(ins.b);
     };
-    auto cmp = [&ss, &rn, &ins](const char *op)
+    // The two source operands of a binary op. A right operand that is not a
+    // register means the in-place form r[a] = r[a] op right (plan §2.6), so the
+    // destination doubles as the left operand and `c` is not in the stream.
+    auto sources = [&rn, &right, &ins](std::string &lhs, std::string &rhs)
     {
-      ss << rn(ins.a) << " = (" << rn(ins.b) << " " << op << " " << rn(ins.c) << ")";
+      if (isInPlaceForm(ins.op, ins.rightKind))
+      {
+        lhs = rn(ins.a);
+        rhs = right();
+      }
+      else
+      {
+        lhs = rn(ins.b);
+        rhs = rn(ins.c);
+      }
+    };
+    auto bin = [&ss, &rn, &sources, &ins](const char *op)
+    {
+      std::string l, r;
+      sources(l, r);
+      ss << rn(ins.a) << " = " << l << " " << op << " " << r;
+    };
+    auto cmp = [&ss, &rn, &sources, &ins](const char *op)
+    {
+      std::string l, r;
+      sources(l, r);
+      ss << rn(ins.a) << " = (" << l << " " << op << " " << r << ")";
     };
 
     switch (ins.op)
     {
-    case Opcode::MOVC:
-      ss << rn(ins.a) << " = pool[" << ins.b << "]";
-      break;
+    // The copy family: the right operand is a register, a pool entry or an
+    // immediate of any form, and `movc` / `movi` are its historical spellings.
     case Opcode::MOV:
-      ss << rn(ins.a) << " = " << rn(ins.b);
+    case Opcode::MOVC:
+    case Opcode::MOVI:
+      ss << rn(ins.a) << " = " << right();
       break;
     case Opcode::DEEPCOPY:
-      ss << rn(ins.a) << " = deepcopy(" << rn(ins.b) << ")";
-      break;
-    case Opcode::MOVI:
-      ss << rn(ins.a) << " = " << ins.imm;
+      ss << rn(ins.a) << " = deepcopy(" << right() << ")";
       break;
     case Opcode::ADDI:
-      ss << rn(ins.a) << " = " << rn(ins.a) << " + " << ins.imm;
+      ss << rn(ins.a) << " = " << rn(ins.a) << " + " << right();
+      break;
+    case Opcode::SUBI:
+      ss << rn(ins.a) << " = " << rn(ins.a) << " - " << right();
       break;
     case Opcode::CONV:
-      ss << rn(ins.a) << " = convert(" << rn(ins.b) << ", " << type(ins.c) << ")";
+      ss << rn(ins.a) << " = convert(" << right() << ", " << type(ins.c) << ")";
       break;
     case Opcode::CAST:
-      ss << rn(ins.a) << " = cast(" << rn(ins.b) << ", " << type(ins.c) << ")";
+      ss << rn(ins.a) << " = cast(" << right() << ", " << type(ins.c) << ")";
       break;
     case Opcode::NEG:
-      ss << rn(ins.a) << " = -" << rn(ins.b);
+      ss << rn(ins.a) << " = -" << right();
       break;
     case Opcode::INC:
       ss << rn(ins.a) << " += 1";
@@ -337,13 +418,21 @@ namespace
       bin("**");
       break;
     case Opcode::LAND:
-      ss << rn(ins.a) << " = truth(" << rn(ins.b) << ") && truth(" << rn(ins.c) << ")";
+    {
+      std::string l, r;
+      sources(l, r);
+      ss << rn(ins.a) << " = truth(" << l << ") && truth(" << r << ")";
       break;
+    }
     case Opcode::LOR:
-      ss << rn(ins.a) << " = truth(" << rn(ins.b) << ") || truth(" << rn(ins.c) << ")";
+    {
+      std::string l, r;
+      sources(l, r);
+      ss << rn(ins.a) << " = truth(" << l << ") || truth(" << r << ")";
       break;
+    }
     case Opcode::NOT:
-      ss << rn(ins.a) << " = !truth(" << rn(ins.b) << ")";
+      ss << rn(ins.a) << " = !truth(" << right() << ")";
       break;
     case Opcode::EQ:
       cmp("==");
@@ -364,8 +453,12 @@ namespace
       cmp(">=");
       break;
     case Opcode::INx:
-      ss << rn(ins.a) << " = (" << rn(ins.b) << " in " << rn(ins.c) << ")";
+    {
+      std::string l, r;
+      sources(l, r);
+      ss << rn(ins.a) << " = (" << l << " in " << r << ")";
       break;
+    }
     case Opcode::CALL:
       if (ins.b >= 0)
       {
@@ -392,14 +485,12 @@ namespace
       ss << rn(ins.a) << "[" << rn(ins.b) << "] = " << rn(ins.c);
       break;
     case Opcode::ARRAPP:
-      ss << rn(ins.a) << " += " << rn(ins.b);
-      break;
     case Opcode::ARRAPPV:
-      ss << rn(ins.a) << " += " << rn(ins.b);
+      ss << rn(ins.a) << " += " << right();
       break;
     case Opcode::ARRLEN:
     case Opcode::LEN:
-      ss << rn(ins.a) << " = len(" << rn(ins.b) << ")";
+      ss << rn(ins.a) << " = len(" << right() << ")";
       break;
     case Opcode::TABCREATE:
       ss << rn(ins.a) << " = {}";
@@ -408,17 +499,21 @@ namespace
       ss << "finalize(" << rn(ins.a) << ")";
       break;
     case Opcode::EVALKEY:
-      ss << rn(ins.a) << " = str(" << rn(ins.b) << ")";
+      ss << rn(ins.a) << " = str(" << right() << ")";
       break;
     case Opcode::JMP:
     case Opcode::CONTINUE:
     case Opcode::BREAK:
     case Opcode::JE:
+    case Opcode::JNE:
     case Opcode::JLE:
     case Opcode::JGE:
     case Opcode::JG:
     case Opcode::JL:
       ss << "pc += " << ins.jumpOffset;
+      break;
+    case Opcode::Nop:
+      ss << "noop";
       break;
     case Opcode::JMPIFFALSE:
       ss << "if !truth(" << rn(ins.a) << ") pc += " << ins.jumpOffset;
@@ -427,10 +522,10 @@ namespace
       ss << "if truth(" << rn(ins.a) << ") pc += " << ins.jumpOffset;
       break;
     case Opcode::CMP:
-      ss << "cmp r" << ins.a << ", r" << ins.b;
+      ss << "cmp " << rn(ins.a) << ", " << right();
       break;
     case Opcode::CMPI:
-      ss << "cmpi r" << ins.a << ", " << ins.imm;
+      ss << "cmpi " << rn(ins.a) << ", " << right();
       break;
     case Opcode::CALLFN:
     {
@@ -468,9 +563,12 @@ namespace
     return ss.str();
   }
 
-  // Comma-separated operands for one decoded instruction. Registers and
-  // pool indices are hex (negative b is decimal: native-call index,
-  // -1 - id); immediates are decimal; jumps show the signed relative
+  // Comma-separated operands for one decoded instruction, mirroring what the
+  // encoder wrote (plan §2.2, §2.6): the left register, the right operand
+  // rendered through its kind (register index / pool[0xNN] / immediate of any
+  // form), and the third operand only when the instruction carries one.
+  // Registers and pool indices are hex (negative b is decimal: native-call
+  // index, -1 - id); immediates are decimal; jumps show the signed relative
   // offset plus the absolute target byte offset. Escaped forms are
   // prefixed with the modifier byte (e=0xNN).
   std::string operandText(const DecodedInstruction &ins, size_t at)
@@ -487,6 +585,12 @@ namespace
       if (!s.empty())
         s += ", ";
       s += fmt(v);
+    };
+    auto addText = [&s](const std::string &t)
+    {
+      if (!s.empty())
+        s += ", ";
+      s += t;
     };
     if (ins.escaped)
     {
@@ -505,52 +609,40 @@ namespace
       s += t;
       return s;
     }
-    if (isImmediateOpcode(ins.op))
+    // CALL names its operands instead of reading them through the kind: its
+    // right operand is the signed function id carried in `b` (negative = native
+    // call, -1 - id) and `c` is the argument count (plan §2.8).
+    if (ins.op == Opcode::CALL)
     {
       add(ins.a);
-      if (!s.empty())
-        s += ", ";
-      s += std::to_string(ins.imm);
+      add(ins.b);
+      add(ins.c);
       return s;
     }
-    switch (ins.op)
+    size_t nOps = baseOperandCount(ins.op);
+    if (nOps == 0)
+      return s; // `nop` carries no operand at all
+    add(ins.a);
+    if (nOps >= 2)
     {
-    case Opcode::INC:
-    case Opcode::DEC:
-    case Opcode::DELETEx:
-    case Opcode::TABCREATE:
-    case Opcode::TABFINALIZE:
-    case Opcode::RETURN:
-      add(ins.a);
-      break;
-    case Opcode::NEG:
-    case Opcode::NOT:
-    case Opcode::EVALKEY:
-    case Opcode::MOV:
-    case Opcode::MOVC:
-    case Opcode::MAKEFUNC:
-    case Opcode::MAKEGEN:
-    case Opcode::REFLOAD:
-    case Opcode::REFSTORE:
-    case Opcode::CMP:
-    case Opcode::ARRAPP:
-    case Opcode::ARRAPPV:
-    case Opcode::ARRLEN:
-    case Opcode::LEN:
-    case Opcode::DEEPCOPY:
-      add(ins.a);
-      add(ins.b);
-      break;
-    case Opcode::CALLCLOS:
-      add(ins.a);
-      add(ins.c);
-      break;
-    default:
-      add(ins.a);
-      add(ins.b);
-      add(ins.c);
-      break;
+      switch (ins.rightKind)
+      {
+      case RightKind::Immediate:
+        addText(immediateText(ins));
+        break;
+      case RightKind::ConstPool:
+        addText("pool[" + fmt(ins.b) + "]");
+        break;
+      case RightKind::Register:
+      case RightKind::Reserved:
+        add(ins.b);
+        break;
+      }
     }
+    // The third operand is in the stream only when the opcode has one and the
+    // right operand did not collapse it into the in-place form.
+    if (nOps == 3 && !isInPlaceForm(ins.op, ins.rightKind))
+      add(ins.c);
     return s;
   }
 
@@ -743,23 +835,19 @@ namespace
           ss << "\n  L" << insLine << ":  "
              << srcLines[static_cast<size_t>(insLine) - 1] << "\n";
         lastLine = insLine;
-        // Level 3: append a copy of the referenced constant (operand b is the
-        // pool index for MOVC / MAKEFUNC / MAKEGEN).
+        // Level 3: append a copy of the referenced constant. Operand b names a
+        // pool entry whenever the instruction's right kind is `ConstPool`
+        // (`mov` / `movc` / `makefunc` / `makegen`, plan §2.5); `emit` is the
+        // one opcode whose b is a pool index though its kind stays register.
         std::string constNote;
         if (level >= 3)
         {
-          switch (ins.op)
-          {
-          case Opcode::MOVC:
-          case Opcode::MAKEFUNC:
-          case Opcode::MAKEGEN:
-          case Opcode::EMIT:
-            if (ins.b >= 0 && static_cast<size_t>(ins.b) < f.constants.size())
-              constNote = valueText(f.constants[static_cast<size_t>(ins.b)]);
-            break;
-          default:
-            break;
-          }
+          bool poolOperand = ins.rightKind == RightKind::ConstPool;
+          if (ins.op == Opcode::EMIT)
+            poolOperand = true;
+          if (poolOperand && ins.b >= 0 &&
+              static_cast<size_t>(ins.b) < f.constants.size())
+            constNote = valueText(f.constants[static_cast<size_t>(ins.b)]);
         }
         // Level 4: name the operands of CALL / CALLFN / CONV / CAST.
         if (level >= 4)
@@ -1085,7 +1173,7 @@ int main(int argc, char **argv)
   ctx.setVerboseLevel(traceLevel);
 
   // --- Load (.qlc) or parse + compile (.ql) ---
-  // A .qlc file is a compiled program (QLC1 v5, docs/SERIALIZATION.md):
+  // A .qlc file is a compiled program (QLC1 v6, docs/SERIALIZATION.md):
   // read it back and re-bind its native functions by name.
   const bool isQlc = source.size() >= 4 && source.compare(0, 4, "QLC1") == 0;
   CompiledProgram compiled;
