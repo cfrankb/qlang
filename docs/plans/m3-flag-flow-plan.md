@@ -1,7 +1,7 @@
 # M3 — Flag Flow: `eqf`/`ltf`/`gtf`/`ltef`/`gtef`, `tst` and the Flag Jumps
 
-Status: **plan — not started.** Baseline `HEAD = 28707db` ("perf: re-record baseline after
-the decoder fast path"). M1 **DONE 2026-11-06** (Round 55), M2 **DONE 2026-11-07**
+Status: **in progress — S1 landed (uncommitted).** Baseline `HEAD = 28707db` ("perf: re-record
+baseline after the decoder fast path"). M1 **DONE 2026-11-06** (Round 55), M2 **DONE 2026-11-07**
 (Round 56 + the Round 57 decoder fast path). Suite at this baseline: ctest **47** entries,
 `encoding_v6` **34 470** checks (sweep tallies 1 756 accepted / 14 138 rejected
 `(opcode, modifier)` pairs), `codec` **199** checks, `perf_stress` execute **10.382 ms**.
@@ -145,6 +145,25 @@ the corpus cannot move); S4 is the test that proves the semantics; S5 switches i
 selection. A regression in S5 therefore cannot be an encoding bug.
 
 ### S1 — Identities and codec tables
+
+> **DONE (uncommitted), 2026-11-07.** The six identities appended last (73–78),
+> `kOpcodeUsedCount` **73 → 79**; `EQF`…`GTEF` in the 2-operand list and `isAluOrFlagCompare`,
+> `TST` in the 1-operand list and *not* in the ALU family (D5); mnemonics `eqf`/`ltf`/`gtf`/
+> `ltef`/`gtef`/`tst`. No `OpMeta` fast-path edit was needed — it inherits the tables.
+> Every S1 expected fact holds: `baseModifier(EQF) == 0x04`, `permittedKinds(EQF) == 0x7`,
+> `permittedKinds(TST) == 0x2`, `isInPlaceForm(EQF, Immediate) == true`,
+> `isInPlaceForm(TST, Immediate) == false`, `instructionSize(EQF, false, 0x04) == 3`,
+> `instructionSize(EQF, true, 0x40) == 4`, `instructionSize(TST, false, 0x04) == 2`
+> (and the escaped `tst` is **3** bytes — the modifier byte is not free).
+> `codec_check` **274** checks (was 199): the count assertion, the malformed-opcode byte moved
+> `73 → 79`, a new `testFlagFlowIdentities` (identity/name/arity/kinds/in-place/sizes/
+> encode-decode for all six, incl. the golden `[C9][40][0C][05]` for `eqf r12, 5`), and five
+> load-time rejections + four legal load spellings in `testV6LoadValidation` (§11 item 7).
+> `encoding_v6` **37 859** checks (was 34 470) — new tallies: sweep **2 029 accepted /
+> 15 401 rejected** (was 1 756 / 14 138), decoder/table parity **30 298 rejected / 2 470
+> accepted / 15 731 truncations** (was 30 517 / 2 251 / 14 401; the parity sweep spans all 128
+> identities, so the six new ones moved 219 pairs from rejected to accepted).
+> `ctest` **47/47** green, corpus untouched (nothing emits the new opcodes yet).
 
 `include/qlang/QLangBytecode.h`, `src/QLangBytecode.cpp`:
 

@@ -86,12 +86,15 @@ size_t baseOperandCount(Opcode op) {
   case Opcode::TABFINALIZE:
   case Opcode::RETURN:
   case Opcode::YIELD:
+  case Opcode::TST:
     return 1;
   }
   // 2-operand (NEG/NOT/EVALKEY are r[a] = op(r[b]): the compiler emits them
-  // with a=dest, b=src, so both operands must be stored). MAKEGEN and SEQGET
-  // are 3-operand (MAKEGEN: c=argCount; SEQGET: c=index) and fall through to
-  // the default below.
+  // with a=dest, b=src, so both operands must be stored). The flag-setting
+  // compares are r[a] <op> right -> flags: no destination, but the right
+  // operand must be stored (and `c` stays unused, as for CMP). MAKEGEN and
+  // SEQGET are 3-operand (MAKEGEN: c=argCount; SEQGET: c=index) and fall
+  // through to the default below.
   switch (op) {
   case Opcode::MOV:
   case Opcode::MOVC:
@@ -99,6 +102,11 @@ size_t baseOperandCount(Opcode op) {
   case Opcode::REFLOAD:
   case Opcode::REFSTORE:
   case Opcode::CMP:
+  case Opcode::EQF:
+  case Opcode::LTF:
+  case Opcode::GTF:
+  case Opcode::LTEF:
+  case Opcode::GTEF:
   case Opcode::ARRAPP:
   case Opcode::ARRLEN:
   case Opcode::LEN:
@@ -310,6 +318,16 @@ static bool isAluOrFlagCompare(Opcode op) {
   case Opcode::POW:
   case Opcode::INx:
   case Opcode::CMP:
+  // The flag-setting compares belong here too (plan M3 D5): one switch entry
+  // buys both the §2.5 permitted-kind row (immediate / register / pool) and
+  // the §2.6 in-place arity rule, and the OpMeta fast path inherits it. TST is
+  // deliberately absent — it has no right operand at all, so any kind other
+  // than register must stay a load-time rejection.
+  case Opcode::EQF:
+  case Opcode::LTF:
+  case Opcode::GTF:
+  case Opcode::LTEF:
+  case Opcode::GTEF:
     return true;
   default:
     return false;
@@ -1248,6 +1266,12 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::DEEPCOPY: return "deepcopy";
   case Opcode::INDEXGET: return "indexget";
   case Opcode::INDEXPUT: return "indexput";
+  case Opcode::EQF: return "eqf";
+  case Opcode::LTF: return "ltf";
+  case Opcode::GTF: return "gtf";
+  case Opcode::LTEF: return "ltef";
+  case Opcode::GTEF: return "gtef";
+  case Opcode::TST: return "tst";
   default:
     return "???";
   }

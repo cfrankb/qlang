@@ -389,6 +389,11 @@ int main() {
       {Opcode::SUBI, RightKind::Immediate, 0x40},
       {Opcode::CMPI, RightKind::Immediate, 0x40},
       {Opcode::CALL, RightKind::Immediate, 0x50},
+      // The flag-flow family (plan M3 D5): a base form can only mean
+      // `defaultRightKind`, which is a register for every one of them.
+      {Opcode::EQF, RightKind::Register, 0x04},
+      {Opcode::GTEF, RightKind::Register, 0x04},
+      {Opcode::TST, RightKind::Register, 0x04},
   };
   for (const BaseCase &c : kBase) {
     check(defaultRightKind(c.op) == c.kind,
@@ -430,6 +435,10 @@ int main() {
       {Opcode::ADD, 0x7},   {Opcode::SUB, 0x7},
       {Opcode::POW, 0x7},   {Opcode::INx, 0x7},
       {Opcode::CMP, 0x7},   {Opcode::EQ, 0x7},
+      // Flag-flow (plan M3 D5): the five compares join the ALU / flag-compare
+      // family, `tst` has no right operand and stays register-only.
+      {Opcode::EQF, 0x7},   {Opcode::LTF, 0x7},   {Opcode::GTF, 0x7},
+      {Opcode::LTEF, 0x7},  {Opcode::GTEF, 0x7},  {Opcode::TST, 0x2},
       {Opcode::LAND, 0x7},  {Opcode::ARRGET, 0x2},
       {Opcode::TABPUT, 0x2}, {Opcode::INDEXGET, 0x2},
       {Opcode::INDGET, 0x2}, {Opcode::SEQGET, 0x2},
@@ -464,6 +473,14 @@ int main() {
         "add with a register right operand keeps the third operand");
   check(isInPlaceForm(Opcode::CMP, RightKind::Immediate),
         "cmp with an immediate right operand is in-place");
+  // The flag compares are 2-operand already, so the rule is about the kind set
+  // they accept rather than a dropped `c` (plan M3 D5).
+  check(isInPlaceForm(Opcode::EQF, RightKind::Immediate) &&
+            isInPlaceForm(Opcode::LTEF, RightKind::ConstPool),
+        "flag compares with a non-register right operand are in-place");
+  check(!isInPlaceForm(Opcode::TST, RightKind::Immediate) &&
+            !isInPlaceForm(Opcode::TST, RightKind::ConstPool),
+        "tst is not a member of the in-place family");
   check(!isInPlaceForm(Opcode::MOV, RightKind::Immediate) &&
             !isInPlaceForm(Opcode::CONV, RightKind::Immediate) &&
             !isInPlaceForm(Opcode::MAKEGEN, RightKind::ConstPool),
@@ -495,6 +512,13 @@ int main() {
       // single-operand opcodes: only the left field is meaningful
       {Opcode::RETURN, 0x04, 3}, {Opcode::RETURN, 0x05, 4},
       {Opcode::INC, 0x06, 6},
+      // flag compares (plan M3 D5): op + e + a + right — there is no third
+      // operand to drop, so the in-place rule changes nothing here.
+      {Opcode::EQF, 0x04, 4},  {Opcode::EQF, 0x14, 5},  {Opcode::EQF, 0x08, 4},
+      {Opcode::EQF, 0x40, 4},  {Opcode::EQF, 0x60, 7},  {Opcode::EQF, 0xA0, 3},
+      {Opcode::LTF, 0x05, 5},
+      // tst: op + e + a, the kind field only widens the single operand
+      {Opcode::TST, 0x04, 3},  {Opcode::TST, 0x05, 4},
       // call: op + e + a + 2-byte function id + 1-byte argument count
       {Opcode::CALL, 0x50, 6}, {Opcode::CALL, 0x51, 7},
       // jump class: e selects the offset width only
@@ -540,6 +564,12 @@ int main() {
       {Opcode::Nop, 0x04, "zero-operand opcode cannot be escaped"},
       {Opcode::RETURN, 0x40, "single-operand opcode has no right operand"},
       {Opcode::INC, 0x0C, "single-operand opcode: reserved kind"},
+      // tst is single-operand and register-only (plan M3 D5, §11 item 7).
+      {Opcode::TST, 0x40, "tst: an immediate kind names no operand"},
+      {Opcode::TST, 0x08, "tst: a constant kind names no operand"},
+      {Opcode::TST, 0x0C, "tst: reserved kind"},
+      {Opcode::EQF, 0x0C, "flag compare: reserved kind"},
+      {Opcode::LTEF, 0x34, "flag compare: reserved register addressing form"},
       {Opcode::CALL, 0x40, "call form is fixed to 5"},
       {Opcode::CALL, 0x54, "call kind is fixed to immediate"},
       {Opcode::CALL, 0x0C, "call: reserved kind"},

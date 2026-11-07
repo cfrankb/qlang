@@ -1092,10 +1092,10 @@ static void testMalformed() {
 
   std::string badOp = fileWithOneInstr();
   // The single instruction's opcode byte is at byte 37 (header + function
-  // metadata + codeSize). Set it to 73: a valid 7-bit identity that is not a
-  // defined opcode (kOpcodeUsedCount == 73; INDEXGET/INDEXPUT took 71/72). It
-  // decodes as a 4-byte 3-operand form, then fails isValidOpcode.
-  badOp[37] = 73;
+  // metadata + codeSize). Set it to 79: a valid 7-bit identity that is not a
+  // defined opcode (kOpcodeUsedCount == 79; the flag-flow family took
+  // 73..78). It decodes as a 4-byte 3-operand form, then fails isValidOpcode.
+  badOp[37] = 79;
   rejects("malformed: invalid opcode", badOp);
 
   // Truncated instruction: codeSize=3, but the ADD at offset 0 needs 4 bytes.
@@ -1235,7 +1235,7 @@ static void testMalformed() {
 // ---------------------------------------------------------------------------
 static void testIndexSubscript() {
   try {
-    check(kOpcodeUsedCount == 73, "index: kOpcodeUsedCount is 73");
+    check(kOpcodeUsedCount == 79, "index: kOpcodeUsedCount is 79");
     check(static_cast<uint8_t>(Opcode::INDEXGET) == 71,
           "indexget: identity 71 (appended last)");
     check(static_cast<uint8_t>(Opcode::INDEXPUT) == 72,
@@ -1350,6 +1350,153 @@ local w = ab[1]
 }
 
 // ---------------------------------------------------------------------------
+// Flag-flow identities (plan docs/plans/m3-flag-flow-plan.md S1; spec
+// `### extended OpCode eq, lt, gt, lte, gte` and `### OpCode tst`). The five
+// flag-setting compares join the ALU / flag-compare family — permitted kinds
+// immediate|register|pool plus the in-place arity rule — while `tst` keeps the
+// single-kind register shape (decision D5). Additive: nothing emits them yet
+// (the compiler starts to in S5), so no corpus stream changes.
+// ---------------------------------------------------------------------------
+static bool throwsError(const std::function<void()> &f) {
+  try {
+    f();
+  } catch (const QLangError &) {
+    return true;
+  }
+  return false;
+}
+
+static void testFlagFlowIdentities() {
+  try {
+    const Opcode compares[] = {Opcode::EQF, Opcode::LTF, Opcode::GTF,
+                               Opcode::LTEF, Opcode::GTEF};
+    const char *names[] = {"eqf", "ltf", "gtf", "ltef", "gtef"};
+    for (size_t i = 0; i < 5; i++) {
+      const Opcode op = compares[i];
+      const std::string n = names[i];
+      const int want = 73 + static_cast<int>(i);
+      check(static_cast<int>(op) == want, n + ": identity " + std::to_string(want));
+      check(std::strcmp(Bytecode::name(op), names[i]) == 0, n + ": name");
+      check(isValidOpcode(op), n + ": valid identity");
+      // Left register + right operand; no destination register, and `c` stays
+      // unused exactly as for `cmp`.
+      check(baseOperandCount(op) == 2 && baseInstructionSize(op) == 3,
+            n + ": 2 operands, 3-byte base form");
+      check(permittedKinds(op) == 0x7 &&
+                kindPermitted(op, RightKind::Immediate) &&
+                kindPermitted(op, RightKind::Register) &&
+                kindPermitted(op, RightKind::ConstPool),
+            n + ": kinds immediate | register | pool (0x7)");
+      check(defaultRightKind(op) == RightKind::Register &&
+                baseModifier(op) == 0x04,
+            n + ": base form is register-right (e = 0x04)");
+      check(isInPlaceForm(op, RightKind::Immediate) &&
+                isInPlaceForm(op, RightKind::ConstPool) &&
+                !isInPlaceForm(op, RightKind::Register),
+            n + ": in-place arity when the right operand is not a register");
+      check(!kindPermitted(op, RightKind::Reserved),
+            n + ": reserved kind 3 is not permitted");
+      check(throwsError([&] { escapedInstructionSize(op, 0x0C); }),
+            n + ": reserved kind 3 rejected by the size table");
+    }
+
+    check(static_cast<int>(Opcode::TST) == 78, "tst: identity 78 (appended last)");
+    check(std::strcmp(Bytecode::name(Opcode::TST), "tst") == 0, "tst: name");
+    check(isValidOpcode(Opcode::TST), "tst: valid identity");
+    check(baseOperandCount(Opcode::TST) == 1 &&
+              baseInstructionSize(Opcode::TST) == 2,
+          "tst: 1 operand, 2-byte base form");
+    check(permittedKinds(Opcode::TST) == 0x2 &&
+              !kindPermitted(Opcode::TST, RightKind::Immediate) &&
+              !kindPermitted(Opcode::TST, RightKind::ConstPool) &&
+              !kindPermitted(Opcode::TST, RightKind::Reserved),
+          "tst: register kind only (0x2) — it has no right operand");
+    check(baseModifier(Opcode::TST) == 0x04, "tst: base form e = 0x04");
+    check(!isInPlaceForm(Opcode::TST, RightKind::Immediate),
+          "tst: not a member of the in-place family");
+    check(throwsError([] { escapedInstructionSize(Opcode::TST, 0x40); }),
+          "tst with an immediate right operand is rejected");
+    check(throwsError([] { escapedInstructionSize(Opcode::TST, 0x08); }),
+          "tst with a pool right operand is rejected");
+
+    // Sizes (S1 exit criteria). An immediate right operand must be *announced*
+    // by the escape bit, so `eqf r12, 5` is the escaped 4-byte form and never a
+    // 3-byte base form (decision D5).
+    check(instructionSize(Opcode::EQF, false, 0x04) == 3,
+          "eqf base form is 3 bytes");
+    check(instructionSize(Opcode::EQF, true, 0x40) == 4,
+          "eqf with an i8 immediate right operand is 4 bytes");
+    check(instructionSize(Opcode::TST, false, 0x04) == 2,
+          "tst base form is 2 bytes");
+
+    // Encode / decode round-trips of both spellings.
+    DecodedInstruction in;
+    in.op = Opcode::LTF;
+    in.a = 2;
+    in.b = 1;
+    std::vector<uint8_t> buf;
+    encodeInstruction(buf, in);
+    check(buf.size() == 3 && buf[0] == 74 && buf[1] == 2 && buf[2] == 1,
+          "ltf r2, r1 encodes to [4A][02][01]");
+    DecodedInstruction out;
+    decodeInstruction(buf.data(), 0, buf.size(), out);
+    check(out.op == Opcode::LTF && !out.escaped && out.size == 3 && out.a == 2 &&
+              out.b == 1 && out.rightKind == RightKind::Register,
+          "ltf base form decode round-trip");
+
+    in = DecodedInstruction();
+    in.op = Opcode::EQF;
+    in.escaped = true;
+    in.modifier = 0x40; // left byte-width, kind immediate, form i8
+    in.a = 12;
+    in.imm = 5;
+    buf.clear();
+    encodeInstruction(buf, in);
+    check(buf.size() == 4 && buf[0] == (0x49 | kOpcodeEscape) &&
+              buf[1] == 0x40 && buf[2] == 12 && buf[3] == 5,
+          "eqf r12, 5 encodes to [C9][40][0C][05] (4 bytes, decision D5)");
+    decodeInstruction(buf.data(), 0, buf.size(), out);
+    check(out.op == Opcode::EQF && out.escaped && out.size == 4 && out.a == 12 &&
+              out.rightKind == RightKind::Immediate &&
+              out.immPayload == ImmPayload::Signed && out.imm == 5,
+          "eqf immediate decode round-trip");
+
+    in = DecodedInstruction();
+    in.op = Opcode::GTEF;
+    in.escaped = true;
+    in.modifier = 0x08; // left byte-width, kind pool, form byte-width
+    in.a = 4;
+    in.b = 3;
+    buf.clear();
+    encodeInstruction(buf, in);
+    check(buf.size() == 4 && buf[0] == (0x4D | kOpcodeEscape) &&
+              buf[1] == 0x08 && buf[2] == 4 && buf[3] == 3,
+          "gtef r4, pool[3] encodes to [CD][08][04][03] (no third operand)");
+    decodeInstruction(buf.data(), 0, buf.size(), out);
+    check(out.op == Opcode::GTEF && out.escaped && out.size == 4 && out.a == 4 &&
+              out.b == 3 && out.rightKind == RightKind::ConstPool,
+          "gtef pool decode round-trip");
+
+    in = DecodedInstruction();
+    in.op = Opcode::TST;
+    in.a = 3;
+    buf.clear();
+    encodeInstruction(buf, in);
+    check(buf.size() == 2 && buf[0] == 78 && buf[1] == 3,
+          "tst r3 encodes to [4E][03]");
+    decodeInstruction(buf.data(), 0, buf.size(), out);
+    check(out.op == Opcode::TST && out.size == 2 && out.a == 3,
+          "tst decode round-trip");
+
+    // No renumbering: the previous tail keeps its identities.
+    check(static_cast<uint8_t>(Opcode::INDEXPUT) == 72,
+          "flag-flow: indexput identity unchanged (72)");
+  } catch (const QLangError &e) {
+    check(false, std::string("flag-flow: ") + e.what());
+  }
+}
+
+// ---------------------------------------------------------------------------
 // v6 load-time validation (plan §8 "Validation", §11 item 7): readQlc decodes
 // every instruction of every function, so a malformed modifier byte is a *load*
 // error — the VM is never handed a stream whose pc would desynchronise. The
@@ -1450,6 +1597,52 @@ static void testV6LoadValidation() {
     std::string why;
     check(!readImage(writeImage(programWithCode(c, {0})), p, why),
           "v6-load: a kind the opcode does not permit is rejected");
+  }
+
+  // The flag-flow family (plan M3 S1, §11 item 7): `tst` has one register
+  // operand and no right operand at all, so an immediate or a pool kind is
+  // outside its permitted set; a flag compare naming the reserved kind 3 is
+  // refused as well.
+  {
+    struct Case {
+      Opcode op;
+      uint8_t e;
+      const char *why;
+    };
+    static const Case kRejected[] = {
+        {Opcode::TST, 0x40, "v6-load: tst with an immediate kind is rejected"},
+        {Opcode::TST, 0x08, "v6-load: tst with a pool kind is rejected"},
+        {Opcode::TST, 0x0C, "v6-load: tst with the reserved kind is rejected"},
+        {Opcode::EQF, 0x0C, "v6-load: eqf with the reserved kind is rejected"},
+        {Opcode::GTEF, 0x0C,
+         "v6-load: gtef with the reserved kind is rejected"},
+    };
+    for (const Case &c : kRejected) {
+      std::vector<uint8_t> code = {
+          static_cast<uint8_t>(static_cast<uint8_t>(c.op) | kOpcodeEscape),
+          c.e, 0x01, 0x02};
+      CompiledProgram p;
+      std::string why;
+      check(!readImage(writeImage(programWithCode(code, {0})), p, why), c.why);
+    }
+    // The legal spellings load: register-right base forms and the escaped
+    // immediate / pool forms of a compare.
+    static const std::vector<uint8_t> kAccepted[] = {
+        {static_cast<uint8_t>(Opcode::EQF), 0x01, 0x02},
+        {static_cast<uint8_t>(static_cast<uint8_t>(Opcode::LTF) |
+                               kOpcodeEscape),
+         0x40, 0x01, 0x02},
+        {static_cast<uint8_t>(static_cast<uint8_t>(Opcode::GTEF) |
+                               kOpcodeEscape),
+         0x08, 0x01, 0x02},
+        {static_cast<uint8_t>(Opcode::TST), 0x01},
+    };
+    for (size_t i = 0; i < 4; i++) {
+      CompiledProgram p;
+      std::string why;
+      check(readImage(writeImage(programWithCode(kAccepted[i], {0})), p, why),
+            "v6-load: legal flag-flow spelling " + std::to_string(i) + " loads");
+    }
   }
 
   // CALL has no base form: its function id is int16, so the escape bit is part
@@ -1691,6 +1884,7 @@ int main() {
   testDeepcopyLowering();
   testIndexSubscript();
   testIndexLowering();
+  testFlagFlowIdentities();
   testV6LoadValidation();
   testDeprecatedSpellings();
   testMalformed();

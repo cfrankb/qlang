@@ -228,12 +228,43 @@ enum class Opcode : uint8_t {
   // Distinct from the reserved INDGET/INDPUT ($$ indirect access) placeholders.
   // Appended last so existing .qlc opcode numbers stay valid.
   INDEXGET, // r[a] = r[b][r[c]]
-  INDEXPUT  // r[a][r[b]] = r[c]
+  INDEXPUT, // r[a][r[b]] = r[c]
+
+  // Flag-setting comparisons over *general* values (SPEC §bytecodes
+  // "extended OpCode eq, lt, gt, lte, gte"; plan
+  // docs/plans/encoding-v6-and-indirect-plan.md §4.3, milestone M3 in
+  // docs/plans/m3-flag-flow-plan.md). Same shared flags as CMP, but the
+  // operands are not restricted to Int: EQF reuses the `==` value-equality
+  // rules (ObjectOps `__str__` dispatch included) and LTF/GTF/LTEF/GTEF the
+  // `<`/`>`/`<=`/`>=` ordering rules, so a String, Float, Array, Table or
+  // object comparison can set the flags without a boolean temporary.
+  //
+  // The flags stay **one-hot**: at most one of GR/EQ/LT is set and "no bit" is
+  // a legal state (a partial comparator that does not hold sets nothing), so
+  // QLangVM::flagsSatisfied needs no change. The spec's lte/gte rows are
+  // capability masks, not two-bit states.
+  //
+  // Operand shape is CMP's (a = left register, b = right operand; the right
+  // operand may be a register, an immediate or a pool entry, and the form is
+  // then in-place, so `c` is unused). The compares never read `c`.
+  EQF,  // flags = (regs[a] == right) ? EQ : 0
+  LTF,  // flags = (regs[a] <  right) ? LT : 0
+  GTF,  // flags = (regs[a] >  right) ? GR : 0
+  LTEF, // flags = (regs[a] <= right) ? (LT or EQ) : 0   (one-hot: only one set)
+  GTEF, // flags = (regs[a] >= right) ? (GR or EQ) : 0   (one-hot: only one set)
+
+  // Truthiness test into the shared flags (SPEC §bytecodes "OpCode tst"):
+  // flags = truth(regs[a]) ? EQ : 0, so `tst` + `je`/`jne` is the flag form of
+  // a bare truthiness test. One register operand; the kind field only selects
+  // its addressing width, so `tst r, imm` is a load-time rejection.
+  // Implemented but not emitted in v6 (M3 D4) — `jmpfalse`/`jmptrue` still
+  // carry truthiness until Phase 3 retires them.
+  TST // flags = truth(regs[a]) ? EQ : 0
 };
 
 inline constexpr uint8_t kOpcodeEscape = 0x80;
 inline constexpr uint8_t kOpcodeMax = 128; // identities 0..127
-inline constexpr uint8_t kOpcodeUsedCount = 73; // defined identities 0..72
+inline constexpr uint8_t kOpcodeUsedCount = 79; // defined identities 0..78
 
 // ---------------------------------------------------------------------------
 // `.qlc` v6 modifier byte (docs/plans/encoding-v6-and-indirect-plan.md §2,
