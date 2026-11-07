@@ -1,6 +1,6 @@
 # M3 — Flag Flow: `eqf`/`ltf`/`gtf`/`ltef`/`gtef`, `tst` and the Flag Jumps
 
-Status: **in progress — S1 landed (`4ead571`), S2–S3 landed (uncommitted).** Baseline `HEAD = 28707db` ("perf: re-record
+Status: **in progress — S1 landed (`4ead571`), S2–S4 landed (uncommitted).** Baseline `HEAD = 28707db` ("perf: re-record
 baseline after the decoder fast path"). M1 **DONE 2026-11-06** (Round 55), M2 **DONE 2026-11-07**
 (Round 56 + the Round 57 decoder fast path). Suite at this baseline: ctest **47** entries,
 `encoding_v6` **34 470** checks (sweep tallies 1 756 accepted / 14 138 rejected
@@ -307,6 +307,48 @@ New `tests/unit/flag_flow_test.cpp` + `add_executable` / `add_test(NAME flag_flo
 *Exit criteria:* the matrix passes against S2's VM. **This is the guard that makes S5 safe** —
 if the negative-jump map is wrong, this suite says so while nothing in the corpus depends on it.
 
+> **DONE (uncommitted), 2026-11-07.** `tests/unit/flag_flow_test.cpp` (new) +
+> `add_executable` / `add_test(NAME flag_flow …)` beside `encoding_v6`
+> (`CMakeLists.txt:180`–`:187`). **Plan correction:** ctest went **48 → 49**, not
+> 47 → 48 — `codegen_size` landed in `3502d1a` after this plan was written, so the
+> baseline was already 48; S6 therefore takes it 49 → 50.
+> **1 324 checks, all green:** matrix **324** (6 comparators × 6 jumps × 3
+> relations × 3 right kinds), general domains **820** (15 cases × {eqf, ltf, gtf,
+> ltef, gtef} × 6 jumps × {register, pool}), `tst` **72** (6 truthy + 6 falsy
+> values × 6 jumps), object `__str__` **24**, none-set state **24**, error-text
+> parity **33**, `cmp` Int-only **6**, reserved-slot load rejections **12**,
+> aliases **8**, `kOpcodeUsedCount` **1**.
+> Shape: a two-pass assembler builds each stream with `encodeInstruction`, because
+> a jump offset is relative to the **end** of the jump and the layout must be known
+> before any offset can be written. Program shape `<cmp> r1, <right>` /
+> `<jump> → taken` / `jmp → end` / `mov r0, 1` / `return r0`, with `res` seeded to
+> 0 — so the result is Int 1 when the jump fired and Int 0 when it did not, and
+> anything else (nil, a throw, a desynchronised pc) fails the check. The verdict
+> travels through a **named global** (`CompiledProgram::vars` plus the main frame's
+> alias of `QLangContext::globalSlots()`), which is why no compiler is involved.
+> `QLangVM::CMP_GR/CMP_EQ/CMP_LT` are private, so the oracle spells its own bits
+> and no check reads a flag directly — the suite cannot agree with a wrong VM by
+> sharing constants with it; `wantFlags()` / `jumpFires()` are re-derived from the
+> spec's own tables.
+> **Plan correction (the `ltef` guard):** the bullet above claims `jge` does **not**
+> fire after `ltef` with `a == b`. It does, and must: `flagsSatisfied` tests
+> `JGE: (f & (gr | eq)) != 0` and the spec's jump table
+> (`docs/spec/13-bytecodes.md`, `## alternate conditional jump OpCode`) agrees —
+> `a >= b` holds when `a == b`. The real two-bit guard is `je` **firing** (it tests
+> `f == eq`, so an `eq | lt` state would stop it) together with `jl` and `jg` **not**
+> firing (they test `f == lt` / `f == gt`, which is what proves neither of those
+> bits is set). The suite asserts `je`/`jle`/`jge` taken and `jl`/`jg`/`jne` not
+> taken; §6's risk row is corrected to match.
+> **Finding (pre-existing `==`, not an M3 change):** `==` compares two numbers
+> through `int64`, so a float is truncated — `2.5 == 2` is **true** while `2.5 > 2`
+> is also true (confirmed through the real pipeline, not only the harness). `eqf`
+> inherits that verbatim (D3), so the harness records the behaviour rather than
+> asserting the intuitive answer; the case is named `float 2.5 vs int 2`. SPEC
+> `## operator == and !=` says only "only if type coercion is possible and results
+> in equivalency" — worth its own issue outside M3.
+> Corpus untouched: nothing emits the new opcodes yet. Full `ctest` **49/49** green
+> (`perf` skipped, non-Release build).
+
 ### S5 — Compiler: general comparison-condition fusion
 
 `src/QLangCompiler.cpp`:
@@ -393,7 +435,7 @@ Keep the plan-file status edits in the docs commit, not in the feature commits. 
 
 ```bash
 cmake -B build && cmake --build build
-ctest --test-dir build                      # 49 entries after S4 + S6
+ctest --test-dir build                      # 49 after S4, 50 after S6 (see S4's correction)
 build/qlang_run --asm /tmp/flags.qla --asm-level 5 tests/scripts/flags.ql
 build/qlang_run --output /tmp/t.qlc tests/scripts/flags.ql   # then round-trip /tmp/t.qlc
 ```
@@ -419,7 +461,7 @@ build/qlang_run --output /tmp/t.qlc tests/scripts/flags.ql   # then round-trip /
 |------|------------|
 | **Wrong negative jump after a partial comparator** (`jge` instead of `jne`) → a silently never-taken branch, and the corpus may not even notice if no script exercises it | D1's normative table; S4's matrix lands **before** S5 and covers all 7 × 6 × 3 plus the none-set state; `flags.ql` exercises the shape in a loop |
 | Fusion changes behaviour for object/string comparison (`==` routes through `valueEqual`/`isEqual`, `<` through `cmp`) | D3: call the same two functions with the same op-name strings; corpus byte-identity is the proof |
-| Someone reintroduces the rejected two-bit `lte`/`gte` flag state | S4 asserts `ltef` with `a == b` yields `f == EQ` only (`je` taken, `jle` taken, `jl`/`jge`/`jg` not); spec `### extended OpCode …` keeps the rejection paragraph |
+| Someone reintroduces the rejected two-bit `lte`/`gte` flag state | S4 asserts `ltef` with `a == b` yields `f == EQ` only (`je`/`jle`/`jge` taken — `jge` tests `gr \| eq`, so it fires — and `jl`/`jg`/`jne` not, which is what proves neither `lt` nor `gt` is set); spec `### extended OpCode …` keeps the rejection paragraph |
 | Flags clobbered between compare and jump | The jump is always the instruction immediately after the compare (the emitter emits the pair back-to-back and backpatches the target); a condition containing calls stages its operands into registers **before** the compare, as today. Add a `flags.ql` case `if f(x) == g(y)` |
 | `kOpcodeUsedCount` bump breaks `codec_check` and the three `encoding_v6` sweeps | S1 updates the assertion and records the new tallies in this file |
 | Perf regression (Round 57 baseline 10.382 ms) | S6 runs `perf_stress` explicitly; the fusion removes instructions, so a regression would mean the new dispatch case is mis-scheduled |

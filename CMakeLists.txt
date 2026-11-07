@@ -177,6 +177,15 @@ add_executable(encoding_v6_test tests/unit/encoding_v6_test.cpp)
 target_link_libraries(encoding_v6_test PRIVATE qlang)
 add_test(NAME encoding_v6 COMMAND encoding_v6_test)
 
+# Flag-flow behaviour matrix: every comparator that writes Frame::flags against
+# every flag jump, over each relation and right-operand kind, the "none set"
+# state, `tst`, the general value domains, error-text parity with the
+# value-producing operators, the alias guard and the reserved-slot load
+# rejections (docs/plans/m3-flag-flow-plan.md S4, verification §11 item 5).
+add_executable(flag_flow_test tests/unit/flag_flow_test.cpp)
+target_link_libraries(flag_flow_test PRIVATE qlang)
+add_test(NAME flag_flow COMMAND flag_flow_test)
+
 # External C++ types (docs/EXTERNAL_TYPES.md): public-member setters,
 # read-only computed props, methods (incl. BoundMethod extraction), enum
 # constants, str, handoff integrity, registration-time validation.
