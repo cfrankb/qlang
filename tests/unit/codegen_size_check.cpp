@@ -51,16 +51,19 @@ static void check(bool ok, const std::string &name) {
 // One scripted program and the instruction ceiling of its entry function. The
 // corpus is the perf corpus (tests/perf/perf_bench.cpp): the four scripts whose
 // compile stage is already tracked, so a codegen change shows up in both gates.
+// hello.ql 215 -> 211 and perf_stress.ql 522 -> 521: comparison conditions with
+// a non-Int operand now fuse to a flag compare + flag jump instead of a value
+// compare + temp + JMPIFFALSE (plan docs/plans/m3-flag-flow-plan.md S5).
 struct Budget {
   const char *script;
   size_t entry;
 };
 
 static const Budget kBudgets[] = {
-    {"hello.ql", 215},
+    {"hello.ql", 211},
     {"money.ql", 151},
     {"cast.ql", 163},
-    {"perf_stress.ql", 522},
+    {"perf_stress.ql", 521},
 };
 
 static std::string readScript(const std::string &path) {

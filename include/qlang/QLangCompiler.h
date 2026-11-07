@@ -336,11 +336,16 @@ private:
   // Returns the index of the j* instruction. `rel` must be a comparison
   // opcode (EQ/NE/LT/GT/LE/GE).
   int emitCmpJumpFalse(Opcode rel, int ra, int rb);
-  // Expression form for if/while conditions: if `cond` is a binary
-  // comparison (==,!=,<,>,<=,>=) whose both operands are compile-time Int,
-  // emit the fused CMP/CMPI + j* and return the j* index (target 0). Returns
-  // -1 when fusion does not apply (the caller then uses the legacy EQ/GT +
-  // JMPIFFALSE path).
+  // Expression form for if/while conditions: a binary comparison
+  // (==,!=,<,>,<=,>=) lowers to a compare that sets the frame flags plus the
+  // "jump if the relation is FALSE" flag jump, and returns that jump's index
+  // (target 0, patched by the caller). Both operands compile-time Int -> CMP;
+  // anything else -> the EQF/LTF/GTF/LTEF/GTEF family, picking the *dual*
+  // comparator (flagCompareIfFalse) so the same jump map fires exactly on the
+  // false branch. Neither path builds a boolean temporary
+  // (plan docs/plans/m3-flag-flow-plan.md D2). Returns -1 when `cond` is not a
+  // comparison (truthiness, && / ||, calls, ...); the caller then uses the
+  // legacy value-producing compare + JMPIFFALSE path.
   int emitCmpJumpFalseExpr(const ExprPtr &cond);
   void compileStmt(const StmtPtr &s,
                    std::vector<std::string> *captures = nullptr);

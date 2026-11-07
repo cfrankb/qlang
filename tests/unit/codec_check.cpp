@@ -569,11 +569,14 @@ static void testSubInPlace() {
 }
 
 // ---------------------------------------------------------------------------
-// cmp + j*: an Int-vs-Int comparison in `if` fuses to one `cmp` plus a flag
-// jump (no comparison-result temp, no pool slot for the boolean). The right
-// operand's *kind* is what distinguishes the old spellings: a literal is an
-// inline immediate (what `cmpi` used to mean), a variable stays a register.
-// Non-Int comparisons are not fused at all (legacy EQ/GT + JMPIFFALSE).
+// compare + j*: a comparison in `if` fuses to one compare plus a flag jump (no
+// comparison-result temp, no pool slot for the boolean). The right operand's
+// *kind* is what distinguishes the old spellings: a literal is an inline
+// immediate (what `cmpi` used to mean), a variable stays a register.
+// Both operands statically Int keep `cmp`; anything else lowers to the flag
+// compare whose set bits are the condition's false states (the *dual*
+// relation) plus the same jump, so no guard pays for a boolean temporary
+// (plan docs/plans/m3-flag-flow-plan.md D1/D2).
 // ---------------------------------------------------------------------------
 static bool hasAnyOp(const Function &fn, std::initializer_list<Opcode> ops) {
   for (const auto &i : decodeAll(fn))
@@ -609,18 +612,33 @@ static void testCmpJump() {
     check(noDeprecatedSpellings(p), "cmp: no cmpi emitted");
 
     // The loop-bound guard compares two registers (kind 1): `cmp x, end` + a
-    // flag jump. (`if` does not fuse variable operands — inferType only records
-    // Array/Table for a variable — so the loop is the register-right cmp path.)
+    // flag jump. (`if` keeps `cmp` only when both operands are statically Int,
+    // which inferType pins down for Int literals alone.)
     CompiledProgram pr = compileSrc("for x = 1 to 3 {\n}\n");
     check(!noCmpKind(pr.functions[0], RightKind::Register),
           "cmp: loop guard compares register-to-register");
 
-    // Float comparison -> legacy path (no CMP/j* for the condition).
+    // Float comparison -> the dual flag compare `gtef r, f64 2.5` + `jge`: the
+    // literal still rides inline and no boolean temp / JMPIFFALSE is built.
     CompiledProgram pf = compileSrc("local r = 0\nif (1.5 < 2.5) { r = 1 }\n");
-    check(!hasAnyOp(pf.functions[0],
-                    {Opcode::CMP, Opcode::CMPI, Opcode::JE, Opcode::JNE,
-                     Opcode::JG, Opcode::JGE, Opcode::JL, Opcode::JLE}),
-          "cmp: float comparison not fused");
+    check(hasFloatImm(pf.functions[0], Opcode::GTEF, 2.5),
+          "cmp: float comparison fuses to an inline-immediate gtef");
+    check(hasAnyOp(pf.functions[0], {Opcode::JGE}),
+          "cmp: float comparison emits its dual jump");
+    check(!hasAnyOp(pf.functions[0], {Opcode::CMP, Opcode::CMPI, Opcode::EQ,
+                                      Opcode::JMPIFFALSE, Opcode::JMPIFTRUE}),
+          "cmp: float comparison builds no cmp/EQ + JMPIFFALSE");
+
+    // String comparison against a pool constant -> `eqf r, c#k` + `jne`
+    // (plan M3 D5: a flag compare accepts a pool right operand).
+    CompiledProgram ps =
+        compileSrc("local r = 0\nlocal s = \"a\"\nif (s == \"a\") { r = 1 }\n");
+    check(hasPoolRight(ps.functions[0], Opcode::EQF),
+          "cmp: string comparison fuses to a pool-right eqf");
+    check(hasAnyOp(ps.functions[0], {Opcode::JNE}),
+          "cmp: string comparison emits jne");
+    check(!hasAnyOp(ps.functions[0], {Opcode::EQ, Opcode::JMPIFFALSE}),
+          "cmp: string comparison builds no EQ + JMPIFFALSE");
 
     // .qlc round-trip of a fused program.
     std::ostringstream os(std::ios::binary);

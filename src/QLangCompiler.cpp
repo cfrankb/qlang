@@ -1029,6 +1029,10 @@ static std::optional<LiteralImm> foldNegLiteral(const ExprPtr &e) {
 // Map a comparison opcode to the conditional jump that fires when that
 // comparison is FALSE (the JMPIFFALSE semantics the branch sites use).
 //   == -> jne   != -> je   < -> jge   > -> jle   <= -> jg   >= -> jl
+// Sound after `cmp` (a total order: exactly one bit set) AND after a flag
+// compare, provided the compare is the *dual* relation — see
+// flagCompareIfFalse below, which is why this map has only one entry per
+// condition instead of a second one for the `*f` path.
 static Opcode cmpJumpIfFalse(Opcode rel) {
   switch (rel) {
   case Opcode::EQ: return Opcode::JNE;
@@ -1038,6 +1042,40 @@ static Opcode cmpJumpIfFalse(Opcode rel) {
   case Opcode::LE: return Opcode::JG;
   case Opcode::GE: return Opcode::JL;
   default: return Opcode::JMPIFFALSE; // not a comparison; caller handles
+  }
+}
+
+// The flag compare whose set bits are exactly the states in which `rel` is
+// FALSE, so that cmpJumpIfFalse's jump fires precisely on the negative branch
+// (SPEC §bytecodes "## alternate conditional jump OpCode", "### extended OpCode
+// eq, lt, gt, lte, gte"). It is the *dual* relation, not the same one: a
+// partial comparator leaves no bit set when its relation does not hold, and no
+// jump predicate tests for "no bits set" — `jne` is `(f & eq) == 0`, so it
+// fires for gr and lt as well. Pairing a compare with the *same* relation and
+// `jne` (the only jump that fires on no bits set) therefore takes the branch
+// when the condition HOLDS: `ltf` leaves lt, and `jne` jumps on lt. Working
+// through the one-hot states gives the dual instead:
+//   a == b false <=> a != b : eqf  f = eq | none     jne  (f & eq) == 0
+//   a != b false <=> a == b : eqf  f = eq | none     je   f == eq
+//   a <  b false <=> a >= b : gtef f = gr | eq | none  jge  (f & (gr|eq)) != 0
+//   a >  b false <=> a <= b : ltef f = lt | eq | none  jle  (f & (lt|eq)) != 0
+//   a <= b false <=> a >  b : gtf  f = gr | none     jg   f == gr
+//   a >= b false <=> a <  b : ltf  f = lt | none     jl   f == lt
+// Those are the same six jumps `cmp` needs, so one jump map serves both paths.
+// `cmp`'s three-way result does not depend on the operator name (only its error
+// text does, src/QLangVM.cpp `cmp`), so the dual is behaviour-identical to the
+// value-producing compare it replaces apart from that name: a source `<` on
+// incomparable operands now reports "operator '>=' cannot compare ...", which
+// is the instruction the stream actually contains.
+static Opcode flagCompareIfFalse(Opcode rel) {
+  switch (rel) {
+  case Opcode::EQ:
+  case Opcode::NE: return Opcode::EQF;
+  case Opcode::LT: return Opcode::GTEF;
+  case Opcode::GT: return Opcode::LTEF;
+  case Opcode::LE: return Opcode::GTF;
+  case Opcode::GE: return Opcode::LTF;
+  default: return Opcode::Nop; // not a comparison; caller handles
   }
 }
 
@@ -1060,9 +1098,19 @@ int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
   else if (t == "<=") rel = Opcode::LE;
   else if (t == ">=") rel = Opcode::GE;
   else return -1;
-  // Both operands must be compile-time Int (SPEC: cmp/cmpi are Int-only).
-  if (inferType(cond->left) != QLangValue::Type::Int) return -1;
-  if (inferType(cond->right) != QLangValue::Type::Int) return -1;
+  // Two lowerings of the same condition (plan M3 D2). Both operands statically
+  // Int -> `cmp`: the bytes are unchanged from before M3 and cmp's total order
+  // keeps the flags reusable for a second jump. Everything else -> a flag
+  // compare over general values, picked by flagCompareIfFalse so that the one
+  // jump map below fires exactly when the condition is false (SPEC §bytecodes
+  // "extended OpCode eq, lt, gt, lte, gte"). The gate used to be "both Int or
+  // no fusion at all", so every guard inferType cannot pin down — i.e. every
+  // guard with a variable operand — paid for a boolean temp plus a jmpfalse;
+  // that domain is exactly what the flag compares cover.
+  const bool intPath = inferType(cond->left) == QLangValue::Type::Int &&
+                       inferType(cond->right) == QLangValue::Type::Int;
+  const Opcode cmpOp = intPath ? Opcode::CMP : flagCompareIfFalse(rel);
+  const Opcode jump = cmpJumpIfFalse(rel);
   // Plain-variable operands are compared in place (no mov into a temp).
   int ra = inPlaceReg(cond->left);
   bool raTmp = false;
@@ -1071,12 +1119,15 @@ int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
     raTmp = true;
     compileExpr(cond->left, ra);
   }
-  int jumpIdx;
-  if (isIntLiteral(cond->right)) {
-    emitLiteral(Opcode::CMP, ra, cond->right->literal);
-    // Flag jump (JE/JNE/JG/JGE/JL/JLE): target in `a`, patched by caller.
-    emit(cmpJumpIfFalse(rel), 0, 0, 0);
-    jumpIdx = static_cast<int>(m_emitter.size()) - 1;
+  // A literal right operand rides inside the compare: an inline immediate when
+  // its type has a form for it, otherwise a constant-pool read (both escaped,
+  // plan M3 D5). On the cmp path only an Int literal may be inlined, because
+  // cmp is Int-only — the historical behaviour.
+  const bool rightInline = cond->right &&
+                           cond->right->kind == ExprKind::Literal &&
+                           (!intPath || isIntLiteral(cond->right));
+  if (rightInline) {
+    emitLiteral(cmpOp, ra, cond->right->literal);
   } else {
     int rb = inPlaceReg(cond->right);
     bool rbTmp = false;
@@ -1085,10 +1136,14 @@ int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
       rbTmp = true;
       compileExpr(cond->right, rb);
     }
-    jumpIdx = emitCmpJumpFalse(rel, ra, rb);
+    emit(cmpOp, ra, rb);
     if (rbTmp)
       freeRegister(rb);
   }
+  // The flag jump follows the compare immediately, so no instruction can
+  // clobber the flags between them. Target in `a`, patched by the caller.
+  emit(jump, 0, 0, 0);
+  int jumpIdx = static_cast<int>(m_emitter.size()) - 1;
   if (raTmp)
     freeRegister(ra);
   return jumpIdx;
@@ -2186,9 +2241,10 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
 
 void QLangCompiler::compileWhile(const StmtPtr &s) {
   int testLabel = static_cast<int>(m_emitter.size());
-  // Fused cmp+j* when the condition is an Int-vs-Int comparison (SPEC
-  // §bytecodes: alternate conditional jump); legacy EQ/GT + JMPIFFALSE
-  // otherwise.
+  // Fused compare+j* for any comparison condition (SPEC §bytecodes: alternate
+  // conditional jump): cmp+j* when both operands are statically Int, otherwise
+  // the dual flag compare + the same j*. Legacy value compare + JMPIFFALSE for
+  // everything that is not a comparison (truthiness, && / ||, !, calls).
   int jumpFalseIdx = emitCmpJumpFalseExpr(s->cond);
   if (jumpFalseIdx < 0) {
     int condReg = tmpRegister();
@@ -2217,9 +2273,10 @@ void QLangCompiler::compileWhile(const StmtPtr &s) {
 }
 
 void QLangCompiler::compileIf(const StmtPtr &s) {
-  // Fused cmp+j* when the condition is an Int-vs-Int comparison (SPEC
-  // §bytecodes: alternate conditional jump); legacy EQ/GT + JMPIFFALSE
-  // otherwise.
+  // Fused compare+j* for any comparison condition (SPEC §bytecodes: alternate
+  // conditional jump): cmp+j* when both operands are statically Int, otherwise
+  // the dual flag compare + the same j*. Legacy value compare + JMPIFFALSE for
+  // everything that is not a comparison (truthiness, && / ||, !, calls).
   int jumpFalseIdx = emitCmpJumpFalseExpr(s->ifCond);
   if (jumpFalseIdx < 0) {
     int condReg = tmpRegister();

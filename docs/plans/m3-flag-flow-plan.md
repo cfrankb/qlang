@@ -116,7 +116,7 @@ emitting a `cmp` that would throw. M3's `*f` path is exactly the domain that gat
 
 | # | Decision | Recommendation | Rationale |
 |---|----------|----------------|-----------|
-| **D1** | The **negative** branch of a `*f` compare is always `jne` (or `je` for `!=`) — never `jge`/`jle`/`jg`/`jl`. | **Yes** — normative table below | After a *partial* comparator the "relation does not hold" state is **no bits set**. `jge`/`jle` require a bit (`(f & (GR\|EQ)) != 0`), `jg`/`jl` require `f == GR`/`f == LT`; with `f = 0` **none of them fires**, so `if a <= b` lowered as `ltef` + `jg` would silently never take the else path. `cmp`'s total order is what makes today's `cmpJumpIfFalse` mapping (`<`→`jge`, `<=`→`jg`, …) correct; that mapping must **not** be reused for `*f`. This is the single most error-prone rule in M3, which is why the flag matrix (S4) lands **before** the emission change (S5). |
+| **D1** | The **negative** branch of a `*f` compare is always `jne` (or `je` for `!=`) — never `jge`/`jle`/`jg`/`jl`. | **No — corrected during S5**, see "D1 correction" under the table | After a *partial* comparator the "relation does not hold" state is **no bits set**. `jge`/`jle` require a bit (`(f & (GR\|EQ)) != 0`), `jg`/`jl` require `f == GR`/`f == LT`; with `f = 0` **none of them fires**, so `if a <= b` lowered as `ltef` + `jg` would silently never take the else path. `cmp`'s total order is what makes today's `cmpJumpIfFalse` mapping (`<`→`jge`, `<=`→`jg`, …) correct, so a second map was planned for `*f` — **that is the part that proved wrong**: the existing map is sound for both paths, only the comparator changes (see the correction below). This is the single most error-prone rule in M3, which is why the flag matrix (S4) lands **before** the emission change (S5). |
 | **D2** | Keep `cmp` when both operands are statically `Int`; use `*f` only where the current gate refuses to fuse. | **Yes** | Same byte count for the compare, but `cmp` sets exactly one bit, so the flags stay reusable (three-way branches, loop guards); its error text (`cmp operand must be an int`) and the corpus shapes are existing behaviour. The change is then purely *additive coverage*: everything the `inferType == Int` gate rejects today (String, Float, Array, Table, object, mixed) stops going through a temporary + `jmpfalse`. |
 | **D3** | `*f` reuses the value-comparison rules **verbatim**: `EQF` → `valueEqual`; `LTF`/`GTF`/`LTEF`/`GTEF` → `cmp(a, b, op, vm)` sign test with the **same op-name strings** `doBinaryVm` uses (`"<"`, `">"`, `"<="`, `">="`). | **Yes** | Parent §4.3 says the `*f` family "reuses the existing `EQ`/`LT`/`GT` value-comparison rules — including the `ObjectOps` dispatch". Routing through the same two functions inherits `__str__` dispatch, array/table ordering and every error message, so the corpus byte-identity check is a real proof of equivalence rather than a hope. No new comparison semantics, no new error text. |
 | **D4** | `TST` is **implemented but not emitted** in M3. | **Yes** (parent §12 item 6 default, spec `### OpCode tst`) | Codec + VM + disassembler + tests, so the flag matrix (§11 item 5) covers it and Phase 3's removal of `jmpfalse`/`jmptrue` has a target ready. Emitting it for bare truthiness costs +1 byte per test (`tst`+`je` = 4 B vs `jmpfalse` = 3 B) and would churn every corpus `.qla` for no gain. |
@@ -125,16 +125,39 @@ emitting a `cmp` that would throw. M3's `*f` path is exactly the domain that gat
 | **D7** | Extend `emitCmpJumpFalseExpr` in place rather than adding a parallel lowering path. | **Yes** | `compileIf`/`compileWhile` keep one entry point and their existing `-1` fallback (non-comparison conditions: truthiness, `&&`/`\|\|`, `!`, `in`, calls). The return contract (index of the jump to backpatch) and the jump class (unchanged since v5) mean backpatching is untouched. |
 
 **D1 normative table** (what `emitCmpJumpFalseExpr` returns is the jump taken when the
-condition is **false**):
+condition is **false**), as implemented in S5:
 
-| Condition | Comparator | Negative jump (M3) | Positive jump (reference) | Today's `cmp` negative |
-|-----------|-----------|--------------------|---------------------------|------------------------|
-| `a == b` | `eqf` | `jne` | `je` | `jne` |
-| `a != b` | `eqf` | `je` | `jne` | `je` |
-| `a < b` | `ltf` | `jne` | `jl` | `jge` |
-| `a > b` | `gtf` | `jne` | `jg` | `jle` |
-| `a <= b` | `ltef` | `jne` | `jle` | `jg` |
-| `a >= b` | `gtef` | `jne` | `jge` | `jl` |
+| Condition | Comparator | Flag states it sets | Negative jump | Why that jump is the false branch |
+|-----------|-----------|---------------------|---------------|-----------------------------------|
+| `a == b` | `eqf` | `eq` \| none | `jne` | `(f & eq) == 0` ⇔ not equal |
+| `a != b` | `eqf` | `eq` \| none | `je` | `f == eq` ⇔ equal |
+| `a < b` | **`gtef`** | `gr` \| `eq` \| none | `jge` | `(f & (gr\|eq)) != 0` ⇔ `a >= b` |
+| `a > b` | **`ltef`** | `lt` \| `eq` \| none | `jle` | `(f & (lt\|eq)) != 0` ⇔ `a <= b` |
+| `a <= b` | **`gtf`** | `gr` \| none | `jg` | `f == gr` ⇔ `a > b` |
+| `a >= b` | **`ltf`** | `lt` \| none | `jl` | `f == lt` ⇔ `a < b` |
+
+> **D1 correction (found while implementing S5).** The table this plan originally
+> shipped paired each condition with the **same** comparator and `jne`
+> (`a < b` → `ltf` + `jne`). That is unsound: `jne` is `(f & CMP_EQ) == 0`
+> (`src/QLangVM.cpp`, `flagsSatisfied`), so it fires on `f == GR` and `f == LT` as
+> well as on "no bits set". `ltf` + `jne` therefore jumps exactly when `a < b`
+> **holds** — `hello.ql`'s `while (n > 0)` left the loop on its first iteration.
+> The premise "the false state is no bits set, and `jne` is the only jump that
+> fires on no bits set" is right; the conclusion is wrong, because no predicate
+> tests for *only* the none-set state. The fix is not a new jump but the **dual**
+> comparator — the compare whose set bits are precisely the states in which the
+> condition is false — which lands on the six jumps `cmpJumpIfFalse` already
+> returns, so one jump map serves both paths and the planned `flagJumpIfFalse`
+> does not exist. `cmp`'s three-way result does not depend on the operator name
+> (only its error text does), so the dual is behaviour-identical to the value
+> compare it replaces apart from that name.
+>
+> S4's matrix stayed green throughout: it asserts what each comparator sets and
+> which jumps fire (its oracle matches the VM), never *which comparator the
+> compiler picks* — the gap the corpus check in S5 closes.
+
+The table as originally planned, kept for the record: `eqf`/`ltf`/`gtf`/`ltef`/`gtef`
+each paired with **its own** relation, negative jump `jne` for every condition but `!=`.
 
 ---
 
@@ -351,15 +374,68 @@ if the negative-jump map is wrong, this suite says so while nothing in the corpu
 
 ### S5 — Compiler: general comparison-condition fusion
 
+> **DONE (uncommitted), 2026-11-07.** `emitCmpJumpFalseExpr` now selects between two
+> lowerings of the same condition: both operands statically `Int` → `cmp` +
+> `cmpJumpIfFalse` (D2, byte-identical to before M3); everything else → the **dual**
+> flag comparator + the *same* jump map. `flagJumpIfFalse` was **not** added and the
+> two maps **are** one — see the D1 correction in §3; `flagCompareIfFalse`
+> (`src/QLangCompiler.cpp:1070`) returns the dual comparator and its comment carries
+> the per-state derivation. Right operand: literal → `emitLiteral` (inline immediate
+> or pool entry, escaped per D5), else `inPlaceReg`/temp as before, so the flag compare
+> is in-place and evaluation order is unchanged. Non-comparison conditions still return
+> `-1`; `compileGotoIf`, the `switch` case checks and the `for`/`for-in` guards are
+> untouched (D4/D7).
+>
+> One observable difference, accepted: because the comparator is the dual, a source
+> `<` on incomparable operands now reports `operator '>=' cannot compare A and B` —
+> the instruction the stream actually contains (`cmp`'s three-way result never depends
+> on the operator name, only its error text does). No test asserted a control-position
+> comparison error message; `flag_flow_test` asserts `ltef`'s own message.
+>
+> `ctest` **49/49** green. Corpus vs `28707db`: all **22** `tests/scripts/*.ql`
+> byte-identical **stdout and exit code**; `--output` → load → run identical for all
+> **22**; `--asm-level 0–5` well-formed on all **22** (**132** pairs, 0 problems).
+> Emitted mnemonics: `eqf`, `ltef`, `gtef` — no `ltf`/`gtf`, because no corpus guard
+> compares non-Int operands with `>=`/`<=`. Budgets lowered in the same commit:
+> `hello.ql` 215 → **211**, `perf_stress.ql` 522 → **521** (`money.ql` 151 and
+> `cast.ql` 163 were already at their ceilings and did not move).
+>
+> | Script | entry instrs | code bytes | registers |
+> |--------|--------------|------------|-----------|
+> | `helpers.ql` | 203 → 138 (**−65**) | 820 → 625 (−195) | 25 → 22 |
+> | `imm_kinds.ql` | 298 → 242 (**−56**) | 1236 → 1058 (−178) | 37 → 34 |
+> | `cmp.ql` | 150 → 105 (**−45**) | 581 → 446 (−135) | 18 → 18 |
+> | `cast.ql` | 202 → 163 (**−39**) | 808 → 691 (−117) | 12 → 10 |
+> | `hello.ql` | 243 → 211 (**−32**) | 978 → 874 (−104) | 26 → 24 |
+> | `len.ql` | 140 → 110 (**−30**) | 570 → 480 (−90) | 11 → 9 |
+> | `moneyv2.ql` | 157 → 129 (**−28**) | 987 → 891 (−96) | 16 → 12 |
+> | `type.ql` | 57 → 37 (**−20**) | 242 → 182 (−60) | 19 → 15 |
+> | `value_share.ql` | 320 → 300 (**−20**) | 1242 → 1182 (−60) | 40 → 37 |
+> | `table_subscript.ql` | 146 → 126 (**−20**) | 631 → 571 (−60) | 14 → 14 |
+> | `money.ql` | 169 → 151 (**−18**) | 912 → 852 (−60) | 14 → 11 |
+> | `perf_stress.ql` | 524 → 521 (**−3**) | 1837 → 1826 (−11) | 30 → 30 |
+> | `encode_repro.ql` | 35 → 33 (**−2**) | 124 → 114 (−10) | 12 → 12 |
+> | `test_minmax.ql`, `test_minmax2.ql` | 13 → 11 (**−2**) each | 54 → 48 (−6) each | 8 → 8 |
+>
+> **15 of 22** scripts shrank: entry functions **−382** instructions, all functions
+> **−388**, code **−1188** bytes. Unchanged (7): `ext_consts`, `ext_regs`,
+> `jump_widths`, `test_assert`, `test_assert2`, `test_cast`, `test_cast2` — no
+> comparison in `if`/`while` position outside the `Int`-literal gate.
+> `money.ql`/`moneyv2.ql`/`value_share.ql` shrink more in total than in `main`
+> (−20/−32/−20 vs −18/−28/−20): their helper functions gained the fusion too.
+
 `src/QLangCompiler.cpp`:
 
 - `emitCmpJumpFalseExpr` (`:1000`): replace the two `inferType(...) != Int → return -1` gates
   (`:1013-1014`) with a selection — both operands statically `Int` → today's
-  `cmp`/`cmpi` + `cmpJumpIfFalse` (D2); otherwise → `*f` + the D1 negative jump.
-- Add `flagCompareOpcode(Opcode rel)` (`EQ`→`EQF`, `LT`→`LTF`, `GT`→`GTF`, `LE`→`LTEF`,
+  `cmp`/`cmpi` + `cmpJumpIfFalse` (D2); otherwise → the `*f` comparator and negative jump
+  of the (corrected) D1 table.
+- ~~Add `flagCompareOpcode(Opcode rel)` (`EQ`→`EQF`, `LT`→`LTF`, `GT`→`GTF`, `LE`→`LTEF`,
   `GE`→`GTEF`, `NE`→`EQF`) and `flagJumpIfFalse(Opcode rel)` (D1: `NE`→`JE`, everything
   else →`JNE`). Keep `cmpJumpIfFalse` untouched for the `cmp` path; the two maps must not be
-  merged.
+  merged.~~ **Superseded by the D1 correction:** the comparator is the dual
+  (`LT`→`GTEF`, `GT`→`LTEF`, `LE`→`GTF`, `GE`→`LTF`, `EQ`/`NE`→`EQF`) and one jump map
+  (`cmpJumpIfFalse`) serves both paths.
 - Right operand: literal → `emitLiteral(op, ra, literal)` (already folds `Int`/`Float`/`Bool`/
   `nil` to immediates and everything else to a pool entry); otherwise `inPlaceReg`/temp as today.
 - Non-comparison conditions keep returning `-1` → the existing `compileExpr` + `JMPIFFALSE`
@@ -397,9 +473,10 @@ per step (M2's convention).
 
 - `docs/spec/13-bytecodes.md`: flip the two `## future plans` bullets from "**— M3, pending**"
   to landed (Round 58); correct `:864` to the escaped 4-byte `eqf` form (D5); note in
-  `### OpCode tst` that `tst` is implemented but not emitted in v6 (D4); state the D1 rule
-  (negative branch of a `*f` compare is `jne`/`je`) next to the jump table, since the spec's
-  `lte`/`gte` rows invite the wrong reading.
+  `### OpCode tst` that `tst` is implemented but not emitted in v6 (D4); state the **corrected**
+  D1 rule next to the jump table — the negative branch of a `*f` compare is the jump of the
+  *dual* relation (`<` → `gtef` + `jge`, …), and no predicate tests for the none-set state —
+  since the spec's `lte`/`gte` rows invite the reading this plan originally shipped.
 - `docs/plans/encoding-v6-and-indirect-plan.md`: §6.1 M3 row → **DONE** with commit SHAs and the
   verification tally; correct the §2.9 rows `mov r3, 5`, `add r3, 12`, `cmp r6, 0`,
   `eqf r12, 5` to the escaped forms (D5); §10's "four exec loops" → one dispatch switch.
@@ -459,7 +536,7 @@ build/qlang_run --output /tmp/t.qlc tests/scripts/flags.ql   # then round-trip /
 
 | Risk | Mitigation |
 |------|------------|
-| **Wrong negative jump after a partial comparator** (`jge` instead of `jne`) → a silently never-taken branch, and the corpus may not even notice if no script exercises it | D1's normative table; S4's matrix lands **before** S5 and covers all 7 × 6 × 3 plus the none-set state; `flags.ql` exercises the shape in a loop |
+| **Wrong negative jump after a partial comparator** (`jge` instead of `jne`) → a silently never-taken branch, and the corpus may not even notice if no script exercises it | D1's normative table; S4's matrix lands **before** S5 and covers all 7 × 6 × 3 plus the none-set state; `flags.ql` exercises the shape in a loop. **Realised in S5** — the plan's own table was the bug (`ltf` + `jne`), and `hello.ql` was the script that noticed; S4 could not catch it because it tests the VM, not the selection (see the D1 correction) |
 | Fusion changes behaviour for object/string comparison (`==` routes through `valueEqual`/`isEqual`, `<` through `cmp`) | D3: call the same two functions with the same op-name strings; corpus byte-identity is the proof |
 | Someone reintroduces the rejected two-bit `lte`/`gte` flag state | S4 asserts `ltef` with `a == b` yields `f == EQ` only (`je`/`jle`/`jge` taken — `jge` tests `gr \| eq`, so it fires — and `jl`/`jg`/`jne` not, which is what proves neither `lt` nor `gt` is set); spec `### extended OpCode …` keeps the rejection paragraph |
 | Flags clobbered between compare and jump | The jump is always the instruction immediately after the compare (the emitter emits the pair back-to-back and backpatches the target); a condition containing calls stages its operands into registers **before** the compare, as today. Add a `flags.ql` case `if f(x) == g(y)` |
