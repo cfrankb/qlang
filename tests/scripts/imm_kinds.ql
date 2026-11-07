@@ -7,7 +7,8 @@
 #   qlang_run --asm /tmp/imm.qla --asm-level 4 tests/scripts/imm_kinds.ql
 #
 #   i8     e=0x40   -128 .. 127
-#   i16    e=0x50   -32768 .. 32767   (255 is i16: v6 dropped the u8/u16/u32 forms)
+#   i16    e=0x50   -32768 .. 32767   (255 is i16: the compiler never emits the
+#                                     unsigned forms, so 255 takes the signed one)
 #   i32    e=0x60   -2^31 .. 2^31-1
 #   f64    e=0x80   float literals
 #   false  e=0x90   true e=0xa0   nil  e=0xb0

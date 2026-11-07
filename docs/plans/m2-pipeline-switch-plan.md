@@ -1,7 +1,8 @@
 # M2 — Switch the Pipeline to v6 (Discard the v5 Codec)
 
-Status: **In progress — S1 committed (`3bc55c7`), S2 (`35edb7a`), S3 (`e0a8323`), S4 (`337584c`),
-S6 (`d577612`); S5 done (uncommitted)** (S6 was taken first because it is the AGENTS.md-mandated companion of
+Status: **S1 committed (`3bc55c7`), S2 (`35edb7a`), S3 (`e0a8323`), S4 (`337584c`),
+S6 (`d577612`), S5 (`2c1e480`); S7 done (working tree — `git rm tests/unit/encoding_test.cpp`
+outstanding); S8 done (docs, working tree) — only S9 remains** (S6 was taken first because it is the AGENTS.md-mandated companion of
 the S1–S4 encoding change and is independent of S5: it renders whatever kind/form the emitter
 produces, so it is correct both before and after the pool shrinks). Baseline
 `HEAD = 0b4a4fb` ("encoding: v6 modifier byte (M1) — 2/2/4 layout, kind/form tables, \*V6 codec +
@@ -489,6 +490,23 @@ at least keep compiling and printing sane operands.
   (`update-doc-hashes.sh`). **Never bump a hash before the tests pass** (AGENTS.md).
 * Parent plan `encoding-v6-and-indirect-plan.md` §6.1: M2 row → **DONE** with the settled
   decisions (D1–D6 above) recorded next to M1's two; §8 annotated per D4.
+
+> **DONE (working tree).** `docs/SERIALIZATION.md`: §4 magic `QLC1` version **6** / "readers
+> accept 6 only", the 2/2/4 modifier layout with the kind and form tables, opcode identity
+> bound `< kOpcodeUsedCount` (**73**), §4.4 documenting the instruction stream only (D4),
+> §5/§9/§10 touch-ups. `docs/spec/13-bytecodes.md`: `## encoding extended` flipped to
+> **shipped**, `### bytecode encoding` rewritten from the v5 nibble description to 2/2/4,
+> `## opCode scope` and `## constant pool` (bool/nil/float have left the pool) and
+> `## future plans` Phase 1 status updated. `docs/compliance/`: **Round 56** — `status.md`
+> tally (35 484 counted unit cases, 22 script regressions, 47 entries) + the Round 56
+> paragraph + the extended-encoding Open Item flipped to "milestones 1–2 of 4 landed";
+> `tests.md` ctest matrix (`encoding` target row removed, `codec_check` 199, `encoding_v6`
+> 34 466, `script_imm_kinds`, perf baseline re-recorded); `harness.md` suite list;
+> `history.md` Round 56 entry; `README.md` "last audit" → Round 56. Parent plan: M2 row
+> **DONE**, D1–D6 recorded next to M1's two decisions, M2 verification paragraph, §8
+> declaration-table row annotated "added in M4" per D4. Hash rows re-recorded with
+> `./update-doc-hashes.sh` **after** the green run (AGENTS.md order), `doc_hashes` gate
+> re-verified.
 
 ### S9 — Housekeeping and commits
 

@@ -1,3 +1,91 @@
+## Round 56 (2026-11-07)
+
+**`.qlc` v6 pipeline switch — milestone 2 of `docs/plans/encoding-v6-and-indirect-plan.md`:
+the v6 encoding of Round 55 becomes the *only* instruction codec, the v5 one is deleted,
+and the compiler emits the unified `mov`/`add`/`sub`/`cmp` with per-literal immediate
+selection, so `bool`, `nil` and `float` leave the constant pool.**
+**On-disk breaking change — `.qlc` v5 → v6, clean break per the Round 37 precedent**
+(single-version reader, no migration shim; no external v5 images exist).
+`include/qlang/QLangBytecode.h`, `src/QLangBytecode.cpp`,
+`include/qlang/QLangBytecodeIO.h`, `src/QLangBytecodeIO.cpp`, `src/QLangCompiler.cpp`,
+`include/qlang/QLangVM.h`, `src/QLangVM.cpp`, `examples/qlang_run.cpp`,
+`examples/hello.cpp`, `CMakeLists.txt`, `tests/`, `docs/SERIALIZATION.md`,
+`docs/spec/13-bytecodes.md`, `docs/compliance/{status,tests,harness,history,README}.md`,
+`docs/plans/{m2-pipeline-switch,encoding-v6-and-indirect}.md`.
+Executed as steps S1–S8 of `docs/plans/m2-pipeline-switch-plan.md`; S1–S5 + S6 landed as
+separate commits (`3bc55c7`, `35edb7a`, `e0a8323`, `337584c`, `d577612`, `2c1e480`), S7
+(tests) and S8 (docs) complete the round in the working tree.
+
+- **Six decisions settled before coding** (recorded in §2 of the M2 plan). **D1** the `V6`
+  suffix is dropped — with exactly one codec left, `encodeInstruction` / `decodeInstruction`
+  / `instructionSize(op, escaped, e)` / `makeModifier` / `baseModifier` are the plain names
+  (zero churn at the 14 external call sites: the v5 signatures were identical). **D2**
+  `DecodedInstruction` gains `immForm` — `ImmPayload::Signed` alone cannot distinguish
+  `Int` (`i8`/`i16`/`i32`) from `Long` (`i64`). **D3** immediate *emission* is restricted to
+  literals that round-trip exactly — `Int` within ±2³¹, `Float`, `Bool`, `nil`;
+  `Long`/`Qword`/`Unsigned` stay in the pool (the codec supports `i64`/`u64`, but the value
+  type of a 64-bit literal is ambiguous). **D4** `.qlc` v6 ships **without** the declaration
+  table — M4 adds it inside v6, Phase 3 bumps v7 (§8 annotated). **D5** the v5 harness
+  `tests/unit/encoding_test.cpp` (41 checks) is retired; its two unique cases (jump-width
+  tiling, truncated-stream decode error) are ported to `encoding_v6_test.cpp`. **D6** pool
+  reads clone containers only where the value is *stored* (`mov`/`movc` →
+  `freshContainerValue`); ALU/`cmp` right operands are read-only and never copied.
+- **Codec + IO.** The v5 `escapedInstructionSize` / `instructionSize` / `encodeInstruction`
+  / `decodeInstruction` are deleted; `kQlcVersion = 6` and `readQlc` accepts **6 only**
+  (v1–v5 → "unsupported format version"). `readQlc` now validates every modifier byte at
+  **load** through the v6 decoder — reserved right kind `3`, reserved left form `3`,
+  reserved immediate forms `12`–`15`, a kind the opcode does not permit, unescaped `CALL` —
+  and the `codeSize` guard moved from `kMaxInstructions × 7` to `× 15` (measured widest
+  instruction: `CONV` with a dword left + `u64` immediate = 15 B).
+- **VM.** A new `QLangVM::operandValue` helper materializes the decoded right operand by
+  kind (register / pool / immediate, `ImmPayload` + `immForm` → `QLangValue`); `mov`/`movc`,
+  `add`/`sub`/ALU and `cmp` route through it, the ALU family gained the §2.6 **in-place
+  arity** branch (`isInPlaceForm`), and the deprecated `movi`/`movc`/`addi`/`subi`/`cmpi`
+  spellings keep decoding and executing (§3 coexistence — the *v5 encoding* was removed,
+  not the *deprecated opcodes*). Flag model untouched.
+- **Compiler.** `RawInstr` carries `kind`/`form`/`payload`; `computeModifier` returns
+  `(modifier, escaped)` — under 2/2/4 `e = 0x00` is a legal modifier, so the flag is the
+  only base-form signal — and is driven by the opcode's right kind, not by an opcode list;
+  `baseOperandCount` became public because `INC`/`RETURN`/`TABCREATE`-class opcodes have no
+  right operand to widen. New emission helpers `emitImmI`/`emitImmF`/`emitImmB`/`emitImmNil`
+  /`emitPool` behind one `emitLiteral` decision point; `literalImmOf` picks the narrowest
+  permitted form per literal (D3); `foldNegLiteral` folds `-1.5` to a single float
+  immediate. **Zero** `MOVI`/`MOVC`/`ADDI`/`SUBI`/`CMPI` emissions remain; the jump path is
+  byte-for-byte unchanged. Encoding consequence: `defaultRightKind(MOV) == Register`, so a
+  *pool* `mov` must announce its kind — 4 B where the old `movc` base form was 3.
+- **Disassembler + demos** (same change, AGENTS.md mandate). `operandText()` renders the
+  right operand by kind (`imm` signed/unsigned/float/`true`/`false`/`nil`, `pool[NN]`,
+  `rN`) with the in-place arity rule so a listing can never read past an instruction;
+  `CALL` prints `dest, id, argc`; `pseudoText()` merged the suffixed cases and gained
+  `SUBI`/`JNE`/`nop` pseudo rows it never had; `hello.cpp` prints operands by kind too.
+- **Tests.** `encoding` ctest target deleted; `encoding_v6` 34249 → **34466** (+ §2.9 golden
+  wire bytes, + a stream tiled by every (kind, form) pair walked pc-by-pc asserting
+  `instructionSize` == the encoder's own length, §11 item 3); `codec_check` 142 → **199**
+  (+20 v6 load-time validation cases, +15 deprecated-spelling cases that write, re-read and
+  **execute** a hand-encoded legacy stream, §11 item 6); new `tests/scripts/imm_kinds.ql`
+  (22nd script regression) drives every immediate form end to end.
+- **Measured effects.** Corpus: all 21 pre-existing `tests/scripts/*.ql` produce
+  **byte-identical stdout** and identical exit codes against a `git worktree` of `d577612`
+  (§11 item 1). Pool: **515 → 477** entries — `bool` 5→0, `nil` 27→0, `float` 6→0, strings
+  and containers unchanged (§11 item 10, exactly the D3 set); code bytes **+1.9 %** (the
+  11-byte float immediate and the pool-`mov` modifier byte cost more than the pool slot
+  they free). `.qlc` write → load → run round-trips for all 22 scripts. `perf_stress`
+  execute 9.809 → 12.995 ms (+32.5 %, one extra byte per escaped instruction in the hot
+  loop) → `tests/perf/baseline.json` re-recorded deliberately (own concern in the commit).
+- **Docs.** `docs/SERIALIZATION.md` §4/§4.4/§5.1/§9/§10 and `docs/spec/13-bytecodes.md`
+  (`## encoding extended`, `### bytecode encoding`, `## constant pool`, `## future plans`)
+  moved from "v6 specified" to **v6 shipped**; opcode identity bound corrected to
+  `kOpcodeUsedCount` **73**; the parent plan's §6.1 M2 row flipped to DONE with D1–D6
+  recorded and §8 annotated per D4.
+- **Verification.** `cmake -B build && cmake --build build` clean; `ctest --test-dir build`
+  **47/47** green (46 + `doc_hashes`; `perf` runs and passes against the re-recorded
+  baseline). `./update-doc-hashes.sh` re-recorded the drifted rows after the green run
+  (AGENTS.md: testing first, hash second).
+- **Not in this round (milestones 3–4):** `eqf`/`ltf`/`gtf`/`ltef`/`gtef`/`tst` and the
+  `ja`/`jae`/`jb`/`jbe` aliases (M3); `DECL`, the declaration table, frame name map +
+  bitset, two-operand `INDGET`/`INDPUT` (M4); deleting the deprecated identities from the
+  enum (Phase 3, `.qlc` v7).
+
 ## Round 55 (2026-11-06)
 
 **v6 encoding layer — milestone 1 of `docs/plans/encoding-v6-and-indirect-plan.md`

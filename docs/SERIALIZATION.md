@@ -1,7 +1,7 @@
 # QLang Serialization / Deserialization Spec
 
-Status: **implemented** — `.qlc` program image (v5)
-Covers: `.qlc` program image (v5) and state snapshot (v2, future)
+Status: **implemented** — `.qlc` program image (v6)
+Covers: `.qlc` program image (v6) and state snapshot (v2, future)
 Reference implementation: `src/QLangBytecodeIO.cpp` (library codec)
 Architecture assessment of this change: [qlc-codec-assessment.md](qlc-codec-assessment.md)
 
@@ -87,17 +87,18 @@ Rules:
   share on assignment and on call (SPEC §types "value semantics"); on disk the
   writer dereferences and emits the bytes / element list exactly as before.
   The pointerization is therefore invisible to this format: tags 10, 11 and 19
-  and the program image (v5) are unchanged, and files written before it still
-  load. A reader always materialises **fresh** payloads — a decoded value
+  and the program image are unchanged by it, and files written before it still
+  load (until a version bump such as v5 → v6 retires them). A reader always
+  materialises **fresh** payloads — a decoded value
   never aliases another value's storage.
 
-## 4. Program image (magic `QLC1`, version 5)
+## 4. Program image (magic `QLC1`, version 6)
 
 ```
 offset  field            type   notes
 ──────  ───────────────  ─────  ──────────────────────────────────────────
 0       magic            4s     "QLC1"
-4       version          u32    = 5  (kQlcVersion; readers accept 5 only)
+4       version          u32    = 6  (kQlcVersion; readers accept 6 only)
 8       funcCount        u32
 …       functions        funcCount × Function
         nativeCount      u32
@@ -125,20 +126,21 @@ u32   locCount, locCount × (u16 line, u16 col)
 u32   constCount, constCount × Value
 ```
 
-The instruction stream is the **escape-byte format** (see
-`include/qlang/QLangBytecode.h`): a flat byte stream where each instruction
+The instruction stream is the **v6 escape-byte format** (see
+`include/qlang/QLangBytecode.h`, §4.4): a flat byte stream where each instruction
 starts with an opcode byte whose bit 7 is the escape flag and bits 0–6 are
-the opcode identity (128 base identities, 68 defined). An escaped
+the opcode identity (128 base identities, 73 defined). An escaped
 instruction carries a modifier byte `e` immediately after the opcode byte
-that widens its operands (2-byte register/constant index, 2/4-byte signed
-immediate, or jmp16/jmp32). The stream is stored **verbatim** — the raw
+that states the operand layout — left-operand width, right-operand **kind**
+(immediate / register / const pool) and right-operand **form** — or, for the
+jump class, the offset width. The stream is stored **verbatim** — the raw
 bytes are the on-disk encoding.
 
 The offset table (`offCount` × `u32`) gives the byte offset of every
 instruction in the stream. It is strictly increasing, and the last
 instruction must end exactly at `codeSize`. The reader decodes every
 instruction to validate the stream (catching truncation, invalid escape
-modifiers, and unknown opcode identities).
+modifiers, reserved kinds and forms, and unknown opcode identities).
 
 The source location is a per-function side table (`loc`), parallel to the
 offset table: `locCount` entries of `(u16 line, u16 col)` with
@@ -147,7 +149,7 @@ offset table: `locCount` entries of `(u16 line, u16 col)` with
 - `functions[0]` is the implicit `main`. The writer MUST emit it first; the
   reader MUST reject files where `functions[0].name != "main"` or
   `funcCount < 1`.
-- Every decoded opcode identity MUST be `< kOpcodeUsedCount` (68).
+- Every decoded opcode identity MUST be `< kOpcodeUsedCount` (73).
 - `line`/`col` in the loc side table are 0-based source positions (0,0 when
   unknown).
 
@@ -176,22 +178,100 @@ constVars: u32 nameLen, name bytes
 Backing containers are `std::unordered_map` / `std::unordered_set`: **order
 within both sections is unspecified**. Readers MUST NOT depend on it.
 
+### 4.4 Instruction stream (v6)
+
+Each instruction is `[opcode byte] [modifier byte] [operands…]`. In the opcode
+byte **bit 7 is the escape flag** and bits 0–6 are the opcode identity
+(128 identities, `kOpcodeUsedCount = 73` of them defined). An unescaped
+instruction uses the identity's **base form** (fixed operand widths, right
+operand kind fixed by the identity); an escaped instruction states its layout
+in the modifier byte `e` that follows the opcode byte.
+
+`e` is split **2 / 2 / 4**:
+
+| bits | field | meaning |
+|---|---|---|
+| 0–1 | left width | addressing width of the left operand (always a register) |
+| 2–3 | right kind | what the right operand *is* |
+| 4–7 | right form | interpreted by the kind |
+
+Addressing widths — used by bits 0–1, and by bits 4–7 when the kind is a
+register or a constant-pool index:
+
+| value | width | bytes | range |
+|---|---|---|---|
+| 0 | Byte | 1 | 0–255 |
+| 1 | Word | 2 | 0–65 535 |
+| 2 | DWord | 4 | 0–2³¹−1 |
+| 3 | Reserved | — | decode error |
+
+Right kind (bits 2–3):
+
+| value | kind | bits 4–7 then mean |
+|---|---|---|
+| 0 | Immediate | an `ImmForm` (below) |
+| 1 | Register | an addressing width (above) |
+| 2 | Const pool | an addressing width (above) |
+| 3 | Reserved | decode error |
+
+Immediate forms (kind 0 only):
+
+| form | bytes | QLang type | form | bytes | QLang type |
+|---|---|---|---|---|---|
+| 0 `U8` | 1 | Unsigned | 6 `I32` | 4 | Int |
+| 1 `U16` | 2 | Unsigned | 7 `I64` | 8 | Long |
+| 2 `U32` | 4 | Unsigned | 8 `Float` | 8 | Float |
+| 3 `U64` | 8 | Qword | 9 `False` | 0 | Bool |
+| 4 `I8` | 1 | Int | 10 `True` | 0 | Bool |
+| 5 `I16` | 2 | Int | 11 `Nil` | 0 | nil |
+
+Forms 12–15 are reserved → decode error. The `False`/`True`/`Nil` forms carry
+**no bytes** — the form *is* the value — which is why bool, nil and float
+literals no longer need a constant-pool entry.
+
+Every base form is equivalent to one escaped instruction, so a reader may treat
+both uniformly:
+
+| base form of the identity | equivalent `e` |
+|---|---|
+| register right (`mov r3, r5`) | `0x04` |
+| immediate right (`movi r3, 5`) | `0x40` |
+| const-pool right (`movc r3, pool[5]`) | `0x08` |
+| jump class, zero-operand opcodes | none — `kNoBaseModifier` (`0xFF`) |
+
+- **Jump class**: the modifier byte is an **offset-width selector**, not a
+  2/2/4 layout — base form = 1-byte offset, `e = 0` = 2 bytes, `e = 1` = 4
+  bytes. The deprecated conditional jumps carry a 1-byte condition register
+  before the offset.
+- **`CALL`** has no base form: it is always escaped with `e = 0x50` (kind 0,
+  form 5 = 2-byte signed function id), followed by the 1-byte argument count.
+  An unescaped `CALL` is rejected by both writer and reader.
+- **Arity rule**: for the binary ALU and flag-compare families a right operand
+  that is not a register means the in-place 2-operand form
+  (`r[a] = r[a] op right`), so the trailing 1-byte `c` is absent. Every other
+  3-operand opcode keeps it.
+- **Widest instruction: 15 bytes** (`op` + `e` = 2, left = 4, right = 8, third
+  = 1 — e.g. `CONV`); the reader's `codeSize` guard is derived from it.
+
 ## 5. Load contract (deserializer)
 
 ### 5.1 Validation sequence
 
-1. At least 12 bytes present; magic == `QLC1`; `version == 5`
+1. At least 12 bytes present; magic == `QLC1`; `version == 6`
    (`kQlcVersion`; anything else → "unsupported version", never a parse
-   attempt). Legacy v1–v4 files (fixed 8-byte instructions) are NOT
-   accepted.
+   attempt). Legacy v1–v5 files (fixed 8-byte instructions through v4, the
+   two-nibble modifier byte in v5) are NOT accepted.
 2. Every read is bounds-checked. Truncation → `QLangError(Io)` with the byte
    offset where the read failed.
 3. Structural invariants: `funcCount >= 1`, `functions[0].name == "main"`,
+   `codeSize <= 64 Mi × 15` (§8 instruction cap × the widest v6 instruction),
    every instruction decodes and its opcode identity is `< kOpcodeUsedCount`,
    offsets strictly increasing with the last instruction ending exactly at
    `codeSize`, `locCount == offCount`, all closure `funcIndex` in
    `[0, funcCount)`, native slots unique and `>= 0`, all `registerCount >= 0`,
-   all `paramCount >= 0`.
+   all `paramCount >= 0`. Decoding is what enforces the modifier rules of
+   §4.4: reserved left width (3), reserved right kind (3), reserved immediate
+   forms (12–15), a kind the opcode does not permit, and an unescaped `CALL`.
 4. Value decoding enforces §8 limits (depth, sizes).
 
 Any violation produces one structured error; the reader never partially
@@ -323,10 +403,11 @@ A codec is not "done" until all of these pass:
    byte-identical to direct `ctx.run(source)`.
 3. **Malformed-input suite** (each case → clean `Io` error, no crash, no
    partial out-param): truncated at every section boundary, bad magic,
-   version 4 (below `kQlcVersion`) and version 6 (above), opcode identity
-   `>= kOpcodeUsedCount`, truncated instruction, dangling closure index,
-   duplicate native slot, negative count, 100-deep nested array, 70 Mi value
-   count.
+   version 5 (below `kQlcVersion`) and version 7 (above), opcode identity
+   `>= kOpcodeUsedCount`, reserved modifier fields (left width 3, kind 3,
+   immediate forms 12–15, unpermitted kind, unescaped `CALL`), truncated
+   instruction, dangling closure index, duplicate native slot, negative count,
+   100-deep nested array, 70 Mi value count.
 4. **Native mismatch**: program calling an unregistered native → single
    error naming all missing natives.
 5. **(v2) Snapshot/resume**: run a script to a checkpoint, snapshot, restore
@@ -337,9 +418,9 @@ A codec is not "done" until all of these pass:
 | Item | Status |
 |---|---|
 | Value codec (`serializeValue`/`deserializeValue`) | done — matches §3 |
-| Program writer (`writeQlc`, §4 incl. native-slot table) | done — v5, explicit little-endian, escape-byte code stream + offset table, loc side table |
+| Program writer (`writeQlc`, §4 incl. native-slot table) | done — v6, explicit little-endian, escape-byte code stream + offset table, loc side table |
 | `QLangErrorKind::Io` | done |
-| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v5 only |
+| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v6 only |
 | App writer (POC `QlcWriter` in `qlang_run.cpp`) | deleted — replaced by `writeQlc` |
 | Tests (`codec_check`: §9 items 1, 3) | done |
 | `QLangContext::loadProgram` / `execute` (§5.2, §9 item 2/4) | not started |

@@ -438,8 +438,9 @@ postfix `[...]` to `arrget`, which rejects a non-array base.
 `indexget a, b, c` — `r[a] = r[b][r[c]]`. three register operands, no `i32`
 slot (the `baseOperandCount()` default). appended last in the opcode enum —
 `DEEPCOPY` was 70, so this is 71 and `kOpcodeUsedCount` becomes 73 — so
-existing `.qlc` opcode numbers stay valid; the `.qlc` format version is
-unchanged (v5).
+existing `.qlc` opcode numbers stay valid; the `.qlc` format version was left
+unchanged (v5) because no encoding rule moved. (It became v6 in Round 56, for
+the modifier re-split — not for these opcodes.)
 
 the base register is dispatched at **runtime**:
 
@@ -695,18 +696,24 @@ better encoding
 Normative summary of the instruction encoding beyond the base (unescaped) forms. Two versions
 are described in this document and it matters which one a passage refers to:
 
-- **Shipped — `.qlc` v5** (Round 37): flat byte stream, `pc` = byte offset, opcode top bit =
-  escape flag + one modifier byte, the modifier's two **nibbles** (low = left-operand form,
-  high = right-operand form), signed `Int` immediates only. Authoritative record:
+- **Shipped — `.qlc` v6** (Round 56): flat byte stream, `pc` = byte offset, opcode top bit =
+  escape flag + one modifier byte, the modifier re-split into **2/2/4** fields, a right-operand
+  **kind** selector (immediate / register / const pool), the full immediate set (signed,
+  unsigned, float, bool, nil) and the `i`/`c` suffix opcodes no longer emitted. Implementation
+  plan: [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md);
+  on-disk contract: [../SERIALIZATION.md](../SERIALIZATION.md) §4.4.
+- **Retired — `.qlc` v5** (Round 37): the same flat stream, but the modifier carried two
+  **nibbles** (low = left-operand form, high = right-operand form) and signed `Int` immediates
+  only. Readers accept v6 only; the historical record stays in
   [../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md).
-- **Specified below — `.qlc` v6, not implemented** (inventory item **A5**,
-  [../plans/missing-features-plan.md](../plans/missing-features-plan.md)): the modifier byte
-  re-split into **2/2/4** fields, a right-operand **kind** selector (immediate / register /
-  const pool), the full immediate set (signed, unsigned, float, bool, nil), the flag-setting
-  comparison family, `tst`, and the removal of the `i`/`c` suffix opcodes. Detailed
-  implementation plan: [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md).
+
+Still specified, not yet emitted: the flag-setting comparison family and `tst` (milestone **M3**
+of the plan above), and the `$$` declaration table (**M4**).
 
 ## opCode scope
+
+The "v6 spelling" column is what the compiler emits since Round 56; the deprecated identities
+(`movi`, `movc`, `addi`, `subi`, `cmpi`) still decode, they are just no longer produced.
 
 | opCode family | type | v6 spelling |
 |---------------|------|-------------|
@@ -723,9 +730,9 @@ are described in this document and it matters which one a passage refers to:
 
 ### bytecode encoding
 
-[../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md)
-(v5, shipped) · [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md)
-(v6, specified)
+[../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md)
+(v6, shipped) · [../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md)
+(v5, retired) · on-disk layout: [../SERIALIZATION.md](../SERIALIZATION.md) §4.4
 
 there should be only one pool of registers and one pool of constants. extended addressing is
 2 byte, default addressing is 1 byte. if OpCode top bit is not set then both left and right
@@ -869,8 +876,8 @@ constant in the pool must have unique values. duplicated entries should be folde
 
 the pool holds what cannot be an immediate: **strings**, **blobs** and the **closure / function
 constants** used by `makefunc` / `makegen`. `int` literals left the pool with `movi` (Round
-30/34); `bool`, `nil` and `float` literals leave it with the v6 immediate forms
-(`### bytecode encoding`), which is the "freeing slots in the constant pool" goal.
+30/34); `bool`, `nil` and `float` literals left it with the v6 immediate forms (Round 56,
+`### bytecode encoding`), which is the "freeing slots in the constant pool" goal.
 
 
 ## bytecode encoding and tests
@@ -882,7 +889,7 @@ all tests will have to validated again whenever new encoding guidelines are impl
 Phasing of the extended encoding. Full design, impact assessment and verification gate:
 [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md).
 
-**Phase 1 — `.qlc` v6.**
+**Phase 1 — `.qlc` v6.** *landed Round 56, except the two bullets marked M3.*
 
 - the modifier byte becomes the 2/2/4 layout (`### bytecode encoding`), which carries a
   right-operand **kind**: immediate / register / const pool.
@@ -892,12 +899,13 @@ Phasing of the extended encoding. Full design, impact assessment and verificatio
 - immediates include signed, unsigned, float, bool and nil, thus freeing slots in the constant
   pool (`## constant pool`).
 - the flag-setting comparisons `eqf`/`ltf`/`gtf`/`ltef`/`gtef` and `tst` are added
-  (`### extended OpCode eq, lt, gt, lte, gte`, `### OpCode tst`).
-- `ja`/`jae`/`jb`/`jbe` exist as assembler aliases only.
+  (`### extended OpCode eq, lt, gt, lte, gte`, `### OpCode tst`). **— M3, pending**
+- `ja`/`jae`/`jb`/`jbe` exist as assembler aliases only. **— M3, pending**
 - the deprecated spellings (`movi`, `movc`, `addi`, `subi`, `cmpi`, `jmpfalse`, `jmptrue`) keep
   decoding, so a v6 stream may contain either spelling; the compiler emits only the new ones.
 
-**Phase 2 — compiler follow-up.** the compiler stops emitting the deprecated spellings, widened
+**Phase 2 — compiler follow-up.** the compiler stops emitting the deprecated spellings *(done,
+Round 56 — it now emits `mov`/`add`/`sub`/`cmp` with a kind and an immediate form)*, widened
 right operands are extended beyond the `## opCode scope` families, and the pool is re-measured.
 
 **Phase 3 — removal.** long-term the `i`/`c` suffix opcodes are removed, together with

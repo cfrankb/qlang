@@ -2,15 +2,17 @@
 
 - `tests/unit/spec_check.cpp` — original cases (const, nil, float, concat, for, if,
   while, operators, toStr/toInt). Result: **33 passed, 0 failed.**
-- `tests/unit/spec_check2.cpp` — 512 test cases covering all spec features including `bool`, `char`, `qword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, method calls, `==`/`!=` nil-equality, function/generator returns, 19 `step` loop cases, 42 class-conformance cases (L449–L615), 6 `$` dynamic-key cases (L617–L626), 6 block-scope cases (L633–L640), 9 `len` storage-size cases, 2 `delete` guard cases (Round 21), 16 `enum` cases (Round 28), 6 error-reporting cases (Round 29: line numbers for lex/parse/runtime errors, module + function name in the report, deep call-chain trace), the Round 30/31 MOVI/ADDI/SUBI + CMP/j* cases, 16 `?` ternary cases (Round 39), 20 `deepcopy` cases (Round 42) and 13 `__deepcopy__` hook cases (Round 44). Result: **512 passed, 0 failed.**
+- `tests/unit/spec_check2.cpp` — 529 test cases covering all spec features including `bool`, `char`, `qword`, `switch`, `range`/`slice` reserved-word status, closures, `**`, `let`, goto, slice, range, method calls, `==`/`!=` nil-equality, function/generator returns, 19 `step` loop cases, 42 class-conformance cases (L449–L615), 6 `$` dynamic-key cases (L617–L626), 6 block-scope cases (L633–L640), 9 `len` storage-size cases, 2 `delete` guard cases (Round 21), 16 `enum` cases (Round 28), 6 error-reporting cases (Round 29: line numbers for lex/parse/runtime errors, module + function name in the report, deep call-chain trace), the Round 30/31 MOVI/ADDI/SUBI + CMP/j* cases, 16 `?` ternary cases (Round 39), 20 `deepcopy` cases (Round 42), 13 `__deepcopy__` hook cases (Round 44) and 17 `t[key]`/`a[i]` subscript cases (Round 51). Result: **529 passed, 0 failed.**
 - `tests/unit/spec_cast_test.cpp` — 20 cast tests: numeric casts (int/float/byte/word/short/unsigned/qword/char/bool), string casts, invalid collection casts, nested casts, expression-context casts, nil cast. Result: **20 passed, 0 failed.**
 - `tests/unit/gen_test.cpp` — 5 generator tests: basic yield, second yield, exhaustion/EOF, loop accumulate, empty yield, outer variable capture, type check. Result: **5 passed, 0 failed.**
 - `tests/unit/range_check.cpp` — 22 range tests: `for i in range(a,b)` counter loop (sum/count/break/continue), `in range(a,b)` bounds check (inside/low/high/above/below/as-value), `arr = range(a,b)` materialization, for-in array membership, generator range. Result: **22 passed, 0 failed.**
-- `tests/unit/codec_check.cpp` — `.qlc` codec round-trip checks: format version **5** (escape-byte flat byte stream + `loc` side-table; **v5-only reader**, v1–v4 dropped in Round 37), MOVI + ADDI + SUBI + CMP/j* suites (Rounds 30–31), constant-pool dedup (Round 38), `nop` (Round 39) and `deepcopy` (Round 42) suites, malformed-file guards. Result: **123 checks passed.**
+- `tests/unit/codec_check.cpp` — `.qlc` codec round-trip checks: format version **6** (escape-byte flat byte stream with the 2/2/4 modifier byte + `loc` side-table; **v6-only reader**, v1–v5 dropped in Round 56), MOVI + ADDI + SUBI + CMP/j* suites (Rounds 30–31), constant-pool dedup (Round 38), `nop` (Round 39) and `deepcopy` (Round 42) suites, malformed-file guards, plus the Round 56 **v6-load** suite (versions 3/4/5/7 rejected, reserved right kind 3, reserved left addressing form 3, reserved immediate forms 12–15, a kind the opcode does not permit, unescaped `CALL`, the `codeSize` guard derived from the 15-byte widest instruction) and the Round 56 **legacy** suite (a hand-encoded stream of the deprecated `movi`/`movc`/`addi`/`subi`/`cmpi` + `jmpfalse`/`jmptrue` spellings still loads, decodes and runs; `movc` clones its pool container, decision D6). Result: **199 checks passed.**
+- `tests/unit/encoding_v6_test.cpp` — the instruction encoding suite (added Round 55, the only one since Round 56): 2/2/4 modifier fields and reserved-slot rejection, the width and form tables, base-form byte-for-byte equivalence, the escaped-size table, immediate boundaries (`u8`…`u64`, `i8`…`i64`, bit-exact `double`, zero-byte `bool`/`nil`), `CALL`, the unchanged jump class, encoder range checks, truncated streams, and the exhaustive sweep of all 73 opcodes × 256 modifier bytes (1 756 accepted / 14 138 rejected, cross-checked between size, encoder and decoder). Result: **34 466 checks passed.**
+  `tests/unit/encoding_test.cpp` (the v5 encoding harness, 41 checks) is retired — no target builds it since Round 56.
 - `tests/unit/test_external.cpp` — external (C++) type bindings: `QL_` declarative meta, `External`/`BoundMethod`/`TypeRef`, method dispatch, RTTI handoff validation (Phase 3), `registerEnum` injection (Round 41). Result: **49 checks passed.**
 Compile against the static lib:
 `g++ -std=c++20 -Iinclude tests/unit/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
-Result: **512 passed, 0 failed.** All spec builtins implemented.
+Result: **529 passed, 0 failed.** All spec builtins implemented.
 `g++ -std=c++20 -Iinclude tests/unit/spec_cast_test.cpp build/libqlang.a -o /tmp/cast_test && /tmp/cast_test 2>/dev/null`
 Result: **20 passed, 0 failed.**
 
@@ -72,8 +74,9 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-**Current tally (re-verified Round 55, 2026-11-06): 35251 counted unit cases + 21
-script regressions + 1 perf gate = 47 ctest entries, all green** — the authoritative,
+**Current tally (re-verified Round 56, 2026-11-07): 35484 counted unit cases + 22
+script regressions + `smoke` + the perf gate + `doc_hashes` = 47 ctest entries, all
+green** — the authoritative,
 per-suite breakdown lives in `docs/compliance/tests.md` (ctest matrix) and
 `docs/compliance/status.md` (`## Current Status`); this module deliberately no
 longer keeps its own copy of the numbers (the paragraph below was a frozen

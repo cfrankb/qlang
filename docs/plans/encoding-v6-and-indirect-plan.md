@@ -1,7 +1,8 @@
 # Encoding v6 — Unified Modifier Byte + `$$` Indirect Access
 
-Status: **In progress — specification finalized 2026-11-06; milestone 1 (v6 encoding layer,
-additive) implemented and green 2026-11-06 — see §6.1. The shipped pipeline still encodes v5.**
+Status: **In progress — specification finalized 2026-11-06; milestones 1 (v6 encoding layer,
+additive; 2026-11-06) and 2 (pipeline switch, `.qlc` v6; 2026-11-07) implemented and green —
+see §6.1. The shipped pipeline now encodes and decodes v6; the v5 codec is deleted.**
 Supersedes: §4 (modifier byte), §5.3 (immediates) and §13.4 (signed-`Int`-only scope) of
 `docs/plans/instruction-format-escape-byte-plan.md` — that plan's byte-stream model, opcode
 space, register/constant pooling and jump forms **stay in force**
@@ -359,7 +360,7 @@ milestones; each keeps `ctest --test-dir build` green.
 | # | Milestone | Scope | Status |
 |---|-----------|-------|--------|
 | **M1** | v6 encoding layer, **additive** | 2/2/4 modifier byte, kind/form tables, permitted-kind + in-place-arity rules, full immediate set, `CALL` as kind 0 / form 5, jump class untouched, new `*V6` codec + `encoding_v6` test suite. v5 codec, `kQlcVersion = 5` and the shipped pipeline are **not** modified. | **DONE 2026-11-06** |
-| **M2** | Switch the pipeline | Compiler emits unified `mov`/`add`/`sub`/`cmp` kinds with immediate selection, VM decodes v6, `.qlc` v5 → v6, disassembler (`examples/qlang_run.cpp`) | pending |
+| **M2** | Switch the pipeline | Compiler emits unified `mov`/`add`/`sub`/`cmp` kinds with immediate selection, VM decodes v6, `.qlc` v5 → v6, disassembler (`examples/qlang_run.cpp`) | **DONE 2026-11-07** |
 | **M3** | Flag flow | `eqf`/`ltf`/`gtf`/`ltef`/`gtef` + `tst`, flag jumps, `ja`/`jae`/`jb`/`jbe` aliases (§4) | pending |
 | **M4** | `$$` (A3) | Declaration table, frame name map + bitset, `DECL`, two-operand `INDGET`/`INDPUT`, `$$"literal"` fast path (§7) | pending |
 
@@ -378,8 +379,37 @@ width/form tables, base-form byte-for-byte equivalence with v5, the escaped-size
 immediate boundaries (`u8`…`u64`, `i8`…`i64`, bit-exact `double`, zero-byte `bool`/`nil`), CALL,
 the unchanged jump class, encoder range checks, truncated streams, and an exhaustive sweep of
 1 756 accepted / 14 138 rejected `(opcode, modifier)` pairs cross-checked between size, encoder
-and decoder. Full suite: 47/47 (`perf` skipped). §11 items 1, 2, 4 (pool part), 5–10 belong to
-M2–M4.
+and decoder. Full suite: 47/47 (`perf` skipped).
+
+Six decisions M2 settled before coding (full rationale in §2 of `docs/plans/m2-pipeline-switch-plan.md`):
+
+1. **D1 — the `V6` suffix is dropped.** With exactly one codec, the plain names
+   (`encodeInstruction`, `decodeInstruction`, `instructionSize(op, escaped, e)`, `makeModifier`,
+   `baseModifier`) win; the v5 signatures were identical, so the 14 external call sites took
+   zero churn. The suffix would also be wrong after Phase 3 (v7 changes identities, not layout).
+2. **D2 — `DecodedInstruction` gains `immForm`.** `ImmPayload::Signed` alone cannot distinguish
+   `Int` (`i8`/`i16`/`i32`) from `Long` (`i64`).
+3. **D3 — immediate emission restricted to exactly-round-tripping literals:** `Int` within
+   ±2³¹ (`i8`/`i16`/`i32`), `Float` (form 8), `Bool` (9/10), `nil` (11). `Long`/`Qword`/
+   `Unsigned` stay in the pool — the codec supports `i64`/`u64`, but the value type of a
+   64-bit literal is ambiguous; widening is a measurable follow-up.
+4. **D4 — `.qlc` v6 ships without the declaration table.** M4 adds it as an optional section
+   inside v6 (§8 annotated); Phase 3 bumps v7.
+5. **D5 — the v5 harness `tests/unit/encoding_test.cpp` is retired** (its ctest target
+   deleted); its two unique cases (jump-width tiling, truncated-stream decode error) moved
+   into `encoding_v6_test.cpp`.
+6. **D6 — pool reads clone containers only on store** (`mov`/`movc` → `freshContainerValue`);
+   ALU/`cmp` right operands read straight from the pool are read-only and never copied.
+
+M2 verification (2026-11-07): corpus stdout byte-identical to the pre-switch build (21
+scripts, §11 item 1); `.qlc` v6 round-trip + execute for all 22 scripts (item 2);
+`instructionSize` == encoder length at every `pc` over a stream tiled by every (kind, form)
+pair (item 3); `true`/`false`/`nil` cost 3 B with no pool entry and the pool shrank
+515 → 477, `bool`/`nil`/`float` entries gone (item 4/10); the deprecated spellings still
+execute from a hand-built stream (item 6); reserved kinds/forms rejected at load (item 7);
+`--asm-level 0–5` well-formed for every form (item 9). `encoding_v6` 34 466 checks,
+`codec_check` 199. Full suite: 47/47. §11 items 5 (flag matrix) and 8 (`$$`) belong to
+M3–M4.
 
 ---
 
@@ -484,7 +514,7 @@ it bumps v5 → v6 itself and A5 takes v7.
 |---------|--------|
 | Header | `kQlcVersion` 5 → **6**; reader accepts v6 only (`src/QLangBytecodeIO.cpp:469`) |
 | Instruction stream | unchanged framing (flat byte array); operand *decoding* follows §2 |
-| Function record | **new**: declaration table (`site id → reg, name, kind`) — the source of the frame name map (§7.2) |
+| Function record | **new**: declaration table (`site id → reg, name, kind`) — the source of the frame name map (§7.2). **Added in M4, not in M2** (decision D4: v6 shipped 2026-11-07 without it; the table will be an optional section inside v6) |
 | Constant pool | unchanged framing; expected to shrink (bool/nil/float become immediates, §9) |
 | Validation | reader validates every modifier byte against the §2.5 permitted-kind table and rejects reserved kinds/forms, so a malformed stream fails at load, not at execution |
 
