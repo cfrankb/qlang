@@ -13,7 +13,7 @@
 
 namespace qlang {
 
-// QLC1 v5 .qlc codec (docs/SERIALIZATION.md).
+// QLC1 v6 .qlc codec (docs/SERIALIZATION.md).
 //
 // Values are serialized with a 1-byte tag (QLangValue::Type in declaration
 // order, fixed) plus an explicit little-endian payload. Non-durable types
@@ -29,9 +29,9 @@ namespace qlang {
 
 // .qlc format version (docs/SERIALIZATION.md §4). Written by writeQlc and
 // validated (strictly) by readQlc; the docs reference this constant.
-// v5 is the escape-byte instruction format (flat per-function code stream +
-// instruction offset table); v1-v4 files are NOT accepted.
-constexpr uint32_t kQlcVersion = 5;
+// v6 is the 2/2/4 modifier-byte instruction format (flat per-function code
+// stream + instruction offset table); v1-v5 files are NOT accepted.
+constexpr uint32_t kQlcVersion = 6;
 
 // Serialize one value. Throws QLangError(Io) on stream failure.
 void serializeValue(std::ostream &os, const QLangValue &v);
@@ -40,17 +40,17 @@ void serializeValue(std::ostream &os, const QLangValue &v);
 // tag, or nesting deeper than 64 levels (docs/SERIALIZATION.md §8).
 QLangValue deserializeValue(std::istream &is);
 
-// Write a full program as QLC1 v5. `nativeIds` maps native function name ->
+// Write a full program as QLC1 v6. `nativeIds` maps native function name ->
 // slot index (from QLangCompiler::nativeFuncIds). Returns false on stream
 // failure or when a constant pool holds a non-durable value (F1).
 bool writeQlc(std::ostream &os, const CompiledProgram &prog,
               const std::map<std::string, int> &nativeIds);
 
-// Read a full program from QLC1 v5. On success fills `prog` (nativeFuncs is
+// Read a full program from QLC1 v6. On success fills `prog` (nativeFuncs is
 // left empty) and `nativeSlots` with the (slot, name) pairs to resolve.
-// Returns false (with `err` set) on bad magic, unsupported version (v1-v4
-// and v6+ are rejected), truncation, invalid opcode/tag, a non-durable
-// value tag, or trailing bytes.
+// Returns false (with `err` set) on bad magic, unsupported version (v1-v5
+// and v7+ are rejected), truncation, invalid opcode or modifier byte, a
+// non-durable value tag, or trailing bytes.
 bool readQlc(std::istream &is, CompiledProgram &prog,
              std::vector<std::pair<int, std::string>> &nativeSlots,
              std::string &err);

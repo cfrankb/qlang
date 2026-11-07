@@ -381,9 +381,9 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
   // Header.
   putBytes(os, "QLC1", 4);
   // Format version (F1): written from the single shared constant
-  // kQlcVersion (docs/SERIALIZATION.md §4). v5 is the escape-byte
+  // kQlcVersion (docs/SERIALIZATION.md §4). v6 is the 2/2/4 modifier-byte
   // instruction format (flat per-function code stream + offset table);
-  // the reader accepts v5 only.
+  // the reader accepts v6 only.
   putU32(os, kQlcVersion); // format version
 
   // Functions (functions[0] is the implicit "main"; the compiler emits it
@@ -398,8 +398,8 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
     putU32(os, static_cast<uint32_t>(f.captures.size()));
     for (const auto &cap : f.captures)
       putI32(os, cap.reg);
-    // Instruction byte stream (escape-byte format, docs/SERIALIZATION.md
-    // §4.1): the raw per-function code blob, verbatim.
+    // Instruction byte stream (v6 2/2/4 modifier-byte format,
+    // docs/SERIALIZATION.md §4.1): the raw per-function code blob, verbatim.
     putU32(os, static_cast<uint32_t>(f.code.size()));
     putBytes(os, f.code.data(), f.code.size());
     // Instruction offset table: byte offset of each instruction in the
@@ -464,8 +464,8 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       r.fail("bad magic");
     r.pos = 4;
     uint32_t version = r.u32();
-    // v5 only: legacy v1-v4 files (fixed 8-byte instructions) and anything
-    // newer are rejected (F1).
+    // v6 only: legacy files (v1-v4 fixed 8-byte instructions, v5 the
+    // two-nibble modifier byte) and anything newer are rejected (F1).
     if (version != kQlcVersion)
       r.fail("unsupported version");
 
@@ -494,10 +494,11 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
         ref.reg = r.i32();
         fn.captures.push_back(ref);
       }
-      // Instruction byte stream (v5 escape-byte format).
+      // Instruction byte stream (v6 2/2/4 modifier-byte format).
       uint32_t codeSize = r.u32();
-      // Max instruction is 7 bytes (escaped 3-operand with 2-byte operands).
-      if (static_cast<size_t>(codeSize) > kMaxInstructions * 7)
+      // Max instruction is 15 bytes: op + modifier + 4-byte left operand +
+      // 8-byte immediate + 1-byte third operand (a conditional jmp32 is 7).
+      if (static_cast<size_t>(codeSize) > kMaxInstructions * 15)
         r.fail("code stream too large");
       fn.code.resize(codeSize);
       for (uint32_t j = 0; j < codeSize; j++)

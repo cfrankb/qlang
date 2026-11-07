@@ -108,6 +108,15 @@ suite still fails on version assertions until S7 — expected; note it and conti
 
 ### S2 — `.qlc` v6
 
+> **DONE (uncommitted).** `kQlcVersion = 6`; reader/writer wording updated; load guard is
+> `kMaxInstructions * 15` (measured widest instruction = 15 B, `CONV`). Verified with a
+> throwaway harness (`/tmp/qlc_v6_check.cpp`, 25 checks): version 6 written, hand-encoded
+> v6 image round-trips, versions 3/4/5/7 rejected with a version error, reserved kind /
+> left form / immediate form and an unpermitted kind rejected at load, unescaped `CALL`
+> rejected, oversized code stream rejected, a 15-byte instruction still loads.
+> `codec` is 132/135: the two `invalid CALL escape modifier` failures (S4) plus
+> `movi: format version 5` (`tests/unit/codec_check.cpp:319`, updated in S7).
+
 `include/qlang/QLangBytecodeIO.h`
 
 * `constexpr uint32_t kQlcVersion = 5;` (L34) → `6`.

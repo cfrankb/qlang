@@ -639,7 +639,8 @@ void encodeInstruction(std::vector<uint8_t> &out,
   if (in.escaped)
     out.push_back(in.modifier);
 
-  // Jump class: identical to v5 (plan §2.7).
+  // Jump class: the modifier is a width selector here, not a 2/2/4 field
+  // (plan §2.7).
   if (isJumpOpcode(in.op)) {
     if (isConditionalJump(in.op)) {
       if (in.a < 0 || in.a > 255)
