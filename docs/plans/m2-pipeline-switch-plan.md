@@ -467,6 +467,8 @@ at least keep compiling and printing sane operands.
 > switch (`c9acf81`) — `perf_stress.ql` execute is +31 % against it, which is what the wider
 > encoding costs. Re-baseline with `./build/perf_bench --update-baseline`, or use a non-Release
 > build dir.
+> **Superseded by §6 (Round 57):** that +31 % was *not* the price of the encoding — it was
+> decoder cost. The fast path recovers 77 % of it and the baseline was re-recorded **downward**.
 > *Formatting:* the new code keeps the compact one-row-per-case braced tables the file already
 > uses. `clang-format --dry-run` flags those rows, but it flags 158 of them at `HEAD` in
 > `encoding_v6_test.cpp` and 394 in `src/QLangCompiler.cpp` — the tree is not clang-format clean,
@@ -559,3 +561,76 @@ Items 5 (flag matrix) and 8 (`$$`) belong to M3 and M4.
 
 Effort estimate: S1–S3 mechanical-to-small, S4 small, **S5 is the bulk** (~70 emission sites,
 mostly one-line), S6 medium, S7 medium, S8 docs. Two reviewable commits minimum (M2a / M2b).
+
+---
+
+## 6. Performance follow-up — the Round 56 regression (Round 57)
+
+S7 recorded `perf` as the only failing gate: `perf_stress.ql` execute **9.809 → 12.995 ms**
+(+32.5 %) against the baseline written before the switch. S8 closed the round by
+**re-baselining** it. That was the wrong instinct and this section records what the
+investigation found instead — the regression was real, it was in the decoder, and most of it
+is now recovered (compliance **Round 57**).
+
+### 6.1 Root cause
+
+`decodeInstruction` runs once per VM step, so it *is* the hot loop. Decode-only throughput
+over the `perf_stress.ql` instruction stream (min-of-N, interleaved, same host):
+
+| build | ns / instruction | `perf_stress` execute |
+|-------|------------------|-----------------------|
+| v5, pre-switch (`0b4a4fb`) | **6.03** | 9.751 ms |
+| v6 as shipped by M2 (`9585958`) | **16.4** | 12.852 ms |
+| v6 with the fast path (Round 57) | **6.68** | 10.465 ms |
+
+Two costs, neither inherent to 2/2/4:
+
+1. **Repeated opcode classification.** `baseOperandCount`, `defaultRightKind`,
+   `permittedKinds`, `isJumpOpcode`, `isConditionalJump` and `isAluOrFlagCompare` are six
+   separate `switch` calls on the *same* opcode, evaluated per instruction.
+2. **The size table walked twice.** The escaped form called `escapedInstructionSize` — which
+   validates the modifier and sums the widths — and *then* read the operands, so every
+   escaped instruction paid for the full table walk plus the operand reads.
+
+### 6.2 The fix (`src/QLangBytecode.cpp`)
+
+Single pass, no behaviour change: a cold-built 128-entry `OpMeta` table (op count, default
+kind, permitted-kind mask, jump / conditional-jump / ALU-compare / `CALL` flags), `constexpr`
+`kWidthBytes` / `kImmBytes` arrays, a dedicated branch for the jump class, modifier
+validation by inline bit tests **in the same order and with the same messages** as
+`escapedInstructionSize`, and one `loadLE` read per operand.
+
+### 6.3 Evidence
+
+* Exhaustive differential vs a verbatim copy of the shipped decoder — 128 identities ×
+  escaped/base × 256 modifiers × 4 operand patterns × 2 extra-byte variants × lengths 0–12:
+  **3 421 184 cases, 3 325 824 throwing, 0 mismatches** in throw-vs-value, the exact message
+  text and all 13 decoded fields.
+* Stream differential over every `tests/scripts/*.ql` + `examples/*.ql`, compared **at every
+  byte offset** (a decode that only matches at instruction starts is exactly how `pc`
+  desynchronises): **42 448 cases, 0 mismatches**.
+* In-repo guard, `encoding_v6` **§18** (+4 checks, 34 466 → **34 470**): `escapedInstructionSize`
+  as the oracle over all **128** identities × 256 modifiers — same rejection message, same
+  accepted size/kind, every truncation must throw (30 517 rejected, 2 251 accepted, 14 401
+  truncations). Proven to fail on a deliberately perturbed decoder message.
+* `ctest --test-dir build` **47/47**; `perf` gate green on three consecutive standalone runs.
+
+### 6.4 Where it stands
+
+`tests/perf/baseline.json` re-recorded downward: `perf_stress` execute **12.995 → 10.382 ms**
+(−20.1 %, 77 % of the regression recovered); the other eleven medians moved ≤ 6.4 µs. The
+residual **+5.8 %** against the pre-switch 9.809 ms is the wider stream itself
+(`perf_stress` code 1837 B vs 1714 B), i.e. the honest cost of the encoding, and is accepted.
+
+Follow-ups, deliberately not taken here (each needs its own measurement):
+
+* `DecodedInstruction` is 56 bytes and is default-initialised on every decode; returning a
+  partially-filled record or an explicit `none` marker would cut per-step stores.
+* The VM re-decodes at `pc` after every taken branch; a small decoded-instruction cache would
+  help branch-heavy code but has to survive pool mutation.
+* `perf_stress` is the only stage above the gate's 0.5 ms absolute floor, so the gate cannot
+  see regressions in the other eleven medians — widening the corpus is a harness decision.
+
+Suggested commits for this follow-up (never auto-commit): `encoding: single-pass v6 decoder
+fast path + size-table parity guard` (code + §18), `perf: re-record baseline after the decoder
+fast path` (deliberate act, own commit), `docs: Round 57 — v6 decode fast path`.

@@ -1334,6 +1334,132 @@ int main() {
     checkTiling(code, offs, jumps, "the three jump widths");
   }
 
+  // --- 18. Decoder / size-table parity over the malformed and the truncated
+  // space. The decoder validates a modifier with inline bit tests instead of
+  // calling `escapedInstructionSize`, so the table is the oracle: every
+  // modifier it rejects the decoder must reject with the *same message*, every
+  // modifier it accepts must decode to exactly the size it predicts, and no
+  // truncation of an accepted instruction may decode at all (a silent short
+  // decode is what would desynchronise `pc`). Swept over all 128 identities,
+  // not just the 73 used ones, because the decoder must be total.
+  {
+    // Aggregate per category and report the first offender: a full sweep is
+    // ~33k modifier bytes and reporting each case would bury the pattern.
+    struct Drift {
+      int bad = 0;
+      std::string first;
+      void note(int id, int e, const std::string &why) {
+        bad++;
+        if (first.empty())
+          first = "op=" + std::to_string(id) + " e=0x" +
+                  std::to_string(e) + ": " + why;
+      }
+    };
+    Drift msgDrift, sizeDrift, truncDrift, baseDrift;
+    int malformed = 0, accepted = 0, truncations = 0;
+
+    // Operand bytes legal at every width (small indices), so the only possible
+    // failures are the modifier itself or the stream length.
+    std::vector<uint8_t> buf(16, 0);
+    buf[2] = 1;
+    buf[3] = 2;
+    buf[4] = 3;
+    for (int id = 0; id < kOpcodeMax; id++) {
+      const Opcode op = static_cast<Opcode>(id);
+      for (int j = 0; j <= 0xFF; j++) {
+        const uint8_t e = static_cast<uint8_t>(j);
+        buf[0] = static_cast<uint8_t>(id | 0x80); // escape bit + identity
+        buf[1] = e;
+        std::string want; // the table's verdict: a size, or an error message
+        size_t size = 0;
+        try {
+          size = escapedInstructionSize(op, e);
+        } catch (const QLangError &err) {
+          want = err.what();
+        }
+        DecodedInstruction out;
+        std::string got;
+        try {
+          decodeInstruction(buf.data(), 0, buf.size(), out);
+        } catch (const QLangError &err) {
+          got = err.what();
+        }
+        if (!want.empty()) {
+          malformed++;
+          if (got != want)
+            msgDrift.note(id, j, "table \"" + want + "\" decoder \"" + got +
+                                     "\"");
+          continue;
+        }
+        accepted++;
+        RightKind kind =
+            isJumpOpcode(op) ? defaultRightKind(op) : modifierRightKind(e);
+        if (!got.empty())
+          sizeDrift.note(id, j, std::string("table accepts, decoder: ") + got);
+        else if (out.size != size)
+          sizeDrift.note(id, j, "size " + std::to_string(out.size) + " != " +
+                                    std::to_string(size));
+        else if (out.rightKind != kind)
+          sizeDrift.note(id, j, "decoded kind != modifier kind");
+        // Every truncation of an accepted instruction must be reported as a
+        // truncated stream, never decoded short.
+        for (size_t len = 1; len < size; len++) {
+          DecodedInstruction t;
+          truncations++;
+          try {
+            decodeInstruction(buf.data(), 0, len, t);
+            truncDrift.note(id, j, "len " + std::to_string(len) + " of " +
+                                       std::to_string(size) + " decoded");
+          } catch (const QLangError &err) {
+            std::string m = err.what();
+            if (m.find("truncated") == std::string::npos)
+              truncDrift.note(id, j, "len " + std::to_string(len) + ": " + m);
+          }
+        }
+      }
+
+      // A base form carries no modifier: its kind is the opcode's default and
+      // its size the base table's. Only CALL is illegal unescaped.
+      buf[0] = static_cast<uint8_t>(id);
+      DecodedInstruction out;
+      std::string got;
+      try {
+        decodeInstruction(buf.data(), 0, buf.size(), out);
+      } catch (const QLangError &err) {
+        got = err.what();
+      }
+      if (op == Opcode::CALL) {
+        // `what()` carries the error-kind prefix, so match the text itself.
+        if (got.find("CALL must be escaped") == std::string::npos)
+          baseDrift.note(id, 0, "unescaped CALL: " + got);
+      } else if (!got.empty()) {
+        baseDrift.note(id, 0, got);
+      } else if (out.size != baseInstructionSize(op)) {
+        baseDrift.note(id, 0, "size " + std::to_string(out.size) + " != " +
+                                  std::to_string(baseInstructionSize(op)));
+      } else if (out.rightKind != defaultRightKind(op)) {
+        baseDrift.note(id, 0, "base kind != defaultRightKind");
+      }
+    }
+    check(msgDrift.bad == 0,
+          "decoder rejects every modifier the size table rejects, with the "
+          "same message (first: " +
+              msgDrift.first + ")");
+    check(sizeDrift.bad == 0,
+          "decoder agrees with the size table on every accepted modifier "
+          "(first: " +
+              sizeDrift.first + ")");
+    check(truncDrift.bad == 0,
+          "every truncation of an accepted instruction is reported (first: " +
+              truncDrift.first + ")");
+    check(baseDrift.bad == 0,
+          "base forms decode to the base table (first: " + baseDrift.first +
+              ")");
+    std::cout << "decoder/table parity: " << malformed
+              << " rejected modifiers, " << accepted << " accepted, "
+              << truncations << " truncations checked\n";
+  }
+
   std::cout << (fails == 0 ? "ALL PASS" : "FAILURES") << ": " << passes
             << " passed, " << fails << " failed\n";
   return fails == 0 ? 0 : 1;

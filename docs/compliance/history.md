@@ -1,3 +1,65 @@
+## Round 57 (2026-11-07)
+
+**v6 decode fast path: the Round 56 performance regression is investigated instead of
+re-baselined — `decodeInstruction` becomes a single-pass, table-driven decoder that is
+behaviour-identical to the one it replaces, and the equivalence is guarded in-repo.**
+**No language, encoding or `.qlc` change** — the byte stream, the opcode table, the
+decoded fields and every error message are unchanged; only *how* the bytes are read.
+`src/QLangBytecode.cpp`, `tests/unit/encoding_v6_test.cpp`, `tests/perf/baseline.json`,
+`docs/compliance/{status,tests,harness,history,README}.md`,
+`docs/plans/m2-pipeline-switch-plan.md`.
+
+- **Why it was worth doing.** `decodeInstruction` runs once per VM step, so it *is* the
+  hot loop. Measured decode-only over the `perf_stress.ql` instruction stream: v5 (before
+  the switch) **6.03 ns**/instruction, the Round 56 v6 decoder **16.4 ns**, i.e. the
+  +32.5 % `perf_stress` regression was decode cost, not the extra byte per instruction.
+  Two causes: (a) every opcode-class question (`baseOperandCount`, `defaultRightKind`,
+  `permittedKinds`, `isJumpOpcode`, `isConditionalJump`, `isAluOrFlagCompare`) was a
+  separate `switch` call on the same opcode, and (b) the escaped form called
+  `escapedInstructionSize` — which walks the whole modifier table — **and then re-read the
+  operands**, so the size computation ran twice per instruction.
+- **The fast path.** A cold-built 128-entry `OpMeta` table (base operand count, default
+  right kind, permitted-kind mask, jump / conditional-jump / ALU-or-flag-compare / `CALL`
+  flags) replaces the six per-opcode predicate calls; `constexpr kWidthBytes[4]` and
+  `kImmBytes[16]` replace the width/form tables; the jump class gets its own branch (it is
+  the only class whose modifier does not select operand widths); modifier validation is
+  inline bit tests evaluated **in the same order, with the same messages**, as
+  `escapedInstructionSize`; each operand is read once through `loadLE`. Result
+  **6.68 ns**/instruction — back to v5 parity (6.03).
+- **Equivalence proven before landing, not assumed.** An exhaustive differential harness
+  (a verbatim copy of the shipped decoder as the reference) swept 128 identities ×
+  escaped/base × 256 modifiers × 4 operand byte patterns × 2 extra-byte variants × stream
+  lengths 0–12 and compared *throw vs value, the exact message text, and all 13 decoded
+  fields*: **3 421 184 cases, 3 325 824 throwing, 0 mismatches**. A second harness walked
+  the compiled byte stream of every `tests/scripts/*.ql` and `examples/*.ql` **at every
+  byte offset**, not just at instruction starts (that is what would desynchronise `pc`):
+  **42 448 cases, 0 mismatches**.
+- **Permanent in-repo guard (`encoding_v6` §18, +4 checks, 34466 → 34470).** The
+  differential harnesses were scratch tools; the repo needs something that fails when the
+  decoder and the size table drift. `escapedInstructionSize` is used as the **oracle** over
+  all **128** identities (not just the 73 used ones — the decoder must be total) × 256
+  modifiers: every modifier the table rejects the decoder must reject with the *same
+  message*, every accepted one must decode to exactly the predicted size and kind, and
+  every truncation of an accepted instruction must throw a `truncated` error. Base forms
+  are checked against `baseInstructionSize` / `defaultRightKind` (`CALL` → "must be
+  escaped"). Swept: **30517 rejected modifiers, 2251 accepted, 14401 truncations**. The
+  guard was verified to work by perturbing one decoder message — §18 failed with the
+  table/decoder pair side by side — then reverted.
+- **Measured outcome.** `perf_stress` execute **12.995 → 10.382 ms** (−20.1 %), 77 % of the
+  Round 56 regression recovered (min-of-N, interleaved against both builds: v5 `0b4a4fb`
+  9.751 ms, Round 56 HEAD 12.852 ms, this change 10.465 ms). `tests/perf/baseline.json`
+  re-recorded with `--update-baseline` (deliberate act, own commit); the other eleven
+  medians moved by ≤ 6.4 µs and stay under the 0.5 ms absolute floor. `hello`/`money`/`cast`
+  execute improved ~8–14 % in the same micro-runs.
+- **Residual, deliberately not chased.** +5.8 % against the pre-switch 9.809 ms is the
+  wider instruction stream itself (`perf_stress` code 1837 B vs 1714 B in v5), not the
+  decoder. Follow-ups recorded in the M2 plan: shrink the 56-byte `DecodedInstruction` and
+  avoid the full default-initialisation on every decode.
+- **Verification.** `cmake -B build && cmake --build build` clean; `ctest --test-dir build`
+  **47/47 green** (`encoding_v6` 34470, `codec_check` 199 unchanged, 22 script regressions);
+  the `perf` gate green on three consecutive standalone runs. Docs re-hashed only after the
+  green run. **47 ctest entries, 47/47 green.**
+
 ## Round 56 (2026-11-07)
 
 **`.qlc` v6 pipeline switch — milestone 2 of `docs/plans/encoding-v6-and-indirect-plan.md`:

@@ -62,7 +62,7 @@ Unit (22 harnesses + `smoke`):
 | `class_static` | `class_static_test` | `tests/unit/class_static_test.cpp` | 17 passed |
 | `signal` | `signal_test` | `tests/unit/signal_test.cpp` | 18 passed (Round 40; `docs/spec/17-signals.md`) |
 | `codec` | `codec_check` | `tests/unit/codec_check.cpp` | 199 checks passed (incl. 15 `deepcopy` cases, Round 42; 19 `indexget`/`indexput` cases, Round 51; **+57 Round 56**: 20 v6 load-time validation cases — versions 3/4/5/7 rejected, reserved right kind 3, reserved left form 3, reserved immediate forms 12–15, a kind the opcode does not permit, unescaped `CALL`, the 15-byte `codeSize` guard — and 15 deprecated-spelling cases: `movi`/`movc`/`addi`/`subi`/`cmpi` and `jmpfalse`/`jmptrue` still load, decode and run, incl. `movc` pool cloning, decision D6) |
-| `encoding_v6` | `encoding_v6_test` | `tests/unit/encoding_v6_test.cpp` | 34466 checks passed (added Round 55 as the additive v6 codec suite; since Round 56 it is **the** encoding suite — the 2/2/4 modifier byte, the kind/form tables and the shipped codec; +217 in Round 56) |
+| `encoding_v6` | `encoding_v6_test` | `tests/unit/encoding_v6_test.cpp` | 34470 checks passed (added Round 55 as the additive v6 codec suite; since Round 56 it is **the** encoding suite — the 2/2/4 modifier byte, the kind/form tables and the shipped codec; +217 in Round 56; **+4 in Round 57**: §18 decoder/size-table parity — `decodeInstruction` must reject every modifier `escapedInstructionSize` rejects with the *same message*, decode every accepted one to exactly the predicted size, and reject every truncation of an accepted instruction, swept over all 128 identities × 256 modifiers: 30517 rejected modifiers, 2251 accepted, 14401 truncations) |
 | `external` | `test_external` | `tests/unit/test_external.cpp` | 49 checks passed (incl. `registerEnum` injection, Round 41) |
 | `test_inject` | `test_inject` | `tests/unit/test_inject.cpp` | `ALL PASS` |
 | `test_dollar_operator` | `test_dollar_operator` | `tests/unit/test_dollar_operator.cpp` | 8 passed |
@@ -73,7 +73,7 @@ Unit (22 harnesses + `smoke`):
 | `phase5_api` | `phase5_api` | `tests/unit/phase5_api.cpp` | 17 checks (step budget, threading contract) |
 | `value_semantics` | `value_semantics` | `tests/unit/value_semantics.cpp` | 40 checks (Round 43 share-by-default array/set/blob: aliasing on assign/call, literal freshness, `deepcopy` independence + array cycles, `+`/`cast` freshness, `a += a`, `string` still a value type) |
 
-Counted unit cases: **35484** (529+33+20+7+5+22+13+17+18+49+8+199+34466+8+3+7+23+17+40), plus
+Counted unit cases: **35488** (529+33+20+7+5+22+13+17+18+49+8+199+34470+8+3+7+23+17+40), plus
 the three `ALL PASS` gate suites (`test_native`, `test_call`, `test_inject`).
 
 Script (22): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
@@ -116,7 +116,17 @@ gate or `./update-doc-hashes.sh --check` directly (Round 49).
 - `--update-baseline` regenerates `tests/perf/baseline.json` (a deliberate act,
   always a separate commit). `baseline.json` is the immutable reference
   (calibrated g++/Linux Release).
+- **Re-recorded Round 57 (2026-11-07)** after the decoder fast path (see
+  `docs/plans/m2-pipeline-switch-plan.md` §"Performance follow-up"):
+  `perf_stress` execute fell 12.995 ms → 10.382 ms (−20.1 %), recovering 77 % of
+  the +32.5 % Round 56 regression. The remaining +5.8 % against the pre-switch
+  v5 figure (9.809 ms) is the wider instruction stream itself, not the decoder
+  (`decodeInstruction` is back to 6.68 ns/instruction vs 6.03 ns in v5, from
+  16.4 ns at Round 56). Again the only stage above the 0.5 ms floor; the other
+  eleven medians moved by ≤ 6.4 µs (host noise), so they are not attributable to
+  the change. Regenerated with `--update-baseline`.
 - **Re-recorded Round 56 (2026-11-07)** after the `.qlc` v6 pipeline switch:
+
   `perf_stress` execute rose 9.809 ms → 12.995 ms (+32.5 %) — the 2/2/4 modifier
   byte adds a byte to every escaped instruction and that script's loop body is
   almost entirely escaped immediate-right arithmetic. It is again the only stage

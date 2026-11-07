@@ -410,6 +410,12 @@ execute from a hand-built stream (item 6); reserved kinds/forms rejected at load
 `--asm-level 0–5` well-formed for every form (item 9). `encoding_v6` 34 466 checks,
 `codec_check` 199. Full suite: 47/47. §11 items 5 (flag matrix) and 8 (`$$`) belong to
 M3–M4.
+**Round 57 follow-up (2026-11-07):** the +32.5 % `perf_stress` execute regression the switch
+introduced was investigated rather than accepted — `decodeInstruction` is now a single-pass
+table-driven decoder (16.4 → 6.68 ns/instruction, v5 was 6.03), behaviour-identical under an
+exhaustive differential sweep, with a permanent decoder/size-table parity guard (§18) →
+`encoding_v6` **34 470**, `perf_stress` execute 12.995 → 10.382 ms, full suite 47/47. See
+`docs/plans/m2-pipeline-switch-plan.md` §6.
 
 ---
 
