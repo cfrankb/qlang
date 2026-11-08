@@ -48,16 +48,13 @@ void FnEmitter::finish(Function &fn) {
                        "invalid jump target in emitter");
   }
 
-  // Initial sizes: jumps assume the widest form (jmp32 — plus the 1-byte
-  // condition register of the jump form nothing produces any more, still
-  // sized until the opcode itself goes away, plan
-  // docs/plans/phase3-opcode-retirement-plan.md S3); everything else uses the
-  // size of the form its operands/immediate actually require (base or
+  // Initial sizes: jumps assume the widest form (jmp32); everything else uses
+  // the size of the form its operands/immediate actually require (base or
   // escaped).
   std::vector<size_t> sizes(raw.size());
   for (size_t i = 0; i < raw.size(); i++) {
     if (raw[i].jumpTarget >= 0)
-      sizes[i] = isConditionalJumpOpcode(raw[i].op) ? 7 : 6;
+      sizes[i] = 6;
     else {
       auto [mod, escaped] = computeModifier(raw[i]);
       sizes[i] = instructionSize(raw[i].op, escaped, mod);
@@ -84,8 +81,7 @@ void FnEmitter::finish(Function &fn) {
       if (raw[i].jumpTarget < 0) continue;
       int32_t offset = static_cast<int32_t>(offsets[raw[i].jumpTarget]) -
                        static_cast<int32_t>(offsets[i] + sizes[i]);
-      size_t newSize = minJumpSize(offset) +
-                       (isConditionalJumpOpcode(raw[i].op) ? 1 : 0);
+      size_t newSize = minJumpSize(offset);
       if (newSize != sizes[i]) {
         sizes[i] = newSize;
         changed = true;
@@ -101,7 +97,7 @@ void FnEmitter::finish(Function &fn) {
     if (raw[i].jumpTarget < 0) continue;
     int32_t offset = static_cast<int32_t>(offsets[raw[i].jumpTarget]) -
                      static_cast<int32_t>(offsets[i] + sizes[i]);
-    size_t offWidth = sizes[i] - (isConditionalJumpOpcode(raw[i].op) ? 1 : 0);
+    size_t offWidth = sizes[i];
     if (offWidth == 1 && (offset < -127 || offset > 127))
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "jump offset does not fit (emitter fixpoint failed)");
@@ -3767,11 +3763,12 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     break;
   }
   case ExprKind::Array: {
-    // Constant elements: one MOVC of a pool payload. MOVC hands out a fresh
-    // copy of it (SPEC §types "value semantics"), so mutating the result never
-    // corrupts the pool entry this site (or a deduped twin) shares.
+    // Constant elements: one pool load (mov kind 2) of a pool payload. The
+    // load hands out a fresh copy of it (SPEC §types "value semantics"), so
+    // mutating the result never corrupts the pool entry this site (or a
+    // deduped twin) shares.
     // Non-constant elements (`local outer = [inner]`): the array is built at
-    // runtime — MOVC an EMPTY array into the destination, then ARRAPP each
+    // runtime — load an EMPTY array into the destination, then ARRAPP each
     // element into it (SPEC §types "array: contain list of mixed variable").
     // The destination payload is freshly created here, so appending in place
     // cannot reach any other name.

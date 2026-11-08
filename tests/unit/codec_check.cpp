@@ -1,6 +1,6 @@
 // .qlc codec check: value round-trips, program round-trip with native wiring,
 // v6 load-time validation (modifier fields, permitted kinds, the size guard),
-// the deprecated-spelling stream, and a malformed-input robustness suite
+// and a malformed-input robustness suite
 // (docs/SERIALIZATION.md §9, docs/plans/m2-pipeline-switch-plan.md §11).
 #include <climits>
 #include <cstdint>
@@ -315,18 +315,6 @@ static bool hasPoolRight(const Function &fn, Opcode op) {
   return false;
 }
 
-// The v6 compiler emits only the unified spellings; the `i`/`c` identities
-// survive as decoder-only aliases (plan §3).
-static bool noDeprecatedSpellings(const CompiledProgram &p) {
-  for (const auto &fn : p.functions)
-    for (const auto &i : decodeAll(fn))
-      if (i.op == Opcode::MOVI || i.op == Opcode::MOVC ||
-          i.op == Opcode::ADDI || i.op == Opcode::SUBI ||
-          i.op == Opcode::CMPI)
-        return false;
-  return true;
-}
-
 static bool poolHasInt(const Function &fn, int32_t v) {
   for (const auto &c : fn.constants)
     if (c.type() == QLangValue::Type::Int && c.asInt() == v)
@@ -351,7 +339,6 @@ static void testMovImmediate() {
     check(findImm(p.functions[0], Opcode::MOV, ImmForm::I8, 42, d),
           "mov: int literal emits a signed immediate");
     check(!poolHasInt(p.functions[0], 42), "mov: no Int pool slot");
-    check(noDeprecatedSpellings(p), "mov: no movi/movc emitted");
 
     // Bool literal -> the zero-byte true form, 3 bytes, no pool entry
     // (§11 item 4).
@@ -463,7 +450,6 @@ static void testCompilerMov() {
               hasImm(p.functions[0], Opcode::MOV, ImmForm::I8, 0) &&
               hasImm(p.functions[0], Opcode::MOV, ImmForm::I8, -1),
           "compiler-mov: for step/zero/direction emitted as immediates");
-    check(noDeprecatedSpellings(p), "compiler-mov: no movi/movc emitted");
   } catch (const QLangError &e) {
     check(false, std::string("compiler-mov: ") + e.what());
   }
@@ -493,7 +479,6 @@ static void testAddInPlace() {
           "add: float literal RHS loads as the float form");
     check(poolCountType(pf.functions[0], QLangValue::Type::Float) == 0,
           "add: float RHS leaves the pool");
-    check(noDeprecatedSpellings(pf), "add: no addi emitted");
 
     // .qlc round-trip of an in-place add program.
     std::ostringstream os(std::ios::binary);
@@ -542,7 +527,6 @@ static void testSubInPlace() {
           "sub: float literal RHS loads as the float form");
     check(poolCountType(pf.functions[0], QLangValue::Type::Float) == 0,
           "sub: float RHS leaves the pool");
-    check(noDeprecatedSpellings(pf), "sub: no subi emitted");
 
     // .qlc round-trip of an in-place sub program.
     std::ostringstream os(std::ios::binary);
@@ -597,7 +581,7 @@ static bool noCmpKind(const Function &fn, RightKind kind) {
 static void testCmpJump() {
   try {
     // Literal comparison in `if` -> `cmp r, i8 3` + a j* (no comparison-result
-    // temp, no JMPIFFALSE for the condition, no `cmpi`).
+    // temp and no register-right cmp for the condition).
     CompiledProgram p = compileSrc("local r = 0\nif (5 > 3) { r = 1 }\n");
     check(hasImm(p.functions[0], Opcode::CMP, ImmForm::I8, 3),
           "cmp: literal operand emits an inline immediate");
@@ -607,9 +591,6 @@ static void testCmpJump() {
                    {Opcode::JE, Opcode::JNE, Opcode::JG, Opcode::JGE,
                     Opcode::JL, Opcode::JLE}),
           "cmp: int literal if emits a j*");
-    check(!hasAnyOp(p.functions[0], {Opcode::JMPIFFALSE, Opcode::JMPIFTRUE}),
-          "cmp: int literal if not JMPIFFALSE");
-    check(noDeprecatedSpellings(p), "cmp: no cmpi emitted");
 
     // The loop-bound guard compares two registers (kind 1): `cmp x, end` + a
     // flag jump. (`if` keeps `cmp` only when both operands are statically Int,
@@ -619,15 +600,14 @@ static void testCmpJump() {
           "cmp: loop guard compares register-to-register");
 
     // Float comparison -> the dual flag compare `gtef r, f64 2.5` + `jge`: the
-    // literal still rides inline and no boolean temp / JMPIFFALSE is built.
+    // literal still rides inline and no boolean temp is built.
     CompiledProgram pf = compileSrc("local r = 0\nif (1.5 < 2.5) { r = 1 }\n");
     check(hasFloatImm(pf.functions[0], Opcode::GTEF, 2.5),
           "cmp: float comparison fuses to an inline-immediate gtef");
     check(hasAnyOp(pf.functions[0], {Opcode::JGE}),
           "cmp: float comparison emits its dual jump");
-    check(!hasAnyOp(pf.functions[0], {Opcode::CMP, Opcode::CMPI, Opcode::EQ,
-                                      Opcode::JMPIFFALSE, Opcode::JMPIFTRUE}),
-          "cmp: float comparison builds no cmp/EQ + JMPIFFALSE");
+    check(!hasAnyOp(pf.functions[0], {Opcode::CMP, Opcode::EQ}),
+          "cmp: float comparison builds no cmp/EQ pair");
 
     // String comparison against a pool constant -> `eqf r, c#k` + `jne`
     // (plan M3 D5: a flag compare accepts a pool right operand).
@@ -637,8 +617,8 @@ static void testCmpJump() {
           "cmp: string comparison fuses to a pool-right eqf");
     check(hasAnyOp(ps.functions[0], {Opcode::JNE}),
           "cmp: string comparison emits jne");
-    check(!hasAnyOp(ps.functions[0], {Opcode::EQ, Opcode::JMPIFFALSE}),
-          "cmp: string comparison builds no EQ + JMPIFFALSE");
+    check(!hasAnyOp(ps.functions[0], {Opcode::EQ}),
+          "cmp: string comparison builds no boolean EQ temp");
 
     // .qlc round-trip of a fused program.
     std::ostringstream os(std::ios::binary);
@@ -787,15 +767,16 @@ static void testPoolDedup() {
 }
 
 // ---------------------------------------------------------------------------
-// Nop: a zero-operand no-op opcode (SPEC §bytecodes "OpCode nop"). Appended
-// last (identity 68) so existing .qlc opcode numbers stay valid. The compiler
+// Nop: a zero-operand no-op opcode (SPEC §bytecodes "OpCode nop"). The compiler
 // never emits it; the codec must round-trip it and the VM must execute it.
+// Identity 61 after the Phase 3 S3 compaction (it was 68 before the deprecated
+// spellings were retired).
 // ---------------------------------------------------------------------------
 static void testNop() {
   try {
     // Identity, name, and size.
-    check(static_cast<uint8_t>(Opcode::Nop) == 68,
-          "nop: identity 68 (appended last)");
+    check(static_cast<uint8_t>(Opcode::Nop) == 61,
+          "nop: identity 61 (after the S3 compaction)");
     check(std::strcmp(Bytecode::name(Opcode::Nop), "nop") == 0, "nop: name");
     check(isValidOpcode(Opcode::Nop), "nop: valid opcode");
     check(baseInstructionSize(Opcode::Nop) == 1, "nop: 1-byte base size");
@@ -805,7 +786,7 @@ static void testNop() {
     in.op = Opcode::Nop;
     std::vector<uint8_t> buf;
     encodeInstruction(buf, in);
-    check(buf.size() == 1 && buf[0] == 68, "nop: encodes to 1 byte");
+    check(buf.size() == 1 && buf[0] == 61, "nop: encodes to 1 byte");
     DecodedInstruction out;
     decodeInstruction(buf.data(), 0, buf.size(), out);
     check(out.op == Opcode::Nop && !out.escaped && out.size == 1,
@@ -825,7 +806,8 @@ static void testNop() {
     }
     check(rejected, "nop: escaped form rejected");
 
-    // .qlc round-trip of a hand-built program: Nop; MOVI 0, 42; RETURN 0.
+    // .qlc round-trip of a hand-built program: Nop; mov r0, 42 (kind 0, i8);
+    // RETURN 0.
     Function fn;
     fn.name = "main";
     fn.paramCount = 0;
@@ -833,7 +815,9 @@ static void testNop() {
     DecodedInstruction d1;
     d1.op = Opcode::Nop;
     DecodedInstruction d2;
-    d2.op = Opcode::MOVI;
+    d2.op = Opcode::MOV;
+    d2.escaped = true;
+    d2.modifier = 0x40;  // left byte, right kind immediate, form i8
     d2.a = 0;
     d2.imm = 42;
     DecodedInstruction d3;
@@ -879,15 +863,15 @@ static void testNop() {
 
 // ---------------------------------------------------------------------------
 // DEEPCOPY: r[a] = deep copy of r[b] (SPEC §bytecodes "OpCode deepcopy").
-// Appended last (identity 70) so existing .qlc opcode numbers stay valid.
 // Two register operands, no i32 slot (same shape as MOV). The compiler lowers
-// a `deepcopy(x)` call directly to this opcode.
+// a `deepcopy(x)` call directly to this opcode. Identity 63 after the Phase 3
+// S3 compaction (it was 70 before the deprecated spellings were retired).
 // ---------------------------------------------------------------------------
 static void testDeepcopy() {
   try {
     // Identity, name, validity, and size.
-    check(static_cast<uint8_t>(Opcode::DEEPCOPY) == 70,
-          "deepcopy: identity 70 (appended last)");
+    check(static_cast<uint8_t>(Opcode::DEEPCOPY) == 63,
+          "deepcopy: identity 63 (after the S3 compaction)");
     check(std::strcmp(Bytecode::name(Opcode::DEEPCOPY), "deepcopy") == 0,
           "deepcopy: name");
     check(isValidOpcode(Opcode::DEEPCOPY), "deepcopy: valid opcode");
@@ -901,7 +885,7 @@ static void testDeepcopy() {
     in.b = 5;
     std::vector<uint8_t> buf;
     encodeInstruction(buf, in);
-    check(buf.size() == 3 && buf[0] == 70 && buf[1] == 3 && buf[2] == 5,
+    check(buf.size() == 3 && buf[0] == 63 && buf[1] == 3 && buf[2] == 5,
           "deepcopy: encodes to 3 bytes");
     DecodedInstruction out;
     decodeInstruction(buf.data(), 0, buf.size(), out);
@@ -909,14 +893,16 @@ static void testDeepcopy() {
               out.a == 3 && out.b == 5,
           "deepcopy: decode round-trip");
 
-    // .qlc round-trip of a hand-built program: MOVI 1, 7; DEEPCOPY 0, 1;
-    // RETURN 0.
+    // .qlc round-trip of a hand-built program: mov r1, 7 (kind 0, i8);
+    // DEEPCOPY 0, 1; RETURN 0.
     Function fn;
     fn.name = "main";
     fn.paramCount = 0;
     fn.registerCount = 2;
     DecodedInstruction d1;
-    d1.op = Opcode::MOVI;
+    d1.op = Opcode::MOV;
+    d1.escaped = true;
+    d1.modifier = 0x40;  // left byte, right kind immediate, form i8
     d1.a = 1;
     d1.imm = 7;
     DecodedInstruction d2;
@@ -1126,10 +1112,10 @@ static void testMalformed() {
 
   std::string badOp = fileWithOneInstr();
   // The single instruction's opcode byte is at byte 37 (header + function
-  // metadata + codeSize). Set it to 79: a valid 7-bit identity that is not a
-  // defined opcode (kOpcodeUsedCount == 79; the flag-flow family took
-  // 73..78). It decodes as a 4-byte 3-operand form, then fails isValidOpcode.
-  badOp[37] = 79;
+  // metadata + codeSize). Set it to 72: a valid 7-bit identity that is not a
+  // defined opcode (kOpcodeUsedCount == 72 after the Phase 3 S3 compaction).
+  // It decodes as a 4-byte 3-operand form, then fails isValidOpcode.
+  badOp[37] = kOpcodeUsedCount;
   rejects("malformed: invalid opcode", badOp);
 
   // Truncated instruction: codeSize=3, but the ADD at offset 0 needs 4 bytes.
@@ -1262,18 +1248,18 @@ static void testMalformed() {
 
 // ---------------------------------------------------------------------------
 // INDEXGET / INDEXPUT: polymorphic subscript (SPEC §bytecodes "OpCode
-// indexget"/"indexput"). Appended last (identities 71, 72) so existing .qlc
-// opcode numbers stay valid. Three register operands, no i32 slot. The
-// compiler emits them for every postfix [...] read or write, replacing the
-// ARRGET/ARRPUT emission; those remain valid opcodes.
+// indexget"/"indexput"). Three register operands, no i32 slot. The compiler
+// emits them for every postfix [...] read or write, replacing the
+// ARRGET/ARRPUT emission; those remain valid opcodes. Identities 64/65 after
+// the Phase 3 S3 compaction (they were 71/72).
 // ---------------------------------------------------------------------------
 static void testIndexSubscript() {
   try {
-    check(kOpcodeUsedCount == 79, "index: kOpcodeUsedCount is 79");
-    check(static_cast<uint8_t>(Opcode::INDEXGET) == 71,
-          "indexget: identity 71 (appended last)");
-    check(static_cast<uint8_t>(Opcode::INDEXPUT) == 72,
-          "indexput: identity 72 (appended last)");
+    check(kOpcodeUsedCount == 72, "index: kOpcodeUsedCount is 72");
+    check(static_cast<uint8_t>(Opcode::INDEXGET) == 64,
+          "indexget: identity 64 (after the S3 compaction)");
+    check(static_cast<uint8_t>(Opcode::INDEXPUT) == 65,
+          "indexput: identity 65 (after the S3 compaction)");
     check(std::strcmp(Bytecode::name(Opcode::INDEXGET), "indexget") == 0,
           "indexget: name");
     check(std::strcmp(Bytecode::name(Opcode::INDEXPUT), "indexput") == 0,
@@ -1292,7 +1278,7 @@ static void testIndexSubscript() {
     in.c = 3;
     std::vector<uint8_t> buf;
     encodeInstruction(buf, in);
-    check(buf.size() == 4 && buf[0] == 71 && buf[1] == 1 && buf[2] == 2 &&
+    check(buf.size() == 4 && buf[0] == 64 && buf[1] == 1 && buf[2] == 2 &&
               buf[3] == 3,
           "indexget: encodes to 4 bytes");
     DecodedInstruction out;
@@ -1308,7 +1294,7 @@ static void testIndexSubscript() {
     in.c = 6;
     buf.clear();
     encodeInstruction(buf, in);
-    check(buf.size() == 4 && buf[0] == 72 && buf[1] == 4 && buf[2] == 5 &&
+    check(buf.size() == 4 && buf[0] == 65 && buf[1] == 4 && buf[2] == 5 &&
               buf[3] == 6,
           "indexput: encodes to 4 bytes");
     decodeInstruction(buf.data(), 0, buf.size(), out);
@@ -1316,10 +1302,10 @@ static void testIndexSubscript() {
               out.a == 4 && out.b == 5 && out.c == 6,
           "indexput: decode round-trip");
 
-    // No renumbering: the previously last opcode keeps its identity, and the
-    // single-kind subscript opcodes stay valid (retained, no longer emitted).
-    check(static_cast<uint8_t>(Opcode::DEEPCOPY) == 70,
-          "index: deepcopy identity unchanged (70)");
+    // The subscript opcodes sit directly above deepcopy, and the single-kind
+    // subscript opcodes stay valid (retained, no longer emitted).
+    check(static_cast<uint8_t>(Opcode::DEEPCOPY) == 63,
+          "index: deepcopy identity is 63 (after the S3 compaction)");
     check(isValidOpcode(Opcode::ARRGET) && isValidOpcode(Opcode::ARRPUT),
           "index: arrget/arrput still valid opcodes");
   } catch (const QLangError &e) {
@@ -1408,7 +1394,7 @@ static void testFlagFlowIdentities() {
     for (size_t i = 0; i < 5; i++) {
       const Opcode op = compares[i];
       const std::string n = names[i];
-      const int want = 73 + static_cast<int>(i);
+      const int want = 66 + static_cast<int>(i);  // 66..70 after S3
       check(static_cast<int>(op) == want, n + ": identity " + std::to_string(want));
       check(std::strcmp(Bytecode::name(op), names[i]) == 0, n + ": name");
       check(isValidOpcode(op), n + ": valid identity");
@@ -1434,7 +1420,8 @@ static void testFlagFlowIdentities() {
             n + ": reserved kind 3 rejected by the size table");
     }
 
-    check(static_cast<int>(Opcode::TST) == 78, "tst: identity 78 (appended last)");
+    check(static_cast<int>(Opcode::TST) == 71,
+          "tst: identity 71 (last defined, after the S3 compaction)");
     check(std::strcmp(Bytecode::name(Opcode::TST), "tst") == 0, "tst: name");
     check(isValidOpcode(Opcode::TST), "tst: valid identity");
     check(baseOperandCount(Opcode::TST) == 1 &&
@@ -1470,8 +1457,8 @@ static void testFlagFlowIdentities() {
     in.b = 1;
     std::vector<uint8_t> buf;
     encodeInstruction(buf, in);
-    check(buf.size() == 3 && buf[0] == 74 && buf[1] == 2 && buf[2] == 1,
-          "ltf r2, r1 encodes to [4A][02][01]");
+    check(buf.size() == 3 && buf[0] == 67 && buf[1] == 2 && buf[2] == 1,
+          "ltf r2, r1 encodes to [43][02][01]");
     DecodedInstruction out;
     decodeInstruction(buf.data(), 0, buf.size(), out);
     check(out.op == Opcode::LTF && !out.escaped && out.size == 3 && out.a == 2 &&
@@ -1486,9 +1473,9 @@ static void testFlagFlowIdentities() {
     in.imm = 5;
     buf.clear();
     encodeInstruction(buf, in);
-    check(buf.size() == 4 && buf[0] == (0x49 | kOpcodeEscape) &&
+    check(buf.size() == 4 && buf[0] == (0x42 | kOpcodeEscape) &&
               buf[1] == 0x40 && buf[2] == 12 && buf[3] == 5,
-          "eqf r12, 5 encodes to [C9][40][0C][05] (4 bytes, decision D5)");
+          "eqf r12, 5 encodes to [C2][40][0C][05] (4 bytes, decision D5)");
     decodeInstruction(buf.data(), 0, buf.size(), out);
     check(out.op == Opcode::EQF && out.escaped && out.size == 4 && out.a == 12 &&
               out.rightKind == RightKind::Immediate &&
@@ -1503,9 +1490,9 @@ static void testFlagFlowIdentities() {
     in.b = 3;
     buf.clear();
     encodeInstruction(buf, in);
-    check(buf.size() == 4 && buf[0] == (0x4D | kOpcodeEscape) &&
+    check(buf.size() == 4 && buf[0] == (0x46 | kOpcodeEscape) &&
               buf[1] == 0x08 && buf[2] == 4 && buf[3] == 3,
-          "gtef r4, pool[3] encodes to [CD][08][04][03] (no third operand)");
+          "gtef r4, pool[3] encodes to [C6][08][04][03] (no third operand)");
     decodeInstruction(buf.data(), 0, buf.size(), out);
     check(out.op == Opcode::GTEF && out.escaped && out.size == 4 && out.a == 4 &&
               out.b == 3 && out.rightKind == RightKind::ConstPool,
@@ -1516,15 +1503,15 @@ static void testFlagFlowIdentities() {
     in.a = 3;
     buf.clear();
     encodeInstruction(buf, in);
-    check(buf.size() == 2 && buf[0] == 78 && buf[1] == 3,
-          "tst r3 encodes to [4E][03]");
+    check(buf.size() == 2 && buf[0] == 71 && buf[1] == 3,
+          "tst r3 encodes to [47][03]");
     decodeInstruction(buf.data(), 0, buf.size(), out);
     check(out.op == Opcode::TST && out.size == 2 && out.a == 3,
           "tst decode round-trip");
 
-    // No renumbering: the previous tail keeps its identities.
-    check(static_cast<uint8_t>(Opcode::INDEXPUT) == 72,
-          "flag-flow: indexput identity unchanged (72)");
+    // The flag-flow family sits directly above the subscript opcodes.
+    check(static_cast<uint8_t>(Opcode::INDEXPUT) == 65,
+          "flag-flow: indexput identity is 65 (after the S3 compaction)");
   } catch (const QLangError &e) {
     check(false, std::string("flag-flow: ") + e.what());
   }
@@ -1745,165 +1732,6 @@ static void testV6LoadValidation() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// The deprecated spellings still execute (plan §3 coexistence, §11 item 6): M2
-// deleted the v5 *encoding*, not the v5 *opcodes*. `movi`/`movc`/`addi`/`subi`/
-// `cmpi` are no longer emitted, but a stream that uses them — together with the
-// `jmpfalse`/`jmptrue` truthiness jumps, which stay in use — must still load,
-// decode and run with the historical semantics.
-// ---------------------------------------------------------------------------
-static void testDeprecatedSpellings() {
-  struct Item {
-    DecodedInstruction d;
-    int jumpTo = -1;  // instruction index a jump targets, -1 for none
-  };
-  std::vector<Item> items;
-
-  // A base (unescaped) instruction: 1-byte operands, 1-byte signed immediate.
-  auto addBase = [&](Opcode op, int a, int b, int64_t imm) {
-    DecodedInstruction d;
-    d.op = op;
-    d.a = a;
-    d.b = b;
-    d.imm = imm;
-    items.push_back({d, -1});
-  };
-  // An escaped jmp16 (modifier 0): a 2-byte relative offset, preceded by the
-  // condition register for the truthiness jumps only.
-  auto addJump = [&](Opcode op, int a, int target) {
-    DecodedInstruction d;
-    d.op = op;
-    d.escaped = true;
-    d.modifier = 0;
-    d.a = a;
-    items.push_back({d, target});
-  };
-
-  const int R0 = 0, R1 = 1, R2 = 2, R9 = 9, R10 = 10, R11 = 11, R12 = 12,
-            R13 = 13, R14 = 14, R15 = 15, R16 = 16;
-
-  addBase(Opcode::MOVI, R0, 0, 10);   // 0  r0 = 10
-  addBase(Opcode::ADDI, R0, 0, 5);    // 1  r0 = r0 + 5
-  addBase(Opcode::SUBI, R0, 0, 3);    // 2  r0 = r0 - 3
-  addBase(Opcode::MOVC, R1, 0, 0);    // 3  r1 = pool[0] (array)
-  addBase(Opcode::MOVC, R2, 1, 0);    // 4  r2 = pool[1] (nil, falsy)
-  addBase(Opcode::MOVI, R9, 0, 1);    // 5  r9 = 1 (truthy)
-  addJump(Opcode::JMPIFTRUE, R9, 8);  // 6  taken -> skip 7
-  addBase(Opcode::MOVI, R10, 0, 1);   // 7  must not run
-  addJump(Opcode::JMPIFFALSE, R9, 10);  // 8  not taken (r9 truthy)
-  addBase(Opcode::MOVI, R11, 0, 2);   // 9  runs
-  addJump(Opcode::JMPIFFALSE, R2, 12);  // 10 taken (nil) -> skip 11
-  addBase(Opcode::MOVI, R12, 0, 1);   // 11 must not run
-  addJump(Opcode::JMPIFTRUE, R2, 14);   // 12 not taken (nil)
-  addBase(Opcode::MOVI, R13, 0, 4);   // 13 runs
-  addBase(Opcode::CMPI, R0, 0, 12);   // 14 cmpi r0, 12 -> equal
-  addJump(Opcode::JE, 0, 17);         // 15 taken -> skip 16
-  addBase(Opcode::MOVI, R14, 0, 1);   // 16 must not run
-  addBase(Opcode::CMPI, R0, 0, 20);   // 17 cmpi r0, 20 -> less
-  addJump(Opcode::JE, 0, 20);         // 18 not taken
-  addBase(Opcode::MOVI, R15, 0, 3);   // 19 runs
-  addBase(Opcode::CMPI, R0, 0, 5);    // 20 cmpi r0, 5 -> greater
-  addJump(Opcode::JG, 0, 23);         // 21 taken -> skip 22
-  addBase(Opcode::MOVI, R16, 0, 1);   // 22 must not run
-  addBase(Opcode::RETURN, R0, 0, 0);  // 23 return r0
-
-  // Two-pass assembly: the sizes first (a jump's width is fixed by its
-  // modifier), then the relative offsets, then the bytes.
-  std::vector<size_t> sizes(items.size()), offs(items.size());
-  for (size_t k = 0; k < items.size(); k++) {
-    std::vector<uint8_t> tmp;
-    encodeInstruction(tmp, items[k].d);
-    sizes[k] = tmp.size();
-  }
-  size_t total = 0;
-  for (size_t k = 0; k < items.size(); k++) {
-    offs[k] = total;
-    total += sizes[k];
-  }
-  std::vector<uint8_t> code;
-  for (size_t k = 0; k < items.size(); k++) {
-    if (items[k].jumpTo >= 0)
-      items[k].d.jumpOffset = static_cast<int32_t>(
-          offs[static_cast<size_t>(items[k].jumpTo)] - (offs[k] + sizes[k]));
-    encodeInstruction(code, items[k].d);
-  }
-  check(code.size() == total, "legacy: the stream tiles without gaps");
-
-  // Load it back through the codec: the deprecated identities (and the pool
-  // entries they read) must survive a .qlc round-trip, not just an in-memory
-  // stream. pool[0] is an array (so `movc` has to clone it), pool[1] a nil.
-  CompiledProgram built = programWithCode(code, offs, 17);
-  built.functions[0].constants = {
-      QLangValue::Array({QLangValue::Int(1), QLangValue::Int(2)}),
-      QLangValue()};
-  CompiledProgram prog;
-  {
-    std::string why;
-    check(readImage(writeImage(built), prog, why),
-          "legacy: the image loads (" + why + ")");
-  }
-  if (prog.functions.empty()) {
-    check(false, "legacy: no function to run");
-    return;
-  }
-  const Function &fn = prog.functions[0];
-  check(fn.registerCount == 17 && fn.constants.size() == 2,
-        "legacy: the frame size and the pool survived the round-trip");
-
-  int movi = 0, movc = 0, addi = 0, subi = 0, cmpi = 0, jpf = 0, jpt = 0;
-  for (size_t off : fn.instrOffsets) {
-    DecodedInstruction d;
-    decodeInstruction(fn.code.data(), off, fn.code.size(), d);
-    switch (d.op) {
-    case Opcode::MOVI: movi++; break;
-    case Opcode::MOVC: movc++; break;
-    case Opcode::ADDI: addi++; break;
-    case Opcode::SUBI: subi++; break;
-    case Opcode::CMPI: cmpi++; break;
-    case Opcode::JMPIFFALSE: jpf++; break;
-    case Opcode::JMPIFTRUE: jpt++; break;
-    default: break;
-    }
-  }
-  check(movi == 9 && movc == 2 && addi == 1 && subi == 1 && cmpi == 3 &&
-            jpf == 2 && jpt == 2,
-        "legacy: every deprecated spelling still decodes");
-
-  QLangContext ctx;
-  try {
-    QLangVM vm(prog, ctx);
-    vm.run();
-  } catch (const QLangError &e) {
-    check(false, std::string("legacy: the stream threw (") + e.what() + ")");
-    return;
-  }
-
-  const auto &slots = ctx.globalSlots();
-  auto reg = [&](int r) -> const QLangValue & {
-    return slots[static_cast<size_t>(r)];
-  };
-  using T = QLangValue::Type;
-  check(reg(R0).type() == T::Int && reg(R0).asInt() == 12,
-        "legacy: movi + addi + subi");
-  check(reg(R1).type() == T::Array &&
-            reg(R1).asArray().get() != fn.constants[0].asArray().get(),
-        "legacy: movc clones a pool container (decision D6)");
-  check(fn.constants[0].asArray()->size() == 2 &&
-            (*fn.constants[0].asArray())[0].asInt() == 1,
-        "legacy: the pool array was not mutated");
-  check(reg(R2).type() == T::Nil, "legacy: movc reads a nil pool entry");
-  check(reg(R10).type() == T::Nil, "legacy: jmptrue taken skips the next op");
-  check(reg(R11).type() == T::Int && reg(R11).asInt() == 2,
-        "legacy: jmpfalse not taken on a truthy register");
-  check(reg(R12).type() == T::Nil, "legacy: jmpfalse taken on nil");
-  check(reg(R13).type() == T::Int && reg(R13).asInt() == 4,
-        "legacy: jmptrue not taken on nil");
-  check(reg(R14).type() == T::Nil, "legacy: cmpi equal -> je taken");
-  check(reg(R15).type() == T::Int && reg(R15).asInt() == 3,
-        "legacy: cmpi less -> je not taken");
-  check(reg(R16).type() == T::Nil, "legacy: cmpi greater -> jg taken");
-}
-
 int main() {
   testValues();
   testProgram();
@@ -1920,7 +1748,6 @@ int main() {
   testIndexLowering();
   testFlagFlowIdentities();
   testV6LoadValidation();
-  testDeprecatedSpellings();
   testMalformed();
   std::cout << (fails == 0 ? "all codec checks passed\n"
                            : "codec checks FAILED\n");

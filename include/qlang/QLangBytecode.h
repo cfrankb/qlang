@@ -49,11 +49,11 @@ enum class Builtin : int {
 
 // Register-machine opcodes. This is a small register VM: each script variable
 // maps to a register, and arithmetic/comparison results are written to a
-// register. Constants live in a separate pool and are loaded with MOVC.
+// register. Constants live in a separate pool and are loaded with MOV
+// (right-operand kind 2).
 enum class Opcode : uint8_t {
   // Data movement
-  MOVC, // r[a] = constants[b]
-  MOV,   // r[a] = r[b]
+  MOV,   // r[a] = r[b]  (kind 1; kind 0 = immediate, kind 2 = constants[b])
   CONV,  // r[a] = convert(r[b], type c)  -- enforce a typed declaration
   NEG,   // r[a] = -r[b]
   INC,   // r[a] += 1
@@ -128,8 +128,6 @@ enum class Opcode : uint8_t {
 
   // Control flow
   JMP,       // pc = a
-  JMPIFFALSE, // if !truth(r[a]) pc = b
-  JMPIFTRUE,  // if truth(r[a]) pc = b
   CONTINUE,  // pc = loop test label (next iteration)
   BREAK,     // pc = loop exit label
 
@@ -168,29 +166,13 @@ enum class Opcode : uint8_t {
   // execution. r[c] is the generator register (used for self-reference).
   YIELD, // r[a] = generator(r[b]); r[c] = generator register
 
-  // Load a 32-bit integer literal straight into a register, skipping the
-  // constant pool. r[a] = Int(i32). Type::Int only: the value tag must match
-  // the pool path (a Bool literal is Bool-typed, not Int). Appended last so
-  // existing .qlc opcode numbers stay valid.
-  MOVI, // r[a] = i32 immediate
-
-  // In-place addition of a 32-bit integer immediate: r[a] = r[a] + Int(i32).
-  // Same operand layout as MOVI (dest register in a, literal in i32; b/c
-  // unused). Appended last so existing .qlc opcode numbers stay valid.
-  ADDI, // r[a] = r[a] + i32 immediate
-
-  // In-place subtraction of a 32-bit integer immediate: r[a] = r[a] - Int(i32).
-  // Same operand layout as ADDI/MOVI (dest register in a, literal in i32; b/c
-  // unused). Appended last so existing .qlc opcode numbers stay valid.
-  SUBI, // r[a] = r[a] - i32 immediate
-
   // Comparison: set the frame's shared flags (GR/EQ/LT) from two Int values,
-  // wiping any prior flags. CMP compares two registers (a, b); CMPI compares
-  // a register (a) against a 32-bit Int immediate (i32). Int operands only.
-  CMP,  // flags = cmp(regs[a], regs[b])   (a, b are registers)
-  CMPI, // flags = cmp(regs[a], Int(i32))  (a is a register, i32 the literal)
+  // wiping any prior flags. The right operand is a register in the base form;
+  // an immediate or pool right operand makes it in-place (plan §2.6). Int
+  // operands only.
+  CMP, // flags = cmp(regs[a], right)
 
-  // Conditional jumps on the flags set by CMP/CMPI. The pc target is the
+  // Conditional jumps on the flags set by CMP. The pc target is the
   // 32-bit i32 slot (like JMP). Each tests a distinct flag pattern:
   //   JG  gr             (a > b)     JGE  gr or eq (a >= b)
   //   JL  lt             (a < b)     JLE  lt or eq (a <= b)
@@ -257,14 +239,12 @@ enum class Opcode : uint8_t {
   // flags = truth(regs[a]) ? EQ : 0, so `tst` + `je`/`jne` is the flag form of
   // a bare truthiness test. One register operand; the kind field only selects
   // its addressing width, so `tst r, imm` is a load-time rejection.
-  // Implemented but not emitted in v6 (M3 D4) — `jmpfalse`/`jmptrue` still
-  // carry truthiness until Phase 3 retires them.
   TST // flags = truth(regs[a]) ? EQ : 0
 };
 
 inline constexpr uint8_t kOpcodeEscape = 0x80;
 inline constexpr uint8_t kOpcodeMax = 128; // identities 0..127
-inline constexpr uint8_t kOpcodeUsedCount = 79; // defined identities 0..78
+inline constexpr uint8_t kOpcodeUsedCount = 72; // defined identities 0..71
 
 // ---------------------------------------------------------------------------
 // `.qlc` v6 modifier byte (docs/plans/encoding-v6-and-indirect-plan.md §2,
@@ -277,11 +257,11 @@ inline constexpr uint8_t kOpcodeUsedCount = 79; // defined identities 0..78
 //   bit 2-3  right-operand *kind*: immediate / register / const pool
 //   bit 4-7  right-operand *form*: interpreted by the kind
 //
-// The kind field is what folds the `i`/`c` suffix opcodes (movi, movc, addi,
-// subi, cmpi) into the unsuffixed opcodes: those identities still *decode*
-// (plan §3) but are no longer emitted. The tables and the entry
-// points below are the only encoding — size, encoder and decoder all read the
-// same tables, so they cannot drift apart.
+// The kind field is what folds the retired `i`/`c` suffix opcodes (movi, movc,
+// addi, subi, cmpi) into the unsuffixed opcodes: those identities are gone
+// (Phase 3 S3) and the kind field is their only remaining spelling. The tables
+// and the entry points below are the only encoding — size, encoder and decoder
+// all read the same tables, so they cannot drift apart.
 // ---------------------------------------------------------------------------
 
 // Modifier bits 2-3: what the right operand *is*.
@@ -370,13 +350,13 @@ bool kindPermitted(Opcode op, RightKind kind);
 
 // Arity rule (plan §2.6): for the binary ALU and flag-compare families a right
 // operand that is not a register means the in-place 2-operand form
-// r[a] = r[a] op right (today's addi/subi semantics), so the trailing 1-byte
-// `c` is absent. Every other 3-operand opcode keeps it (makegen's argument
-// count, conv/cast's type id, seqget's index, ...).
+// r[a] = r[a] op right (the retired addi/subi semantics), so the trailing
+// 1-byte `c` is absent. Every other 3-operand opcode keeps it (makegen's
+// argument count, conv/cast's type id, seqget's index, ...).
 bool isInPlaceForm(Opcode op, RightKind kind);
 
 struct DecodedInstruction {
-  Opcode op = Opcode::MOVC;
+  Opcode op = Opcode::MOV;
   bool escaped = false;   // true when the opcode byte carried the escape bit
   uint8_t modifier = 0;   // raw modifier byte; meaningful only when escaped
   // v6: what the right operand is. For a base form this is `defaultRightKind`
@@ -400,7 +380,9 @@ struct DecodedInstruction {
 // Class predicates
 bool isValidOpcode(Opcode op);
 bool isJumpOpcode(Opcode op);
-bool isImmediateOpcode(Opcode op);
+// Every non-jump opcode takes a register or constant-pool right operand (the
+// `i`-suffix immediate identities are gone; an immediate right operand is a
+// modifier kind, not an opcode identity).
 bool isRegConstOpcode(Opcode op);
 
 // Size computation. The base (unescaped) form carries no modifier byte.

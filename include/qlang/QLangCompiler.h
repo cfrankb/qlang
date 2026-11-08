@@ -108,8 +108,8 @@ struct FnEmitter {
 
   // Register-right emission (the historical shape). The right-operand kind
   // follows the opcode identity, because a base form carries no modifier byte
-  // to state it in: movi/addi/subi/cmpi mean an immediate, movc/makefunc/
-  // makegen a pool index, everything else a register.
+  // to state it in: call means an immediate, makefunc/makegen a pool index,
+  // everything else a register.
   size_t emit(Opcode op, int32_t a = 0, int32_t b = 0, int32_t c = 0,
               int64_t imm = 0, uint16_t line = 0, uint16_t col = 0) {
     RawInstr r;
@@ -190,10 +190,6 @@ struct FnEmitter {
   void finish(Function &fn);
 
 private:
-  static bool isConditionalJumpOpcode(Opcode op) {
-    return op == Opcode::JMPIFFALSE || op == Opcode::JMPIFTRUE;
-  }
-
   // Pick the modifier byte for a non-jump instruction from its operand widths
   // and immediate form, and report whether the instruction has to carry the
   // escape bit. Under the 2/2/4 layout a modifier of 0x00 is a *legal* escaped
@@ -425,7 +421,7 @@ private:
   // variables qualify (SPEC §bytecodes: encoding guidelines — avoid
   // temporary registers and register aliasing).
   int inPlaceReg(const ExprPtr &e) const;
-  // Fold `x = x + k` / `x = x - k` into an in-place INC/DEC/ADDI/SUBI on
+  // Fold `x = x + k` / `x = x - k` into an in-place INC/DEC/ADD/SUB on
   // register r (SPEC §bytecodes: encoding guidelines — favor int
   // immediates over temporaries). Returns true when a fold was emitted.
   bool foldSelfArith(const ExprPtr &e, const std::string &name, int r);

@@ -381,13 +381,8 @@ int main() {
       {Opcode::CMP, RightKind::Register, 0x04},
       {Opcode::ARRGET, RightKind::Register, 0x04},
       {Opcode::RETURN, RightKind::Register, 0x04},
-      {Opcode::MOVC, RightKind::ConstPool, 0x08},
       {Opcode::MAKEFUNC, RightKind::ConstPool, 0x08},
       {Opcode::MAKEGEN, RightKind::ConstPool, 0x08},
-      {Opcode::MOVI, RightKind::Immediate, 0x40},
-      {Opcode::ADDI, RightKind::Immediate, 0x40},
-      {Opcode::SUBI, RightKind::Immediate, 0x40},
-      {Opcode::CMPI, RightKind::Immediate, 0x40},
       {Opcode::CALL, RightKind::Immediate, 0x50},
       // The flag-flow family (plan M3 D5): a base form can only mean
       // `defaultRightKind`, which is a register for every one of them.
@@ -403,10 +398,9 @@ int main() {
               " == 0x40/0x08/0x04 class value");
   }
   check(baseModifier(Opcode::CALL) == 0x50, "CALL always carries e = 0x50");
-  for (Opcode op : {Opcode::JMP, Opcode::JMPIFFALSE, Opcode::JMPIFTRUE,
-                    Opcode::CONTINUE, Opcode::BREAK, Opcode::JE, Opcode::JNE,
-                    Opcode::JG, Opcode::JGE, Opcode::JL, Opcode::JLE,
-                    Opcode::Nop})
+  for (Opcode op : {Opcode::JMP, Opcode::CONTINUE, Opcode::BREAK, Opcode::JE,
+                    Opcode::JNE, Opcode::JG, Opcode::JGE, Opcode::JL,
+                    Opcode::JLE, Opcode::Nop})
     check(baseModifier(op) == kNoBaseModifier,
           "no base modifier for op " + std::to_string(static_cast<int>(op)));
   // The kind a base form means must agree with the modifier it is equivalent
@@ -426,9 +420,7 @@ int main() {
     uint8_t mask;
   };
   static const KindCase kKinds[] = {
-      {Opcode::MOVI, 0x1},  {Opcode::ADDI, 0x1},
-      {Opcode::SUBI, 0x1},  {Opcode::CMPI, 0x1},
-      {Opcode::CALL, 0x1},  {Opcode::MOVC, 0x4},
+      {Opcode::CALL, 0x1},
       {Opcode::MAKEFUNC, 0x4}, {Opcode::MAKEGEN, 0x4},
       {Opcode::MOV, 0x7},   {Opcode::CONV, 0x7},
       {Opcode::NEG, 0x7},   {Opcode::DEEPCOPY, 0x7},
@@ -456,10 +448,10 @@ int main() {
   check(!kindPermitted(Opcode::ARRGET, RightKind::Immediate) &&
             !kindPermitted(Opcode::ARRGET, RightKind::ConstPool),
         "array/table ops accept only a register");
-  check(!kindPermitted(Opcode::MOVC, RightKind::Register),
-        "movc accepts only a constant");
-  check(!kindPermitted(Opcode::MOVI, RightKind::ConstPool),
-        "movi accepts only an immediate");
+  check(!kindPermitted(Opcode::MAKEFUNC, RightKind::Register),
+        "makefunc accepts only a constant");
+  check(!kindPermitted(Opcode::CALL, RightKind::ConstPool),
+        "call accepts only an immediate");
   for (Opcode op : {Opcode::MOV, Opcode::ADD, Opcode::ARRGET, Opcode::Nop})
     check(!kindPermitted(op, RightKind::Reserved),
           "reserved kind is never permitted (op " +
@@ -523,8 +515,7 @@ int main() {
       {Opcode::CALL, 0x50, 6}, {Opcode::CALL, 0x51, 7},
       // jump class: e selects the offset width only
       {Opcode::JMP, 0x00, 4},  {Opcode::JMP, 0x01, 6},
-      {Opcode::JE, 0x01, 6},   {Opcode::JMPIFFALSE, 0x00, 5},
-      {Opcode::JMPIFTRUE, 0x01, 7},
+      {Opcode::JE, 0x01, 6},   {Opcode::JLE, 0x00, 4},
   };
   for (const SizeCase &c : kSizes) {
     size_t size = 0;
@@ -556,9 +547,6 @@ int main() {
       {Opcode::ARRGET, 0x40, "immediate kind not permitted"},
       {Opcode::ARRGET, 0x08, "constant kind not permitted"},
       {Opcode::TABPUT, 0x00, "immediate kind not permitted"},
-      {Opcode::MOVC, 0x04, "register kind not permitted for movc"},
-      {Opcode::MOVI, 0x04, "register kind not permitted for movi"},
-      {Opcode::CMPI, 0x08, "constant kind not permitted for cmpi"},
       {Opcode::MAKEGEN, 0x40, "immediate kind not permitted for makegen"},
       {Opcode::MAKEFUNC, 0x04, "register kind not permitted for makefunc"},
       {Opcode::Nop, 0x04, "zero-operand opcode cannot be escaped"},
@@ -575,7 +563,7 @@ int main() {
       {Opcode::CALL, 0x0C, "call: reserved kind"},
       {Opcode::JMP, 0x02, "invalid jump modifier"},
       {Opcode::JMP, 0x40, "jump class ignores the 2/2/4 layout"},
-      {Opcode::JMPIFFALSE, 0x03, "invalid jump modifier"},
+      {Opcode::JE, 0x03, "invalid jump modifier"},
   };
   for (const BadCase &c : kBad) {
     check(throws([&] { return escapedInstructionSize(c.op, c.e); }),
@@ -621,20 +609,6 @@ int main() {
     bytesAre(d, {static_cast<uint8_t>(Opcode::ADD), 1, 2, 4}, "add");
   }
   {
-    DecodedInstruction d = ins(Opcode::MOVI, false, 0);
-    d.a = 2;
-    d.imm = -5;
-    roundTrip(d, "base movi r2, -5", 3);
-    bytesAre(d, {static_cast<uint8_t>(Opcode::MOVI), 2, 0xFB}, "movi");
-  }
-  {
-    DecodedInstruction d = ins(Opcode::MOVC, false, 0);
-    d.a = 1;
-    d.b = 9;
-    roundTrip(d, "base movc r1, pool[9]", 3);
-    bytesAre(d, {static_cast<uint8_t>(Opcode::MOVC), 1, 9}, "movc");
-  }
-  {
     DecodedInstruction d = ins(Opcode::ARRGET, false, 0);
     d.a = 1;
     d.b = 2;
@@ -666,13 +640,6 @@ int main() {
     d.jumpOffset = -3;
     roundTrip(d, "base jmp -3", 2);
     bytesAre(d, {static_cast<uint8_t>(Opcode::JMP), 0xFD}, "jmp");
-  }
-  {
-    DecodedInstruction d = ins(Opcode::JMPIFFALSE, false, 0);
-    d.a = 2;
-    d.jumpOffset = 5;
-    roundTrip(d, "base jmpfalse r2, +5", 3);
-    bytesAre(d, {static_cast<uint8_t>(Opcode::JMPIFFALSE), 2, 5}, "jmpfalse");
   }
 
   // --- 8. Immediate forms, boundary values (plan §2.3, D8)
@@ -820,10 +787,10 @@ int main() {
     roundTrip(d, "mov r1, pool[100000] (dword constant)", 7);
   }
   {
-    DecodedInstruction d = ins(Opcode::MOVC, true, 0x08);
+    DecodedInstruction d = ins(Opcode::MOV, true, 0x08);
     d.a = 1;
     d.b = 200;
-    roundTrip(d, "escaped movc r1, pool[200]", 4);
+    roundTrip(d, "escaped mov r1, pool[200] (byte constant)", 4);
   }
   {
     // e = 0x15: word left, register right, word right; `c` stays 1 byte.
@@ -900,10 +867,9 @@ int main() {
     roundTrip(d, "jmp32 INT32_MAX", 6);
   }
   {
-    DecodedInstruction d = ins(Opcode::JMPIFFALSE, true, 0x00);
-    d.a = 200;
+    DecodedInstruction d = ins(Opcode::JE, true, 0x00);
     d.jumpOffset = -2;
-    roundTrip(d, "jmpfalse r200, -2 (jmp16)", 5);
+    roundTrip(d, "je -2 (jmp16)", 4);
   }
   {
     DecodedInstruction d = ins(Opcode::JLE, true, 0x01);
@@ -933,8 +899,6 @@ int main() {
   };
   static const RejectCase kRejects[] = {
       {Opcode::MOV, false, 0, 300, 0, 0, 0, 0, 0, "base form register > 255"},
-      {Opcode::MOVI, false, 0, 2, 0, 0, 200, 0, 0, "base immediate > i8"},
-      {Opcode::MOVI, false, 0, 2, 0, 0, -129, 0, 0, "base immediate < i8"},
       {Opcode::MOV, true, 0x04, 1, 300, 0, 0, 0, 0, "1-byte right > 255"},
       {Opcode::MOV, true, 0x05, 70000, 0, 0, 0, 0, 0, "2-byte left > 65535"},
       {Opcode::MOV, true, 0x06, -1, 0, 0, 0, 0, 0, "negative left index"},
@@ -1100,7 +1064,9 @@ int main() {
   // retired encoding suite; the emitter picks operand and offset widths with
   // these, so they are part of the encoding contract).
   check(baseInstructionSize(Opcode::MOV) == 3, "baseInstructionSize MOV == 3");
-  check(baseInstructionSize(Opcode::MOVI) == 3, "baseInstructionSize MOVI == 3");
+  check(baseInstructionSize(Opcode::Nop) == 1, "baseInstructionSize Nop == 1");
+  check(baseInstructionSize(Opcode::RETURN) == 2,
+        "baseInstructionSize RETURN == 2");
   check(baseInstructionSize(Opcode::JMP) == 2, "baseInstructionSize JMP == 2");
   check(baseInstructionSize(Opcode::ADD) == 4, "baseInstructionSize ADD == 4");
   check(minJumpSize(5) == 2, "minJumpSize(5) == 2");
@@ -1217,18 +1183,11 @@ int main() {
     std::vector<DecodedInstruction> prog;
     auto emit = [&prog](const DecodedInstruction &d) { prog.push_back(d); };
 
-    // The base forms of the three right-operand classes.
+    // The base form: a base mov can only mean a register right operand
+    // (defaultRightKind), the other two classes are the escaped forms below.
     DecodedInstruction d = ins(Opcode::MOV, false, 0);
     d.a = 5;
     d.b = 9;
-    emit(d); // 3
-    d = ins(Opcode::MOVC, false, 0);
-    d.a = 5;
-    d.b = 9;
-    emit(d); // 3
-    d = ins(Opcode::MOVI, false, 0);
-    d.a = 5;
-    d.imm = -5;
     emit(d); // 3
 
     // kind 0: every immediate form, in enum order.
@@ -1336,18 +1295,15 @@ int main() {
         {Opcode::JMP, false, 0, 0, 2},
         {Opcode::JMP, true, 0x00, 0, 500},
         {Opcode::JMP, true, 0x01, 0, 100000},
-        {Opcode::JMPIFFALSE, false, 0, 1, 3},
-        {Opcode::JMPIFTRUE, true, 0x00, 1, 500},
+        {Opcode::JE, false, 0, 0, 3},
+        {Opcode::JNE, true, 0x00, 0, 500},
         {Opcode::JE, true, 0x01, 0, 100000},
         {Opcode::CONTINUE, false, 0, 0, -2},
     };
     for (const JumpCase &c : kJumps) {
       // minJumpSize is what the emitter calls: the width of a plain jump. Only
-      // JMPIFFALSE/JMPIFTRUE add a 1-byte condition register, and only the
-      // escaped form adds the modifier byte.
-      bool cond = c.op == Opcode::JMPIFFALSE || c.op == Opcode::JMPIFTRUE;
-      check(instructionSize(c.op, c.escaped, c.e) ==
-                minJumpSize(c.off) + (cond ? 1 : 0),
+      // the escaped form adds the modifier byte.
+      check(instructionSize(c.op, c.escaped, c.e) == minJumpSize(c.off),
             "jump width of op " + std::to_string(static_cast<int>(c.op)) +
                 " matches the emitter's choice");
       d = ins(c.op, c.escaped, c.e);

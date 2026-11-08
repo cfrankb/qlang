@@ -17,8 +17,6 @@ bool isValidOpcode(Opcode op) {
 bool isJumpOpcode(Opcode op) {
   switch (op) {
   case Opcode::JMP:
-  case Opcode::JMPIFFALSE:
-  case Opcode::JMPIFTRUE:
   case Opcode::CONTINUE:
   case Opcode::BREAK:
   case Opcode::JE:
@@ -33,29 +31,7 @@ bool isJumpOpcode(Opcode op) {
   }
 }
 
-bool isImmediateOpcode(Opcode op) {
-  switch (op) {
-  case Opcode::MOVI:
-  case Opcode::ADDI:
-  case Opcode::SUBI:
-  case Opcode::CMPI:
-    return true;
-  default:
-    return false;
-  }
-}
-
-bool isRegConstOpcode(Opcode op) {
-  return !isJumpOpcode(op) && !isImmediateOpcode(op);
-}
-
-// Jumps that test a register: they carry a 1-byte condition register in
-// addition to the offset, in every form (base and escaped). The jump-class
-// modifier byte only selects the offset width, so the condition register has
-// no form field of its own (like the 3-operand `c`).
-static bool isConditionalJump(Opcode op) {
-  return op == Opcode::JMPIFFALSE || op == Opcode::JMPIFTRUE;
-}
+bool isRegConstOpcode(Opcode op) { return !isJumpOpcode(op); }
 
 // ---------------------------------------------------------------------------
 // Size computation
@@ -64,14 +40,8 @@ static bool isConditionalJump(Opcode op) {
 // Number of operand bytes (excluding opcode byte) for a base-form instruction
 // (declared in QLangBytecode.h: the emitter reads it to pick a modifier).
 size_t baseOperandCount(Opcode op) {
-  if (isJumpOpcode(op)) {
-    // JMPIFFALSE/JMPIFTRUE have a condition register + offset
-    if (op == Opcode::JMPIFFALSE || op == Opcode::JMPIFTRUE)
-      return 2; // reg + offset
+  if (isJumpOpcode(op))
     return 1; // offset only
-  }
-  if (isImmediateOpcode(op))
-    return 2; // reg + imm
   // 0-operand
   switch (op) {
   case Opcode::Nop:
@@ -97,7 +67,6 @@ size_t baseOperandCount(Opcode op) {
   // through to the default below.
   switch (op) {
   case Opcode::MOV:
-  case Opcode::MOVC:
   case Opcode::MAKEFUNC:
   case Opcode::REFLOAD:
   case Opcode::REFSTORE:
@@ -266,12 +235,9 @@ ImmType immediateFormType(uint8_t form) {
 }
 
 RightKind defaultRightKind(Opcode op) {
-  if (isImmediateOpcode(op)) // movi / addi / subi / cmpi
-    return RightKind::Immediate;
   switch (op) {
   case Opcode::CALL: // always escaped; the function id is an immediate
     return RightKind::Immediate;
-  case Opcode::MOVC:
   case Opcode::MAKEFUNC:
   case Opcode::MAKEGEN:
     return RightKind::ConstPool;
@@ -339,17 +305,7 @@ uint8_t permittedKinds(Opcode op) {
   constexpr uint8_t kReg = 1u << static_cast<uint8_t>(RightKind::Register);
   constexpr uint8_t kConst = 1u << static_cast<uint8_t>(RightKind::ConstPool);
 
-  // The deprecated `i`/`c` suffix identities keep decoding with their
-  // historical kind only (plan §3, coexistence rule), so a v6 stream may
-  // contain either spelling.
   switch (op) {
-  case Opcode::MOVI:
-  case Opcode::ADDI:
-  case Opcode::SUBI:
-  case Opcode::CMPI:
-    return kImm;
-  case Opcode::MOVC:
-    return kConst;
   case Opcode::CALL: // form fixed to 5 (plan §2.8)
     return kImm;
   case Opcode::MAKEFUNC:
@@ -436,10 +392,7 @@ size_t escapedInstructionSize(Opcode op, uint8_t e) {
     if (e > 1)
       throw QLangError(QLangErrorKind::Runtime, 0, 0,
                        "invalid jump escape modifier");
-    size_t size = 2 + (e == 0 ? 2 : 4); // jmp16 / jmp32
-    if (isConditionalJump(op))
-      size += 1; // deprecated jmpfalse/jmptrue carry a 1-byte condition reg
-    return size;
+    return 2 + (e == 0 ? 2 : 4); // jmp16 / jmp32
   }
 
   OperandWidth left = modifierLeftForm(e);
@@ -661,12 +614,6 @@ void encodeInstruction(std::vector<uint8_t> &out,
   // Jump class: the modifier is a width selector here, not a 2/2/4 field
   // (plan §2.7).
   if (isJumpOpcode(in.op)) {
-    if (isConditionalJump(in.op)) {
-      if (in.a < 0 || in.a > 255)
-        throw QLangError(QLangErrorKind::Runtime, 0, 0,
-                         "condition register out of range");
-      out.push_back(static_cast<uint8_t>(in.a));
-    }
     if (!in.escaped) {
       if (in.jumpOffset < -128 || in.jumpOffset > 127)
         throw QLangError(QLangErrorKind::Runtime, 0, 0,
@@ -755,7 +702,6 @@ struct OpMeta {
   uint8_t defKind;   // defaultRightKind
   uint8_t permitted; // permittedKinds bitmask
   bool jump;         // isJumpOpcode
-  bool condJump;     // isConditionalJump (deprecated jmpfalse/jmptrue)
   bool aluCmp;       // isAluOrFlagCompare (the in-place arity rule)
   bool call;         // CALL: always escaped, modifier fixed
 };
@@ -772,7 +718,6 @@ const OpMetaTable kOpMeta = [] {
     m.defKind = static_cast<uint8_t>(defaultRightKind(op));
     m.permitted = permittedKinds(op);
     m.jump = isJumpOpcode(op);
-    m.condJump = isConditionalJump(op);
     m.aluCmp = isAluOrFlagCompare(op);
     m.call = op == Opcode::CALL;
   }
@@ -898,12 +843,6 @@ void decodeInstruction(const uint8_t *code, size_t pc, size_t codeSize,
       if (e > 1)
         throw QLangError(QLangErrorKind::Runtime, 0, 0,
                          "invalid jump escape modifier");
-    }
-    if (m.condJump) {
-      if (pos >= codeSize)
-        throw QLangError(QLangErrorKind::Io, 0, 0,
-                         "truncated condition register");
-      out.a = code[pos++];
     }
     if (!escaped) {
       if (pos >= codeSize)
@@ -1193,7 +1132,6 @@ int Bytecode::addFunction(const std::string &name, int paramCount,
 
 const char *Bytecode::name(Opcode op) {
   switch (op) {
-  case Opcode::MOVC: return "movc";
   case Opcode::MOV: return "mov";
   case Opcode::CONV: return "conv";
   case Opcode::NEG: return "neg";
@@ -1241,8 +1179,6 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::INDPUT: return "indput";
   case Opcode::EVALKEY: return "evalkey";
   case Opcode::JMP: return "jmp";
-  case Opcode::JMPIFFALSE: return "jmpfalse";
-  case Opcode::JMPIFTRUE: return "jmptrue";
   case Opcode::CALLFN: return "callfn";
   case Opcode::CALLCLOS: return "callclo";
   case Opcode::RETURN: return "return";
@@ -1250,11 +1186,7 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::MAKEGEN: return "makegen";
   case Opcode::REFLOAD: return "refload";
   case Opcode::REFSTORE: return "refstore";
-  case Opcode::MOVI: return "movi";
-  case Opcode::ADDI: return "addi";
-  case Opcode::SUBI: return "subi";
   case Opcode::CMP: return "cmp";
-  case Opcode::CMPI: return "cmpi";
   case Opcode::JE: return "je";
   case Opcode::JNE: return "jne";
   case Opcode::JG: return "jg";

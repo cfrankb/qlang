@@ -1,6 +1,7 @@
 # Phase 3 — Opcode Retirement: Remove the Deprecated Spellings, Compact Identities, `.qlc` v7
 
-Status: **S1 + S2 landed (2026-11-08, uncommitted) — S3–S7 open.** Baseline
+Status: **S1 landed (`b86460b`); S2 gate re-verified there; S3 landed (2026-11-08,
+uncommitted) — `kOpcodeUsedCount` is now 72 — S4–S7 open.** Baseline
 `HEAD = f192ad0` ("planning"); the M3 S7 documentation edits and the M2 S9 housekeeping
 landed in `51f9d33`. **M4 has not landed**, so `kOpcodeUsedCount` is still **79** (not
 the 80 D2 assumes): §4's table is correct as written except the `DECL` row, which is
@@ -254,6 +255,13 @@ mnemonics in the corpus: tst 83   je 59   jne 51   jmpfalse 0   jmptrue 0
 exceed it because M3 already emits them for fused comparisons. No checked-in `.qlc`
 fixture exists (§2), so nothing else can carry an old spelling.
 
+Re-verified 2026-11-08 at `b86460b` (clean tree, incremental build already up to date):
+producer gate unchanged (22 / 8 / 7), `src/QLangCompiler.cpp` 0 with `QLangCompiler.h:194`
+the only compiler-side hit; 23/23 corpus listings emitted, asm gate 0 hits, tally unchanged
+(`tst` 83 / `je` 59 / `jne` 51); `git ls-files` lists 0 `.qlc`/`.qla` (47 on-disk dumps, all
+matched by `.gitignore`); `ctest` 50/50 passed (`doc_hashes` skipped). The parent §6
+precondition — no producer emits the old spellings — holds at this commit.
+
 ### S3 — Enum removal + compaction + tables (one atomic change)
 
 The tests reference the enumerators, so enum, tables, VM, disassembler and test edits land
@@ -277,6 +285,61 @@ together (compile atomicity):
 (S4 owns them); `encoding_v6` sweep re-run over 73 opcodes × 256 modifiers — record the new
 accepted/rejected tallies (was 1 756 / 14 138 at 73 pre-M3 identities; re-measure, do not
 estimate).
+
+**Landed 2026-11-08 (uncommitted, on `b86460b`).** Enum, tables, VM, disassembler and test
+edits landed as one change — 9 files, **135 insertions / 485 deletions**:
+`QLangBytecode.h` +21/−39, `QLangBytecode.cpp` +3/−71, `QLangVM.cpp` +9/−30,
+`QLangCompiler.h` +3/−7, `QLangCompiler.cpp` +10/−13, `qlang_run.cpp` +3/−22,
+`codec_check.cpp` +61/−234, `encoding_v6_test.cpp` +23/−67, `flag_flow_test.cpp` +2/−2.
+
+Deviations from the text above, all forced:
+
+1. **`kOpcodeUsedCount` → 72, not 73** (the §1 D2 fallback: M4 has not landed, so the `DECL`
+   row is dropped and `TST` is the last defined identity). Compaction removed ids
+   **0, 45, 46, 57, 58, 59, 61**; `new = old − |{removed < old}|` gives `mov` 1→0,
+   `jmp` 44→43, `continue` 47→44, `yield` 56→53, `cmp` 60→54, `je` 62→55, `jne`→56,
+   `jg`→57, `jge`→58, `jl`→59, `jle` 67→60, `nop` 68→61, `emit`→62, `deepcopy`→63,
+   `indexget`→64, `indexput`→65, `eqf` 73→66, `ltf`→67, `gtf`→68, `ltef`→69, `gtef` 77→70,
+   `tst` 78→71.
+2. **The suite is fully green (50/50), not "green except the version asserts".** S3 does not
+   touch `kQlcVersion`, so nothing in S3's scope can break them; they stay at v6 until S4.
+3. **D5's test list was incomplete.** Besides the legacy-execution suite and the two
+   hand-built `MOVI` streams (both retargeted to `mov` + `e = 0x40`), the identity pins had
+   to be re-recorded: `codec_check` `nop` 68→61, `deepcopy` 70→63, `indexget`/`indexput`
+   71/72→64/65, `eqf..gtef` 73..77→66..70, `tst` 78→71 and their byte-level asserts
+   (`[43]`, `[C2]`, `[C6]`, `[47]`), and `flag_flow_test:863` `kOpcodeUsedCount` 79→72.
+   `codec_check`'s invalid-opcode probe now uses `kOpcodeUsedCount` instead of the literal
+   79, so it tracks the boundary instead of pinning it twice.
+
+Measured (re-measured, not estimated):
+
+| metric | before S3 | after S3 |
+| --- | --- | --- |
+| `encoding_v6` exhaustive pairs validated | 2 029 | **1 872** |
+| `encoding_v6` rejected pairs cross-checked | 15 401 | **14 274** |
+| `encoding_v6` decoder/table parity | 30 298 rej / 2 470 acc / 15 731 trunc | **30 392 rej / 2 376 acc / 15 144 trunc** |
+| `encoding_v6` checks | 37 859 | **35 083** |
+| `flag_flow` checks | 1 324 | **1 324** (unchanged) |
+| `codegen_size_check` (hello/money/cast/perf_stress) | 215/151/163/565 | **215/151/163/565** (unchanged — §6 row 3) |
+| `ctest` | 50/50 | **50/50** (`doc_hashes` skipped) |
+
+Sweep coverage is now 72 opcodes × 256 modifiers = 18 432 pairs; the rejected cross-check
+skips the 9 jump opcodes, so it walks 63 × 256 = 16 128. The two tallies are consistent:
+16 128 − 14 274 rejected = 1 854 accepted non-jump pairs, and 1 872 − 1 854 = 18 = the 9
+jump opcodes × their 2 width modifiers. The parity sweep still covers the whole
+128 × 256 identity space (30 392 + 2 376 = 32 768), so the 7 retired identities moved 94
+modifier pairs from accepted to rejected; the decoder accepts fewer of them than the size
+table does (157), because a retired identity has no payload the encoder could build.
+
+Compiler diagnostics are unchanged in kind: `QLangBytecode.cpp`'s three `default`-less
+switches in `baseOperandCount` emit `-Wswitch` noise at HEAD too — **209** warnings at
+`b86460b`, **189** now (7 fewer enumerators × 3 switches). No new warning class, and the
+build is not `-Werror`.
+
+Left for later steps (deliberately out of S3's scope): the stale comments naming the deleted
+enumerators — `include/qlang/QLangVM.h:112, 114, 128, 154` (`CMP/CMPI`, `mov/movc`),
+`tests/unit/spec_check2.cpp:902-1007` labels (D7), `tests/unit/value_semantics.cpp:34, 285,
+298`, `tests/unit/codegen_size_check.cpp:56` → **S5**; spec + compliance + hashes → **S6**.
 
 ### S4 — `.qlc` v7
 

@@ -771,7 +771,7 @@ there should be only one pool of registers and one pool of constants. extended a
 2 byte, default addressing is 1 byte. if OpCode top bit is not set then both left and right
 operand are using 1 byte encoding
 
-127 OpCode limit (hard limit)
+127 OpCode count limit (hard limit)
 
 ```
 top bit of opCode byte is set to denote variants
@@ -787,6 +787,24 @@ extra byte (e):
     e = 0              => jmp16 (2 bytes) relative address
     e = 1              => jmp32 (4 bytes) relative address
   a deprecated jmpfalse / jmptrue additionally carries its 1-byte condition register.
+
+- if opCode is call (proposal / not finalized)
+  bit 0-1 left operand (always a function)
+     value 0 function -128 to 127      (1 byte)
+     value 1 extended function         (2 bytes)
+     value 2 extended function         (4 bytes, future version)
+     value 3 reserved for future use
+  bit 2-3 left operand (always a register/1st parameter)
+     value 0 base register 0 to 255    (1 byte)
+     value 1 extended base register    (2 bytes)
+     value 2 extended base register    (4 bytes, future version)
+     value 3 reserved for future use
+  bit 4-7
+    parameter count (0-15)
+
+  if more than 1 parameter             (1 byte per extra parameter)
+    encode delta index from base parameter for each subsequent parameter
+    byte stores -128 to +127 (delta)
 
 - otherwise (mov, add, sub, cmp, eqf/ltf/gtf/ltef/gtef, tst, ...) e is read as three fields:
 

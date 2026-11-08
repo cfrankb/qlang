@@ -157,7 +157,7 @@ static void attachFinalizer(QLangValue &v, QLangContext &scope) {
   v = QLangValue::Table(wrapped);
 }
 
-// MOVC materialization (SPEC §value semantics, plan Phase 2). A container
+// Pool-load materialization (SPEC §value semantics, plan Phase 2). A container
 // constant lives in the function's constant pool for the whole program run,
 // so handing the pool payload to a register would alias it: every later
 // mutation of the register would rewrite the literal for every subsequent
@@ -912,7 +912,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
       thr(QLangErrorKind::Type,
           "assert: second argument must be a string (error message)");
     // Truthiness check (SPEC §boolean evaluation, shared with the
-    // JMPIFTRUE/JMPIFFALSE and NOT/LAND/LOR paths).
+    // TST and NOT/LAND/LOR paths).
     if (!vm->isTrue(args[0]))
       thr(QLangErrorKind::Runtime, args[1].asString());
     return QLangValue();
@@ -1092,7 +1092,7 @@ bool QLangVM::isTrue(const QLangValue &v) {
 }
 
 int QLangVM::cmpFlags(const QLangValue &a, const QLangValue &b, QLangVM *vm) {
-  // SPEC §bytecodes: cmp/cmpi can only be used if both operands are Int.
+  // SPEC §bytecodes: cmp can only be used if both operands are Int.
   if (a.type() != QLangValue::Type::Int || b.type() != QLangValue::Type::Int)
     vm->vmThrow(QLangErrorKind::Type, "cmp operand must be an int");
   int64_t av = (int64_t)toInt64(a), bv = (int64_t)toInt64(b);
@@ -2024,12 +2024,10 @@ RunResult QLangVM::runFrames() {
           pc, (int)op, i.a, i.b, i.c);
 
     switch (op) {
-    case Opcode::MOVC:
-    case Opcode::MOVI:
     case Opcode::MOV:
-      // One materializer for the three spellings: the modifier's kind field
-      // decides register / pool / inline literal, and a pool value is cloned
-      // because it is stored into a register (see freshContainerValue).
+      // One materializer: the modifier's kind field decides register / pool /
+      // inline literal, and a pool value is cloned because it is stored into a
+      // register (see freshContainerValue).
       frame.regs[i.a] = operandValue(i, frame, consts, true);
       break;
     case Opcode::DEEPCOPY: {
@@ -2446,16 +2444,6 @@ RunResult QLangVM::runFrames() {
             yielded;
       return RunResult::Yielded;
     }
-    case Opcode::ADDI:
-      frame.regs[i.a] =
-          doBinary(Opcode::ADD, frame.regs[i.a],
-                   operandValue(i, frame, consts, false), this);
-      break;
-    case Opcode::SUBI:
-      frame.regs[i.a] =
-          doBinary(Opcode::SUB, frame.regs[i.a],
-                   operandValue(i, frame, consts, false), this);
-      break;
     case Opcode::ADD:
     case Opcode::SUB:
     case Opcode::MUL:
@@ -2486,8 +2474,7 @@ RunResult QLangVM::runFrames() {
         frame.regs[i.a] = doBinaryVm(op, frame.regs[i.b], frame.regs[i.c]);
       }
       break;
-    case Opcode::CMP:
-    case Opcode::CMPI: {
+    case Opcode::CMP: {
       // cmp always compares against r[a]; only the right operand's kind varies.
       QLangValue rhs = operandValue(i, frame, consts, false);
       frame.flags = cmpFlags(frame.regs[i.a], rhs, this);
@@ -2510,8 +2497,8 @@ RunResult QLangVM::runFrames() {
     case Opcode::TST:
       // Truthiness into the flags (SPEC §bytecodes "OpCode tst"): eq from
       // truth(r[a]), the other two bits cleared, so the flag jumps are
-      // reachable from any value. Emission stays on jmpfalse/jmptrue in v6
-      // (plan M3 D4); the opcode exists so Phase 3 has a target.
+      // reachable from any value. `tst` + `je`/`jne` is the only truthiness
+      // test form since Phase 3 S3 retired the truthiness jumps.
       frame.flags = isTrue(frame.regs[i.a]) ? CMP_EQ : 0;
       break;
     case Opcode::JE:
@@ -2526,19 +2513,11 @@ RunResult QLangVM::runFrames() {
     case Opcode::JMP:
       frame.pc += static_cast<size_t>(i.jumpOffset);
       continue;
-    case Opcode::JMPIFTRUE:
-      if (isTrue(frame.regs[i.a]))
-        frame.pc += static_cast<size_t>(i.jumpOffset);
-      continue;
     case Opcode::CONTINUE:
       frame.pc += static_cast<size_t>(i.jumpOffset);
       continue;
     case Opcode::BREAK:
       frame.pc += static_cast<size_t>(i.jumpOffset);
-      continue;
-    case Opcode::JMPIFFALSE:
-      if (!isTrue(frame.regs[i.a]))
-        frame.pc += static_cast<size_t>(i.jumpOffset);
       continue;
     case Opcode::Nop:
       break; // takes no action (SPEC §bytecodes "OpCode nop")

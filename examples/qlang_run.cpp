@@ -177,7 +177,7 @@ namespace
   //   2 = level 1 + the original source line interleaved before each run of
   //       instructions that share a line
   //   3 = level 2 + the referenced constant's value inlined next to the
-  //       instruction (MOVC / MAKEFUNC / MAKEGEN, whose operand b is a pool
+  //       instruction (MOV kind 2 / MAKEFUNC / MAKEGEN, whose b is a pool
   //       index)
   //   4 = level 3 + the variable->register map (main function), operand names
   //       for CALL (builtin/native), CALLFN (function name), CONV/CAST (target
@@ -387,20 +387,12 @@ namespace
     switch (ins.op)
     {
     // The copy family: the right operand is a register, a pool entry or an
-    // immediate of any form, and `movc` / `movi` are its historical spellings.
+    // immediate of any form (the modifier's kind field selects which).
     case Opcode::MOV:
-    case Opcode::MOVC:
-    case Opcode::MOVI:
       ss << rn(ins.a) << " = " << right();
       break;
     case Opcode::DEEPCOPY:
       ss << rn(ins.a) << " = deepcopy(" << right() << ")";
-      break;
-    case Opcode::ADDI:
-      ss << rn(ins.a) << " = " << rn(ins.a) << " + " << right();
-      break;
-    case Opcode::SUBI:
-      ss << rn(ins.a) << " = " << rn(ins.a) << " - " << right();
       break;
     case Opcode::CONV:
       ss << rn(ins.a) << " = convert(" << right() << ", " << type(ins.c) << ")";
@@ -548,17 +540,8 @@ namespace
     case Opcode::Nop:
       ss << "noop";
       break;
-    case Opcode::JMPIFFALSE:
-      ss << "if !truth(" << rn(ins.a) << ") pc += " << ins.jumpOffset;
-      break;
-    case Opcode::JMPIFTRUE:
-      ss << "if truth(" << rn(ins.a) << ") pc += " << ins.jumpOffset;
-      break;
     case Opcode::CMP:
       ss << "cmp " << rn(ins.a) << ", " << right();
-      break;
-    case Opcode::CMPI:
-      ss << "cmpi " << rn(ins.a) << ", " << right();
       break;
     // The flag-flow family (SPEC §bytecodes "extended OpCode eq, lt, gt, lte,
     // gte" and "### OpCode tst"): the pseudo-mnemonic names the flags as the
@@ -654,8 +637,6 @@ namespace
     }
     if (isJumpOpcode(ins.op))
     {
-      if (ins.op == Opcode::JMPIFFALSE || ins.op == Opcode::JMPIFTRUE)
-        add(ins.a);
       add(ins.jumpOffset);
       char t[16];
       std::snprintf(t, sizeof t, " -> %.4x",
@@ -892,7 +873,7 @@ namespace
         lastLine = insLine;
         // Level 3: append a copy of the referenced constant. Operand b names a
         // pool entry whenever the instruction's right kind is `ConstPool`
-        // (`mov` / `movc` / `makefunc` / `makegen`, plan §2.5); `emit` is the
+        // (`mov` kind 2 / `makefunc` / `makegen`, plan §2.5); `emit` is the
         // one opcode whose b is a pool index though its kind stays register.
         std::string constNote;
         if (level >= 3)
