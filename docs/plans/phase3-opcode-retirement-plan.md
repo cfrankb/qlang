@@ -1,0 +1,308 @@
+# Phase 3 — Opcode Retirement: Remove the Deprecated Spellings, Compact Identities, `.qlc` v7
+
+Status: **plan — not started.** Baseline `HEAD = 56998cf` ("tests: flags.ql script suite,
+corpus and perf re-verified (M3 S6)"); the M3 S7 documentation edits are staged but not yet
+committed (`todo.md` §1). Suite at this baseline: ctest **50** entries (48 with `-E perf`),
+`encoding_v6` **34 470** checks, `codec_check` **199**, `flag_flow` **1324**, `perf_stress`
+execute **10.382 ms**.
+Parent plan: [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md) — this file
+executes its **§6 Phase 3 (removal)** and cites §3 (coexistence rule + opcode budget),
+§5.4 (`TST` subsumes the `jmpfalse`/`jmptrue` pair), §11 item 6 (the guarantee this plan
+inverts) and §12 item 6 (the emission policy this plan flips).
+Reference spec: `docs/spec/13-bytecodes.md` (`## opCode scope`, `### bytecode encoding`,
+`### OpCode tst`, `## future plans` Phase 3) · `docs/SERIALIZATION.md` §4 (version field,
+identity rule, validation).
+Precedent for this document's structure: [m3-flag-flow-plan.md](m3-flag-flow-plan.md).
+Prerequisite: **M4 (`$$`) lands first** (D2); `todo.md` §2–3 track the order.
+
+Three deviations from the parent plan, stated up front:
+
+1. **The §12 item-6 default is flipped.** The parent kept `jmpfalse`/`jmptrue` for bare
+   truthiness "until they are removed"; removal is this plan, so bare truthiness lowers to
+   `tst` + `je`/`jne` **here** (S1). The spec already states this end-state
+   (`13-bytecodes.md:397`: "Emitting `tst` belongs with the removal of the deprecated pair
+   (Phase 3, `.qlc` v7)").
+2. **§11 item 6 is inverted, not re-verified.** "A hand-built v6 stream containing the
+   deprecated spellings still executes" becomes "a v6 image is rejected by the version field
+   and the removed identities are never produced or decoded". The legacy-execution suite is
+   retired (D5), not kept as a must-fail test.
+3. **Ordering vs M4 is made explicit** (D2). The parent implies M4 → Phase 3 (`DECL` = 79,
+   declaration table inside v6); this plan is written against that baseline
+   (`kOpcodeUsedCount` 80 → 73, matching the §3 budget "80 … 73 after
+   `JMPIFFALSE`/`JMPIFTRUE` are removed"). The fallback (Phase 3 first: 79 → 72, `DECL`
+   appended later at 72) is recorded there.
+
+---
+
+## 1. Scope
+
+**In scope (Phase 3):**
+
+1. The compiler emits `tst` + `je`/`jne` for every bare truthiness test — all 15
+   `JMPIFFALSE`/`JMPIFTRUE` sites (S1).
+2. `MOVC`, `MOVI`, `ADDI`, `SUBI`, `CMPI`, `JMPIFFALSE`, `JMPIFTRUE` are deleted from the
+   `Opcode` enum (S3).
+3. A **one-time identity compaction** closes the seven holes (D3); `kOpcodeUsedCount`
+   **80 → 73** (with M4 landed; 79 → 72 in the D2 fallback).
+4. The codec tables, `Bytecode::name()` mnemonics, VM dispatch cases and the disassembler
+   special cases for the seven identities are deleted (S3).
+5. `.qlc` format version **6 → 7**; the reader accepts v7 only (v6 rejected like v1–v5,
+   clean-break precedent per Round 37/56) (S4).
+6. Tests: legacy-spelling cases retired, hand-built streams retargeted, version-boundary
+   cases added, tallies re-recorded (S3–S5).
+7. Documentation: spec `## opCode scope` / `## future plans`, `SERIALIZATION.md` §4,
+   compliance round entry, parent-plan statuses (S6).
+
+**Out of scope:**
+
+| Item | Where it belongs |
+|------|------------------|
+| `$$` machinery (`DECL`, declaration table, name map/bitset, two-operand `INDGET`/`INDPUT`) | **M4** (parent §7; `todo.md` §2) |
+| Offset-table compression / elimination (also a v6 → 7 bump — see follow-ups) | `offset-table-elimination-plan.md` §9 decision |
+| `ja`/`jae`/`jb`/`jbe` as code | nowhere — no assembler exists (M3 D6) |
+| The jump-class width selector (jmp8/16/32) | unchanged — Phase 3 touches identities only |
+| `Long`/`Qword`/`Unsigned` literal widening | M2 D3 follow-up (parent §9) |
+
+**Invariants:** the encoding **layout does not change** — 2/2/4 modifier byte, escape bit,
+permitted-kind tables, immediate forms and the jump class are untouched; only the identity
+table changes (parent §6: "it changes no layout, only the identity table"). Corpus stdout
+stays byte-identical. The reader stays single-version. No opcode identity is appended here
+(`DECL` is M4's); the count only shrinks.
+
+---
+
+## 2. Baseline facts
+
+| Fact | Location |
+|------|----------|
+| `kOpcodeUsedCount = 79` (M4 appends `DECL` → 80) | `include/qlang/QLangBytecode.h:267` |
+| Deprecated identities: `MOVC` 0, `JMPIFFALSE` 45, `JMPIFTRUE` 46, `MOVI` 57, `ADDI` 58, `SUBI` 59, `CMPI` 61 | `include/qlang/QLangBytecode.h` (`enum class Opcode`) |
+| Reader accepts `kQlcVersion` only ("unsupported version") | `include/qlang/QLangBytecodeIO.h:34`, `src/QLangBytecodeIO.cpp:469` |
+| Compiler still emits `JMPIFFALSE`/`JMPIFTRUE` at 15 sites | `src/QLangCompiler.cpp:858, 1044, 1918, 1935, 1949, 1973, 2110, 2121, 2130, 2162, 2252, 2284, 2316, 3066, 3945` |
+| VM handlers to delete (`MOVC`/`MOVI` share one case) | `src/QLangVM.cpp:2027-2028, 2449, 2454, 2490, 2529, 2539` |
+| Jump class includes the `JMPIF*` pair (width selector + 1-byte condition register) | `src/QLangBytecode.cpp:20-21, 57, 68-69` |
+| Permitted-kind table pins the suffix kinds (`MOVI` → immediate only, …) | `src/QLangBytecode.cpp:346-351` |
+| Mnemonics `movc`/`jmpfalse`/`jmptrue`/`movi`/`addi`/`subi`/`cmpi` | `src/QLangBytecode.cpp:1196, 1244-1245, 1253-1257` |
+| Disassembler special cases ("historical spellings", pseudo-text) | `examples/qlang_run.cpp:390-393, 551-561, 657, 895` |
+| §11 item 6 legacy-execution suite (hand-built deprecated stream) | `tests/unit/codec_check.cpp:1749` ff. |
+| Hand-built `MOVI` streams in round-trip cases | `tests/unit/codec_check.cpp:828-836, :912-919` |
+| `encoding_v6` deprecated-spelling cases (kinds, base forms, sweep rows, rejects) | `tests/unit/encoding_v6_test.cpp:384-431, 459-461, 526-527, 559-578, 624-635, 671-675, 823, 903` |
+| `spec_check2` "movi:/addi:/subi:" cases are **behavioral** (compile source, check values) — labels stale since M2 | `tests/unit/spec_check2.cpp:902-997` |
+| `value_semantics` L5 comments name the `MOVC` clone (behavior now on `mov` kind 2) | `tests/unit/value_semantics.cpp:34, 285, 298` |
+| `tst` implemented, **not emitted** (M3 D4); spec states the Phase 3 end-state | `docs/spec/13-bytecodes.md:397` |
+| Spec `## opCode scope` + `## future plans` already describe Phase 3 (removal, v7) | `docs/spec/13-bytecodes.md:746` ff. |
+| SERIALIZATION: version 6 at `:95, :101, :260`; "79 defined" at `:132, :152, :185`; identity rule `< kOpcodeUsedCount` at `:152` | `docs/SERIALIZATION.md` §4 |
+| No checked-in bytecode fixtures: root `/*.qlc`, `/*.qla` and `examples/qla/` are gitignored | `.gitignore:18-20` |
+
+**Measured today** (`qlang_run --asm-level 4`, 2026-11-07) — the bare-truthiness population
+S1 converts, each site +1 byte / +1 instruction (parent §5.4):
+
+| Script | `jmpfalse` | `jmptrue` |
+|--------|-----------:|----------:|
+| `hello.ql` | 1 | 3 |
+| `flags.ql` | 10 | 0 |
+| `perf_stress.ql` | 11 | 33 |
+| **corpus (22 scripts)** | — | **83 total** |
+
+---
+
+## 3. Decisions to settle before coding
+
+| # | Decision | Recommendation | Rationale |
+|---|----------|----------------|-----------|
+| D1 | Bare truthiness lowering | `tst r[a]` + `je`/`jne` at all 15 sites; retire the pair here. Rejected: keep `jmpfalse`/`jmptrue` until a hypothetical v8 (the §12 item-6 default) — it keeps two identities, the jump-class condition-register special case and the spec's stale "not emitted" note alive, and blocks its own removal. | `tst` sets `flags = truth(r[a]) ? EQ : none`; `je` takes `EQ`, `jne` takes the none-set state — exact subsumption (parent §5.4). Spec `13-bytecodes.md:397` already normative. |
+| D2 | Ordering vs M4 | **M4 first** (baseline `kOpcodeUsedCount` 80; after removal 73 = the §3 budget). `DECL` keeps its documented identity 79 → 72; the declaration table ships inside v6 (M2 D4); one renumbering event. Rejected: Phase 3 first (79 → 72, `DECL` later appended at 72) — legal, but `DECL`'s identity would differ from every document written for M4. Fallback if the order flips: drop the `DECL` row from §4 and end at `TST` → 71, count 72. |
+| D3 | Renumbering scheme | Compact in relative order: `new = old − |{removed ids < old}|`; no holes left. Rejected: keep holes — wastes 7 of the 128-slot budget and leaves identities that are "defined" (`< kOpcodeUsedCount`) but unimplemented, which the load validator would have to special-case. | Parent §6: "a one-time renumbering, since removal leaves holes". |
+| D4 | Removed identities at decode | No special case. After compaction every removed identity is either ≥ `kOpcodeUsedCount` (rejected by the existing load rule, `SERIALIZATION.md` §4 `:152`) or belongs to a live opcode. Old v6 streams die at the **version field** before any byte decodes (`QLangBytecodeIO.cpp:469`) — byte-level detection of old spellings is impossible (identities are reused) and unnecessary. |
+| D5 | Fate of the legacy tests | Delete the `codec_check` §11-item-6 suite; retarget the two hand-built `MOVI` streams to `mov` kind 0; delete the `encoding_v6` deprecated-spelling cases; add version-boundary cases (v6 rejected below, v8 rejected above). Rejected: keep them as must-fail tests — they would exercise identities the decoder no longer defines. |
+| D6 | Mnemonics | Remove the seven mnemonics from `Bytecode::name()` and the disassembler. A mnemonic for an undecodable opcode only invites hand-built streams that cannot load. |
+| D7 | `spec_check2` labels | Keep every assertion (the cases are behavioral and already pass on the unified spellings); rename the labels `movi:`/`addi:`/`subi:` → `mov-imm:`/`add-imm:`/`sub-imm:` and fix the `value_semantics` L5 comments. |
+
+---
+
+## 4. Identity compaction (D3)
+
+Removed: **0, 45, 46, 57, 58, 59, 61**. Shift by old identity: `1–44 → −1`;
+`47–56 → −3`; `60 → −6`; `62–79 → −7`. Boundary anchors (the formula covers the rest;
+`encoding_v6`'s exhaustive sweep cross-checks size/encode/decode for every identity):
+
+| Opcode | old | new |
+|--------|----:|----:|
+| `MOVC` | 0 | **removed** |
+| `MOV` | 1 | 0 |
+| `JMP` | 44 | 43 |
+| `JMPIFFALSE` / `JMPIFTRUE` | 45 / 46 | **removed** |
+| `CONTINUE` | 47 | 44 |
+| `YIELD` | 56 | 53 |
+| `MOVI` / `ADDI` / `SUBI` | 57 / 58 / 59 | **removed** |
+| `CMP` | 60 | 54 |
+| `CMPI` | 61 | **removed** |
+| `JE` | 62 | 55 |
+| `JLE` | 67 | 60 |
+| `Nop` | 68 | 61 |
+| `INDEXPUT` | 72 | 65 |
+| `EQF` | 73 | 66 |
+| `TST` | 78 | 71 |
+| `DECL` (M4) | 79 | 72 |
+
+`kOpcodeUsedCount` **80 → 73** (fallback without M4: 79 → 72). The escape bit (bit 7) and
+the 127-identity ceiling are unaffected.
+
+---
+
+## 5. Steps
+
+### S1 — Compiler: `tst` + `je`/`jne` for bare truthiness
+
+Replace all 15 emission sites (`QLangCompiler.cpp` list in §2): `jmptrue r,t` → `tst r; je t`,
+`jmpfalse r,t` → `tst r; jne t`. Update the jump-width selector (`:858`) and the negative-jump
+mapping default (`:1044`) to operate on `je`/`jne` (plain jump class — no condition register).
+Corpus stdout byte-identical (22 scripts); re-record `codegen_size_check` counts (+1
+instruction per site: hello +4, flags +10, perf_stress +44); re-measure `perf_stress`
+(baseline 10.382 ms; expect a small increase from +44 instructions — record the number, do
+not silently accept a regression beyond ~5 %).
+
+*Exit criteria:* `grep -c "Opcode::JMPIFFALSE\|Opcode::JMPIFTRUE" src/QLangCompiler.cpp` == 0;
+suite green (the legacy decode suites hand-build streams and are untouched until S3).
+
+### S2 — Producer-free gate
+
+Record in this plan: the grep gate over `src/` + `examples/` is zero for all seven opcodes,
+and the `--asm-level 4` scan of all 22 corpus listings contains no `movi`/`movc`/`addi`/
+`subi`/`cmpi`/`jmpfalse`/`jmptrue`. No checked-in `.qlc` fixtures exist (§2, `.gitignore`) —
+the parent §6 precondition ("no producer emits the old spellings") is then discharged.
+
+*Exit criteria:* gate output pasted below this step during execution.
+
+### S3 — Enum removal + compaction + tables (one atomic change)
+
+The tests reference the enumerators, so enum, tables, VM, disassembler and test edits land
+together (compile atomicity):
+
+- `QLangBytecode.h`: delete the 7 enumerators, renumber per §4, `kOpcodeUsedCount` → 73.
+- `QLangBytecode.cpp`: jump class (`:20-21, 57, 68-69`), operand-count/width tables
+  (`:100, 274`), permitted kinds (`:346-351`), names (`:1196, 1244-1245, 1253-1257`).
+- `QLangVM.cpp`: delete cases `:2027-2028` (the shared `MOVC`/`MOVI` case — `mov` by kind
+  already covers both), `:2449`, `:2454`, `:2490`, `:2529`, `:2539`.
+- `examples/qlang_run.cpp`: delete the special cases at `:390-393, 551-561, 657, 895`.
+- Tests (D5): delete the `codec_check` legacy-execution suite and the `encoding_v6`
+  deprecated-spelling cases; retarget the hand-built `MOVI` streams (`codec_check.cpp:836,
+  919`) to `mov` kind 0 (`e = 0x40`).
+
+*Exit criteria:* build green; suite green **except** the `codec_check` version asserts
+(S4 owns them); `encoding_v6` sweep re-run over 73 opcodes × 256 modifiers — record the new
+accepted/rejected tallies (was 1 756 / 14 138 at 73 pre-M3 identities; re-measure, do not
+estimate).
+
+### S4 — `.qlc` v7
+
+`kQlcVersion` 6 → 7 (`QLangBytecodeIO.h:34`); the writer emits 7; the reader rejects 6 with
+the standard "unsupported version" (the `:469` path is version-agnostic — no logic change).
+`codec_check`: version-boundary asserts (v6 below rejected, v8 above rejected, v7
+round-trip) and the `.qlc` round-trip + execute for all 22 scripts (stdout identical).
+
+*Exit criteria:* suite fully green; `SERIALIZATION.md` §4 validation rule matches the
+implementation (doc edit lands in S6).
+
+### S5 — Tallies, labels, perf
+
+Re-record: `encoding_v6` check count + sweep tallies, `codec_check`, `flag_flow` (unchanged),
+ctest entry count (50); rename the `spec_check2` labels (D7) and fix the `value_semantics`
+comments; re-measure `perf_stress` against the S1 number and record the pair.
+
+*Exit criteria:* suite green; tallies recorded under each step.
+
+### S6 — Documentation (only after the suite is green)
+
+- `docs/spec/13-bytecodes.md`: `## opCode scope` — the deprecated column becomes "removed in
+  v7", the `tst` row becomes **emitted**; `## future plans` Phase 3 bullet → landed; the
+  `### bytecode encoding` "a deprecated jmpfalse / jmptrue additionally carries its 1-byte
+  condition register" note deleted; `### OpCode tst` status → emitted (M3 D4 closed).
+- `docs/SERIALIZATION.md`: §4 title + version field → **7** (`:95, :101, :260`); "79
+  defined" → **73** (`:132, :152, :185`); identity rule keeps `< kOpcodeUsedCount`.
+- `docs/compliance/`: `history.md` round entry (next available number — M4 may take one
+  first); `status.md` extended-encoding item → Phase 3 landed (M4 row per its actual state);
+  `README.md` round range; `tests.md` tallies.
+- Parent plan: §3 fate column → removed; §5.4 → done; §6 phase table + a §6.1 row → **DONE**
+  with SHAs; §11 item 6 marked inverted/retired; §12 item 6 marked superseded by D1.
+- This plan → DONE; `todo.md` §3 checked.
+- Then `bash update-doc-hashes.sh` — **never before** the tests (AGENTS.md).
+
+*Exit criteria:* `doc_hashes` green; no spec sentence left claiming the deprecated spellings
+still decode, none claiming `tst` is un-emitted.
+
+### S7 — Housekeeping and commits
+
+Suggested names (AGENTS.md: suggest, never auto-commit), staged by concern:
+
+1. `compiler: lower bare truthiness to tst + je/jne (Phase 3 S1)`
+2. `bytecode: retire movi/movc/addi/subi/cmpi/jmpfalse/jmptrue; compact identities (Phase 3 S3)`
+3. `io: .qlc v7 — reader accepts v7 only (Phase 3 S4)`
+4. `tests: retire legacy-spelling cases; re-record tallies (Phase 3 S5)`
+5. `docs: opcode retirement shipped (Round N)` — S6, plan-status edits included, hashes after green
+
+---
+
+## 6. Verification gate
+
+```bash
+cmake -B build && cmake --build build
+ctest --test-dir build                      # 50 entries (48 with -E perf)
+# producer gate (S2)
+grep -rn "Opcode::JMPIFFALSE\|Opcode::JMPIFTRUE\|Opcode::MOVI\|Opcode::MOVC\|Opcode::ADDI\|Opcode::SUBI\|Opcode::CMPI" src/ examples/ \
+  && echo "PRODUCER GATE FAIL" || echo "producer gate OK"
+# corpus disassembly gate
+for f in tests/scripts/*.ql; do build/qlang_run --asm /tmp/p3/x.qla --asm-level 4 "$f" >/dev/null; done
+grep -lE "\b(movi|movc|addi|subi|cmpi|jmpfalse|jmptrue)\b" /tmp/p3/*.qla \
+  && echo "ASM GATE FAIL" || echo "asm gate OK"
+# v6 image rejected (write one before S4, keep it as a fixture under /tmp)
+build/qlang_run /tmp/p3/v6.qlc               # exit != 0, "unsupported version"
+```
+
+| Parent §11 item | Discharged by |
+|-----------------|---------------|
+| 1 corpus byte-identical | S1, S5 |
+| 2 round-trip → execute (now v7) | S4 |
+| 3 size/decode agreement at every `pc` | unchanged (layout invariant) — S3 sweep |
+| 4 zero-byte immediates | unchanged |
+| 5 flag matrix | S1 — `tst` now appears in compiled code; `flag_flow` + `flags.ql` cover it |
+| 6 deprecated spellings still execute | **inverted** (deviation 2): v6 rejected by version; removed spellings never produced (gate above) |
+| 7 reserved kinds/forms rejected at load | unchanged; identity rule `< kOpcodeUsedCount` now 73 |
+| 8 `$$` | — M4 |
+| 9 disassembly well-formed | S3 (mnemonics removed) |
+| 10 pool shrink | unchanged |
+
+---
+
+## 7. Risks and effort
+
+| Risk | Mitigation |
+|------|------------|
+| Identity reuse makes old v6 byte streams ambiguous | The version field rejects v6 before any byte decodes (`QLangBytecodeIO.cpp:469`); clean-break precedent (v1–v5 all rejected since Round 56) |
+| +1 B / +1 instruction per truthiness test (83 corpus sites; 44 in `perf_stress`) | S1 measures against the 10.382 ms baseline and records the delta; AGENTS.md perf gate; `tst` dispatches through the same table-driven decoder as every non-jump op |
+| Test compile breakage when enumerators vanish | S3 is atomic (enum + tables + VM + disassembler + tests in one change) |
+| M4 ordering drifts | D2 fallback recorded; §4 table recomputed if the order flips |
+| A codec-table row missed for a shifted identity | `encoding_v6` exhaustive sweep (every opcode × 256 modifiers, size/encode/decode cross-checked) re-run in S3 |
+| Docs claim removed spellings still decode | S6 exit criteria + `doc_hashes` |
+
+Effort: S1 1 d, S2 0.25 d, S3 1 d, S4 0.5 d, S5 0.5 d, S6 0.5 d, S7 0.25 d ≈ **4 days**.
+
+---
+
+## 8. Follow-ups recorded (deliberately not Phase 3)
+
+- **Offset-table plan bumps v6 → 7 too** (`offset-table-elimination-plan.md` §10). If its §9
+  decision lands while this plan is open, decide whether **one bump carries both** (one
+  reader change, one round) or two sequential bumps. Decision belongs to that plan, not here.
+- Spec `## opCode divi` / `## OpCode: swap` snippets still show `movi`/`divi`-era listings —
+  spec-drift cleanup, not a Phase 3 obligation.
+- `ja`/`jae`/`jb`/`jbe` aliases stay spec/disassembly-only until an assembler exists (M3 D6).
+- `Long`/`Qword`/`Unsigned` literal widening (M2 D3 follow-up).
+- `Opcode::Nop` casing (odd one out) — cosmetic, separate change.
+
+---
+
+## 9. Housekeeping and commits
+
+See S7. Plan-file status edits ride the docs commit; `update-doc-hashes.sh` runs only after
+a green suite (AGENTS.md); `todo.md` §3 is checked when this plan closes.

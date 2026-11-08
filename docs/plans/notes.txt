@@ -1,9 +1,0 @@
-M2
-docs/plans/m2-pipeline-switch-plan.md
-S1–S6 are done, S7/S8/S9 remain
-S7 in progress
-
-M3 ...
-docs/plans/encoding-v6-and-indirect-plan.md
-S4 done
-S5 ...
