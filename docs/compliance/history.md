@@ -1,3 +1,64 @@
+## Round 59 (2026-11-07)
+
+**M3 flag flow — milestone 3 of `docs/plans/encoding-v6-and-indirect-plan.md` (plan
+`docs/plans/m3-flag-flow-plan.md`): the five flag-setting comparisons `eqf`/`ltf`/`gtf`/`ltef`/`gtef`
+and `tst` are appended, executed by the VM and emitted by the compiler — comparison conditions in
+branch position now lower to a flag compare + flag jump instead of `cmp` + flag jump — and the spec's
+"specified, not yet emitted" markers flip to shipped.**
+The code landed across `4ead571` (identities + tables + codec/encoding suites), `1e47009` (VM
+`flagCompare` + disassembler), `0086112` (the `flag_flow` flag × jump matrix), `a1984fa` (compiler
+lowering + budgets) and `56998cf` (`flags.ql` script regression); **this round is the documentation
+round (plan S7) plus the tally drift those commits left behind** — `docs/spec/13-bytecodes.md`,
+`docs/SERIALIZATION.md`, `docs/compliance/{status,tests,harness,history,README}.md`,
+`docs/plans/{encoding-v6-and-indirect,m3-flag-flow}-plan.md`. **No on-disk format change — `.qlc`
+stays v6**: six identities appended last (`EQF` 73, `LTF` 74, `GTF` 75, `LTEF` 76, `GTEF` 77,
+`TST` 78), `kOpcodeUsedCount` 73 → **79** of 128; `DECL` is M4's and will make it 80.
+
+- **Why it was worth doing.** The spec (`## opCode scope`, `### extended OpCode eq, lt, gt, lte,
+  gte`, finalized 2026-11-06) defines comparisons over **general types** that set the flags
+  directly; until now every `if (a < b)` paid for `cmp` — which orders numbers only — and a
+  two-instruction sequence, and comparing strings or mixed types in condition position went
+  through the generic truthiness path.
+- **The family.** Register left operand, right operand of kind immediate/register/const per the
+  permitted-kind table (`TST` register-only). `QLangVM::flagCompare` compares through the existing
+  `cmpValues`/`isEqual` (numbers, strings, bool, nil, containers by content) and returns **one-hot**
+  flags (`CMP_GR` 1, `CMP_EQ` 2, `CMP_LT` 4) or zero, so `flagsSatisfied` and every flag jump are
+  unchanged — the spec's `lte`/`gte` rows are capability masks, not multi-bit results. `TST` sets
+  `EQ` iff `truth(r[a])`.
+- **The compiler lowering and the D1 correction.** `emitCmpJumpFalseExpr` now has two lowerings of
+  the same condition (D2): both operands statically `Int` keep `cmp` + flag jump (bytes unchanged
+  from pre-M3, and `cmp`'s total order keeps the flags reusable for a second jump), everything else
+  — exactly the guards that previously paid for a boolean temp + `jmpfalse` — takes a flag compare +
+  flag jump. The negative branch **cannot reuse the same comparator**: a partial comparator (`ltf`,
+  `gtf`) leaves no bits set when the relation is false, and no flag-jump predicate tests the
+  none-set state — so the false branch uses the comparator of the **dual** relation with the jump
+  the condition needs (`==`→`jne`, `!=`→`je`, `<`→`gtef`+`jge`, `>`→`ltef`+`jle`, `<=`→`gtf`+`jg`,
+  `>=`→`ltf`+`jl`), implemented as `flagCompareIfFalse`. The plan's original D1 said "same
+  comparator, inverted jump" — corrected during implementation; the rule is now normative in the
+  spec (`### shared registers`) and recorded in both plans.
+- **`tst` is implemented but not emitted (D4).** It decodes, executes and disassembles and is
+  covered by the matrix, but bare truthiness still lowers to `jmpfalse`/`jmptrue`; emitting `tst`
+  belongs with the **removal** of that deprecated pair (Phase 3, `.qlc` v7). `ja`/`jae`/`jb`/`jbe`
+  stay spec/disassembly aliases — the repo has no assembler and they have no opcode identity (D6).
+  An immediate right operand on a flag compare is **always escaped** (D5): every flag compare's
+  `defaultRightKind` is register, so a base form can only mean register and `eqf r12, 5` is
+  `[C9][40][0C][05]` (4 B) — the spec's 3-byte base-form example was wrong and is fixed here.
+- **Measured outcome.** A comparison condition in branch position is one byte shorter per site:
+  `hello.ql` 215 → **211** instructions, `perf_stress.ql` 522 → **521** (`codegen_size` budgets
+  lowered in `a1984fa`; `money`/`cast` unchanged). `perf` gate green with **no re-baseline**
+  (re-verified in `56998cf`).
+- **Verification.** `cmake -B build && cmake --build build` clean; `ctest --test-dir build`
+  **50/50 green** (48 with `-E perf`). New `flag_flow` suite (**1324 checks**, 879 lines): the full
+  matrix (6 comparators × 6 flag jumps × 3 relations × 3 right-operand kinds), the "no bit set"
+  state spelled out case by case (the D1 rationale), the `tst` truth table, the general value
+  domains the Int gate rejects with error-text parity (D3), `__str__` dispatch, `cmp`'s Int-only
+  contract (D2), the alias name table (D6) and reserved-slot rejection for the new identities. New
+  `tests/scripts/flags.ql` (23rd script regression, 182 lines). Drift corrected: `codec_check`
+  276 → **281** (+5 S5 lowering cases landed unrecorded) and the `encoding_v6` §18 parity sweep
+  re-tallied for the new identities (30298 rejected / 2470 accepted / 15731 truncations, was
+  30517/2251/14401). Round 58 (call args into slots) was recorded in the `status.md` tally but
+  never got its own entry here. **50 ctest entries, 50/50 green.**
+
 ## Round 57 (2026-11-07)
 
 **v6 decode fast path: the Round 56 performance regression is investigated instead of

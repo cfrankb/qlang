@@ -110,6 +110,12 @@ Conventions:
 | DEEPCOPY | dest reg | src reg | — | | `r[a] = deepcopy(r[b])` |
 | INDEXGET | dest reg | base reg | key reg | | `r[a] = r[b][r[c]]`; array/table/object subscript |
 | INDEXPUT | base reg | key reg | value reg | | `r[a][r[b]] = r[c]`; array/table/object subscript |
+| EQF | left reg | right reg | — | | identity 73; `flags = (r[a] == right) ? EQ : none`; general types; right may be immediate/register/const |
+| LTF | left reg | right reg | — | | identity 74; `flags = (r[a] < right) ? LT : none` |
+| GTF | left reg | right reg | — | | identity 75; `flags = (r[a] > right) ? GR : none` |
+| LTEF | left reg | right reg | — | | identity 76; `flags = (r[a] < right) ? LT : (r[a] == right) ? EQ : none` (one-hot) |
+| GTEF | left reg | right reg | — | | identity 77; `flags = (r[a] > right) ? GR : (r[a] == right) ? EQ : none` (one-hot) |
+| TST | test reg | — | — | | identity 78; `flags = truth(r[a]) ? EQ : none`; register operand only |
 
 ## opcode: MOVI
 
@@ -295,6 +301,23 @@ there is no unsigned-specific flag state for a distinct jump to test. They carry
 encoding and no opcode identity; disassembly prints the canonical `jg`/`jge`/`jl`/`jle`. A
 genuinely unsigned relation on mixed-signedness operands is deferred to a future version.
 
+**The negative branch of a `*f` compare (normative).** A partial comparator leaves **no bit
+set** when its relation does not hold, and **no jump predicate tests for the none-set state**
+(`jne` is `(f & eq) == 0`, which also fires for `gr`/`lt`; `jge`/`jle` require a bit; `jg`/`jl`
+require a specific one). Pairing a compare with the *same* relation and `jne` therefore takes
+the branch when the condition **holds** — `ltf` + `jne` jumps on `a < b`, the opposite of the
+else-path. The correct pairing is the comparator of the **dual** relation with the *same* jump
+`cmp` needs, so one jump map serves both paths:
+
+|condition|comparator|jump taken when the condition is false|
+|-|-|-|
+|`a == b`|`eqf`|`jne` (`f = eq` or none)|
+|`a != b`|`eqf`|`je` (`f == eq`)|
+|`a < b`|`gtef`|`jge` (`f = gr` \| `eq` \| none)|
+|`a > b`|`ltef`|`jle` (`f = lt` \| `eq` \| none)|
+|`a <= b`|`gtf`|`jg` (`f = gr` or none)|
+|`a >= b`|`ltf`|`jl` (`f = lt` or none)|
+
 The jump target is a **relative** offset (jmp8 / jmp16 / jmp32, `### bytecode encoding`), not
 the pre-v5 absolute `i32` pc target.
 
@@ -367,6 +390,11 @@ The pair is one byte longer for a bare truthiness test, so the compiler keeps `j
 comparison (`eqf` + `jne` replaces `eq` + `jmpfalse` **and** frees a register) or when the
 flags feed a second branch. Both pairs decode; `jmpfalse`/`jmptrue` are **deprecated**
 (`## future plans`).
+
+**Status (Round 59):** `tst` is **implemented** — identity 78, codec tables, VM handler
+(`flags = truth(r[a]) ? EQ : none`) and disassembly — but **not emitted** by the compiler in
+v6: bare truthiness tests (`if x`, `while x`, `&&`/`||`) still lower to `jmpfalse`/`jmptrue`.
+Emitting `tst` belongs with the removal of the deprecated pair (Phase 3, `.qlc` v7).
 
 OpCode `jge` and `jle` work exactly like `jg` and `jl`; `jne` is the complement of `je`.
 
@@ -707,8 +735,13 @@ are described in this document and it matters which one a passage refers to:
   only. Readers accept v6 only; the historical record stays in
   [../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md).
 
-Still specified, not yet emitted: the flag-setting comparison family and `tst` (milestone **M3**
-of the plan above), and the `$$` declaration table (**M4**).
+The flag-setting comparison family `eqf`/`ltf`/`gtf`/`ltef`/`gtef` is **implemented and
+emitted** (milestone **M3**, Round 59 — identities 73–77; comparison conditions in `if`/`while`
+position lower to a flag compare + flag jump, no temporary — except when both operands are
+statically `Int`, where the compiler keeps `cmp` + flag jump: the bytes are unchanged from
+pre-M3 and `cmp`'s total order keeps the flags reusable for a second jump). `tst` (identity 78) is implemented
+but **not emitted** in v6 (`### OpCode tst`). Still unimplemented: the `$$` declaration table,
+frame name map + bitset and `DECL` (**M4**).
 
 ## opCode scope
 
@@ -725,8 +758,8 @@ The "v6 spelling" column is what the compiler emits since Round 56; the deprecat
 | jl, jg, jle, jge | conditional jump | unchanged; test the shared-register flags |
 | je, jne | conditional jump | unchanged; test the shared-register flags |
 | cmp, cmpi | comparison (numbers only) | `cmp` — `cmpi` is `cmp` with an immediate right operand, deprecated |
-| eq, lt, gt, lte, gte | comparison (general) | flag-setting `eqf`, `ltf`, `gtf`, `ltef`, `gtef` (`### extended OpCode eq, lt, gt, lte, gte`) |
-| tst | truthiness test | sets `eq` from `truth(r[a])`; replaces `jmpfalse` / `jmptrue` |
+| eq, lt, gt, lte, gte | comparison (general) | flag-setting `eqf`, `ltf`, `gtf`, `ltef`, `gtef` — emitted since Round 59 for comparison conditions in branch position, statically-`Int` operands excepted (`### extended OpCode eq, lt, gt, lte, gte`) |
+| tst | truthiness test | sets `eq` from `truth(r[a])`; implemented, **not emitted** in v6 — it will replace `jmpfalse` / `jmptrue` when they are removed (Phase 3) |
 
 ### bytecode encoding
 
@@ -859,10 +892,12 @@ new encoding, right operand is a register (kind 1, form 0)
 0075  eqf          0c, 0d     ; flags = (r12 == r13)    # 3 bytes
 0078  jne          03         ; pc += 3                 # 2 bytes, -> 007d
 
-new encoding, right operand is a signed 1-byte immediate (kind 0, form 4)
+new encoding, right operand is a signed 1-byte immediate (kind 0, form 4) — the modifier MUST
+be emitted: a base (unescaped) form can only mean the opcode's default right kind, which for
+every `*f` compare is a register, so an immediate right operand is always announced (`e=0x40`)
 
-0075  eqf   e=0x40 0c, 05    ; flags = (r12 == 5)       # 3 bytes (base form, no e emitted)
-0078  jne          03         ; pc += 3                 # 2 bytes, -> 007d
+0075  eqf   e=0x40 0c, 05    ; flags = (r12 == 5)       # 4 bytes (escaped: e + 1-byte imm)
+0079  jne          03         ; pc += 3                 # 2 bytes, -> 007e
 ```
 
 these new encodings reduce the number of active temporary registers: the comparison writes
@@ -889,7 +924,8 @@ all tests will have to validated again whenever new encoding guidelines are impl
 Phasing of the extended encoding. Full design, impact assessment and verification gate:
 [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md).
 
-**Phase 1 — `.qlc` v6.** *landed Round 56, except the two bullets marked M3.*
+**Phase 1 — `.qlc` v6.** *landed — Round 56 (encoding, pipeline) and Round 59 (the `*f`
+family and the `ja`/`jae`/`jb`/`jbe` aliases).*
 
 - the modifier byte becomes the 2/2/4 layout (`### bytecode encoding`), which carries a
   right-operand **kind**: immediate / register / const pool.
@@ -899,8 +935,11 @@ Phasing of the extended encoding. Full design, impact assessment and verificatio
 - immediates include signed, unsigned, float, bool and nil, thus freeing slots in the constant
   pool (`## constant pool`).
 - the flag-setting comparisons `eqf`/`ltf`/`gtf`/`ltef`/`gtef` and `tst` are added
-  (`### extended OpCode eq, lt, gt, lte, gte`, `### OpCode tst`). **— M3, pending**
-- `ja`/`jae`/`jb`/`jbe` exist as assembler aliases only. **— M3, pending**
+  (`### extended OpCode eq, lt, gt, lte, gte`, `### OpCode tst`). **— landed Round 59**
+  (`tst` decodes and disassembles; the compiler does not emit it yet)
+- `ja`/`jae`/`jb`/`jbe` exist as assembler aliases only. **— landed Round 59** as
+  specification + disassembly rules: the repo has no assembler, so an alias has no code
+  surface, and the opcode table carries no `JA`/`JAE`/`JB`/`JBE` identity by design.
 - the deprecated spellings (`movi`, `movc`, `addi`, `subi`, `cmpi`, `jmpfalse`, `jmptrue`) keep
   decoding, so a v6 stream may contain either spelling; the compiler emits only the new ones.
 

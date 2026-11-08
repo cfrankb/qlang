@@ -1,0 +1,35 @@
+# Line-ending policy.
+#
+# The documentation hash gate (cmake/check_doc_hashes.cmake, registered as the
+# `doc_hashes` ctest entry) records the SHA256 of the committed bytes, which are
+# LF. GitHub's windows-latest image sets core.autocrlf=true in git's system
+# config, so a plain checkout rewrites every .md to CRLF and all 24 recorded
+# hashes drift at once (first seen in the MSVC CI run of 2026-11-05). Pinning
+# eol=lf makes checkouts byte-identical on every platform, so a recorded hash
+# still equals `sha256sum` of the file on disk.
+#
+# No tracked file contains CR, so adding this needs no renormalization commit.
+
+# Text: LF in the repository and in every working tree.
+* text=auto eol=lf
+
+# Shell scripts must stay LF even if a Windows editor rewrites them: bash and
+# MSYS refuse to run a CRLF script (bad interpreter).
+*.sh text eol=lf
+
+# Binary: never touch the bytes. Declared explicitly because `eol=` implies
+# "text", which would corrupt these on commit.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.qlc binary
+*.qla binary
+*.a binary
+*.o binary
+*.obj binary
+*.lib binary
+*.dll binary
+*.exe binary
+*.zip binary

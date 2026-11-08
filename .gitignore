@@ -18,4 +18,5 @@ range_check
 /*.qlc
 /*.qla
 /examples/qla/
+/perf_result.json
 .aider*

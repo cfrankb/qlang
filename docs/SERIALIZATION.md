@@ -129,7 +129,7 @@ u32   constCount, constCount × Value
 The instruction stream is the **v6 escape-byte format** (see
 `include/qlang/QLangBytecode.h`, §4.4): a flat byte stream where each instruction
 starts with an opcode byte whose bit 7 is the escape flag and bits 0–6 are
-the opcode identity (128 base identities, 73 defined). An escaped
+the opcode identity (128 base identities, 79 defined). An escaped
 instruction carries a modifier byte `e` immediately after the opcode byte
 that states the operand layout — left-operand width, right-operand **kind**
 (immediate / register / const pool) and right-operand **form** — or, for the
@@ -149,7 +149,7 @@ offset table: `locCount` entries of `(u16 line, u16 col)` with
 - `functions[0]` is the implicit `main`. The writer MUST emit it first; the
   reader MUST reject files where `functions[0].name != "main"` or
   `funcCount < 1`.
-- Every decoded opcode identity MUST be `< kOpcodeUsedCount` (73).
+- Every decoded opcode identity MUST be `< kOpcodeUsedCount` (79).
 - `line`/`col` in the loc side table are 0-based source positions (0,0 when
   unknown).
 
@@ -182,7 +182,7 @@ within both sections is unspecified**. Readers MUST NOT depend on it.
 
 Each instruction is `[opcode byte] [modifier byte] [operands…]`. In the opcode
 byte **bit 7 is the escape flag** and bits 0–6 are the opcode identity
-(128 identities, `kOpcodeUsedCount = 73` of them defined). An unescaped
+(128 identities, `kOpcodeUsedCount = 79` of them defined). An unescaped
 instruction uses the identity's **base form** (fixed operand widths, right
 operand kind fixed by the identity); an escaped instruction states its layout
 in the modifier byte `e` that follows the opcode byte.

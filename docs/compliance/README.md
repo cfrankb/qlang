@@ -1,7 +1,7 @@
 # QLang Compliance — Module Index
 
 Entry point for the compliance reference (migrated from root `SPEC_COMPLIANCE.md`,
-2026-10-29; last audit Round 58, 2026-11-07). Content is verbatim from the
+2026-10-29; last audit Round 59, 2026-11-07). Content is verbatim from the
 original `SPEC_COMPLIANCE.md`. The recorded hashes are checked by the
 `doc_hashes` ctest entry (`cmake/check_doc_hashes.cmake`); re-record them after
 a verified doc edit with `./update-doc-hashes.sh` (`--check` verifies only).
@@ -19,7 +19,7 @@ below (spec hashes tracked in [../spec/README.md](../spec/README.md)); the
 | [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `c546961324eabfd6d50ca4b80621589b95dd42b2cbd6d5ce343260f73cdfc4d3` |
 | [coverage.md](coverage.md) | reserved-word coverage, value-type coverage | 02-lexical, 01-types | `789a0b58112961a6f32e98426923c17c88be737f0cfbc3a809ad771b11c898eb` |
 | [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `3fac957985c9994659ed3e0b153eb99496d1ff27f4165cab15e45015a00f758e` |
-| [history.md](history.md) | audit rounds 7–56 (append-only) | mixed (per round) | `282c948ca3e8ef6e9ce48a08a2fc2c8b3b0dce382923ce1d65ed7ac49f02dc0f` |
+| [history.md](history.md) | audit rounds 7–59 (append-only) | mixed (per round) | `282c948ca3e8ef6e9ce48a08a2fc2c8b3b0dce382923ce1d65ed7ac49f02dc0f` |
 | [classes.md](classes.md) | class implementation details, class spec conformance | 10-classes | `c95a835ae11f6e25c87facb30dd7210a18e928b56ab9b3592e25acf805e99b40` |
 | [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `266c98bc59b3a64008af10ad5482b60051842ef4737672e8b12f52a9d04d6ab1` |
 | [migration-value-semantics.md](migration-value-semantics.md) | copy→share migration note for `array`/`set`/`blob` (Round 43) | 01-types | `3b38a16ad6e8f04386092ee2f588adb27d5f1bdfcada749135c7168066547e7d` |
