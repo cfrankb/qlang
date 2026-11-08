@@ -1,3 +1,62 @@
+## Round 60 (2026-11-08)
+
+**Phase 3 opcode retirement — the seven spellings the v6 encoding made redundant are deleted,
+their identities compacted, and `.qlc` becomes v7: same byte layout, smaller identity space,
+`tst` + `je`/`jne` the only way to branch on truthiness.**
+Plan `docs/plans/phase3-opcode-retirement-plan.md`; the code landed in `b86460b` (S1, compiler
+lowers bare truthiness to `tst` + `je`/`jne`), `801498c` (S3, enumerators + codec rows +
+mnemonics + VM handlers removed, identities compacted) and `a6737b9` (S4, `kQlcVersion` 7,
+reader accepts v7 only); **this round is the documentation step (S6) plus the tally re-record
+(S5's measurement half)**. Touched: `docs/spec/13-bytecodes.md`, `docs/SERIALIZATION.md`,
+`docs/compliance/{status,tests,harness,history,README}.md`,
+`docs/plans/{encoding-v6-and-indirect,phase3-opcode-retirement,todo}.md`.
+
+- **Why it was worth doing.** Since Round 56 the modifier byte carries a right-operand **kind**,
+  so `movi`/`movc` are `mov`, `addi` is `add`, `subi` is `sub` and `cmpi` is `cmp` — the separate
+  identities had no producer left (Phase 2, Round 56) and only cost decode-table entries.
+  `jmpfalse`/`jmptrue` duplicated what `tst` + `je`/`jne` express, and keeping both spellings kept
+  the spec honest only by saying "deprecated".
+- **What was removed.** `MOVC` (0), `JMPIFFALSE` (45), `JMPIFTRUE` (46), `MOVI` (57), `ADDI` (58),
+  `SUBI` (59), `CMPI` (61) — enumerator, codec row, mnemonic, VM handler and the condition-register
+  jump form in `emit()`. `kOpcodeUsedCount` **79 → 72**.
+- **The compaction (D3).** One-time, not incremental: `new = old − |{removed < old}|`, so every
+  identity above a removed one shifts down. Spot-checked after the change: `mov` 0, `jmp` 43,
+  `continue` 44, `yield` 53, `cmp` 54, `je` 55, `jle` 60, `nop` 61, `emit` 62, `deepcopy` 63,
+  `indexget` 64, `indexput` 65, `eqf` 66, `ltf` 67, `gtf` 68, `ltef` 69, `gtef` 70, `tst` **71**
+  (last defined, hence the count 72). The plan's "73" assumed **M4** (`DECL`) landed first; it has
+  not, so the D2 fallback applies and `DECL` will be identity **72** / count **73** when M4 lands.
+- **`.qlc` v7 is a version bump with no layout change.** The escape-byte stream, the 2/2/4
+  modifier, the offset table and the loc side table are byte-for-byte the v6 ones; only the
+  version field (4) and the set of decodable identities differ. Readers accept **7 only** —
+  v1–v6 fail at the header with `qlc: unsupported version (byte offset 8)`, exit 3, never a parse
+  attempt — which is what makes the removal safe rather than a compatibility break in disguise.
+- **`tst` is now emitted (M3 D4 closed).** 15 `JMPIFFALSE`/`JMPIFTRUE` references converted;
+  `emitJumpIfTrue`/`emitJumpIfFalse` emit `tst r` + `je`/`jne` and return the **jump** index, with
+  the `tst` at index − 1 (where a loop back-edge must point to re-evaluate the condition), so every
+  hardcoded `+2`/`+3` label offset became an explicitly captured index. Cost: one more instruction
+  per truthiness test — `hello.ql` 211 → **215** (+4 sites), `perf_stress.ql` 521 → **565** (+44);
+  `money.ql` 151 and `cast.ql` 163 unchanged (no truthiness test). Corpus stdout **23/23 scripts
+  byte-identical**, all exit 0.
+- **Measured outcome (perf).** `perf_bench` **PASS 12/12 stages** within ±20 % / 0.50 ms;
+  `perf_stress` execute **10.974 ms** vs the 10.382 ms baseline (**+5.7 %**), consistent with the
+  +8.7 % S1 A/B (11.349 ms) recorded in the plan — the inner `for j = 1 to 200` back-edge now
+  executes one extra dispatch. **No re-baseline**; the loop-invariant direction re-test that causes
+  it is filed as a follow-up (plan §8), not a `tst` cost.
+- **Verification.** `cmake -B build && cmake --build build` clean; `ctest --test-dir build`
+  **50/50 green** (48 with `-E perf`, `doc_hashes` skipped). Producer gate: zero references to the
+  seven opcodes in `src/` + `examples/`, and the `--asm-level 4` scan of all 23 corpus listings has
+  **0 deprecated mnemonics**. v6 and v8 images rejected at the version field; a v7 write → read →
+  `loadProgram` → `execute` round-trip is stdout byte-identical to `ctx.run(source)`.
+- **Tallies re-recorded.** `codec_check` 281 → **330** (v7 version matrix: 3/4/5/6/8 rejected,
+  v7 round-trip per script); `encoding_v6` 37 859 → **35 083** (the sweep now walks 72 identities —
+  parity sweep 30 392 rejected modifiers / 2 376 accepted / 15 144 truncations, 14 274 rejected
+  `(opcode, modifier)` pairs cross-checked); `flag_flow` **1 324** unchanged; counted unit cases
+  40 287 → **37 560**.
+- **Still open (S5's other half, labels only — no code surface).** `tests/unit/spec_check2.cpp`
+  case names still read `movi:` / `addi:` / `subi:`, `tests/unit/value_semantics.cpp` comments
+  still say "the MOVC clone", and `include/qlang/QLangVM.h` still documents "CMP/CMPI" and
+  "mov/movc". Renaming them is a test-comment change, deliberately not mixed into this round.
+
 ## Round 59 (2026-11-07)
 
 **M3 flag flow — milestone 3 of `docs/plans/encoding-v6-and-indirect-plan.md` (plan

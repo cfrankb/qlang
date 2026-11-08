@@ -1,11 +1,15 @@
 # Phase 3 — Opcode Retirement: Remove the Deprecated Spellings, Compact Identities, `.qlc` v7
 
-Status: **S1 landed (`b86460b`), S2 gate re-verified there, S3 landed (`801498c`); S4
-landed (2026-11-08, uncommitted) — `.qlc` is v7 — S5–S7 open.** Baseline
+Status: **DONE (2026-11-08) except S7, the docs commit.** S1 (`b86460b`), S3 (`801498c`) and
+S4 (`a6737b9`) are committed; the S2 gate was re-verified at `b86460b`; S5 landed (tallies +
+perf re-measured; its D7 label half deferred — see its record); S6 (documentation) landed
+2026-11-08 as compliance **Round 60**.
+`.qlc` is **v7**, `kOpcodeUsedCount` **72**, suite **50/50** with `encoding_v6` **35 083**,
+`codec_check` **330**, `flag_flow` **1324**. Baseline
 `HEAD = f192ad0` ("planning"); the M3 S7 documentation edits and the M2 S9 housekeeping
-landed in `51f9d33`. **M4 has not landed**, so `kOpcodeUsedCount` is still **79** (not
+landed in `51f9d33`. **M4 has not landed**, so `kOpcodeUsedCount` was **79** at the baseline (not
 the 80 D2 assumes): §4's table is correct as written except the `DECL` row, which is
-prospective. Suite at this baseline: ctest **50** entries (48 with `-E perf`),
+prospective. Suite at that baseline: ctest **50** entries (48 with `-E perf`),
 `encoding_v6` **34 470** checks, `codec_check` **199**, `flag_flow` **1324**,
 `perf_stress` execute **10.382 ms** (committed baseline; **10.44 ms** in the S1 session —
 see the S1 record for the pair).
@@ -411,6 +415,29 @@ record) and record the pair.
 
 *Exit criteria:* suite green; tallies recorded under each step.
 
+**Landed 2026-11-08 (measurement half; the D7 label half is deferred — see below).** No code
+changed; this step re-measured and re-recorded what S3/S4 shipped:
+
+| metric | value at close |
+| --- | --- |
+| `ctest --test-dir build` | **50/50** (48 with `-E perf`, `doc_hashes` skipped until S6) |
+| `encoding_v6` checks | **35 083** (sweep 72 × 256; parity sweep still 128 × 256 = 32 768) |
+| `codec_check` checks | **330** (S4's v7 matrix + 23-script round-trip) |
+| `flag_flow` checks | **1 324** (unchanged) |
+| `perf_stress` execute | **10.974 ms** vs the 10.382 ms committed baseline (**+5.7 %**) |
+| `perf_bench` | **PASS 12/12** stages within ±20 % / 0.50 ms |
+
+The perf pair: S1's A/B measured **11.349 ms** (+8.7 % over a same-session `f192ad0`
+worktree); the close-out measurement is **10.974 ms** (+5.7 % over the committed baseline).
+Both are above this plan's ~5 % caution and inside the AGENTS.md ±20 % gate; the cause is
+unchanged (one extra dispatch on the `for` back-edge, §1 record) and the mitigation stays
+filed in §8. **No re-baseline.**
+
+*Deferred (D7, labels only, no code surface):* `spec_check2`'s `movi:`/`addi:`/`subi:` case
+names, the `value_semantics` "MOVC clone" comments and `QLangVM.h`'s `CMP/CMPI` +
+`mov/movc` comments still name the retired spellings. They are test-comment/label text; the
+rename is deliberately not mixed into the Round 60 docs commit. Filed in `todo.md`.
+
 ### S6 — Documentation (only after the suite is green)
 
 - `docs/spec/13-bytecodes.md`: `## opCode scope` — the deprecated column becomes "removed in
@@ -429,6 +456,32 @@ record) and record the pair.
 
 *Exit criteria:* `doc_hashes` green; no spec sentence left claiming the deprecated spellings
 still decode, none claiming `tst` is un-emitted.
+
+**Landed 2026-11-08 as compliance Round 60** (after the suite was green at 50/50). Files
+touched: `docs/spec/13-bytecodes.md` (identity table, `### OpCode tst` → emitted, `## opCode
+scope` deprecated column → removed in v7, the condition-register note deleted, `## future
+plans` Phase 3 → landed), `docs/SERIALIZATION.md` (§4 version field → 7, "79 defined" → 72,
+identity rule unchanged at `< kOpcodeUsedCount`), `docs/compliance/{history,status,tests,
+harness,README}.md` (Round 60 entry; extended-encoding Open Item closed; tallies re-recorded;
+round range → 7–60), the parent plan (§3 fate column, §5.4, §6 phase table + §6.1 row → DONE
+with the three SHAs, §11 item 6 marked inverted/retired, §12 item 6 marked superseded by D1),
+this plan and `todo.md`.
+
+Deviations from the checklist above:
+
+1. **72, not 73.** Every "73 defined" the checklist predicted is written as **72** — the D2
+   fallback is the landed reality (M4 has not landed, `DECL` has no identity yet; `TST` 71 is
+   the last defined opcode). `DECL` will be 72 / count 73 when M4 lands; the spec and
+   SERIALIZATION say so explicitly so M4's round has a written target.
+2. **`README.md`'s hash rows are updated last, by script.** `update-doc-hashes.sh` ran only
+   after the final green `ctest` (AGENTS.md); the compliance README's self-hash is not
+   tracked in its own table.
+3. **The D7 label renames did not ride this commit** (see the S5 record) — the round entry
+   records them as the one open test-text item instead.
+
+*Exit-criteria check:* `doc_hashes` green (below); `grep -rn "still decod\|deprecated" docs/spec/13-bytecodes.md`
+leaves only the retirement banners ("removed in v7"); no spec sentence claims `tst` is
+un-emitted (M3 D4 closed in `### OpCode tst`).
 
 ### S7 — Housekeeping and commits
 

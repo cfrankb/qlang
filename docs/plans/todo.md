@@ -1,6 +1,6 @@
 # QLang — TODO / backlog
 
-Status: current 2026-11-07 (`HEAD = 56998cf` + the staged M3 S7 documentation edits).
+Status: current 2026-11-08 (`HEAD = a6737b9` + the staged Phase 3 S6 documentation edits).
 Maintained alongside `docs/plans/`; per AGENTS.md a plan that is fully implemented moves to
 `docs/plans/archive/`. Sources: the 2026-11-07 plan audit,
 [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md),
@@ -9,14 +9,13 @@ Maintained alongside `docs/plans/`; per AGENTS.md a plan that is fully implement
 
 ## 1. In flight (uncommitted working tree)
 
-- [ ] M3 S7 tail — plan-file statuses: parent §6.1 M3 row → **DONE** (`4ead571`…`56998cf`,
-      Round 59); parent §2.9 base-form rows → escaped (m3 D5); parent §10 "four exec loops" →
-      one dispatch switch; `m3-flag-flow-plan.md` status header → DONE (it still says
-      "S6 landed (uncommitted)" — S6 is committed at `56998cf`)
+- [ ] Phase 3 S6 docs (Round 60) + this file — commit as
+      `docs: opcode retirement shipped (Round 60)` (plan §S7 item 5; S1–S4 are already
+      committed at `b86460b`/`801498c`/`a6737b9`)
+- [ ] After the commit: move `phase3-opcode-retirement-plan.md` to `docs/plans/archive/`
+      (AGENTS.md — the plan is DONE except that commit)
 - [ ] Rebuild + `ctest --test-dir build` green → `bash update-doc-hashes.sh` → re-verify
       `doc_hashes` (the script is not executable)
-- [ ] Commit the staged M3 S7 docs + M2 S9 housekeeping (`.gitignore`, `.gitattributes` are
-      already staged; suggested: `docs: flag flow shipped (M3, Round 59)`)
 
 ## 2. M4 — `$$` indirect access (A3) — next milestone
 
@@ -24,9 +23,11 @@ Design is settled by parent plan §7 (**Q6 closed**: the declaration bit is not 
 a detailed plan is still owed for the check pipeline + test plan (missing-features Phase 2
 item 3; open **Q7–Q11**).
 
-- [ ] `DECL siteId` opcode — identity 79, `kOpcodeUsedCount` 79 → 80
-- [ ] Per-function declaration table (`site → {reg, name, kind}`) as an optional `.qlc` v6
-      section (M2 D4) + frame name map + per-frame bitset
+- [ ] `DECL siteId` opcode — identity **72** (appended after Phase 3's compaction; the plan
+      text's "79 → 80" predates it), `kOpcodeUsedCount` 72 → 73
+- [ ] Per-function declaration table (`site → {reg, name, kind}`) as an optional `.qlc`
+      section (M2 D4; `.qlc` is **v7** since Phase 3 — decide whether the table rides v7 or
+      forces v8) + frame name map + per-frame bitset
 - [ ] Two-operand `INDGET`/`INDPUT` (reuse the placeholders, `QLangBytecode.h:123-124`;
       **Q10** decides the arity)
 - [ ] Six-stage `indirect variable error:` pipeline, resolution order (locals + `global`
@@ -37,24 +38,33 @@ item 3; open **Q7–Q11**).
 
 ## 3. Phase 3 — opcode retirement (`.qlc` v6 → v7)
 
-Plan: [phase3-opcode-retirement-plan.md](phase3-opcode-retirement-plan.md) (written
-2026-11-07; prerequisite per its D2: M4 lands first — **not landed**,
-`kOpcodeUsedCount` is still 79, which only affects the `DECL` row of its §4 table).
+Plan: [phase3-opcode-retirement-plan.md](phase3-opcode-retirement-plan.md) — **DONE
+2026-11-08** except its S7 docs commit. D2's prerequisite (M4 first) did not hold, so the
+plan's recorded **fallback** executed: `kOpcodeUsedCount` 79 → **72** (not 80 → 73), `TST` 71
+last defined, `DECL` will append at 72.
 
-- [x] **S1 + S2 landed 2026-11-08** (uncommitted): bare truthiness lowers to
-      `tst` + `je`/`jne` at all 15 references; producer gate clean. Cost:
-      `perf_stress` execute 10.442 → 11.349 ms (+8.7 %, inside the ±20 % gate, above
-      the plan's ~5 % caution — root cause and mitigation in its S1 record and §8)
-- [ ] Execute S3–S7 there: retire
-      `MOVC`/`MOVI`/`ADDI`/`SUBI`/`CMPI`/`JMPIFFALSE`/`JMPIFTRUE` → identity compaction
-      (80 → 73) → `.qlc` v7 → tests → docs
+- [x] **S1 + S2** (`b86460b`): bare truthiness lowers to `tst` + `je`/`jne` at all 15
+      references; producer gate clean. Cost: `perf_stress` execute 10.442 → 11.349 ms
+      (+8.7 % A/B; +5.7 % vs the committed baseline at close-out — inside the ±20 % gate,
+      above the plan's ~5 % caution; root cause and mitigation in its S1 record and §8)
+- [x] **S3** (`801498c`): the seven spellings retired, identities compacted
+      (`new = old − |{removed < old}|`), `kOpcodeUsedCount` 79 → 72
+- [x] **S4** (`a6737b9`): `.qlc` **v7**, reader accepts v7 only (v1–v6 rejected at the
+      version field); v7 write → read → execute round-trip covered for all 23 scripts
+- [x] **S5** (tallies + perf re-measured) + **S6** (Round 60 docs, staged)
+- [ ] **S7**: the docs commit (`docs: opcode retirement shipped (Round 60)`), then archive
+      the plan
+- [ ] **D7 tail (deferred, test text only)**: rename `spec_check2`'s `movi:`/`addi:`/`subi:`
+      case names, fix the `value_semantics` "MOVC clone" comments and `QLangVM.h`'s
+      `CMP/CMPI` + `mov/movc` comments
 
 ## 4. Offset table (exploration → decision)
 
 - [ ] Sign off §9 of `offset-table-elimination-plan.md` (option **A** + §7.4 `loc`
       delta-encoding; perf_stress image 6 719 B → ~3 600 B, −46 %) and record the decision
-- [ ] If approved: it bumps `kQlcVersion` 6 → 7 as well — decide with Phase 3 whether one
-      version bump carries both changes or two (see Phase 3 plan, follow-ups)
+- [ ] If approved: bump `kQlcVersion` **7 → 8** — Phase 3 already spent the 6 → 7 bump
+      (`a6737b9`), so the "one bump or two" question in the Phase 3 plan's follow-ups is
+      closed in favour of two; update that plan's §8 bullet when the §9 decision lands
 
 ## 5. missing-features backlog (`missing-features-plan.md`)
 

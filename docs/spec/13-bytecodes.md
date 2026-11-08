@@ -40,7 +40,8 @@ parameter used `i32`; all others used `a`/`b`/`c` as `int16_t`. The former
 `usesI32(Opcode)` source of truth is deleted — the width of every operand is
 now selected by the modifier byte (`### bytecode encoding`). The opcodes that
 once used the `i32` slot are `JMP`, `JMPIFFALSE`, `JMPIFTRUE`, `CONTINUE`,
-`BREAK` (pc targets) and `MOVI`/`ADDI` (32-bit integer literal).
+`BREAK` (pc targets) and `MOVI`/`ADDI` (32-bit integer literal) — four of
+those (`JMPIFFALSE`, `JMPIFTRUE`, `MOVI`, `ADDI`) were retired in `.qlc` v7.
 
 Source location (line/col) is NOT in the instruction: it lives in the
 parallel `Function::loc` side-table (`std::vector<std::pair<uint16_t,
@@ -82,25 +83,19 @@ Conventions:
 | INDPUT | table reg | key reg | value reg | | **reserved** (enum placeholder) — `$$` indirect write, not yet implemented |
 | EVALKEY | dest reg | value reg | — | | `$` dynamic key stringify |
 | JMP | — | — | — | pc target | |
-| JMPIFFALSE | cond reg | — | — | pc target | |
-| JMPIFTRUE | cond reg | — | — | pc target | |
 | CONTINUE | — | — | — | pc target | loop test label |
 | BREAK | — | — | — | pc target | loop exit label |
-| NOP | — | — | — | | no operands, no action (identity 68) |
+| NOP | — | — | — | | no operands, no action (identity 61) |
 | CALLFN | dest reg | function index | arg count | | args in r[a+1..a+c] |
 | CALLCLOS | closure / dest reg | — | arg count | | b unused |
-| EMIT | object reg | signal-name const index | arg count | | identity 69; args in r[a+1..a+c] |
+| EMIT | object reg | signal-name const index | arg count | | identity 62; args in r[a+1..a+c] |
 | RETURN | result reg | — | — | | |
 | MAKEFUNC | dest reg | closure const index | — | | |
 | MAKEGEN | dest reg | function const index | — | | |
 | REFLOAD | dest reg | capture table index | — | | |
 | REFSTORE | value reg | capture table index | — | | |
 | YIELD | generator value reg | yield value reg | generator reg | | |
-| MOVI | dest reg | — | — | int32 literal | `r[a] = Int(i32)`; Type::Int only |
-| ADDI | dest reg | — | — | int32 literal | `r[a] = r[a] + Int(i32)`; in-place; Type::Int only |
-| SUBI | dest reg | — | — | int32 literal | `r[a] = r[a] - Int(i32)`; in-place; Type::Int only |
 | CMP | left reg | right reg | — | | flags = `cmp(r[a], r[b])`; independent GT/EQ/LT bits, wipes prior flags |
-| CMPI | left reg | — | — | int32 literal | flags = `cmp(r[a], Int(i32))` |
 | JE | — | — | — | pc target | jump when flags == EQ (`a == b`) |
 | JNE | — | — | — | pc target | jump when EQ not set (`a != b`) |
 | JG | — | — | — | pc target | jump when GT only (`a > b`) |
@@ -110,14 +105,20 @@ Conventions:
 | DEEPCOPY | dest reg | src reg | — | | `r[a] = deepcopy(r[b])` |
 | INDEXGET | dest reg | base reg | key reg | | `r[a] = r[b][r[c]]`; array/table/object subscript |
 | INDEXPUT | base reg | key reg | value reg | | `r[a][r[b]] = r[c]`; array/table/object subscript |
-| EQF | left reg | right reg | — | | identity 73; `flags = (r[a] == right) ? EQ : none`; general types; right may be immediate/register/const |
-| LTF | left reg | right reg | — | | identity 74; `flags = (r[a] < right) ? LT : none` |
-| GTF | left reg | right reg | — | | identity 75; `flags = (r[a] > right) ? GR : none` |
-| LTEF | left reg | right reg | — | | identity 76; `flags = (r[a] < right) ? LT : (r[a] == right) ? EQ : none` (one-hot) |
-| GTEF | left reg | right reg | — | | identity 77; `flags = (r[a] > right) ? GR : (r[a] == right) ? EQ : none` (one-hot) |
-| TST | test reg | — | — | | identity 78; `flags = truth(r[a]) ? EQ : none`; register operand only |
+| EQF | left reg | right reg | — | | identity 66; `flags = (r[a] == right) ? EQ : none`; general types; right may be immediate/register/const |
+| LTF | left reg | right reg | — | | identity 67; `flags = (r[a] < right) ? LT : none` |
+| GTF | left reg | right reg | — | | identity 68; `flags = (r[a] > right) ? GR : none` |
+| LTEF | left reg | right reg | — | | identity 69; `flags = (r[a] < right) ? LT : (r[a] == right) ? EQ : none` (one-hot) |
+| GTEF | left reg | right reg | — | | identity 70; `flags = (r[a] > right) ? GR : (r[a] == right) ? EQ : none` (one-hot) |
+| TST | test reg | — | — | | identity 71; `flags = truth(r[a]) ? EQ : none`; register operand only |
 
 ## opcode: MOVI
+
+> **Removed in `.qlc` v7** (Phase 3, Round 60). `movi`/`movc` are the `mov`
+> immediate and const-pool **kinds** since Round 56; the identities, their codec
+> rows, their mnemonics and their VM handlers are gone — a v7 stream cannot
+> contain them and a v6 file is rejected by the version field. The sections
+> below are the historical record of the v2–v5 spellings.
 
 **Implemented (Round 30, 2026-10-29):** `Opcode::MOVI` appended last in the
 enum (existing `.qlc` opcode numbers unchanged), `usesI32()` covers it, the
@@ -170,14 +171,18 @@ proposal
 ````
 net saving. -1 constant in pool. -2 Instructions.
 
-**Deprecated by `## encoding extended` (2026-11-06).** `movi`/`movc` are the same instruction
+**Deprecated by `## encoding extended` (2026-11-06); removed in `.qlc` v7 (Round 60).**
+`movi`/`movc` are the same instruction
 as `mov` with a right-operand *kind* of immediate / constant pool: the `i`/`c` suffix is folded
-into the modifier byte and the separate identities are removed in a later version. The
+into the modifier byte and the separate identities are gone. The
 "fits in 32 bits ⇒ immediate, otherwise ⇒ pool" rule survives unchanged — it becomes the
 compiler's immediate-form selection (`### bytecode encoding`).
 
 
 ## OpCode addi
+
+> **Removed in `.qlc` v7** (Phase 3, Round 60) — `addi` is `add` with an immediate
+> right-operand kind; historical record below.
 
 **Implemented (Round 31, 2026-10-29):** `Opcode::ADDI` appended last in the
 enum (existing `.qlc` opcode numbers unchanged), `usesI32()` covers it, the
@@ -208,6 +213,9 @@ net savings: -2 instructions
 
 ##  OpCode: subi
 
+> **Removed in `.qlc` v7** (Phase 3, Round 60) — `subi` is `sub` with an immediate
+> right-operand kind; historical record below.
+
 opcode `subi`
 
 ```
@@ -227,14 +235,15 @@ net savings: -3 instructions
 
 `addi`/`subi` are likewise folded into `add`/`sub` with an immediate right operand — the
 in-place semantics (`r[a] = r[a] op imm`) are exactly what the non-register kinds mean
-(`### bytecode encoding`). **Deprecated**, same removal schedule as `movi`.
+(`### bytecode encoding`). **Removed in `.qlc` v7** (Round 60), same as `movi`.
 
 ## alternate conditional jump OpCode
 
 jump OpCode: `je`, `jl`, `jle`, `jg`, `jge`, `jne` (+ the `ja`/`jae`/`jb`/`jbe` aliases)
 comparator: `cmp`, and the flag-setting `eqf`, `ltf`, `gtf`, `ltef`, `gtef`, `tst`
 (`### extended OpCode eq, lt, gt, lte, gte`). `cmpi` is `cmp` with an immediate right operand
-(`### bytecode encoding`), not a separate opcode in the extended encoding.
+(`### bytecode encoding`), not a separate opcode in the extended encoding — its identity was
+removed in `.qlc` v7 (Round 60).
 
 ### shared registers
 
@@ -324,7 +333,7 @@ the pre-v5 absolute `i32` pc target.
 
 ### OpCode jg
 
-current — compare into a temporary, branch on its truthiness (2 instructions, 1 temporary):
+before v7 — compare into a temporary, branch on its truthiness (2 instructions, 1 temporary):
 
 ```
 0054  gt           09, 0c, 0d ; r9 = (r12 > r13)          # 4 bytes
@@ -340,7 +349,7 @@ extended — flags, no temporary (2 instructions, 0 temporaries):
 
 ### OpCode je
 
-current:
+before v7:
 
 ```
 004c  eq           06, 09, 0c ; r6 = (r9 == r12)          # 4 bytes
@@ -356,7 +365,7 @@ extended:
 
 ### OpCode jl
 
-current:
+before v7:
 
 ```
 0068  lt           0e, 09, 0d ; r14 = (r9 < r13)          # 4 bytes
@@ -377,24 +386,25 @@ on their own. `tst` bridges the gap: it sets `eq` from `truth(r[a])` and clears 
 bits, so the flag jumps become reachable from any value.
 
 ```
-current
+v5/v6
 0040  jmptrue      06, 04     ; if truth(r6) pc += 4      # 3 bytes
 
-extended
+v7
 0040  tst          06         ; flags = truth(r6) ? eq : 0 # 2 bytes
 0042  je           04         ; pc += 4                   # 2 bytes, -> 0046
 ```
 
-The pair is one byte longer for a bare truthiness test, so the compiler keeps `jmpfalse`/
-`jmptrue` there until they are removed; it is a win whenever the condition is already a
-comparison (`eqf` + `jne` replaces `eq` + `jmpfalse` **and** frees a register) or when the
-flags feed a second branch. Both pairs decode; `jmpfalse`/`jmptrue` are **deprecated**
-(`## future plans`).
+The pair is one byte longer for a bare truthiness test, which is why the compiler kept
+`jmpfalse`/`jmptrue` there while both spellings decoded; it is a win whenever the condition is
+already a comparison (`eqf` + `jne` replaces `eq` + `jmpfalse` **and** frees a register) or when
+the flags feed a second branch.
 
-**Status (Round 59):** `tst` is **implemented** — identity 78, codec tables, VM handler
-(`flags = truth(r[a]) ? EQ : none`) and disassembly — but **not emitted** by the compiler in
-v6: bare truthiness tests (`if x`, `while x`, `&&`/`||`) still lower to `jmpfalse`/`jmptrue`.
-Emitting `tst` belongs with the removal of the deprecated pair (Phase 3, `.qlc` v7).
+**Status (Round 60):** `tst` is **emitted** — identity 71, codec tables, VM handler
+(`flags = truth(r[a]) ? EQ : none`) and disassembly. Bare truthiness tests (`if x`, `while x`,
+`&&`/`||`) lower to `tst` + `je`/`jne` (Phase 3 step 1). `jmpfalse`/`jmptrue` were **removed**
+with `.qlc` v7 (Phase 3 step 3): their identities, codec rows, mnemonics and VM handlers are
+gone, so the `v5/v6` listing above is the historical record only and a v7 stream can contain
+only the `v7` pair.
 
 OpCode `jge` and `jle` work exactly like `jg` and `jl`; `jne` is the complement of `je`.
 
@@ -468,7 +478,9 @@ slot (the `baseOperandCount()` default). appended last in the opcode enum —
 `DEEPCOPY` was 70, so this is 71 and `kOpcodeUsedCount` becomes 73 — so
 existing `.qlc` opcode numbers stay valid; the `.qlc` format version was left
 unchanged (v5) because no encoding rule moved. (It became v6 in Round 56, for
-the modifier re-split — not for these opcodes.)
+the modifier re-split — not for these opcodes.) *Historical identities: the v7
+compaction (Round 60) moved `indexget` to 64 and `indexput` to 65, and
+`kOpcodeUsedCount` to 72.*
 
 the base register is dispatched at **runtime**:
 
@@ -721,55 +733,72 @@ better encoding
 
 ## encoding extended
 
-Normative summary of the instruction encoding beyond the base (unescaped) forms. Two versions
+Normative summary of the instruction encoding beyond the base (unescaped) forms. Three versions
 are described in this document and it matters which one a passage refers to:
 
-- **Shipped — `.qlc` v6** (Round 56): flat byte stream, `pc` = byte offset, opcode top bit =
-  escape flag + one modifier byte, the modifier re-split into **2/2/4** fields, a right-operand
-  **kind** selector (immediate / register / const pool), the full immediate set (signed,
-  unsigned, float, bool, nil) and the `i`/`c` suffix opcodes no longer emitted. Implementation
-  plan: [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md);
+- **Shipped — `.qlc` v7** (Round 60): the v6 layout **unchanged**, with the retired identities
+  removed — `movc`, `movi`, `addi`, `subi`, `cmpi`, `jmpfalse` and `jmptrue` no longer exist and
+  the remaining identities are compacted to `0..71` (`kOpcodeUsedCount` 79 → 72). Bare truthiness
+  tests lower to `tst` + `je`/`jne`. Implementation plan:
+  [../plans/phase3-opcode-retirement-plan.md](../plans/phase3-opcode-retirement-plan.md);
+  on-disk contract: [../SERIALIZATION.md](../SERIALIZATION.md) §4.
+- **Layout — `.qlc` v6** (Round 56, superseded by v7): flat byte stream, `pc` = byte offset,
+  opcode top bit = escape flag + one modifier byte, the modifier re-split into **2/2/4** fields,
+  a right-operand **kind** selector (immediate / register / const pool), the full immediate set
+  (signed, unsigned, float, bool, nil) and the `i`/`c` suffix opcodes no longer emitted.
+  Implementation plan:
+  [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md);
   on-disk contract: [../SERIALIZATION.md](../SERIALIZATION.md) §4.4.
 - **Retired — `.qlc` v5** (Round 37): the same flat stream, but the modifier carried two
   **nibbles** (low = left-operand form, high = right-operand form) and signed `Int` immediates
-  only. Readers accept v6 only; the historical record stays in
+  only. Readers accept v7 only; the historical record stays in
   [../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md).
 
 The flag-setting comparison family `eqf`/`ltf`/`gtf`/`ltef`/`gtef` is **implemented and
-emitted** (milestone **M3**, Round 59 — identities 73–77; comparison conditions in `if`/`while`
-position lower to a flag compare + flag jump, no temporary — except when both operands are
-statically `Int`, where the compiler keeps `cmp` + flag jump: the bytes are unchanged from
-pre-M3 and `cmp`'s total order keeps the flags reusable for a second jump). `tst` (identity 78) is implemented
-but **not emitted** in v6 (`### OpCode tst`). Still unimplemented: the `$$` declaration table,
-frame name map + bitset and `DECL` (**M4**).
+emitted** (milestone **M3**, Round 59 — identities 66–70 since the v7 compaction, 73–77 in v6;
+comparison conditions in `if`/`while` position lower to a flag compare + flag jump, no temporary
+— except when both operands are statically `Int`, where the compiler keeps `cmp` + flag jump: the
+bytes are unchanged from pre-M3 and `cmp`'s total order keeps the flags reusable for a second
+jump). `tst` (identity 71) is implemented **and emitted** since Round 60 (`### OpCode tst`).
+Still unimplemented: the `$$` declaration table, frame name map + bitset and `DECL` (**M4**).
 
 ## opCode scope
 
-The "v6 spelling" column is what the compiler emits since Round 56; the deprecated identities
-(`movi`, `movc`, `addi`, `subi`, `cmpi`) still decode, they are just no longer produced.
+The "v7 spelling" column is what the compiler emits. The retired identities (`movi`, `movc`,
+`addi`, `subi`, `cmpi`, `jmpfalse`, `jmptrue`) no longer exist — they were removed in `.qlc` v7
+(Round 60), so a v7 stream cannot contain them; the first column names the *language* operations
+they used to spell.
 
-| opCode family | type | v6 spelling |
+| opCode family | type | v7 spelling |
 |---------------|------|-------------|
-| mov, movi, movc | copy | `mov` — the right-operand *kind* selects register / immediate / const pool; `movi`, `movc` are deprecated |
-| add, addi, addc | add | `add` — same kind selector; `addi` deprecated, `addc` never added |
-| sub, subi, subc | sub | `sub` — same kind selector; `subi` deprecated, `subc` never added |
+| mov, ~~movi, movc~~ | copy | `mov` — the right-operand *kind* selects register / immediate / const pool; `movi`, `movc` removed in v7 |
+| add, ~~addi~~, addc | add | `add` — same kind selector; `addi` removed in v7, `addc` never added |
+| sub, ~~subi~~, subc | sub | `sub` — same kind selector; `subi` removed in v7, `subc` never added |
 | jmp | jump | `jmp` (jmp8 / jmp16 / jmp32 relative) |
 | ja, jb, jae, jbe | conditional jump | assembler aliases of `jg`, `jl`, `jge`, `jle` — no distinct encoding |
 | jl, jg, jle, jge | conditional jump | unchanged; test the shared-register flags |
 | je, jne | conditional jump | unchanged; test the shared-register flags |
-| cmp, cmpi | comparison (numbers only) | `cmp` — `cmpi` is `cmp` with an immediate right operand, deprecated |
+| cmp, ~~cmpi~~ | comparison (numbers only) | `cmp` — `cmpi` was `cmp` with an immediate right operand, removed in v7 |
 | eq, lt, gt, lte, gte | comparison (general) | flag-setting `eqf`, `ltf`, `gtf`, `ltef`, `gtef` — emitted since Round 59 for comparison conditions in branch position, statically-`Int` operands excepted (`### extended OpCode eq, lt, gt, lte, gte`) |
-| tst | truthiness test | sets `eq` from `truth(r[a])`; implemented, **not emitted** in v6 — it will replace `jmpfalse` / `jmptrue` when they are removed (Phase 3) |
+| tst | truthiness test | sets `eq` from `truth(r[a])`; emitted since Round 60 — it replaced `jmpfalse` / `jmptrue`, which were removed in v7 |
 
 ### bytecode encoding
 
 [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md)
-(v6, shipped) · [../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md)
+(v6 layout) · [../plans/phase3-opcode-retirement-plan.md](../plans/phase3-opcode-retirement-plan.md)
+(v7, shipped — identity removal only) ·
+[../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md)
 (v5, retired) · on-disk layout: [../SERIALIZATION.md](../SERIALIZATION.md) §4.4
 
 there should be only one pool of registers and one pool of constants. extended addressing is
 2 byte, default addressing is 1 byte. if OpCode top bit is not set then both left and right
 operand are using 1 byte encoding
+
+**encoding prioiries:**
+- always favor fewer registers. 
+- no constant in the pool (if possible)
+- shorter encoding (in bytes)
+- few register swapings and no aliasing
 
 127 OpCode count limit (hard limit)
 
@@ -786,24 +815,27 @@ extra byte (e):
     (base, no escape)  => jmp8  (1 byte)  relative address, +/-127
     e = 0              => jmp16 (2 bytes) relative address
     e = 1              => jmp32 (4 bytes) relative address
-  a deprecated jmpfalse / jmptrue additionally carries its 1-byte condition register.
 
 - if opCode is call (proposal / not finalized)
+  this encoding is intended for situations where parameters cannot be
+  contigious or moving them in sequence would require swaping or aliasing.
+
   bit 0-1 left operand (always a function)
      value 0 function -128 to 127      (1 byte)
      value 1 extended function         (2 bytes)
      value 2 extended function         (4 bytes, future version)
      value 3 reserved for future use
-  bit 2-3 left operand (always a register/1st parameter)
+  bit 2-3 left operand (base register)
      value 0 base register 0 to 255    (1 byte)
      value 1 extended base register    (2 bytes)
      value 2 extended base register    (4 bytes, future version)
      value 3 reserved for future use
+     this is register contains the return value
   bit 4-7
     parameter count (0-15)
 
-  if more than 1 parameter             (1 byte per extra parameter)
-    encode delta index from base parameter for each subsequent parameter
+  for each parameter                   (1 byte per parameter)
+    encode delta index from base register for each subsequent parameter
     byte stores -128 to +127 (delta)
 
 - otherwise (mov, add, sub, cmp, eqf/ltf/gtf/ltef/gtef, tst, ...) e is read as three fields:
@@ -900,7 +932,7 @@ once the extended comparisons have set the `shared registers` a follow up condit
 possible (`je`, `jne`, `jl`, `jle`, `jg`, `jge`, and the `ja`/`jb`/`jae`/`jbe` aliases).
 
 ```
-current reg, reg (comparison)
+v5/v6 spelling, reg, reg (comparison into a temporary; `jmpfalse` removed in v7)
 
 0075  eq           11, 0c, 0d ; r17 = (r12 == r13)      # 4 bytes
 0079  jmpfalse     11, 03     ; if !truth(r17) pc += 3  # 3 bytes, -> 007f
@@ -954,20 +986,25 @@ family and the `ja`/`jae`/`jb`/`jbe` aliases).*
   pool (`## constant pool`).
 - the flag-setting comparisons `eqf`/`ltf`/`gtf`/`ltef`/`gtef` and `tst` are added
   (`### extended OpCode eq, lt, gt, lte, gte`, `### OpCode tst`). **— landed Round 59**
-  (`tst` decodes and disassembles; the compiler does not emit it yet)
+  (`tst` emitted since Round 60, Phase 3 S1)
 - `ja`/`jae`/`jb`/`jbe` exist as assembler aliases only. **— landed Round 59** as
   specification + disassembly rules: the repo has no assembler, so an alias has no code
   surface, and the opcode table carries no `JA`/`JAE`/`JB`/`JBE` identity by design.
-- the deprecated spellings (`movi`, `movc`, `addi`, `subi`, `cmpi`, `jmpfalse`, `jmptrue`) keep
-  decoding, so a v6 stream may contain either spelling; the compiler emits only the new ones.
+- the deprecated spellings (`movi`, `movc`, `addi`, `subi`, `cmpi`, `jmpfalse`, `jmptrue`) kept
+  decoding in **v6**, so a v6 stream could contain either spelling while the compiler emitted
+  only the new ones. They were **removed in `.qlc` v7** (Phase 3, Round 60).
 
 **Phase 2 — compiler follow-up.** the compiler stops emitting the deprecated spellings *(done,
 Round 56 — it now emits `mov`/`add`/`sub`/`cmp` with a kind and an immediate form)*, widened
 right operands are extended beyond the `## opCode scope` families, and the pool is re-measured.
 
-**Phase 3 — removal.** long-term the `i`/`c` suffix opcodes are removed, together with
-`jmpfalse` and `jmptrue` (`tst` + `je`/`jne` subsume them). This is a second version bump with
-no layout change, and it can only land once nothing emits the old spellings.
+**Phase 3 — removal.** *landed — Round 60.* the `i`/`c` suffix opcodes (`movc`, `movi`, `addi`,
+`subi`, `cmpi`) are removed together with `jmpfalse` and `jmptrue` (`tst` + `je`/`jne` subsume
+them), the remaining identities are compacted to `0..71` (`kOpcodeUsedCount` 79 → 72) and the
+version field becomes **7** — a second version bump with no layout change, landed once nothing
+emitted the old spellings any more. Plan:
+[../plans/phase3-opcode-retirement-plan.md](../plans/phase3-opcode-retirement-plan.md)
+(S1 `b86460b`, S3 `801498c`, S4 `a6737b9`).
 
 reducing temporary registers is a priority: the flag comparisons and the in-place immediate
 forms exist to remove the compare-to-temporary + `jmpfalse` shape and the arithmetic
@@ -978,7 +1015,7 @@ It is per-*event* state (whether a declaration has executed in this frame), not
 per-instruction state, so no operand field can express it — spare or not. It becomes a
 per-frame bitset indexed by declaration-site id, set by a `DECL siteId` marker opcode executed
 where the declaration executes, with the frame name map and the declaration table as function
-metadata in the `.qlc` v6 function record. `indget`/`indput` are ordinary register-class
+metadata in the `.qlc` function record (v7 as of Round 60). `indget`/`indput` are ordinary register-class
 opcodes. `kind 3` and immediate forms 12–15 therefore stay reserved. See
 [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md) §7 and
 [05-operators.md](05-operators.md) `## operator $$`.

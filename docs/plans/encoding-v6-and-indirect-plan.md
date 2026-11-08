@@ -1,8 +1,12 @@
 # Encoding v6 — Unified Modifier Byte + `$$` Indirect Access
 
 Status: **In progress — specification finalized 2026-11-06; milestones 1 (v6 encoding layer,
-additive; 2026-11-06) and 2 (pipeline switch, `.qlc` v6; 2026-11-07) implemented and green —
-see §6.1. The shipped pipeline now encodes and decodes v6; the v5 codec is deleted.**
+additive; 2026-11-06), 2 (pipeline switch, `.qlc` v6; 2026-11-07) and 3 (flag flow, `.qlc` still
+v6; 2026-11-07) implemented and green — see §6.1. The shipped pipeline encodes and decodes the
+v6 layout; the v5 codec is deleted. This plan's §6 **phase 3 (removal) also landed — Round 60,
+2026-11-08** — executed by [phase3-opcode-retirement-plan.md](phase3-opcode-retirement-plan.md):
+the seven `i`/`c`/`jmp*` spellings are gone, identities are compacted (`kOpcodeUsedCount` 72)
+and `.qlc` is **v7**. Only **M4 (`$$`, §7)** is left.**
 Supersedes: §4 (modifier byte), §5.3 (immediates) and §13.4 (signed-`Int`-only scope) of
 `docs/plans/instruction-format-escape-byte-plan.md` — that plan's byte-stream model, opcode
 space, register/constant pooling and jump forms **stay in force**
@@ -42,8 +46,8 @@ Two consequences worth stating up front:
 ## 2. The v6 modifier byte `e`
 
 Unchanged from v5: opcode byte bit 7 = escape flag, bits 0–6 = identity (128 values,
-`kOpcodeUsedCount` 73 today); escaped form = `[op | 0x80][e]` + operands. **Only the
-interpretation of `e` changes.**
+`kOpcodeUsedCount` 73 when this was written — **72 since the Round 60 compaction**, §3);
+escaped form = `[op | 0x80][e]` + operands. **Only the interpretation of `e` changes.**
 
 ### 2.1 Field layout
 
@@ -201,21 +205,29 @@ instruction costs `1 (op) + 1 (e) + width(a) + immediate/operand bytes`.
 
 | Today | v6 spelling | v6 encoding | Fate of the old identity |
 |-------|-------------|-------------|--------------------------|
-| `movi a, imm` | `mov a, imm` | `mov`, kind 0 | `MOVI` deprecated → removed in v7 |
-| `movc a, idx` | `mov a, pool[i]` | `mov`, kind 2 | `MOVC` deprecated → removed in v7 |
-| `addi a, imm` | `add a, imm` | `add`, kind 0 (in place) | `ADDI` deprecated → removed in v7 |
-| `subi a, imm` | `sub a, imm` | `sub`, kind 0 (in place) | `SUBI` deprecated → removed in v7 |
-| `cmpi a, imm` | `cmp a, imm` | `cmp`, kind 0 | `CMPI` deprecated → removed in v7 |
+| `movi a, imm` | `mov a, imm` | `mov`, kind 0 | `MOVI` deprecated → **removed in v7 (Round 60)** |
+| `movc a, idx` | `mov a, pool[i]` | `mov`, kind 2 | `MOVC` deprecated → **removed in v7 (Round 60)** |
+| `addi a, imm` | `add a, imm` | `add`, kind 0 (in place) | `ADDI` deprecated → **removed in v7 (Round 60)** |
+| `subi a, imm` | `sub a, imm` | `sub`, kind 0 (in place) | `SUBI` deprecated → **removed in v7 (Round 60)** |
+| `cmpi a, imm` | `cmp a, imm` | `cmp`, kind 0 | `CMPI` deprecated → **removed in v7 (Round 60)** |
 | `addc` / `subc` (spec families) | `add` / `sub`, kind 2 | no new opcode | **never added** |
 
-**Coexistence rule for v6:** the decoder accepts *both* spellings — the deprecated identities
-remain in the enum and decode with kind restricted to their historical kind (`MOVI` → kind 0
-only, `MOVC` → kind 2 only, …), so a v6 stream that still contains them is valid. The v6
-**compiler emits only the unified spellings**. Removal happens in a later version once no
-producer emits them, which is a second `.qlc` bump with no encoding-layout change.
+**Coexistence rule for v6:** *(in force for v6 only — retired in Round 60)* the decoder accepts
+*both* spellings — the deprecated identities remain in the enum and decode with kind restricted
+to their historical kind (`MOVI` → kind 0 only, `MOVC` → kind 2 only, …), so a v6 stream that
+still contains them is valid. The v6 **compiler emits only the unified spellings**. Removal
+happens in a later version once no producer emits them, which is a second `.qlc` bump with no
+encoding-layout change. **That bump landed in Round 60:** the seven identities are deleted, the
+remaining ones are compacted (`new = old − |{removed ids < old}|`, no holes left), and a v6
+image now dies at the version field before any byte decodes — the removed identities are
+reused by live opcodes, so byte-level detection of the old spellings is impossible and
+unnecessary. `JMPIFFALSE`/`JMPIFTRUE` went with them (§5.4).
 
 Opcode budget: 73 today + 7 new (§4) = **80** of 128; **75** after the five suffix identities
-are removed; **73** after `JMPIFFALSE`/`JMPIFTRUE` are removed (§5.4).
+are removed; **73** after `JMPIFFALSE`/`JMPIFTRUE` are removed (§5.4). *Actual outcome: M4 has
+not landed, so `DECL` was never appended — 79 + 7 removed = **72**, with `DECL` still to be
+appended at identity 72 (→ 73) when M4 lands.*
+
 
 ---
 
@@ -325,18 +337,24 @@ The pair is a net win whenever the condition is already a comparison (`eqf` + `j
 `eq` + `jmpfalse` and frees a register) or when the flags are reused by a second branch. The
 compiler is **not** required to emit `tst` for a bare truthiness test in v6 — it may keep
 `jmpfalse` there. Deprecation is about the *spelling in new emission sites for comparisons*,
-not about a mechanical rewrite.
+not about a mechanical rewrite. *(Phase 3 flipped this: with the pair removed there is nothing
+left to keep, and the mechanical rewrite is what landed — see §5.4 and §12 item 6.)*
 
 ### 5.3 v6 behaviour
 
-Both forms decode. The compiler emits flag jumps for comparison conditions and keeps
-`jmpfalse`/`jmptrue` for bare truthiness tests. `13-bytecodes.md` marks the pair deprecated.
+*(v6 only — superseded by Phase 3, Round 60.)* Both forms decode. The compiler emits flag jumps
+for comparison conditions and keeps `jmpfalse`/`jmptrue` for bare truthiness tests.
+`13-bytecodes.md` marks the pair deprecated.
 
-### 5.4 Removal
+### 5.4 Removal — **DONE (Round 60, 2026-11-08)**
 
 `JMPIFFALSE`/`JMPIFTRUE` are removed together with the `i`/`c` suffix identities in the later
 version (§6, phase 3): `TST` + `je`/`jne` fully subsume them, at the cost of one byte per bare
-truthiness test.
+truthiness test. **Landed:** all 15 compiler emission sites now lower bare truthiness to
+`tst` + `je`/`jne` (flipping §12 item 6's default), the pair's condition-register jump form is
+deleted from `emit()`, and the cost measured exactly as predicted — +1 instruction per test
+site, 83 sites across the corpus, `hello.ql` 211 → 215 and `perf_stress.ql` 521 → 565, corpus
+stdout byte-identical.
 
 ---
 
@@ -346,11 +364,14 @@ truthiness test.
 |-------|---------|--------|
 | **1 — v6 (this plan)** | 2/2/4 modifier byte; full immediate set; `mov`/`add`/`sub`/`cmp` kind folding; `eqf`/`ltf`/`gtf`/`ltef`/`gtef`; `tst`; `ja`/`jae`/`jb`/`jbe` aliases; `DECL` + `$$` (§7); frame name map + declaration table in the file | v5 → **v6** |
 | **2 — compiler follow-up** | Compiler stops emitting `movi`/`movc`/`addi`/`subi`/`cmpi` (already required in phase 1) and stops emitting `jmpfalse`/`jmptrue` for comparisons; widened right operands extended to the remaining ALU ops; constant pool shrinks as bool/nil/float become immediates | unchanged |
-| **3 — removal** | `MOVI`, `ADDI`, `SUBI`, `CMPI`, `MOVC`, `JMPIFFALSE`, `JMPIFTRUE` deleted from the enum; opcode identities compacted (a one-time renumbering, since removal leaves holes) | v6 → v7 |
+| **3 — removal** | `MOVI`, `ADDI`, `SUBI`, `CMPI`, `MOVC`, `JMPIFFALSE`, `JMPIFTRUE` deleted from the enum; opcode identities compacted (a one-time renumbering, since removal leaves holes) | v6 → **v7 — DONE Round 60** |
 
 Phase 3 is deliberately separate: it changes no layout, only the identity table, and it can
 only land once no producer (compiler, tests, checked-in `.qlc` fixtures) emits the old
-spellings.
+spellings. **It landed 2026-11-08** — the producer gate (compiler + disassembler grep, plus an
+`--asm-level 4` scan of every corpus listing) was recorded clean before the enum was touched,
+and no checked-in `.qlc`/`.qla` fixture exists (all such dumps are gitignored). Executed by
+[phase3-opcode-retirement-plan.md](phase3-opcode-retirement-plan.md); see the P3 row below.
 
 ### 6.1 Milestone status (implementation decomposition actually used)
 
@@ -361,8 +382,14 @@ milestones; each keeps `ctest --test-dir build` green.
 |---|-----------|-------|--------|
 | **M1** | v6 encoding layer, **additive** | 2/2/4 modifier byte, kind/form tables, permitted-kind + in-place-arity rules, full immediate set, `CALL` as kind 0 / form 5, jump class untouched, new `*V6` codec + `encoding_v6` test suite. v5 codec, `kQlcVersion = 5` and the shipped pipeline are **not** modified. | **DONE 2026-11-06** |
 | **M2** | Switch the pipeline | Compiler emits unified `mov`/`add`/`sub`/`cmp` kinds with immediate selection, VM decodes v6, `.qlc` v5 → v6, disassembler (`examples/qlang_run.cpp`) | **DONE 2026-11-07** |
-| **M3** | Flag flow | `eqf`/`ltf`/`gtf`/`ltef`/`gtef` + `tst`, flag jumps, `ja`/`jae`/`jb`/`jbe` aliases (§4) | pending — plan written: [m3-flag-flow-plan.md](m3-flag-flow-plan.md) |
-| **M4** | `$$` (A3) | Declaration table, frame name map + bitset, `DECL`, two-operand `INDGET`/`INDPUT`, `$$"literal"` fast path (§7) | pending |
+| **M3** | Flag flow | `eqf`/`ltf`/`gtf`/`ltef`/`gtef` + `tst`, flag jumps, `ja`/`jae`/`jb`/`jbe` aliases (§4) | **DONE 2026-11-07** (Round 59; `4ead571`…`56998cf`, docs `51f9d33`) — plan [m3-flag-flow-plan.md](m3-flag-flow-plan.md) |
+| **P3** | §6 phase 3 — removal | The seven deprecated identities deleted, identities compacted, `tst` emitted for bare truthiness, `.qlc` v6 → v7 | **DONE 2026-11-08** (Round 60; `b86460b` S1 / `801498c` S3 / `a6737b9` S4) — plan [phase3-opcode-retirement-plan.md](phase3-opcode-retirement-plan.md) |
+| **M4** | `$$` (A3) | Declaration table, frame name map + bitset, `DECL`, two-operand `INDGET`/`INDPUT`, `$$"literal"` fast path (§7) | pending — `DECL` now takes identity **72** (`kOpcodeUsedCount` → 73); the declaration table still ships inside the v6 layout, now carried by a v7 file (§8) |
+
+P3 deviation from the phase table: the plan budgeted **73** remaining identities on the
+assumption that M4 appended `DECL` first (80 − 7). M4 has not landed, so the count is **72** and
+`DECL` will be appended at 72 — one renumbering event either way, and no document other than
+this table's arithmetic depends on which.
 
 Two decisions M1 settled, both deviations from the draft text:
 
@@ -518,7 +545,7 @@ it bumps v5 → v6 itself and A5 takes v7.
 
 | Section | Change |
 |---------|--------|
-| Header | `kQlcVersion` 5 → **6**; reader accepts v6 only (`src/QLangBytecodeIO.cpp:469`) |
+| Header | `kQlcVersion` 5 → **6**; reader accepts v6 only (`src/QLangBytecodeIO.cpp:469`). **6 → 7 in Round 60** (phase 3, §6): the reader is v7-only and the version comparison is unchanged — the constant is the only thing that moved |
 | Instruction stream | unchanged framing (flat byte array); operand *decoding* follows §2 |
 | Function record | **new**: declaration table (`site id → reg, name, kind`) — the source of the frame name map (§7.2). **Added in M4, not in M2** (decision D4: v6 shipped 2026-11-07 without it; the table will be an optional section inside v6) |
 | Constant pool | unchanged framing; expected to shrink (bool/nil/float become immediates, §9) |
@@ -571,7 +598,9 @@ build/qlang_run --output /tmp/t.qlc tests/scripts/hello.ql   # then round-trip /
 
 1. **Full corpus:** every `tests/scripts/*.ql` compiles, runs, and produces byte-identical
    stdout to the pre-change build.
-2. **Round-trip:** compile → write `.qlc` (v6) → read → execute → stdout matches direct run.
+2. **Round-trip:** compile → write `.qlc` (v6, **v7 since Round 60**) → read → execute → stdout
+   matches direct run. Committed as `codec_check`'s `qlc-exec` suite in Round 60: 23 scripts ×
+   (image declares the version / image survives the round-trip / executes with identical stdout).
 3. **Size/decode agreement:** a generated stream exercising every (kind, form) pair decodes
    with `instructionSize()` == the encoder's emitted length at every `pc`.
 4. **Zero-byte immediates:** `true`/`false`/`nil` cost 3 bytes and add **no** pool entry
@@ -580,7 +609,12 @@ build/qlang_run --output /tmp/t.qlc tests/scripts/hello.ql   # then round-trip /
    jump (`je`, `jne`, `jg`, `jge`, `jl`, `jle`, and the `ja`/`jae`/`jb`/`jbe` aliases) ×
    less/equal/greater, including the "no bit set" state.
 6. **Deprecated spellings:** a hand-built v6 stream containing `movi`/`movc`/`addi`/`subi`/
-   `cmpi`/`jmpfalse`/`jmptrue` still executes (coexistence, §3).
+   `cmpi`/`jmpfalse`/`jmptrue` still executes (coexistence, §3). **Inverted in Round 60** — the
+   guarantee is now the opposite: a v6 image is rejected by the version field and the removed
+   identities are never produced or decoded. The `codec_check` legacy suite that proved the old
+   form was **deleted**, not kept as a must-fail test (it would exercise identities the decoder
+   no longer defines); the replacement gate is the producer grep + the corpus disassembly scan
+   in `phase3-opcode-retirement-plan.md` §6.
 7. **Reserved slots:** a stream with `kind = 3` or immediate form 12–15 is rejected at load.
 8. **`$$`:** branch-dependent declaration (`not declared` after the untaken branch, success
    after the taken one), loop re-declaration, `const` read-only, function/global rejection,
@@ -614,7 +648,10 @@ build/qlang_run --output /tmp/t.qlc tests/scripts/hello.ql   # then round-trip /
    saving matters.
 6. **`tst` emission policy** — emit `tst` + `je`/`jne` for bare truthiness (uniform, +1 byte)
    or keep `jmpfalse`/`jmptrue` there until they are removed? **Default:** keep
-   `jmpfalse`/`jmptrue` for bare truthiness in v6 (§5.2).
+   `jmpfalse`/`jmptrue` for bare truthiness in v6 (§5.2). **Superseded by Phase 3 D1
+   (Round 60):** removal *is* the point of that step, so the default was flipped — bare
+   truthiness lowers to `tst` + `je`/`jne` at all 15 sites and the pair is gone. The +1 byte
+   became +1 *instruction*, which is what `perf_stress` measures (+8.7 % in the A/B run, §5.4).
 
 ---
 
@@ -624,12 +661,12 @@ build/qlang_run --output /tmp/t.qlc tests/scripts/hello.ql   # then round-trip /
 |--------|--------------|----------------|
 | Modifier byte | nibbles: left form (0–3) / right form (4–7) | **2/2/4**: left form (0–1) / right **kind** (2–3) / right **form** (4–7) |
 | Right operand kind | fixed per opcode identity | declared per instruction (`imm` / `reg` / `const`); `3` reserved |
-| `i`/`c` suffixes | separate opcodes | folded into `mov`/`add`/`sub`/`cmp`; identities deprecated, removed in v7 |
+| `i`/`c` suffixes | separate opcodes | folded into `mov`/`add`/`sub`/`cmp`; identities deprecated, **removed in v7 (Round 60)** |
 | Immediates | signed `Int` 1/2/4 B | unsigned/signed 1/2/4/8 B + `float` + `bool` + `nil` (0-byte forms) |
 | Constant pool | scalars + strings + closures | strings + blobs + closure consts only |
 | Comparison in control position | `eq`/`lt`/… into a temp + `jmpfalse` | `eqf`/`ltf`/`gtf`/`ltef`/`gtef` + flag jump, **no temporary** |
-| Truthiness branch | `jmpfalse`/`jmptrue` | `tst` + `je`/`jne` (pair deprecated) |
+| Truthiness branch | `jmpfalse`/`jmptrue` | `tst` + `je`/`jne` — emitted since Round 60, pair removed |
 | Unsigned jumps | n/a | `ja`/`jae`/`jb`/`jbe` assembler aliases (no encoding) |
 | `$$` declaration bit | unencodable (Q6) | per-frame bitset + `DECL` marker + function declaration table — **no encoding space used** |
-| Opcode count | 73 / 128 | 80 / 128 (75 after suffix removal, 73 after `jmpfalse`/`jmptrue`) |
-| `.qlc` | v5 | **v6** (+ declaration table in the function record) |
+| Opcode count | 73 / 128 | 79 after M3 (`DECL` still pending) → **72 / 128** after the Round 60 compaction; 73 when M4 appends `DECL` |
+| `.qlc` | v5 | **v6** → **v7** (Round 60: same layout, compacted identities; + declaration table in the function record when M4 lands) |

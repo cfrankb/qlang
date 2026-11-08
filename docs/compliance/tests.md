@@ -9,15 +9,15 @@ Phases 0–5, not from the legacy monolith.
 
 | Requirement (15-tests.md) | Status | Evidence |
 |---|---|---|
-| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (23 C++ harnesses), `tests/scripts/` (22 `.ql`), `tests/perf/`; `examples/` holds demos only — `hello.cpp` (smoke app) + `qlang_run.cpp` (runner) |
+| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (24 C++ harnesses), `tests/scripts/` (23 `.ql`), `tests/perf/`; `examples/` holds demos only — `hello.cpp` (smoke app) + `qlang_run.cpp` (runner) |
 | Tests run after every task (regression gate) | ✓ | ctest is the gate (AGENTS.md "Build & test"); CI on every push to `main` |
-| Regression tests exist | ✓ | 22 script regressions (`script_*`, driven by `qlang_run`) + all 23 unit harnesses |
-| Unit tests exist (features + edge cases) | ✓ | 23 unit suites — see ctest matrix below |
+| Regression tests exist | ✓ | 23 script regressions (`script_*`, driven by `qlang_run`) + all 24 unit harnesses |
+| Unit tests exist (features + edge cases) | ✓ | 24 unit suites — see ctest matrix below |
 | Performance tests: immutable baseline for parser/compiler/execution time, logged and compared | ✓ | `tests/perf/perf_bench.cpp` + committed `tests/perf/baseline.json`; ctest `perf` gate (±20% / 0.5 ms) |
 | GitHub CI: library + smoke app + test suite against `msvc`, `g++`, `mingw`, `wasm`, `clang` | ✓ | three workflows, per the spec's "three separate ci/cd yaml" — see CI matrix |
 | Running on C++20 | ✓ | `CMAKE_CXX_STANDARD 20` (root `CMakeLists.txt`) |
 
-### Layout (verified 2026-11-07)
+### Layout (verified 2026-11-08)
 
 ```
 tests/
@@ -36,14 +36,14 @@ tests/
   perf/     perf_bench.cpp baseline.json
 ```
 
-`tests/unit/encoding_test.cpp` (the v5 encoding harness, 41 checks) is retired with
-`.qlc` v5: no target builds it since Round 56 and its coverage lives in
-`encoding_v6_test.cpp`; the file itself is removed in the M2 commit.
+`tests/unit/encoding_test.cpp` (the v5 encoding harness, 41 checks) was retired with
+`.qlc` v5 in Round 56 and deleted from the tree; its coverage lives in
+`encoding_v6_test.cpp`.
 
 `examples/` retains only real demos: `hello.cpp` (smoke app) and `qlang_run.cpp`
 (script runner / smoke-test app).
 
-### ctest matrix — 50 entries (50/50 green, 2026-11-07)
+### ctest matrix — 50 entries (50/50 green, 2026-11-08)
 
 Unit (24 harnesses + `smoke`):
 
@@ -61,9 +61,9 @@ Unit (24 harnesses + `smoke`):
 | `class_str` | `class_str_test` | `tests/unit/class_str_test.cpp` | 13 passed |
 | `class_static` | `class_static_test` | `tests/unit/class_static_test.cpp` | 17 passed |
 | `signal` | `signal_test` | `tests/unit/signal_test.cpp` | 18 passed (Round 40; `docs/spec/17-signals.md`) |
-| `codec` | `codec_check` | `tests/unit/codec_check.cpp` | 281 checks passed (incl. 15 `deepcopy` cases, Round 42; 19 `indexget`/`indexput` cases, Round 51; **+57 Round 56**: 20 v6 load-time validation cases — versions 3/4/5/7 rejected, reserved right kind 3, reserved left form 3, reserved immediate forms 12–15, a kind the opcode does not permit, unescaped `CALL`, the 15-byte `codeSize` guard — and 15 deprecated-spelling cases: `movi`/`movc`/`addi`/`subi`/`cmpi` and `jmpfalse`/`jmptrue` still load, decode and run, incl. `movc` pool cloning, decision D6). The 199 recorded at Round 56 is stale by **+82**: +75 from the M3 flag-flow identities (`eqf`/`ltf`/`gtf`/`ltef`/`gtef`/`tst`, landed unrecorded — drift corrected here), +5 from M3 S5 (comparison conditions lower to flag compare + flag jump; the suite asserts the emitted sequence and the D1 dual-comparator negative branch, also landed unrecorded) and +2 from Round 58, where the pool-dedup suite asserts **both** directions of the call-arg scratch: a call-free argument compiles straight into its slot (no scratch, so **no** nil clear at all), a call-shaped non-final argument still takes the shared scratch and clears it with the nil immediate |
-| `encoding_v6` | `encoding_v6_test` | `tests/unit/encoding_v6_test.cpp` | 37859 checks passed (added Round 55 as the additive v6 codec suite; since Round 56 it is **the** encoding suite — the 2/2/4 modifier byte, the kind/form tables and the shipped codec; +217 in Round 56; **+4 in Round 57**: §18 decoder/size-table parity — `decodeInstruction` must reject every modifier `escapedInstructionSize` rejects with the *same message*, decode every accepted one to exactly the predicted size, and reject every truncation of an accepted instruction, swept over all 128 identities × 256 modifiers (re-tallied after M3: 30298 rejected, 2470 accepted, 15731 truncations — the six new identities moved the table; was 30517/2251/14401); the 34470 recorded at Round 57 is stale by **+3389**, all of it the M3 flag-flow identities (`eqf`/`ltf`/`gtf`/`ltef`/`gtef`/`tst`) added unrecorded — drift corrected here) |
-| `flag_flow` | `flag_flow_test` | `tests/unit/flag_flow_test.cpp` | 1324 checks passed (added Round 59, M3): the full matrix — 6 comparators × 6 flag jumps × 3 relations × 3 right-operand kinds; the "no bit set" state spelled out case by case (the D1 rationale); the `tst` truth table (implemented but not emitted — this suite is the only thing exercising it); the general value domains the compiler's Int gate rejects (strings, bool, nil, mixed numerics, containers) with error-text parity against the value-producing opcode's own message (D3); `__str__` dispatch through `==`/`<`; `cmp` keeps its Int-only contract (D2); the `ja`/`jae`/`jb`/`jbe` alias name table (D6 — no identity, no mnemonic); reserved-slot rejection for the new identities |
+| `codec` | `codec_check` | `tests/unit/codec_check.cpp` | 330 checks passed (incl. 15 `deepcopy` cases, Round 42; 19 `indexget`/`indexput` cases, Round 51; **+57 Round 56**: 20 load-time validation cases — reserved right kind 3, reserved left form 3, reserved immediate forms 12–15, a kind the opcode does not permit, unescaped `CALL`, the 15-byte `codeSize` guard; +80 Round 59 for the `eqf`/`ltf`/`gtf`/`ltef`/`gtef`/`tst` identities and the comparison-lowering sequence; **+49 Round 60**, see below). **Round 60 (`.qlc` v7, Phase 3):** the `legacy:` suite — the Round-56 proof that `movi`/`movc`/`addi`/`subi`/`cmpi`/`jmpfalse`/`jmptrue` still load, decode and run, incl. `movc` pool cloning (decision D6) — is **deleted** with the opcodes (decision D5: a must-fail test would exercise identities the decoder no longer defines), and the two hand-built `MOVI` streams were retargeted to `mov` kind 0 (`e = 0x40`). Added: the version matrix now rejects **3/4/5/6/8** at the version field (v6 joined the list) and `qlc-exec` — **69 checks**, 3 per script over all 23 `tests/scripts/*.ql`: each is compiled exactly as `qlang_run` compiles it, written with `writeQlc`, read back against a **fresh** `QLangContext` (the isolation a real `file.qlc` run gets from a new process), then `code`, `instrOffsets` and the constant pool are compared and both runs' stdout byte-compared (non-vacuity measured: every script prints 2–403 bytes, and corrupting one string constant fails both the image and the execute check for 23/23). The invalid-opcode probe now derives from `kOpcodeUsedCount` instead of pinning the literal 79 |
+| `encoding_v6` | `encoding_v6_test` | `tests/unit/encoding_v6_test.cpp` | 35083 checks passed (added Round 55 as the additive v6 codec suite; since Round 56 it is **the** encoding suite — the 2/2/4 modifier byte, the kind/form tables and the shipped codec; +217 in Round 56; +4 in Round 57 for §18; +3389 in Round 59 for the six flag-flow identities). **−2776 in Round 60**, entirely the identity compaction: the sweep walks the defined identities, and seven are gone. Exhaustive sweep now **1872** accepted / **14274** rejected `(opcode, modifier)` pairs cross-checked between size, encoder and decoder (was 2029/15401) — 72 identities × 256 modifiers = 18 432 pairs, of which the rejected cross-check skips the 9 jump opcodes (63 × 256 = 16 128); 16 128 − 14 274 = 1 854 accepted non-jump pairs and 1 872 − 1 854 = 18 = the 9 jumps × their 2 width modifiers, so the two tallies are consistent. §18 decoder/size-table parity still covers the whole 128 × 256 identity space (**30 392** rejected, **2 376** accepted, **15 144** truncations; 30 392 + 2 376 = 32 768): the seven retired identities moved 94 modifier pairs from accepted to rejected, and the decoder rejects more of them than the size table does because a retired identity has no payload the encoder could build |
+| `flag_flow` | `flag_flow_test` | `tests/unit/flag_flow_test.cpp` | 1324 checks passed (added Round 59, M3): the full matrix — 6 comparators × 6 flag jumps × 3 relations × 3 right-operand kinds; the "no bit set" state spelled out case by case (the D1 rationale); the `tst` truth table (emitted since Round 60 for bare truthiness — this suite remains the only exhaustive one); the general value domains the compiler's Int gate rejects (strings, bool, nil, mixed numerics, containers) with error-text parity against the value-producing opcode's own message (D3); `__str__` dispatch through `==`/`<`; `cmp` keeps its Int-only contract (D2); the `ja`/`jae`/`jb`/`jbe` alias name table (D6 — no identity, no mnemonic); reserved-slot rejection for the new identities |
 | `external` | `test_external` | `tests/unit/test_external.cpp` | 49 checks passed (incl. `registerEnum` injection, Round 41) |
 | `test_inject` | `test_inject` | `tests/unit/test_inject.cpp` | `ALL PASS` |
 | `test_dollar_operator` | `test_dollar_operator` | `tests/unit/test_dollar_operator.cpp` | 8 passed |
@@ -73,9 +73,9 @@ Unit (24 harnesses + `smoke`):
 | `phase3_api` | `phase3_api` | `tests/unit/phase3_api.cpp` | 23 checks (handles, type-mismatch, finalizer queue, `release()`) |
 | `phase5_api` | `phase5_api` | `tests/unit/phase5_api.cpp` | 17 checks (step budget, threading contract) |
 | `value_semantics` | `value_semantics` | `tests/unit/value_semantics.cpp` | 40 checks (Round 43 share-by-default array/set/blob: aliasing on assign/call, literal freshness, `deepcopy` independence + array cycles, `+`/`cast` freshness, `a += a`, `string` still a value type) |
-| `codegen_size` | `codegen_size_check` | `tests/unit/codegen_size_check.cpp` | 4 checks (added Round 58; SPEC §bytecodes "encoding guidelines") — every budgeted script is compiled exactly as `qlang_run` compiles it and the **entry function's instruction count** (the number `--profile` prints) must stay within its ceiling: `hello.ql` 211, `money.ql` 151, `cast.ql` 163, `perf_stress.ql` 521 (the `perf` corpus, so a codegen change trips both gates; `hello`/`perf_stress` came down in M3 S5 — a flag compare + flag jump is one byte shorter than the boolean-temp path in branch position). A ceiling is not a target: it comes down when the stream legitimately shrinks, and going up needs a reason recorded in `docs/compliance/`. This is the mechanical form of the hand comparison of the root `test-hello-*.qla` dumps that caught the 229 → 243 growth |
+| `codegen_size` | `codegen_size_check` | `tests/unit/codegen_size_check.cpp` | 4 checks (added Round 58; SPEC §bytecodes "encoding guidelines") — every budgeted script is compiled exactly as `qlang_run` compiles it and the **entry function's instruction count** (the number `--profile` prints) must stay within its ceiling: `hello.ql` 215, `money.ql` 151, `cast.ql` 163, `perf_stress.ql` 565 (the `perf` corpus, so a codegen change trips both gates; `hello`/`perf_stress` came down in M3 S5 — a flag compare + flag jump is one byte shorter than the boolean-temp path in branch position — and went **up** in Round 60 S1 by exactly one instruction per bare-truthiness test site, because `tst` + `je`/`jne` replaces the single `jmpfalse`/`jmptrue`: +4 in `hello.ql`, +44 in `perf_stress.ql`, `money`/`cast` unchanged — the reason is recorded in the file header and in `docs/plans/phase3-opcode-retirement-plan.md` §5 S1). A ceiling is not a target: it comes down when the stream legitimately shrinks, and going up needs a reason recorded in `docs/compliance/`. This is the mechanical form of the hand comparison of the root `test-hello-*.qla` dumps that caught the 229 → 243 growth |
 
-Counted unit cases: **40287** (529+33+20+7+5+22+13+17+18+49+8+281+37859+1324+8+3+7+23+17+40+4), plus
+Counted unit cases: **37560** (529+33+20+7+5+22+13+17+18+49+8+330+35083+1324+8+3+7+23+17+40+4), plus
 the three `ALL PASS` gate suites (`test_native`, `test_call`, `test_inject`).
 
 Script (23): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
@@ -118,6 +118,16 @@ gate or `./update-doc-hashes.sh --check` directly (Round 49).
 - `--update-baseline` regenerates `tests/perf/baseline.json` (a deliberate act,
   always a separate commit). `baseline.json` is the immutable reference
   (calibrated g++/Linux Release).
+- **Measured, not re-recorded, Round 60 (2026-11-08)** after Phase 3: `perf_stress`
+  execute 10.91–10.97 ms against the 10.382 ms baseline (**+5.0 % to +5.7 %** across
+  the runs of this round) — 44 extra instructions in that script's hot loop, one per
+  bare-truthiness test (`tst` + `je`/`jne` replacing `jmptrue`). Inside the ±20 %
+  gate, above this plan's own ~5 % caution, so the number is recorded rather than
+  accepted: the A/B measurement in `docs/plans/phase3-opcode-retirement-plan.md` §5 S1
+  (median of 5, three interleaved rounds against a `f192ad0` worktree) is **11.349 ms,
+  +8.7 %**, root-caused to one extra dispatch per iteration of the inner `for j` loop
+  (its direction re-test sits on the back-edge) with the fix filed in that plan §8.
+  The other eleven medians moved by ≤ 0.011 ms; `baseline.json` is unchanged.
 - **Re-recorded Round 57 (2026-11-07)** after the decoder fast path (see
   `docs/plans/m2-pipeline-switch-plan.md` §"Performance follow-up"):
   `perf_stress` execute fell 12.995 ms → 10.382 ms (−20.1 %), recovering 77 % of
