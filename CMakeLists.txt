@@ -162,10 +162,14 @@ add_executable(signal_test tests/unit/signal_test.cpp)
 target_link_libraries(signal_test PRIVATE qlang)
 add_test(NAME signal COMMAND signal_test)
 
-# .qlc codec round-trip + v6 load-time validation + the deprecated-spelling
-# stream + malformed-input robustness (docs/SERIALIZATION.md §9).
+# .qlc codec round-trip + the v7 version boundary + v6-encoding load-time
+# validation + malformed-input robustness + the script-corpus .qlc round-trip
+# and execute gate (docs/SERIALIZATION.md §9).
 add_executable(codec_check tests/unit/codec_check.cpp)
 target_link_libraries(codec_check PRIVATE qlang)
+target_compile_definitions(codec_check PRIVATE
+  QLANG_TEST_SCRIPTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts"
+)
 add_test(NAME codec COMMAND codec_check)
 
 # Instruction encoding: 2/2/4 modifier byte, immediate forms, permitted kinds,

@@ -381,9 +381,9 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
   // Header.
   putBytes(os, "QLC1", 4);
   // Format version (F1): written from the single shared constant
-  // kQlcVersion (docs/SERIALIZATION.md §4). v6 is the 2/2/4 modifier-byte
-  // instruction format (flat per-function code stream + offset table);
-  // the reader accepts v6 only.
+  // kQlcVersion (docs/SERIALIZATION.md §4). v7 is the v6 2/2/4 modifier-byte
+  // instruction format after the Phase 3 identity compaction; the reader
+  // accepts v7 only.
   putU32(os, kQlcVersion); // format version
 
   // Functions (functions[0] is the implicit "main"; the compiler emits it
@@ -464,8 +464,9 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       r.fail("bad magic");
     r.pos = 4;
     uint32_t version = r.u32();
-    // v6 only: legacy files (v1-v4 fixed 8-byte instructions, v5 the
-    // two-nibble modifier byte) and anything newer are rejected (F1).
+    // v7 only: legacy files (v1-v4 fixed 8-byte instructions, v5 the
+    // two-nibble modifier byte, v6 the pre-Phase-3 identity table) and
+    // anything newer are rejected (F1).
     if (version != kQlcVersion)
       r.fail("unsupported version");
 

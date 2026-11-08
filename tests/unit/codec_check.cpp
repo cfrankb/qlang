@@ -1,10 +1,13 @@
 // .qlc codec check: value round-trips, program round-trip with native wiring,
-// v6 load-time validation (modifier fields, permitted kinds, the size guard),
-// and a malformed-input robustness suite
-// (docs/SERIALIZATION.md §9, docs/plans/m2-pipeline-switch-plan.md §11).
+// the v7 version boundary and the v6-encoding load-time validation (modifier
+// fields, permitted kinds, the size guard), a malformed-input robustness
+// suite, and the script-corpus .qlc round-trip + execute gate
+// (docs/SERIALIZATION.md §9, docs/plans/m2-pipeline-switch-plan.md §11,
+//  docs/plans/phase3-opcode-retirement-plan.md S4).
 #include <climits>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <initializer_list>
 #include <iostream>
@@ -12,6 +15,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -20,6 +24,10 @@
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
 #include "qlang/QLangVM.h"
+
+#ifndef QLANG_TEST_SCRIPTS_DIR
+#error "QLANG_TEST_SCRIPTS_DIR must be defined by the build (tests/scripts)"
+#endif
 
 using namespace qlang;
 
@@ -386,22 +394,22 @@ static void testMovImmediate() {
     check(hasPoolRight(ps.functions[0], Opcode::MOV),
           "mov: string literal is a pool read");
 
-    // .qlc written at format version 6 (kQlcVersion); the reader accepts v6
-    // only (v1-v5 and v7+ are rejected).
+    // .qlc written at format version 7 (kQlcVersion); the reader accepts v7
+    // only (v1-v6 and v8+ are rejected).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "mov: writeQlc (v6)");
+    check(writeQlc(os, p, {}), "mov: writeQlc (v7)");
     std::string bytes = os.str();
     uint32_t version = static_cast<uint32_t>(static_cast<uint8_t>(bytes[4])) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[5])) << 8) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[6])) << 16) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[7])) << 24);
-    check(version == 6, "mov: format version 6");
+    check(version == 7, "mov: format version 7");
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
     check(readQlc(is, back, slots, err),
-          std::string("mov: readQlc v6 (") + err + ")");
+          std::string("mov: readQlc v7 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -1030,7 +1038,7 @@ struct Bin {
 static std::string minimalFile() {
   Bin f;
   f.b += "QLC1";
-  f.u32(6); // version
+  f.u32(kQlcVersion); // version
   f.u32(1); // funcCount
   f.str("main");
   f.i32(0); // paramCount
@@ -1063,7 +1071,7 @@ static void rejects(const std::string &name, const std::string &bytes) {
 static std::string fileWithOneInstr() {
   Bin f;
   f.b += "QLC1";
-  f.u32(6); // version
+  f.u32(kQlcVersion); // version
   f.u32(1); // funcCount
   f.str("main");
   f.i32(0); // paramCount
@@ -1097,7 +1105,7 @@ static void testMalformed() {
   rejects("malformed: bad magic", badMagic);
 
   std::string badVersion = minimalFile();
-  badVersion[4] = 5;  // v6 is current; the previous format must be rejected
+  badVersion[4] = 6; // v7 is current; the previous format must be rejected
   rejects("malformed: unsupported version", badVersion);
 
   rejects("malformed: truncated", minimalFile().substr(0, 10));
@@ -1121,7 +1129,7 @@ static void testMalformed() {
   // Truncated instruction: codeSize=3, but the ADD at offset 0 needs 4 bytes.
   Bin truncInstr;
   truncInstr.b += "QLC1";
-  truncInstr.u32(6); // version
+  truncInstr.u32(kQlcVersion); // version
   truncInstr.u32(1);
   truncInstr.str("main");
   truncInstr.i32(0);
@@ -1147,7 +1155,7 @@ static void testMalformed() {
   // Dangling closure: pool holds a Function value with funcIndex 5.
   Bin dangling;
   dangling.b += "QLC1";
-  dangling.u32(6); // version
+  dangling.u32(kQlcVersion); // version
   dangling.u32(1);
   dangling.str("main");
   dangling.i32(0);
@@ -1172,7 +1180,7 @@ static void testMalformed() {
                         const char *nameB) {
     Bin f;
     f.b += "QLC1";
-    f.u32(6); // version
+    f.u32(kQlcVersion); // version
     f.u32(1);
     f.str("main");
     f.i32(0);
@@ -1204,7 +1212,7 @@ static void testMalformed() {
   auto valueFile = [&](std::function<void(Bin &)> emit) {
     Bin f;
     f.b += "QLC1";
-    f.u32(6); // version
+    f.u32(kQlcVersion); // version
     f.u32(1);
     f.str("main");
     f.i32(0);
@@ -1570,8 +1578,8 @@ static void testV6LoadValidation() {
       (static_cast<uint32_t>(static_cast<uint8_t>(image[5])) << 8) |
       (static_cast<uint32_t>(static_cast<uint8_t>(image[6])) << 16) |
       (static_cast<uint32_t>(static_cast<uint8_t>(image[7])) << 24);
-  check(kQlcVersion == 6 && written == 6,
-        "v6-load: the image declares version 6");
+  check(kQlcVersion == 7 && written == 7,
+        "v6-load: the image declares version 7");
 
   CompiledProgram back;
   std::string err;
@@ -1580,9 +1588,10 @@ static void testV6LoadValidation() {
             back.functions[0].instrOffsets == offs,
         "v6-load: the code bytes and the offset table survived");
 
-  // The reader is single-version: v5 (the format M2 replaced) and every other
-  // number are refused with a version error, no migration shim (decision D4).
-  for (uint32_t bad : {3u, 4u, 5u, 7u}) {
+  // The reader is single-version: v6 (the format Phase 3 replaced) and every
+  // other number are refused with a version error, no migration shim (decision
+  // D5: one case below the current version, one above).
+  for (uint32_t bad : {3u, 4u, 5u, 6u, 8u}) {
     std::string m = image;
     for (int i = 0; i < 4; i++)
       m[4 + i] = static_cast<char>((bad >> (8 * i)) & 0xFF);
@@ -1732,6 +1741,203 @@ static void testV6LoadValidation() {
   }
 }
 
+// --- script-corpus .qlc round-trip + execute (plan
+// docs/plans/phase3-opcode-retirement-plan.md S4) ---
+//
+// Every script under tests/scripts is compiled exactly as `qlang_run` compiles
+// it, written with writeQlc, read back with readQlc, and executed on a fresh
+// context (the same isolation `qlang_run file.qlc` gets from a new process).
+// The loaded run's stdout must be byte-identical to the freshly compiled
+// program's: the v6 -> v7 bump changes only the version field, so any
+// behavioural difference here is a codec bug, not a format question.
+//
+// The corpus is CMake's QL_SCRIPTS list (23 scripts, perf_stress.ql included —
+// the whole suite costs ~75 ms).
+static const char *const kRoundTripScripts[] = {
+    "cmp.ql",         "cast.ql",         "encode_repro.ql",
+    "ext_consts.ql",  "ext_regs.ql",     "flags.ql",
+    "hello.ql",       "helpers.ql",      "imm_kinds.ql",
+    "jump_widths.ql", "len.ql",          "money.ql",
+    "moneyv2.ql",     "perf_stress.ql",  "table_subscript.ql",
+    "test_assert.ql", "test_assert2.ql", "test_cast.ql",
+    "test_cast2.ql",  "test_minmax.ql",  "test_minmax2.ql",
+    "type.ql",        "value_share.ql",
+};
+
+// The VM prints through std::cout (QLangVM.cpp print/println), so swapping its
+// stream buffer captures a run without touching the VM. The buffer is restored
+// on every exit path, including a thrown QLangError.
+class StdoutCapture {
+public:
+  StdoutCapture() : m_saved(std::cout.rdbuf(m_ss.rdbuf())) {}
+  ~StdoutCapture() { std::cout.rdbuf(m_saved); }
+  StdoutCapture(const StdoutCapture &) = delete;
+  StdoutCapture &operator=(const StdoutCapture &) = delete;
+  std::string text() const { return m_ss.str(); }
+
+private:
+  std::ostringstream m_ss;
+  std::streambuf *m_saved;
+};
+
+// Execute `prog` on `scope`, capturing everything it prints. Returns false and
+// sets `err` when the VM threw (a failed assert or a runtime error), exactly
+// the case `qlang_run` reports as exit 3.
+static bool runCaptured(const CompiledProgram &prog, QLangContext &scope,
+                        std::string &out, std::string &err) {
+  QLangVM vm(prog, scope);
+  StdoutCapture cap;
+  try {
+    vm.run();
+  } catch (const QLangError &e) {
+    err = e.what();
+    return false;
+  } catch (const std::exception &e) {
+    err = e.what();
+    return false;
+  }
+  out = cap.text();
+  err.clear();
+  return true;
+}
+
+static void testScriptQlcRoundTrip() {
+  for (const char *script : kRoundTripScripts) {
+    const std::string name(script);
+    const std::string label = "qlc-exec: " + name;
+    std::ifstream in(std::string(QLANG_TEST_SCRIPTS_DIR) + "/" + name,
+                     std::ios::binary);
+    if (!in) {
+      check(false, label + " is readable");
+      continue;
+    }
+    std::ostringstream src;
+    src << in.rdbuf();
+
+    // --- Compile, wire natives and collect nativeIds as qlang_run does ---
+    CompiledProgram prog;
+    std::map<std::string, int> nativeIds;
+    QLangContext ctx;
+    bool compiled = true;
+    std::string why;
+    try {
+      std::vector<StmtPtr> program = ctx.parse(src.str());
+      QLangCompiler compiler(std::move(program), &ctx);
+      compiler.addExternalConsts({});
+      std::unordered_set<std::string> nativeNames;
+      for (const auto &[n, fn] : ctx.nativeFuncs()) nativeNames.insert(n);
+      compiler.addExternalFuncs(nativeNames);
+      compiler.addModules(ctx.modules());
+      prog = compiler.compile();
+      for (const auto &[n, fn] : ctx.nativeFuncs()) {
+        auto it = compiler.nativeFuncIds().find(n);
+        if (it == compiler.nativeFuncIds().end()) continue;
+        int slot = -1 - it->second;
+        while (prog.nativeFuncs.size() <= static_cast<size_t>(slot))
+          prog.nativeFuncs.push_back(nullptr);
+        prog.nativeFuncs[static_cast<size_t>(slot)] = fn;
+      }
+      const auto &resolved = compiler.nativeFuncsResolved();
+      for (size_t i = 0; i < resolved.size(); i++) {
+        while (prog.nativeFuncs.size() <= i)
+          prog.nativeFuncs.push_back(nullptr);
+        if (resolved[i]) prog.nativeFuncs[i] = resolved[i];
+      }
+      nativeIds.insert(compiler.nativeFuncIds().begin(),
+                       compiler.nativeFuncIds().end());
+    } catch (const QLangError &e) {
+      compiled = false;
+      why = e.what();
+    }
+    if (!compiled) {
+      check(false, label + " compiles (" + why + ")");
+      continue;
+    }
+
+    // --- writeQlc -> readQlc ---
+    std::ostringstream os(std::ios::binary);
+    if (!writeQlc(os, prog, nativeIds)) {
+      check(false, label + " writeQlc accepted the program");
+      continue;
+    }
+    CompiledProgram back;
+    std::vector<std::pair<int, std::string>> slots;
+    std::string err;
+    std::istringstream is(os.str(), std::ios::binary);
+    if (!readQlc(is, back, slots, err)) {
+      check(false, label + " readQlc (" + err + ")");
+      continue;
+    }
+
+    // The image declares the current format version.
+    const uint32_t version =
+        static_cast<uint32_t>(static_cast<uint8_t>(os.str()[4])) |
+        (static_cast<uint32_t>(static_cast<uint8_t>(os.str()[5])) << 8) |
+        (static_cast<uint32_t>(static_cast<uint8_t>(os.str()[6])) << 16) |
+        (static_cast<uint32_t>(static_cast<uint8_t>(os.str()[7])) << 24);
+    check(version == kQlcVersion,
+          label + " image declares v" + std::to_string(version));
+
+    // The code, the offset table and the constant pool survived byte for byte.
+    bool sameImage = back.functions.size() == prog.functions.size();
+    for (size_t i = 0; sameImage && i < prog.functions.size(); i++) {
+      const auto &a = prog.functions[i];
+      const auto &b = back.functions[i];
+      sameImage = a.code == b.code && a.instrOffsets == b.instrOffsets &&
+                  a.constants.size() == b.constants.size();
+      for (size_t k = 0; sameImage && k < a.constants.size(); k++)
+        sameImage = valueEq(a.constants[k], b.constants[k]);
+    }
+    check(sameImage, label + " image survives the round-trip");
+
+    // --- Re-resolve the native slots on a fresh context, then execute both ---
+    QLangContext loadCtx;
+    bool natives = true;
+    std::string missing;
+    for (const auto &[slot, n] : slots) {
+      QLangContext::NativeFunc fn;
+      auto it = loadCtx.nativeFuncs().find(n);
+      if (it != loadCtx.nativeFuncs().end())
+        fn = it->second;
+      else
+        for (const auto &mod : loadCtx.modules()) {
+          auto mit = mod.funcs.find(n);
+          if (mit != mod.funcs.end()) {
+            fn = mit->second;
+            break;
+          }
+        }
+      if (!fn) {
+        natives = false;
+        missing = n;
+        break;
+      }
+      while (back.nativeFuncs.size() <= static_cast<size_t>(slot))
+        back.nativeFuncs.push_back(nullptr);
+      back.nativeFuncs[static_cast<size_t>(slot)] = fn;
+    }
+    if (!natives) {
+      check(false, label + " native slot '" + missing + "' re-resolves");
+      continue;
+    }
+
+    std::string outA, errA, outB, errB;
+    bool okA = runCaptured(prog, ctx, outA, errA);
+    bool okB = runCaptured(back, loadCtx, outB, errB);
+    bool same = okA == okB && outA == outB && (!okA || errA == errB);
+    std::string detail;
+    if (okA != okB)
+      detail = okA ? " (the loaded run failed: " + errB + ")"
+                   : " (the original run failed: " + errA + ")";
+    else if (!okA && errA != errB)
+      detail = " (both runs failed differently)";
+    else if (outA != outB)
+      detail = " (" + std::to_string(outA.size()) + " vs " +
+               std::to_string(outB.size()) + " bytes)";
+    check(same, label + " executes with identical stdout" + detail);
+  }
+}
+
 int main() {
   testValues();
   testProgram();
@@ -1749,6 +1955,7 @@ int main() {
   testFlagFlowIdentities();
   testV6LoadValidation();
   testMalformed();
+  testScriptQlcRoundTrip();
   std::cout << (fails == 0 ? "all codec checks passed\n"
                            : "codec checks FAILED\n");
   return fails == 0 ? 0 : 1;

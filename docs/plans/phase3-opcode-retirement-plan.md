@@ -1,7 +1,7 @@
 # Phase 3 — Opcode Retirement: Remove the Deprecated Spellings, Compact Identities, `.qlc` v7
 
-Status: **S1 landed (`b86460b`); S2 gate re-verified there; S3 landed (2026-11-08,
-uncommitted) — `kOpcodeUsedCount` is now 72 — S4–S7 open.** Baseline
+Status: **S1 landed (`b86460b`), S2 gate re-verified there, S3 landed (`801498c`); S4
+landed (2026-11-08, uncommitted) — `.qlc` is v7 — S5–S7 open.** Baseline
 `HEAD = f192ad0` ("planning"); the M3 S7 documentation edits and the M2 S9 housekeeping
 landed in `51f9d33`. **M4 has not landed**, so `kOpcodeUsedCount` is still **79** (not
 the 80 D2 assumes): §4's table is correct as written except the `DECL` row, which is
@@ -350,6 +350,57 @@ round-trip) and the `.qlc` round-trip + execute for all 22 scripts (stdout ident
 
 *Exit criteria:* suite fully green; `SERIALIZATION.md` §4 validation rule matches the
 implementation (doc edit lands in S6).
+
+**Landed 2026-11-08 (uncommitted, on `801498c`).** 5 files, **251 insertions / 38
+deletions**: `QLangBytecodeIO.h` +9/−8, `QLangBytecodeIO.cpp` +6/−5, `qlang_run.cpp`
++3/−3, `codec_check.cpp` +227/−20, `CMakeLists.txt` +6/−2. `kQlcVersion` is **7**; the
+writer emits it and the reader still compares against the constant, so `QLangBytecodeIO.cpp`
+changed only in the two comments naming the accepted version — exactly as predicted.
+
+Deviations from the text above:
+
+1. **23 scripts, not 22.** The corpus is CMake's `QL_SCRIPTS` list, 23 entries since
+   `perf_stress.ql` was added; the new suite runs all of them (~75 ms).
+2. **`qlang_run.cpp` prose joined S4.** Its header, `--help` line and load comment all
+   assert "QLC1 v6"; deferring them to S5 would ship a binary that contradicts itself.
+   Comment/usage text only, no behaviour change.
+3. **The hand-built malformed-file builders write `kQlcVersion`, not a literal `6`**
+   (6 sites). Their only defect must be the field under test, and a literal would make
+   every `rejects()` case vacuous at the next bump.
+4. **`CMakeLists.txt`'s `codec_check` comment lost "the deprecated-spelling stream"** —
+   that suite was deleted in S3, and the block was being edited for the new
+   `QLANG_TEST_SCRIPTS_DIR` definition anyway.
+
+New suite `testScriptQlcRoundTrip()` (`codec_check`): each script is compiled exactly as
+`qlang_run` compiles it (`addExternalConsts({})`, the context's natives and modules, the
+same slot wiring), written with `writeQlc`, read back with `readQlc`, its native slots
+re-resolved against a **fresh** `QLangContext` (the isolation `qlang_run file.qlc` gets
+from a new process), and executed. The image's `code`, `instrOffsets` and constant pool
+are compared, and both runs' stdout is captured by swapping `std::cout`'s stream buffer
+(the VM prints through `std::cout`) and compared byte for byte; a failure carries the byte
+counts or the VM error. Non-vacuity measured: every script prints something (2–403 bytes,
+so no `"" == ""` pass), and corrupting one string constant of a loaded image fails both
+the image check and the execute check for 23/23 scripts.
+
+| metric | before S4 | after S4 |
+| --- | --- | --- |
+| `.qlc` format version | 6 | **7** |
+| `codec_check` checks | 260 (257 pass, **3 fail**: the v6 asserts) | **330**, all pass |
+| version-boundary cases | 3/4/5/7 rejected | **3/4/5/6/8** rejected |
+| corpus `.qlc` round-trip + execute | no committed coverage | **23 scripts × 3 checks** |
+| `encoding_v6` / `flag_flow` checks | 35 083 / 1 324 | **35 083 / 1 324** (unchanged) |
+| `ctest` | 50/50 | **50/50** (`doc_hashes` skipped) |
+
+§6 gate: a v6 image written before the bump (`/tmp/p3/s4/v6_hello.qlc`, 3 804 bytes, header
+`QLC1 06 00 00 00`) is refused — `qlang_run: …: qlc: unsupported version (byte offset 8)`,
+exit **3**; the same script written after the bump (`QLC1 07 00 00 00`) round-trips with
+byte-identical stdout. Producer and disassembly gates re-run clean. `qlang_run.cpp:60`
+(the `--help` summary) is 81 columns — it already was at `801498c` and only the `v6`→`v7`
+token changed, so it stays (pre-existing clang-format drift, not a new violation).
+
+Left for later steps: `docs/SERIALIZATION.md` §4 (`:95, :101, :260` → 7) and the compliance
+round entry → **S6**. The `v6-load:` suite labels in `codec_check` stay: they name the v6
+*instruction encoding* (parent plan §8), not the file version.
 
 ### S5 — Tallies, labels, perf
 

@@ -1,5 +1,5 @@
 // qlang_run — small driver that runs a .ql (QLang) script or a .qlc
-// (compiled QLC1 v6 image) with a selectable diagnostic trace level,
+// (compiled QLC1 v7 image) with a selectable diagnostic trace level,
 // optional stage timing, and bytecode output.
 //
 //   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>]
@@ -57,7 +57,7 @@ namespace
 
   void printHelp(const char *prog)
   {
-    std::cout << "Run a QLang (.ql) script or a compiled .qlc image (QLC1 v6).\n"
+    std::cout << "Run a QLang (.ql) script or a compiled .qlc image (QLC1 v7).\n"
               << "\n"
               << "usage: " << prog << " [options] <file.ql|file.qlc>\n"
               << "\n"
@@ -1303,7 +1303,7 @@ int main(int argc, char **argv)
   ctx.setVerboseLevel(traceLevel);
 
   // --- Load (.qlc) or parse + compile (.ql) ---
-  // A .qlc file is a compiled program (QLC1 v6, docs/SERIALIZATION.md):
+  // A .qlc file is a compiled program (QLC1 v7, docs/SERIALIZATION.md):
   // read it back and re-bind its native functions by name.
   const bool isQlc = source.size() >= 4 && source.compare(0, 4, "QLC1") == 0;
   CompiledProgram compiled;
