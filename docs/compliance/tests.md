@@ -73,7 +73,7 @@ Unit (24 harnesses + `smoke`):
 | `phase3_api` | `phase3_api` | `tests/unit/phase3_api.cpp` | 23 checks (handles, type-mismatch, finalizer queue, `release()`) |
 | `phase5_api` | `phase5_api` | `tests/unit/phase5_api.cpp` | 17 checks (step budget, threading contract) |
 | `value_semantics` | `value_semantics` | `tests/unit/value_semantics.cpp` | 40 checks (Round 43 share-by-default array/set/blob: aliasing on assign/call, literal freshness, `deepcopy` independence + array cycles, `+`/`cast` freshness, `a += a`, `string` still a value type) |
-| `codegen_size` | `codegen_size_check` | `tests/unit/codegen_size_check.cpp` | 4 checks (added Round 58; SPEC §bytecodes "encoding guidelines") — every budgeted script is compiled exactly as `qlang_run` compiles it and the **entry function's instruction count** (the number `--profile` prints) must stay within its ceiling: `hello.ql` 215, `money.ql` 151, `cast.ql` 163, `perf_stress.ql` 565 (the `perf` corpus, so a codegen change trips both gates; `hello`/`perf_stress` came down in M3 S5 — a flag compare + flag jump is one byte shorter than the boolean-temp path in branch position — and went **up** in Round 60 S1 by exactly one instruction per bare-truthiness test site, because `tst` + `je`/`jne` replaces the single `jmpfalse`/`jmptrue`: +4 in `hello.ql`, +44 in `perf_stress.ql`, `money`/`cast` unchanged — the reason is recorded in the file header and in `docs/plans/phase3-opcode-retirement-plan.md` §5 S1). A ceiling is not a target: it comes down when the stream legitimately shrinks, and going up needs a reason recorded in `docs/compliance/`. This is the mechanical form of the hand comparison of the root `test-hello-*.qla` dumps that caught the 229 → 243 growth |
+| `codegen_size` | `codegen_size_check` | `tests/unit/codegen_size_check.cpp` | 4 checks (added Round 58; SPEC §bytecodes "encoding guidelines") — every budgeted script is compiled exactly as `qlang_run` compiles it and the **entry function's instruction count** (the number `--profile` prints) must stay within its ceiling: `hello.ql` 215, `money.ql` 151, `cast.ql` 163, `perf_stress.ql` 565 (the `perf` corpus, so a codegen change trips both gates; `hello`/`perf_stress` came down in M3 S5 — a flag compare + flag jump is one byte shorter than the boolean-temp path in branch position — and went **up** in Round 60 S1 by exactly one instruction per bare-truthiness test site, because `tst` + `je`/`jne` replaces the single `jmpfalse`/`jmptrue`: +4 in `hello.ql`, +44 in `perf_stress.ql`, `money`/`cast` unchanged — the reason is recorded in the file header and in `docs/plans/archive/phase3-opcode-retirement-plan.md` §5 S1). A ceiling is not a target: it comes down when the stream legitimately shrinks, and going up needs a reason recorded in `docs/compliance/`. This is the mechanical form of the hand comparison of the root `test-hello-*.qla` dumps that caught the 229 → 243 growth |
 
 Counted unit cases: **37560** (529+33+20+7+5+22+13+17+18+49+8+330+35083+1324+8+3+7+23+17+40+4), plus
 the three `ALL PASS` gate suites (`test_native`, `test_call`, `test_inject`).
@@ -123,13 +123,13 @@ gate or `./update-doc-hashes.sh --check` directly (Round 49).
   the runs of this round) — 44 extra instructions in that script's hot loop, one per
   bare-truthiness test (`tst` + `je`/`jne` replacing `jmptrue`). Inside the ±20 %
   gate, above this plan's own ~5 % caution, so the number is recorded rather than
-  accepted: the A/B measurement in `docs/plans/phase3-opcode-retirement-plan.md` §5 S1
+  accepted: the A/B measurement in `docs/plans/archive/phase3-opcode-retirement-plan.md` §5 S1
   (median of 5, three interleaved rounds against a `f192ad0` worktree) is **11.349 ms,
   +8.7 %**, root-caused to one extra dispatch per iteration of the inner `for j` loop
   (its direction re-test sits on the back-edge) with the fix filed in that plan §8.
   The other eleven medians moved by ≤ 0.011 ms; `baseline.json` is unchanged.
 - **Re-recorded Round 57 (2026-11-07)** after the decoder fast path (see
-  `docs/plans/m2-pipeline-switch-plan.md` §"Performance follow-up"):
+  `docs/plans/archive/m2-pipeline-switch-plan.md` §"Performance follow-up"):
   `perf_stress` execute fell 12.995 ms → 10.382 ms (−20.1 %), recovering 77 % of
   the +32.5 % Round 56 regression. The remaining +5.8 % against the pre-switch
   v5 figure (9.809 ms) is the wider instruction stream itself, not the decoder

@@ -4,11 +4,11 @@ Status: **In progress — specification finalized 2026-11-06; milestones 1 (v6 e
 additive; 2026-11-06), 2 (pipeline switch, `.qlc` v6; 2026-11-07) and 3 (flag flow, `.qlc` still
 v6; 2026-11-07) implemented and green — see §6.1. The shipped pipeline encodes and decodes the
 v6 layout; the v5 codec is deleted. This plan's §6 **phase 3 (removal) also landed — Round 60,
-2026-11-08** — executed by [phase3-opcode-retirement-plan.md](phase3-opcode-retirement-plan.md):
+2026-11-08** — executed by [archive/phase3-opcode-retirement-plan.md](archive/phase3-opcode-retirement-plan.md):
 the seven `i`/`c`/`jmp*` spellings are gone, identities are compacted (`kOpcodeUsedCount` 72)
 and `.qlc` is **v7**. Only **M4 (`$$`, §7)** is left.**
 Supersedes: §4 (modifier byte), §5.3 (immediates) and §13.4 (signed-`Int`-only scope) of
-`docs/plans/instruction-format-escape-byte-plan.md` — that plan's byte-stream model, opcode
+`docs/plans/archive/instruction-format-escape-byte-plan.md` — that plan's byte-stream model, opcode
 space, register/constant pooling and jump forms **stay in force**
 Builds on: escape-byte encoding `.qlc` v5 — **DONE** (Round 37)
 Reference spec: `docs/spec/13-bytecodes.md` (`## encoding extended`, `## opCode scope`,
@@ -371,7 +371,7 @@ only land once no producer (compiler, tests, checked-in `.qlc` fixtures) emits t
 spellings. **It landed 2026-11-08** — the producer gate (compiler + disassembler grep, plus an
 `--asm-level 4` scan of every corpus listing) was recorded clean before the enum was touched,
 and no checked-in `.qlc`/`.qla` fixture exists (all such dumps are gitignored). Executed by
-[phase3-opcode-retirement-plan.md](phase3-opcode-retirement-plan.md); see the P3 row below.
+[archive/phase3-opcode-retirement-plan.md](archive/phase3-opcode-retirement-plan.md); see the P3 row below.
 
 ### 6.1 Milestone status (implementation decomposition actually used)
 
@@ -382,8 +382,8 @@ milestones; each keeps `ctest --test-dir build` green.
 |---|-----------|-------|--------|
 | **M1** | v6 encoding layer, **additive** | 2/2/4 modifier byte, kind/form tables, permitted-kind + in-place-arity rules, full immediate set, `CALL` as kind 0 / form 5, jump class untouched, new `*V6` codec + `encoding_v6` test suite. v5 codec, `kQlcVersion = 5` and the shipped pipeline are **not** modified. | **DONE 2026-11-06** |
 | **M2** | Switch the pipeline | Compiler emits unified `mov`/`add`/`sub`/`cmp` kinds with immediate selection, VM decodes v6, `.qlc` v5 → v6, disassembler (`examples/qlang_run.cpp`) | **DONE 2026-11-07** |
-| **M3** | Flag flow | `eqf`/`ltf`/`gtf`/`ltef`/`gtef` + `tst`, flag jumps, `ja`/`jae`/`jb`/`jbe` aliases (§4) | **DONE 2026-11-07** (Round 59; `4ead571`…`56998cf`, docs `51f9d33`) — plan [m3-flag-flow-plan.md](m3-flag-flow-plan.md) |
-| **P3** | §6 phase 3 — removal | The seven deprecated identities deleted, identities compacted, `tst` emitted for bare truthiness, `.qlc` v6 → v7 | **DONE 2026-11-08** (Round 60; `b86460b` S1 / `801498c` S3 / `a6737b9` S4) — plan [phase3-opcode-retirement-plan.md](phase3-opcode-retirement-plan.md) |
+| **M3** | Flag flow | `eqf`/`ltf`/`gtf`/`ltef`/`gtef` + `tst`, flag jumps, `ja`/`jae`/`jb`/`jbe` aliases (§4) | **DONE 2026-11-07** (Round 59; `4ead571`…`56998cf`, docs `51f9d33`) — plan [archive/m3-flag-flow-plan.md](archive/m3-flag-flow-plan.md) |
+| **P3** | §6 phase 3 — removal | The seven deprecated identities deleted, identities compacted, `tst` emitted for bare truthiness, `.qlc` v6 → v7 | **DONE 2026-11-08** (Round 60; `b86460b` S1 / `801498c` S3 / `a6737b9` S4) — plan [archive/phase3-opcode-retirement-plan.md](archive/phase3-opcode-retirement-plan.md) |
 | **M4** | `$$` (A3) | Declaration table, frame name map + bitset, `DECL`, two-operand `INDGET`/`INDPUT`, `$$"literal"` fast path (§7) | pending — `DECL` now takes identity **72** (`kOpcodeUsedCount` → 73); the declaration table still ships inside the v6 layout, now carried by a v7 file (§8) |
 
 P3 deviation from the phase table: the plan budgeted **73** remaining identities on the
@@ -408,7 +408,7 @@ the unchanged jump class, encoder range checks, truncated streams, and an exhaus
 1 756 accepted / 14 138 rejected `(opcode, modifier)` pairs cross-checked between size, encoder
 and decoder. Full suite: 47/47 (`perf` skipped).
 
-Six decisions M2 settled before coding (full rationale in §2 of `docs/plans/m2-pipeline-switch-plan.md`):
+Six decisions M2 settled before coding (full rationale in §2 of `docs/plans/archive/m2-pipeline-switch-plan.md`):
 
 1. **D1 — the `V6` suffix is dropped.** With exactly one codec, the plain names
    (`encodeInstruction`, `decodeInstruction`, `instructionSize(op, escaped, e)`, `makeModifier`,
@@ -442,7 +442,7 @@ introduced was investigated rather than accepted — `decodeInstruction` is now 
 table-driven decoder (16.4 → 6.68 ns/instruction, v5 was 6.03), behaviour-identical under an
 exhaustive differential sweep, with a permanent decoder/size-table parity guard (§18) →
 `encoding_v6` **34 470**, `perf_stress` execute 12.995 → 10.382 ms, full suite 47/47. See
-`docs/plans/m2-pipeline-switch-plan.md` §6.
+`docs/plans/archive/m2-pipeline-switch-plan.md` §6.
 
 ---
 

@@ -1,7 +1,7 @@
 # Architecture assessment: 12-byte `Instruction` + library `.qlc` codec
 
 Date: 2026-07-11
-Scope: the two-commit change described in [plans/qlc-codec-plan.md](plans/qlc-codec-plan.md) —
+Scope: the two-commit change described in [plans/archive/qlc-codec-plan.md](plans/archive/qlc-codec-plan.md) —
 (1) `Instruction` restructured to a 12-byte record with a `b/c | i32` union,
 (2) the `.qlc` codec (`serializeValue`/`deserializeValue`/`writeQlc`/`readQlc`)
 moved from the `qlang_run` POC into `libqlang.a`.

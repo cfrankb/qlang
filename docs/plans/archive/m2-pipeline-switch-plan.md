@@ -1,13 +1,19 @@
 # M2 — Switch the Pipeline to v6 (Discard the v5 Codec)
 
-Status: **S1 committed (`3bc55c7`), S2 (`35edb7a`), S3 (`e0a8323`), S4 (`337584c`),
-S6 (`d577612`), S5 (`2c1e480`); S7 done (working tree — `git rm tests/unit/encoding_test.cpp`
-outstanding); S8 done (docs, working tree) — only S9 remains** (S6 was taken first because it is the AGENTS.md-mandated companion of
-the S1–S4 encoding change and is independent of S5: it renders whatever kind/form the emitter
-produces, so it is correct both before and after the pool shrinks). Baseline
+Status: **DONE 2026-11-07 (compliance Round 56) — archived.** S1 committed (`3bc55c7`),
+S2 (`35edb7a`), S3 (`e0a8323`), S4 (`337584c`), S6 (`d577612`), S5 (`2c1e480`); S7 landed —
+`tests/unit/encoding_test.cpp` is deleted and its ctest target removed; S8 (docs) landed as
+Round 56 (`9585958`); **S9 done** — the stale v5 images are gitignored rather than deleted
+(`51f9d33` added `/*.qlc`, `/*.qla`, `/examples/qla/`, `/perf_result.json`) and no
+`*.orig`/`*.rej` artifacts exist. (S6 was taken first because it is the AGENTS.md-mandated
+companion of the S1–S4 encoding change and is independent of S5: it renders whatever kind/form
+the emitter produces, so it is correct both before and after the pool shrinks.)
+Re-verified 2026-11-08 at `be2ea56`: `ctest --test-dir build` **50/50** green; the shipped
+format is **v7** since Round 60, and §6's performance follow-up recovered most of the Round 56
+regression — its remaining items are tracked in `docs/plans/todo.md`. Baseline
 `HEAD = 0b4a4fb` ("encoding: v6 modifier byte (M1) — 2/2/4 layout, kind/form tables, \*V6 codec +
 `encoding_v6` suite").
-Parent plan: [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md) — this file
+Parent plan: [encoding-v6-and-indirect-plan.md](../encoding-v6-and-indirect-plan.md) — this file
 executes its **§6.1 milestone M2** and cites its sections (§2 layout, §3 coexistence, §6
 phasing, §8 file format, §9 pool, §10 impact, §11 verification gate, §12 open questions).
 Reference spec: `docs/spec/13-bytecodes.md` (`## encoding extended`, `### bytecode encoding`,

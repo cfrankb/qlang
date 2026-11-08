@@ -9,13 +9,13 @@ IMPORTANT: every time a change is made to the opcodes or bytecode encoding, alwa
 
 **Historical — the 8-byte struct was deleted in Round 37 (`.qlc` v5).** The instructions are
 now a flat byte stream decoded by `include/qlang/QLangBytecode.h` / `src/QLangBytecode.cpp`
-(see [../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md)
+(see [../plans/archive/instruction-format-escape-byte-plan.md](../plans/archive/instruction-format-escape-byte-plan.md)
 and `## encoding extended` below). What survives is the **operand roles**: `a`/`b`/`c` below
 name the logical operands of each opcode, which is what the disassembler prints and what the
 tables in this document are written against. The `i32` column is dead — 32-bit parameters are
 now ordinary operands whose width is selected by the modifier byte.
 
-See also [../plans/qlc-codec-plan.md](../plans/qlc-codec-plan.md).
+See also [../plans/archive/qlc-codec-plan.md](../plans/archive/qlc-codec-plan.md).
 
 ```cpp
 struct Instruction {
@@ -740,7 +740,7 @@ are described in this document and it matters which one a passage refers to:
   removed — `movc`, `movi`, `addi`, `subi`, `cmpi`, `jmpfalse` and `jmptrue` no longer exist and
   the remaining identities are compacted to `0..71` (`kOpcodeUsedCount` 79 → 72). Bare truthiness
   tests lower to `tst` + `je`/`jne`. Implementation plan:
-  [../plans/phase3-opcode-retirement-plan.md](../plans/phase3-opcode-retirement-plan.md);
+  [../plans/archive/phase3-opcode-retirement-plan.md](../plans/archive/phase3-opcode-retirement-plan.md);
   on-disk contract: [../SERIALIZATION.md](../SERIALIZATION.md) §4.
 - **Layout — `.qlc` v6** (Round 56, superseded by v7): flat byte stream, `pc` = byte offset,
   opcode top bit = escape flag + one modifier byte, the modifier re-split into **2/2/4** fields,
@@ -752,7 +752,7 @@ are described in this document and it matters which one a passage refers to:
 - **Retired — `.qlc` v5** (Round 37): the same flat stream, but the modifier carried two
   **nibbles** (low = left-operand form, high = right-operand form) and signed `Int` immediates
   only. Readers accept v7 only; the historical record stays in
-  [../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md).
+  [../plans/archive/instruction-format-escape-byte-plan.md](../plans/archive/instruction-format-escape-byte-plan.md).
 
 The flag-setting comparison family `eqf`/`ltf`/`gtf`/`ltef`/`gtef` is **implemented and
 emitted** (milestone **M3**, Round 59 — identities 66–70 since the v7 compaction, 73–77 in v6;
@@ -785,9 +785,9 @@ they used to spell.
 ### bytecode encoding
 
 [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md)
-(v6 layout) · [../plans/phase3-opcode-retirement-plan.md](../plans/phase3-opcode-retirement-plan.md)
+(v6 layout) · [../plans/archive/phase3-opcode-retirement-plan.md](../plans/archive/phase3-opcode-retirement-plan.md)
 (v7, shipped — identity removal only) ·
-[../plans/instruction-format-escape-byte-plan.md](../plans/instruction-format-escape-byte-plan.md)
+[../plans/archive/instruction-format-escape-byte-plan.md](../plans/archive/instruction-format-escape-byte-plan.md)
 (v5, retired) · on-disk layout: [../SERIALIZATION.md](../SERIALIZATION.md) §4.4
 
 there should be only one pool of registers and one pool of constants. extended addressing is
@@ -1003,7 +1003,7 @@ right operands are extended beyond the `## opCode scope` families, and the pool 
 them), the remaining identities are compacted to `0..71` (`kOpcodeUsedCount` 79 → 72) and the
 version field becomes **7** — a second version bump with no layout change, landed once nothing
 emitted the old spellings any more. Plan:
-[../plans/phase3-opcode-retirement-plan.md](../plans/phase3-opcode-retirement-plan.md)
+[../plans/archive/phase3-opcode-retirement-plan.md](../plans/archive/phase3-opcode-retirement-plan.md)
 (S1 `b86460b`, S3 `801498c`, S4 `a6737b9`).
 
 reducing temporary registers is a priority: the flag comparisons and the in-place immediate

@@ -16,12 +16,12 @@ below (spec hashes tracked in [../spec/README.md](../spec/README.md)); the
 
 | Module | Content | Validates spec module(s) | SHA256 (self) |
 |--------|---------|--------------------------|---------------|
-| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `ee5f326c2444bfdcf055a80f80f3b2b5c3f652fa3601be7f285ec17e97fe94c4` |
+| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `26386ba107d781a883a877cecf17484588c21bf1029b42868317e5d274e0c1f8` |
 | [coverage.md](coverage.md) | reserved-word coverage, value-type coverage | 02-lexical, 01-types | `789a0b58112961a6f32e98426923c17c88be737f0cfbc3a809ad771b11c898eb` |
 | [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `64e32da896720517c63f6b6f743597958858971b2cacc72096eb9985ceb8f354` |
 | [history.md](history.md) | audit rounds 7–60 (append-only) | mixed (per round) | `e8b61f1eb1af54df099b5b30f722e4fa946591fcd67aa2049c104244d77ac733` |
 | [classes.md](classes.md) | class implementation details, class spec conformance | 10-classes | `c95a835ae11f6e25c87facb30dd7210a18e928b56ab9b3592e25acf805e99b40` |
-| [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `451dd901e955889e8f63d41cad2f9fcc0854e0074af4058b7d19549fcc9f7ab5` |
+| [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `069186393b00e81a1f53ca63a2837223927205e82f23935ecdd46a60d34e0838` |
 | [migration-value-semantics.md](migration-value-semantics.md) | copy→share migration note for `array`/`set`/`blob` (Round 43) | 01-types | `3b38a16ad6e8f04386092ee2f588adb27d5f1bdfcada749135c7168066547e7d` |
 
 **New spec modules:** every new module in `docs/spec/` must get, at creation,

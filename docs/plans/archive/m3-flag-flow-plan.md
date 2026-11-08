@@ -1,12 +1,18 @@
 # M3 — Flag Flow: `eqf`/`ltf`/`gtf`/`ltef`/`gtef`, `tst` and the Flag Jumps
 
-Status: **in progress — S1 landed (`4ead571`), S2–S4 landed (`0086112` + `1e47009`), S5 landed
-(`a1984fa`), S6 landed (uncommitted).** Baseline `HEAD = 28707db` ("perf: re-record
+Status: **DONE 2026-11-07 (compliance Round 59) — archived.** S1 landed (`4ead571`), S2–S4 landed
+(`0086112` + `1e47009`), S5 landed (`a1984fa`), S6 landed (`56998cf`); **S7 (documentation) landed
+as Round 59** and **S8's commits are all in `git log`** — the docs commit is `51f9d33`
+("housekeeping"), not the suggested name, and the round is **59**, not 58. Re-verified 2026-11-08
+at `be2ea56`: `ctest --test-dir build` **50/50** green. `.qlc` is **v7** and
+`kOpcodeUsedCount` **72** since Round 60 (Phase 3 retired the deprecated spellings and emitted
+`tst`, closing D4); §7's follow-ups are tracked in `docs/plans/todo.md`.
+Baseline `HEAD = 28707db` ("perf: re-record
 baseline after the decoder fast path"). M1 **DONE 2026-11-06** (Round 55), M2 **DONE 2026-11-07**
 (Round 56 + the Round 57 decoder fast path). Suite at this baseline: ctest **47** entries,
 `encoding_v6` **34 470** checks (sweep tallies 1 756 accepted / 14 138 rejected
 `(opcode, modifier)` pairs), `codec` **199** checks, `perf_stress` execute **10.382 ms**.
-Parent plan: [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md) — this file
+Parent plan: [encoding-v6-and-indirect-plan.md](../encoding-v6-and-indirect-plan.md) — this file
 executes its **§6.1 milestone M3** and cites its sections (§2.5 permitted kinds, §2.6 arity,
 §2.9 concrete forms, §4 the new opcodes + flag model + type domain + aliases + savings, §5
 phasing out `jmpfalse`/`jmptrue`, §10 impact, §11 verification gate item 5, §12 item 6).
@@ -555,8 +561,10 @@ Suggested commit names (AGENTS.md: suggest, do not commit; stage by concern):
 4. `tests: flags.ql script suite, corpus and perf re-verified (M3 S6)`
 5. `docs: flag flow shipped (Round 58, M3 S7)`
 
-Keep the plan-file status edits in the docs commit, not in the feature commits. Nothing moves to
-`docs/plans/archive/` until M4 lands — the parent plan stays open.
+Keep the plan-file status edits in the docs commit, not in the feature commits. **Outcome:** the
+commits landed (S8 items 1–5, the docs commit as `51f9d33`) and this milestone plan moved to
+`docs/plans/archive/` on 2026-11-08 after Phase 3 shipped; the **parent** plan
+`encoding-v6-and-indirect-plan.md` stays open until M4 (`$$`) lands.
 
 ---
 

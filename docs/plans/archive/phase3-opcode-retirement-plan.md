@@ -1,9 +1,13 @@
 # Phase 3 — Opcode Retirement: Remove the Deprecated Spellings, Compact Identities, `.qlc` v7
 
-Status: **DONE (2026-11-08) except S7, the docs commit.** S1 (`b86460b`), S3 (`801498c`) and
+Status: **DONE 2026-11-08 (compliance Round 60) — archived.** S1 (`b86460b`), S3 (`801498c`) and
 S4 (`a6737b9`) are committed; the S2 gate was re-verified at `b86460b`; S5 landed (tallies +
 perf re-measured; its D7 label half deferred — see its record); S6 (documentation) landed
-2026-11-08 as compliance **Round 60**.
+2026-11-08 as compliance **Round 60**, and **S7 closed with `be2ea56`** ("docs: opcode retirement
+shipped (Round 60)"), re-verified 2026-11-08 at that commit: `ctest --test-dir build` **50/50**
+green including `doc_hashes`. Only §8's follow-ups survive this plan (D7 label tail, the
+loop-direction hoist, the `.qlc` 7 → 8 question now owned by the offset-table plan); they are
+tracked in `docs/plans/todo.md`.
 `.qlc` is **v7**, `kOpcodeUsedCount` **72**, suite **50/50** with `encoding_v6` **35 083**,
 `codec_check` **330**, `flag_flow` **1324**. Baseline
 `HEAD = f192ad0` ("planning"); the M3 S7 documentation edits and the M2 S9 housekeeping
@@ -13,7 +17,7 @@ prospective. Suite at that baseline: ctest **50** entries (48 with `-E perf`),
 `encoding_v6` **34 470** checks, `codec_check` **199**, `flag_flow` **1324**,
 `perf_stress` execute **10.382 ms** (committed baseline; **10.44 ms** in the S1 session —
 see the S1 record for the pair).
-Parent plan: [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md) — this file
+Parent plan: [encoding-v6-and-indirect-plan.md](../encoding-v6-and-indirect-plan.md) — this file
 executes its **§6 Phase 3 (removal)** and cites §3 (coexistence rule + opcode budget),
 §5.4 (`TST` subsumes the `jmpfalse`/`jmptrue` pair), §11 item 6 (the guarantee this plan
 inverts) and §12 item 6 (the emission policy this plan flips).

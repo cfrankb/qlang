@@ -1,6 +1,6 @@
 # QLang Test Migration & Coverage Plan
 
-Satisfies spec module [`docs/spec/15-tests.md`](../spec/15-tests.md) and closes the
+Satisfies spec module [`docs/spec/15-tests.md`](../../spec/15-tests.md) and closes the
 coverage gaps found in the 2026-11-01 spec↔compliance comparison.
 
 Requirements being met (15-tests.md):
