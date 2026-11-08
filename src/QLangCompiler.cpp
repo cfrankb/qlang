@@ -48,9 +48,12 @@ void FnEmitter::finish(Function &fn) {
                        "invalid jump target in emitter");
   }
 
-  // Initial sizes: jumps assume the widest form (jmp32, plus a condition
-  // register for JMPIFFALSE/JMPIFTRUE); everything else uses the size of
-  // the form its operands/immediate actually require (base or escaped).
+  // Initial sizes: jumps assume the widest form (jmp32 — plus the 1-byte
+  // condition register of the jump form nothing produces any more, still
+  // sized until the opcode itself goes away, plan
+  // docs/plans/phase3-opcode-retirement-plan.md S3); everything else uses the
+  // size of the form its operands/immediate actually require (base or
+  // escaped).
   std::vector<size_t> sizes(raw.size());
   for (size_t i = 0; i < raw.size(); i++) {
     if (raw[i].jumpTarget >= 0)
@@ -851,15 +854,11 @@ void QLangCompiler::emit(Opcode op, int a, int b, int c) {
   uint16_t line = static_cast<uint16_t>(m_curLine);
   uint16_t col = static_cast<uint16_t>(m_curCol);
   if (isJumpOpcode(op)) {
-    // JMPIFFALSE/JMPIFTRUE carry the condition register in `a` and the
-    // target in `b`; every other jump carries the target in `a`.
-    int32_t target = a;
-    int32_t cond = 0;
-    if (op == Opcode::JMPIFFALSE || op == Opcode::JMPIFTRUE) {
-      cond = a;
-      target = b;
-    }
-    m_emitter.emitJump(op, target, cond, line, col);
+    // Every jump the compiler emits carries its target in `a`. The jump class
+    // has no condition-register form: a register test lowers to `tst` + a
+    // flag jump (emitJumpIfTrue/emitJumpIfFalse), so no jump carries a second
+    // operand (plan docs/plans/phase3-opcode-retirement-plan.md S1).
+    m_emitter.emitJump(op, a, 0, line, col);
     return;
   }
   m_emitter.emit(op, a, b, c, 0, line, col);
@@ -1027,7 +1026,7 @@ static std::optional<LiteralImm> foldNegLiteral(const ExprPtr &e) {
 }
 
 // Map a comparison opcode to the conditional jump that fires when that
-// comparison is FALSE (the JMPIFFALSE semantics the branch sites use).
+// comparison is FALSE (the negative branch every branch site takes).
 //   == -> jne   != -> je   < -> jge   > -> jle   <= -> jg   >= -> jl
 // Sound after `cmp` (a total order: exactly one bit set) AND after a flag
 // compare, provided the compare is the *dual* relation — see
@@ -1041,7 +1040,7 @@ static Opcode cmpJumpIfFalse(Opcode rel) {
   case Opcode::GT: return Opcode::JLE;
   case Opcode::LE: return Opcode::JG;
   case Opcode::GE: return Opcode::JL;
-  default: return Opcode::JMPIFFALSE; // not a comparison; caller handles
+  default: return Opcode::Nop; // not a comparison; caller handles
   }
 }
 
@@ -1086,6 +1085,23 @@ int QLangCompiler::emitCmpJumpFalse(Opcode rel, int ra, int rb) {
   return static_cast<int>(m_emitter.size()) - 1;
 }
 
+// Truthiness into the flags + the flag jump that takes the branch: `tst` sets
+// eq from truth(r[a]) and clears the other two bits, so `je` fires exactly on
+// the true side and `jne` — `(f & eq) == 0` — on the false one
+// (SPEC §bytecodes "OpCode tst"; plan docs/plans/phase3-opcode-retirement-plan.md
+// D1). The jump's target stays 0 for the caller to patch.
+int QLangCompiler::emitJumpIfTrue(int condReg) {
+  emit(Opcode::TST, condReg);
+  emit(Opcode::JE, 0);
+  return static_cast<int>(m_emitter.size()) - 1;
+}
+
+int QLangCompiler::emitJumpIfFalse(int condReg) {
+  emit(Opcode::TST, condReg);
+  emit(Opcode::JNE, 0);
+  return static_cast<int>(m_emitter.size()) - 1;
+}
+
 int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
   if (!cond || cond->kind != ExprKind::Binary)
     return -1;
@@ -1105,8 +1121,8 @@ int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
   // jump map below fires exactly when the condition is false (SPEC §bytecodes
   // "extended OpCode eq, lt, gt, lte, gte"). The gate used to be "both Int or
   // no fusion at all", so every guard inferType cannot pin down — i.e. every
-  // guard with a variable operand — paid for a boolean temp plus a jmpfalse;
-  // that domain is exactly what the flag compares cover.
+  // guard with a variable operand — paid for a boolean temp plus a truthiness
+  // test; that domain is exactly what the flag compares cover.
   const bool intPath = inferType(cond->left) == QLangValue::Type::Int &&
                        inferType(cond->right) == QLangValue::Type::Int;
   const Opcode cmpOp = intPath ? Opcode::CMP : flagCompareIfFalse(rel);
@@ -1914,13 +1930,13 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     emit(Opcode::GT, posReg, subReg, zeroReg);
     int dirReg = tmpRegister();
     emitImmI(Opcode::MOV, dirReg, -1);
-    int dPosLabel = static_cast<int>(m_emitter.size());
-    emit(Opcode::JMPIFTRUE, posReg, 0);
+    int dTrueIdx = emitJumpIfTrue(posReg); // ascending bounds -> dir = 1
     int dDoneLabel = static_cast<int>(m_emitter.size());
     emit(Opcode::JMP, 0);
-    m_emitter.patchJump(dPosLabel, dPosLabel + 2);
+    int dSetOne = static_cast<int>(m_emitter.size());
     emitImmI(Opcode::MOV, dirReg, 1);
-    m_emitter.patchJump(dDoneLabel, dPosLabel + 3);
+    m_emitter.patchJump(dTrueIdx, dSetOne);
+    m_emitter.patchJump(dDoneLabel, static_cast<int>(m_emitter.size()));
 
     // No explicit step: advance in the loop's natural direction (unit step).
     // Without this a backward no-step loop would get step +1 vs dir -1 and
@@ -1931,10 +1947,10 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     // step == 0 -> natural-direction unit step (so a `step 0` loop advances).
     int zeroCmp = tmpRegister();
     emit(Opcode::EQ, zeroCmp, stepReg, zeroReg);
-    int zeroStepLabel = static_cast<int>(m_emitter.size());
-    emit(Opcode::JMPIFFALSE, zeroCmp, 0);      // step != 0 -> skip normalization
-    emit(Opcode::MOV, stepReg, dirReg);        // step == 0 -> step = dir (+1 / -1)
-    m_emitter.patchJump(zeroStepLabel, zeroStepLabel + 2);
+    int zeroStepLabel =
+        emitJumpIfFalse(zeroCmp);           // step != 0 -> skip normalization
+    emit(Opcode::MOV, stepReg, dirReg);     // step == 0 -> step = dir (+1 / -1)
+    m_emitter.patchJump(zeroStepLabel, static_cast<int>(m_emitter.size()));
 
     // runtime conditions
     int posStep = tmpRegister();
@@ -1945,8 +1961,7 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     emit(Opcode::EQ, sameSign, posStep, posDir);
 
     // Decision: sameSign -> guard loop; else fall through to run-once.
-    int guardLabel = static_cast<int>(m_emitter.size());
-    emit(Opcode::JMPIFTRUE, sameSign, 0);
+    int guardStepIdx = emitJumpIfTrue(sameSign);
 
     // Run-once body (wrong direction): execute exactly once, then exit.
     emit(Opcode::MOV, x, startReg);
@@ -1969,8 +1984,10 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     //   backward (dir <= 0): `to` bound inclusive -> GE guard (x >= end continues)
     int guardLoopStart = static_cast<int>(m_emitter.size());
     emit(Opcode::MOV, x, startReg);
+    // `guardOnceLabel` is the `tst` itself: the loop back edge below points at
+    // it so every pass re-evaluates the direction.
     int guardOnceLabel = static_cast<int>(m_emitter.size());
-    emit(Opcode::JMPIFTRUE, posDir, 0);          // forward -> LT guard path
+    int guardOnceJeIdx = emitJumpIfTrue(posDir); // forward -> LT guard path
     // Guards are Int-vs-Int: fused to cmp+j* (SPEC §bytecodes: alternate
     // conditional jump). guardGeIdx/guardFwdIdx point at the CMP; the j* is
     // at +1 (patched below).
@@ -1989,7 +2006,7 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     int loopExit = static_cast<int>(m_emitter.size());
 
     // Patch the guard loop's branches.
-    m_emitter.patchJump(guardOnceLabel, guardFwdIdx);   // forward -> guard
+    m_emitter.patchJump(guardOnceJeIdx, guardFwdIdx);   // forward -> guard
     m_emitter.patchJump(guardGeIdx + 1, loopExit);     // backward exit
     m_emitter.patchJump(guardFwdIdx + 1, loopExit);    // forward exit
     m_emitter.patchJump(guardSkipIdx, guardLoopEntry); // backward -> body (JMP reads a)
@@ -2006,7 +2023,7 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
       else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
     }
     // Patch the decision jump.
-    m_emitter.patchJump(guardLabel, guardLoopStart);  // sameSign -> guard loop
+    m_emitter.patchJump(guardStepIdx, guardLoopStart);  // sameSign -> guard loop
     m_loops.pop_back();
   }
   popBlockScope();
@@ -2106,19 +2123,18 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
       emit(Opcode::GT, posReg, subReg, zeroReg);
       int dirReg = tmpRegister();
       emitImmI(Opcode::MOV, dirReg, -1);
-      int dPosLabel = static_cast<int>(m_emitter.size());
-      emit(Opcode::JMPIFTRUE, posReg, 0);
+      int dTrueIdx = emitJumpIfTrue(posReg); // ascending bounds -> dir = 1
       int dDoneLabel = static_cast<int>(m_emitter.size());
       emit(Opcode::JMP, 0);
-      m_emitter.patchJump(dPosLabel, dPosLabel + 2);
+      int dSetOne = static_cast<int>(m_emitter.size());
       emitImmI(Opcode::MOV, dirReg, 1);
-      m_emitter.patchJump(dDoneLabel, dPosLabel + 3);
+      m_emitter.patchJump(dTrueIdx, dSetOne);
+      m_emitter.patchJump(dDoneLabel, static_cast<int>(m_emitter.size()));
 
       // step == 0 -> infinite loop: body + increment forever, no guard.
       int zeroCmp = tmpRegister();
       emit(Opcode::EQ, zeroCmp, stepReg, zeroReg);
-      int zeroJumpIdx = static_cast<int>(m_emitter.size());
-      emit(Opcode::JMPIFTRUE, zeroCmp, 0);
+      int zeroJumpIdx = emitJumpIfTrue(zeroCmp);
       int infExitLabel = static_cast<int>(m_emitter.size());
       int posStep = tmpRegister();
       emit(Opcode::GT, posStep, stepReg, zeroReg);
@@ -2126,8 +2142,7 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
       emit(Opcode::GT, posDir, dirReg, zeroReg);
       int sameSign = tmpRegister();
       emit(Opcode::EQ, sameSign, posStep, posDir);
-      int ssJumpIdx = static_cast<int>(m_emitter.size());
-      emit(Opcode::JMPIFTRUE, sameSign, 0);
+      int ssJumpIdx = emitJumpIfTrue(sameSign);
       // Run-once: step and direction disagree -> body executes a single time.
       emit(Opcode::MOV, x, startReg);
       int runOnceBodyStart = static_cast<int>(m_emitter.size());
@@ -2158,16 +2173,18 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
       int guardLabel = static_cast<int>(m_emitter.size());
       int posDir2 = tmpRegister();
       emit(Opcode::GT, posDir2, dirReg, zeroReg);
-      int fwdGuardIdx = static_cast<int>(m_emitter.size());
-      emit(Opcode::JMPIFTRUE, posDir2, 0);
+      int fwdGuardIdx = emitJumpIfTrue(posDir2);
       // Int-vs-Int range guards: fused to cmp+j* (SPEC §bytecodes). The j*
       // is the last instruction emitted, so backExitIdx/fwdExitIdx point at
       // it (patched to guardExit below).
       emitCmpJumpFalse(Opcode::GE, x, endReg); // backward guard (x >= end)
       int backExitIdx = static_cast<int>(m_emitter.size()) - 1;
-      int skipFwdIdx = static_cast<int>(m_emitter.size());
+      // Defect (pre-existing, unchanged here): this skip JMP is never
+      // patched, so its target stays instruction 0 — a descending loop with
+      // non-constant bounds spins there. Tracked in docs/plans/todo.md.
       emit(Opcode::JMP, 0);
-      m_emitter.patchJump(fwdGuardIdx, skipFwdIdx + 1);
+      // The direction test above jumps here, to the forward guard's CMP.
+      m_emitter.patchJump(fwdGuardIdx, static_cast<int>(m_emitter.size()));
       emitCmpJumpFalse(Opcode::LE, x, endReg); // forward guard (x <= end)
       int fwdExitIdx = static_cast<int>(m_emitter.size()) - 1;
       int bodyStart = static_cast<int>(m_emitter.size());
@@ -2243,14 +2260,13 @@ void QLangCompiler::compileWhile(const StmtPtr &s) {
   int testLabel = static_cast<int>(m_emitter.size());
   // Fused compare+j* for any comparison condition (SPEC §bytecodes: alternate
   // conditional jump): cmp+j* when both operands are statically Int, otherwise
-  // the dual flag compare + the same j*. Legacy value compare + JMPIFFALSE for
-  // everything that is not a comparison (truthiness, && / ||, !, calls).
+  // the dual flag compare + the same j*. Everything that is not a comparison
+  // (truthiness, && / ||, !, calls) lowers to `tst` + `jne`.
   int jumpFalseIdx = emitCmpJumpFalseExpr(s->cond);
   if (jumpFalseIdx < 0) {
     int condReg = tmpRegister();
     compileExpr(s->cond, condReg);
-    emit(Opcode::JMPIFFALSE, condReg, 0);
-    jumpFalseIdx = static_cast<int>(m_emitter.size()) - 1;
+    jumpFalseIdx = emitJumpIfFalse(condReg);
   }
 
   // continue -> re-evaluate the condition (testLabel is known before the body);
@@ -2275,14 +2291,13 @@ void QLangCompiler::compileWhile(const StmtPtr &s) {
 void QLangCompiler::compileIf(const StmtPtr &s) {
   // Fused compare+j* for any comparison condition (SPEC §bytecodes: alternate
   // conditional jump): cmp+j* when both operands are statically Int, otherwise
-  // the dual flag compare + the same j*. Legacy value compare + JMPIFFALSE for
-  // everything that is not a comparison (truthiness, && / ||, !, calls).
+  // the dual flag compare + the same j*. Everything that is not a comparison
+  // (truthiness, && / ||, !, calls) lowers to `tst` + `jne`.
   int jumpFalseIdx = emitCmpJumpFalseExpr(s->ifCond);
   if (jumpFalseIdx < 0) {
     int condReg = tmpRegister();
     compileExpr(s->ifCond, condReg);
-    emit(Opcode::JMPIFFALSE, condReg, 0);
-    jumpFalseIdx = static_cast<int>(m_emitter.size()) - 1;
+    jumpFalseIdx = emitJumpIfFalse(condReg);
   }
 
   m_blockScopes.emplace_back(); // if body is a block scope (SPEC # block scope)
@@ -2313,7 +2328,8 @@ void QLangCompiler::compileGotoIf(const StmtPtr &s) {
   if (lit == m_labels.end())
     throw QLangError(QLangErrorKind::Parse, 0, 0,
                      "undefined label '" + s->gotoIfLabel + "'");
-  emit(Opcode::JMPIFTRUE, condReg, lit->second);
+  int jumpTrueIdx = emitJumpIfTrue(condReg);
+  m_emitter.patchJump(jumpTrueIdx, lit->second);
 }
 
 void QLangCompiler::compileExprStmt(const StmtPtr &s) {
@@ -3040,12 +3056,12 @@ void QLangCompiler::compileSwitch(const StmtPtr &s) {
 
   // Emit a comparison + conditional-jump chain for each case.
   // For each case we emit:
-  //   [match check: EQ/IN] -> JMPIFTRUE -> [JMP to skip] -> [case body]
+  //   [match check: EQ/IN] -> tst + je -> [JMP to skip] -> [case body]
   // After all cases, compile default, then emit JMP to switch end.
   // The JMP after each case jumps to the next case's check (or switchEnd for last).
   std::vector<int> caseMatchStarts; // instruction index of each case's match start (const emit)
-  std::vector<int> caseJmpiIfTrueIdx; // instruction index of each JMPIFTRUE
-  std::vector<int> caseSkipJmpIdx;    // JMP after JMPIFTRUE (skip to next case)
+  std::vector<int> caseJeIdx;       // `je` of each case's truthiness test
+  std::vector<int> caseSkipJmpIdx;    // JMP after the test (skip to next case)
   std::vector<int> caseExitJmpIdx;    // implicit JMP after case body (exit to switchEnd)
   std::vector<int> caseBodyStarts;    // instruction index of each case body
   for (size_t i = 0; i < s->cases.size(); i++) {
@@ -3063,8 +3079,8 @@ void QLangCompiler::compileSwitch(const StmtPtr &s) {
       compileExpr(sc.value, exprReg);
       emit(Opcode::EQ, cmpReg, valReg, exprReg);
     }
-    emit(Opcode::JMPIFTRUE, cmpReg, 0); // target to patch: jump to case body
-    caseJmpiIfTrueIdx.push_back(static_cast<int>(m_emitter.size()) - 1);
+    // tst + je; the target is patched below to the case body start.
+    caseJeIdx.push_back(emitJumpIfTrue(cmpReg));
     // Emit JMP to skip this case body (patched to next case or switchEnd).
     int skipJmpIdx = static_cast<int>(m_emitter.size());
     emit(Opcode::JMP, 0);
@@ -3106,11 +3122,11 @@ void QLangCompiler::compileSwitch(const StmtPtr &s) {
   }
   m_breakJmps.clear();
 
-  // Patch all JMPIFTRUE targets to point at their case body start,
+  // Patch all truthiness-test jumps to point at their case body start,
   // skip-JMP targets to next case (or default body for last),
   // and exit-JMP targets to switchEnd.
   for (size_t i = 0; i < s->cases.size(); i++) {
-    m_emitter.patchJump(caseJmpiIfTrueIdx[i], caseBodyStarts[i]);
+    m_emitter.patchJump(caseJeIdx[i], caseBodyStarts[i]);
     if (i + 1 < s->cases.size())
       m_emitter.patchJump(caseSkipJmpIdx[i], caseMatchStarts[i + 1]);
     else
@@ -3937,13 +3953,12 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
   }
   case ExprKind::Ternary: {
     // cond ? trueBranch : falseBranch  (SPEC §operators "operator ?").
-    // The condition goes to a temp; JMPIFFALSE branches to the false side.
+    // The condition goes to a temp; `tst` + `jne` branches to the false side.
     // Block branches lower to a closure call whose `return` yields the
     // ternary's value.
     int condReg = tmpRegister();
     compileExpr(e->cond, condReg);
-    emit(Opcode::JMPIFFALSE, condReg, 0);
-    size_t jumpFalseIdx = m_emitter.size() - 1;
+    size_t jumpFalseIdx = static_cast<size_t>(emitJumpIfFalse(condReg));
     if (e->trueExpr)
       compileExpr(e->trueExpr, dest);
     else

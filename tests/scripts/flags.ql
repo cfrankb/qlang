@@ -12,9 +12,11 @@
 #   a <  b   gtef + jge      a >  b   ltef + jle
 #   a <= b   gtf  + jg       a >= b   ltf  + jl
 #
-# Truthiness (`if x`) and the short-circuits (`&&`, `||`, `!`) deliberately keep
-# the deprecated `jmpfalse` spelling (plan §3 D4) — the last section asserts
-# they still behave, so their removal stays a Phase-3 change.
+# Truthiness (`if x`) and the short-circuits (`&&`, `||`, `!`) lower to
+# `tst r` + `je`/`jne`: `tst` puts truth(r) into the flags (eq set, the other
+# two clear), so `je` takes the true side and `jne` the false one
+# (docs/plans/phase3-opcode-retirement-plan.md D1). The last section asserts
+# they still behave.
 #
 # To see the shapes:
 #   qlang_run --asm /tmp/flags.qla --asm-level 4 tests/scripts/flags.ql
@@ -158,7 +160,7 @@ if (apple < "banana") { hits += 1 }
 if (apple != "applesauce") { hits += 1 }
 assert(hits == 32, "pool-right flag compares branch correctly")
 
-# --- truthiness and short-circuits keep the jmpfalse path (plan D4) ----------
+# --- truthiness and short-circuits lower to tst + je/jne (Phase 3 D1) --------
 local text = "text"
 local list = [1]
 local map = {k = 1}

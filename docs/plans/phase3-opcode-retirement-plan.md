@@ -1,10 +1,13 @@
 # Phase 3 — Opcode Retirement: Remove the Deprecated Spellings, Compact Identities, `.qlc` v7
 
-Status: **plan — not started.** Baseline `HEAD = 56998cf` ("tests: flags.ql script suite,
-corpus and perf re-verified (M3 S6)"); the M3 S7 documentation edits are staged but not yet
-committed (`todo.md` §1). Suite at this baseline: ctest **50** entries (48 with `-E perf`),
-`encoding_v6` **34 470** checks, `codec_check` **199**, `flag_flow` **1324**, `perf_stress`
-execute **10.382 ms**.
+Status: **S1 + S2 landed (2026-11-08, uncommitted) — S3–S7 open.** Baseline
+`HEAD = f192ad0` ("planning"); the M3 S7 documentation edits and the M2 S9 housekeeping
+landed in `51f9d33`. **M4 has not landed**, so `kOpcodeUsedCount` is still **79** (not
+the 80 D2 assumes): §4's table is correct as written except the `DECL` row, which is
+prospective. Suite at this baseline: ctest **50** entries (48 with `-E perf`),
+`encoding_v6` **34 470** checks, `codec_check` **199**, `flag_flow` **1324**,
+`perf_stress` execute **10.382 ms** (committed baseline; **10.44 ms** in the S1 session —
+see the S1 record for the pair).
 Parent plan: [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md) — this file
 executes its **§6 Phase 3 (removal)** and cites §3 (coexistence rule + opcode budget),
 §5.4 (`TST` subsumes the `jmpfalse`/`jmptrue` pair), §11 item 6 (the guarantee this plan
@@ -78,7 +81,7 @@ stays byte-identical. The reader stays single-version. No opcode identity is app
 | `kOpcodeUsedCount = 79` (M4 appends `DECL` → 80) | `include/qlang/QLangBytecode.h:267` |
 | Deprecated identities: `MOVC` 0, `JMPIFFALSE` 45, `JMPIFTRUE` 46, `MOVI` 57, `ADDI` 58, `SUBI` 59, `CMPI` 61 | `include/qlang/QLangBytecode.h` (`enum class Opcode`) |
 | Reader accepts `kQlcVersion` only ("unsupported version") | `include/qlang/QLangBytecodeIO.h:34`, `src/QLangBytecodeIO.cpp:469` |
-| Compiler still emits `JMPIFFALSE`/`JMPIFTRUE` at 15 sites | `src/QLangCompiler.cpp:858, 1044, 1918, 1935, 1949, 1973, 2110, 2121, 2130, 2162, 2252, 2284, 2316, 3066, 3945` |
+| Compiler still emitted `JMPIFFALSE`/`JMPIFTRUE` at 15 sites (**all converted in S1**) | `src/QLangCompiler.cpp:858, 1044, 1918, 1935, 1949, 1973, 2110, 2121, 2130, 2162, 2252, 2284, 2316, 3066, 3945` |
 | VM handlers to delete (`MOVC`/`MOVI` share one case) | `src/QLangVM.cpp:2027-2028, 2449, 2454, 2490, 2529, 2539` |
 | Jump class includes the `JMPIF*` pair (width selector + 1-byte condition register) | `src/QLangBytecode.cpp:20-21, 57, 68-69` |
 | Permitted-kind table pins the suffix kinds (`MOVI` → immediate only, …) | `src/QLangBytecode.cpp:346-351` |
@@ -89,7 +92,7 @@ stays byte-identical. The reader stays single-version. No opcode identity is app
 | `encoding_v6` deprecated-spelling cases (kinds, base forms, sweep rows, rejects) | `tests/unit/encoding_v6_test.cpp:384-431, 459-461, 526-527, 559-578, 624-635, 671-675, 823, 903` |
 | `spec_check2` "movi:/addi:/subi:" cases are **behavioral** (compile source, check values) — labels stale since M2 | `tests/unit/spec_check2.cpp:902-997` |
 | `value_semantics` L5 comments name the `MOVC` clone (behavior now on `mov` kind 2) | `tests/unit/value_semantics.cpp:34, 285, 298` |
-| `tst` implemented, **not emitted** (M3 D4); spec states the Phase 3 end-state | `docs/spec/13-bytecodes.md:397` |
+| `tst` implemented, **not emitted** (M3 D4) — **emitted since S1**; the spec sentence is stale until S6 | `docs/spec/13-bytecodes.md:397` |
 | Spec `## opCode scope` + `## future plans` already describe Phase 3 (removal, v7) | `docs/spec/13-bytecodes.md:746` ff. |
 | SERIALIZATION: version 6 at `:95, :101, :260`; "79 defined" at `:132, :152, :185`; identity rule `< kOpcodeUsedCount` at `:152` | `docs/SERIALIZATION.md` §4 |
 | No checked-in bytecode fixtures: root `/*.qlc`, `/*.qla` and `examples/qla/` are gitignored | `.gitignore:18-20` |
@@ -165,6 +168,59 @@ not silently accept a regression beyond ~5 %).
 *Exit criteria:* `grep -c "Opcode::JMPIFFALSE\|Opcode::JMPIFTRUE" src/QLangCompiler.cpp` == 0;
 suite green (the legacy decode suites hand-build streams and are untouched until S3).
 
+**Landed 2026-11-08.** 15 references converted — 13 emission sites plus the two
+non-emission references §2 counts:
+
+| Site | count |
+|------|------:|
+| `compileFor` — direction select, step-zero guard, same-sign guard, back-edge re-test | 4 |
+| `compileForIn` — constant-bound path and runtime-bound path (same four shapes) | 4 |
+| `compileWhile`, `compileIf` — fallback after `emitCmpJumpFalseExpr` returns −1 | 2 |
+| `compileGotoIf`, `compileSwitch` (case dispatch), `compileExpr` (ternary) | 3 |
+| `emit()` — the condition-register jump form deleted; `cmpJumpIfFalse` default → `Nop` | 2 |
+
+`emitJumpIfTrue`/`emitJumpIfFalse` (`QLangCompiler.cpp:1093, 1099`) emit `tst r` +
+`je`/`jne` and return the index of the **jump**; the `tst` sits at index − 1, which is
+where a loop back-edge must point to re-evaluate the condition. Every hardcoded `+2`/`+3`
+label offset in the loop prologues became an explicitly captured index — patching the
+`tst` (not a jump) would set `jumpTarget` on a non-jump and corrupt the width fixpoint.
+The jump-width selector keeps its 7-byte conditional form for now
+(`isConditionalJumpOpcode` is dead code after S1; S3 deletes it with the enumerators).
+
+Gate and measurement output (2026-11-08, Release):
+
+```
+$ grep -c "Opcode::JMPIFFALSE\|Opcode::JMPIFTRUE" src/QLangCompiler.cpp
+0
+$ ctest --test-dir build                     # 50/50 passed (doc_hashes skipped)
+$ build/codegen_size_check                   # ceilings re-recorded, reason in the file header
+hello.ql 211 -> 215 (+4)   money.ql 151   cast.ql 163   perf_stress.ql 521 -> 565 (+44)
+corpus stdout: 23/23 scripts byte-identical to the pre-change build, all exit 0
+```
+
+`perf_stress` execute, median of 5, three interleaved A/B rounds against a `f192ad0`
+worktree built in the same session:
+
+| build | per-round medians (ms) | median |
+|-------|------------------------|-------:|
+| `HEAD` `f192ad0` | 10.436 / 10.442 / 10.458 | **10.442** |
+| S1 | 13.311 / 10.960 / 11.349 | **11.349 (+8.7 %)** |
+
+**+8.7 % is above this step's ~5 % caution, so it is recorded, not accepted.** The cause
+is structural, not noise: the inner `for j = 1 to 200` back-edge lands on the loop's
+direction re-test, one instruction before (`jmptrue r23`) and two after (`tst r23; je`),
+so each of the 40 000 iterations executes one extra dispatch — 7 → 8 instructions on the
+taken path, +14 % on that loop, +8.7 % for the script (its other loops have no
+bare-truthiness test). `perf_bench`'s own gate passes (12/12 stages within ±20 %, worst
++8.7 %, 0.5 ms epsilon). The direction test is loop-invariant: hoisting it out of the
+back-edge is a `compileFor`/`compileForIn` change, not a `tst` change, and would take the
+loop below the pre-S1 count — filed in §8.
+
+Found while re-reading the runtime-bound `compileForIn` path (pre-existing, **unchanged**
+by S1, marked in the code): the skip `JMP` after the backward guard is never patched, so a
+descending `for … in range(hi, lo) step -1` with non-constant bounds spins at instruction
+0 and trips the step guard. Filed in `todo.md`.
+
 ### S2 — Producer-free gate
 
 Record in this plan: the grep gate over `src/` + `examples/` is zero for all seven opcodes,
@@ -173,6 +229,30 @@ and the `--asm-level 4` scan of all 22 corpus listings contains no `movi`/`movc`
 the parent §6 precondition ("no producer emits the old spellings") is then discharged.
 
 *Exit criteria:* gate output pasted below this step during execution.
+
+**Recorded 2026-11-08.** The literal grep over `src/` + `examples/` is **not** zero and
+cannot be at this step: the remaining hits are the *consumer* side (codec tables, VM
+handlers, disassembler), which is exactly S3's deletion list. The **producer** — the
+compiler — is zero, which is what the parent §6 precondition asks for.
+
+```
+$ grep -rn "Opcode::JMPIFFALSE\|Opcode::JMPIFTRUE\|Opcode::MOVI\|Opcode::MOVC\|Opcode::ADDI\
+\|Opcode::SUBI\|Opcode::CMPI" src/ examples/ | awk -F: '{print $1}' | sort | uniq -c
+     22 src/QLangBytecode.cpp        # jump class, width/permitted-kind tables, mnemonics (S3)
+      8 examples/qlang_run.cpp       # disassembler special cases (S3)
+      7 src/QLangVM.cpp              # handlers (S3)
+$ grep -rn … src/QLangCompiler.cpp include/qlang/QLangCompiler.h | wc -l
+1                                  # isConditionalJumpOpcode (QLangCompiler.h:194) — dead
+                                   # since S1, removed with the enumerators in S3
+$ for f in tests/scripts/*.ql; do build/qlang_run --asm /tmp/p3/gate2/$(basename $f).qla \
+      --asm-level 4 "$f"; done ; grep -lE "\b(movi|movc|addi|subi|cmpi|jmpfalse|jmptrue)\b" …
+asm gate OK                        # 23 listings (22 + flags.ql, added by M3 S6), 0 hits
+mnemonics in the corpus: tst 83   je 59   jne 51   jmpfalse 0   jmptrue 0
+```
+
+`tst` 83 matches §2's predicted population exactly (83 bare-truthiness sites). `je`/`jne`
+exceed it because M3 already emits them for fused comparisons. No checked-in `.qlc`
+fixture exists (§2), so nothing else can carry an old spelling.
 
 ### S3 — Enum removal + compaction + tables (one atomic change)
 
@@ -185,6 +265,10 @@ together (compile atomicity):
 - `QLangVM.cpp`: delete cases `:2027-2028` (the shared `MOVC`/`MOVI` case — `mov` by kind
   already covers both), `:2449`, `:2454`, `:2490`, `:2529`, `:2539`.
 - `examples/qlang_run.cpp`: delete the special cases at `:390-393, 551-561, 657, 895`.
+- `QLangCompiler.h:193` `isConditionalJumpOpcode` and its three uses in the width
+  fixpoint (`QLangCompiler.cpp:60, 88, 104`): dead since S1 (the compiler emits no
+  conditional jump), they exist only to name the two enumerators — delete them with the
+  enum.
 - Tests (D5): delete the `codec_check` legacy-execution suite and the `encoding_v6`
   deprecated-spelling cases; retarget the hand-built `MOVI` streams (`codec_check.cpp:836,
   919`) to `mov` kind 0 (`e = 0x40`).
@@ -208,7 +292,8 @@ implementation (doc edit lands in S6).
 
 Re-record: `encoding_v6` check count + sweep tallies, `codec_check`, `flag_flow` (unchanged),
 ctest entry count (50); rename the `spec_check2` labels (D7) and fix the `value_semantics`
-comments; re-measure `perf_stress` against the S1 number and record the pair.
+comments; re-measure `perf_stress` against the S1 number (**11.349 ms**, see the S1
+record) and record the pair.
 
 *Exit criteria:* suite green; tallies recorded under each step.
 
@@ -279,7 +364,7 @@ build/qlang_run /tmp/p3/v6.qlc               # exit != 0, "unsupported version"
 | Risk | Mitigation |
 |------|------------|
 | Identity reuse makes old v6 byte streams ambiguous | The version field rejects v6 before any byte decodes (`QLangBytecodeIO.cpp:469`); clean-break precedent (v1–v5 all rejected since Round 56) |
-| +1 B / +1 instruction per truthiness test (83 corpus sites; 44 in `perf_stress`) | S1 measures against the 10.382 ms baseline and records the delta; AGENTS.md perf gate; `tst` dispatches through the same table-driven decoder as every non-jump op |
+| +1 B / +1 instruction per truthiness test (83 corpus sites; 44 in `perf_stress`) | **Measured (S1): +8.7 %** on `perf_stress` execute, 10.442 → 11.349 ms — inside the AGENTS.md ±20 % gate, above this plan's ~5 % caution, root-caused to one extra dispatch in the `for` loop's per-iteration direction re-test (see the S1 record). Mitigation filed in §8; `tst` dispatches through the same table-driven decoder as every non-jump op |
 | Test compile breakage when enumerators vanish | S3 is atomic (enum + tables + VM + disassembler + tests in one change) |
 | M4 ordering drifts | D2 fallback recorded; §4 table recomputed if the order flips |
 | A codec-table row missed for a shifted identity | `encoding_v6` exhaustive sweep (every opcode × 256 modifiers, size/encode/decode cross-checked) re-run in S3 |
@@ -291,6 +376,15 @@ Effort: S1 1 d, S2 0.25 d, S3 1 d, S4 0.5 d, S5 0.5 d, S6 0.5 d, S7 0.25 d ≈ *
 
 ## 8. Follow-ups recorded (deliberately not Phase 3)
 
+- **Hoist the `for` loop's direction re-test out of the back-edge** (recovers
+  S1's +8.7 %). `compileFor`/`compileForIn` end the loop with a jump back to the test
+  that picks the bound comparison (`jl` when the step is positive, `jg` when negative).
+  That test reads `step_init > 0`, computed once in the prologue and never written in
+  the body, so the loop can branch to one of two specialized back-edges before entering
+  and drop the test from the iteration entirely (8 → 7 instructions in `perf_stress`'s
+  inner loop, i.e. below the pre-S1 count). Independent of `tst`: the same saving
+  applies to the old `jmptrue` spelling, so it is a codegen improvement, not a Phase 3
+  obligation.
 - **Offset-table plan bumps v6 → 7 too** (`offset-table-elimination-plan.md` §10). If its §9
   decision lands while this plan is open, decide whether **one bump carries both** (one
   reader change, one round) or two sequential bumps. Decision belongs to that plan, not here.

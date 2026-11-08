@@ -54,16 +54,21 @@ static void check(bool ok, const std::string &name) {
 // hello.ql 215 -> 211 and perf_stress.ql 522 -> 521: comparison conditions with
 // a non-Int operand now fuse to a flag compare + flag jump instead of a value
 // compare + temp + JMPIFFALSE (plan docs/plans/m3-flag-flow-plan.md S5).
+// hello.ql 211 -> 215 and perf_stress.ql 521 -> 565: bare truthiness lowers to
+// `tst` + `je`/`jne` instead of one register-testing jump, so every test costs
+// one more instruction (4 sites in hello.ql, 44 in perf_stress.ql — plan
+// docs/plans/phase3-opcode-retirement-plan.md S1). money.ql and cast.ql have no
+// truthiness test and are unchanged.
 struct Budget {
   const char *script;
   size_t entry;
 };
 
 static const Budget kBudgets[] = {
-    {"hello.ql", 211},
+    {"hello.ql", 215},
     {"money.ql", 151},
     {"cast.ql", 163},
-    {"perf_stress.ql", 521},
+    {"perf_stress.ql", 565},
 };
 
 static std::string readScript(const std::string &path) {

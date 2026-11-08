@@ -344,9 +344,18 @@ private:
   // comparator (flagCompareIfFalse) so the same jump map fires exactly on the
   // false branch. Neither path builds a boolean temporary
   // (plan docs/plans/m3-flag-flow-plan.md D2). Returns -1 when `cond` is not a
-  // comparison (truthiness, && / ||, calls, ...); the caller then uses the
-  // legacy value-producing compare + JMPIFFALSE path.
+  // comparison (truthiness, && / ||, calls, ...); the caller then lowers the
+  // condition with `tst` + a flag jump (emitJumpIfFalse below).
   int emitCmpJumpFalseExpr(const ExprPtr &cond);
+  // Bare-truthiness lowering (SPEC §bytecodes "OpCode tst"; plan
+  // docs/plans/phase3-opcode-retirement-plan.md D1): `tst r[a]` puts
+  // truth(r[a]) into the flags (eq set, the other two clear), so `je` takes
+  // the true side and `jne` — which fires when no eq bit is set — the false
+  // one. Both emit the compare and the flag jump with target 0 and return the
+  // index of the *jump* (the `tst` sits at index - 1, which is where a loop
+  // back-edge must point to re-evaluate the condition).
+  int emitJumpIfTrue(int condReg);
+  int emitJumpIfFalse(int condReg);
   void compileStmt(const StmtPtr &s,
                    std::vector<std::string> *captures = nullptr);
   // Per-statement compilers (one per StmtKind); compileStmt dispatches to

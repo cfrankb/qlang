@@ -38,9 +38,14 @@ item 3; open **Q7–Q11**).
 ## 3. Phase 3 — opcode retirement (`.qlc` v6 → v7)
 
 Plan: [phase3-opcode-retirement-plan.md](phase3-opcode-retirement-plan.md) (written
-2026-11-07; prerequisite per its D2: M4 lands first).
+2026-11-07; prerequisite per its D2: M4 lands first — **not landed**,
+`kOpcodeUsedCount` is still 79, which only affects the `DECL` row of its §4 table).
 
-- [ ] Execute S1–S7 there: `tst` + `je`/`jne` for bare truthiness → retire
+- [x] **S1 + S2 landed 2026-11-08** (uncommitted): bare truthiness lowers to
+      `tst` + `je`/`jne` at all 15 references; producer gate clean. Cost:
+      `perf_stress` execute 10.442 → 11.349 ms (+8.7 %, inside the ±20 % gate, above
+      the plan's ~5 % caution — root cause and mitigation in its S1 record and §8)
+- [ ] Execute S3–S7 there: retire
       `MOVC`/`MOVI`/`ADDI`/`SUBI`/`CMPI`/`JMPIFFALSE`/`JMPIFTRUE` → identity compaction
       (80 → 73) → `.qlc` v7 → tests → docs
 
@@ -53,6 +58,13 @@ Plan: [phase3-opcode-retirement-plan.md](phase3-opcode-retirement-plan.md) (writ
 
 ## 5. missing-features backlog (`missing-features-plan.md`)
 
+- [ ] **codegen defect (found 2026-11-08 while converting Phase 3 S1; pre-existing,
+      left as is)**: `compileForIn`'s runtime-bound path emits a skip `JMP` after the
+      backward guard that is never patched, so its target stays instruction 0 — a
+      descending loop with non-constant bounds spins there and trips the step guard.
+      Repro: `local n = 3` / `for i in range(5, n) step -1 { }` → "infinite loop (step
+      limit)". Constant bounds take the other path and work. Marked with a `Defect`
+      comment in `src/QLangCompiler.cpp`
 - [ ] **C3 defect (small, unblocks "verified")**: `hasMethod` accepts `BoundMethod`
       (`QLangContext.cpp:635`) but the table `ObjectOps::callMethod` requires `Function`
       (`QLangObjects.cpp:188`) — fix the guard, add a case
