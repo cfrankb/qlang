@@ -73,12 +73,16 @@ closing the **Q#**s its item points at:
 - [ ] **C5** inheritance (`ObjectOps::base` returns null) — spec decision first (**Q21**); plan
 - [ ] **C7** enum-name string form — design decision first (**Q22**); plan
 - [ ] **C8** module search paths + `searchCallback` — **Q23–Q26**; plan; front end for
-      `external-modules-plan-v3.md`
-- [ ] **`external-modules-plan-v3.md` needs a re-audit**: it has no `Status:` header (unlike every
-      milestone plan), no round tracking, and its version arithmetic is stale by three bumps — it
-      plans `.qlc` v3 → v4 (unified pool) → v5 (module tables) while the tree is at **v7** and v5
-      is retired. Nothing of Phases 1–3 has landed (no import/export tables, no
-      `GETIMPORT`/`CALLIMPORT`, no builtin name table); it stays blocked on C8
+      `external-modules-plan-v4.md`
+- [x] **`external-modules-plan-v3.md` re-audited → `docs/plans/external-modules-plan-v4.md`**
+      (2026-11-08): v4 adds the `Status:` header, the **Q29–Q35** open-question set and an
+      implementation order, and re-bases the machine on the tree — `.qlc` **v7 → v8** (unified
+      pool) → **v8 → v9** (module tables); no byte-level patching of an encoded body (v6 operands
+      are variable-width, so the merge happens on `RawInstr` before `finish()`); `mov` kind 2
+      replaces `MOVC`; the two new opcodes append at **73/74** because M4 owns identity 72; pool
+      dedup is back and spec-mandated. v3 moved to `docs/plans/archive/`. Still **nothing
+      implemented**: Phase 1 + Phase 2 ready to start, Phase 3 gated on Q29–Q35 and (for
+      name-based resolution only) C8
 - [ ] `missing-features-plan.md` itself drifted after Rounds 56/59/60: the A5 row still says
       "pipeline still emits v5", Phase 2 still says "`kOpcodeUsedCount` is 73 … A5 raises it to
       80", Conventions still say "`.qlc` v5 stays the only supported format", and Dependencies

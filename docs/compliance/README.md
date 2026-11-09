@@ -16,7 +16,7 @@ below (spec hashes tracked in [../spec/README.md](../spec/README.md)); the
 
 | Module | Content | Validates spec module(s) | SHA256 (self) |
 |--------|---------|--------------------------|---------------|
-| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `26386ba107d781a883a877cecf17484588c21bf1029b42868317e5d274e0c1f8` |
+| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `bc5d3547c07c0d7175b174161a81ee6989332d998d195766ab0053e5bb932425` |
 | [coverage.md](coverage.md) | reserved-word coverage, value-type coverage | 02-lexical, 01-types | `789a0b58112961a6f32e98426923c17c88be737f0cfbc3a809ad771b11c898eb` |
 | [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `64e32da896720517c63f6b6f743597958858971b2cacc72096eb9985ceb8f354` |
 | [history.md](history.md) | audit rounds 7–60 (append-only) | mixed (per round) | `e8b61f1eb1af54df099b5b30f722e4fa946591fcd67aa2049c104244d77ac733` |

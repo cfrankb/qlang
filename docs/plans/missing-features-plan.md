@@ -105,7 +105,7 @@ warning toggle still exists is **Q27**.
 | C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | draft spec — C++ API "to be provided"; examples show runtime exceptions at call/return sites; **now also owns the duplicate-declaration diagnostic (B2) and warning emission (B1)** |
 | C5 | Inheritance (`ObjectOps::base`) | `10-classes.md` v1 restrictions, `EXTERNAL_TYPES.md` §10.3 | reserved, returns null; base-chain walk deferred to v2 |
 | C7 | Enum-name string form for enum-valued properties | `EXTERNAL_TYPES.md` §10.5 | no dispatch point sees both field value and type context |
-| C8 | Module search paths + external search callback | `07-api.md` `## module search paths`, `## external search callback` | **new in this audit** — spec text only, no C++ surface (`searchPath`/`searchCallback` appear nowhere in `include/` or `src/`); prerequisite/front end for `external-modules-plan-v3.md` |
+| C8 | Module search paths + external search callback | `07-api.md` `## module search paths`, `## external search callback` | **new in this audit** — spec text only, no C++ surface (`searchPath`/`searchCallback` appear nowhere in `include/` or `src/`); prerequisite/front end for `external-modules-plan-v4.md` |
 
 C2 enum injection (Round 41), C3 `hasMethod`/`callMethod` (`c4ee131`,
 2026-11-06), C4 RTTI handoff validation (Phase 3) and C6 signals (Round 40) are
@@ -368,7 +368,7 @@ than deleted, since the landing cites them.
   The spec's "search for `[modulename].ql`" implies compile-from-file.
   **Default:** C8 ships the path list, the callback and a resolver returning the
   module's source text; the compile-from-source entry point is tracked with
-  `external-modules-plan-v3.md`.
+  `external-modules-plan-v4.md`.
 - **Q24 precedence** — registered C++ modules (`ctx.registerModule()`), the
   callback and the path list: which wins? **Default:** registered module →
   callback → paths in order.
@@ -507,7 +507,7 @@ cross-references.
    `src/`). Work: the `QLangContext` API (`setModuleSearchPaths(...)`,
    `setSearchCallback(...)`) plus the `import` resolution path; no lexer, parser
    or VM change is implied. Prerequisite/front end for
-   `docs/plans/external-modules-plan-v3.md` (import/export tables assume a module
+   `docs/plans/external-modules-plan-v4.md` (import/export tables assume a module
    can be *found* before it can be linked). Open questions: **Q23–Q26** — Q23
    (does C8 also own compile-from-source?) decides the item's size, Q24–Q26 the
    resolution contract. Tests: `test_module` (+ a `tests/scripts/` regression
@@ -701,7 +701,7 @@ A5 (encoding layout) ──✗──> A3 Q6: edge removed 2026-11-06 — Q6 is c
                             (they share only the `.qlc` v6 bump)
 spec writing ──> C5 (inheritance)
 design decision ──> C7 (enum-name string form)
-C8 (module search paths) ──> external-modules-plan-v3.md (import/export tables)
+C8 (module search paths) ──> external-modules-plan-v4.md (import/export tables)
 A3, A5, C8: otherwise independent of each other and of the above
 
 open questions gate the work (see §Open questions):
