@@ -117,6 +117,15 @@ offset  field            type   notes
 …       imports          importCount × ImportEntry   (§4.6)
 ```
 
+**A linked program is not an image.** `QLangLinker`
+([plans/external-modules-plan-v4.md](plans/external-modules-plan-v4.md) Phase 3b) merges the
+module images one program imports into a single runnable `CompiledProgram`, and that program
+carries two link-time fields the layout above has no section for: `initSequence` (the module
+top levels to run before `functions[0]`, each with the slice of the shared global register area
+it owns) and `pendingLinks` (cross-module references whose handles still name the *defining*
+module). `writeQlc` rejects a program with either populated instead of writing an image that
+would run against the wrong functions and cells.
+
 **Version allocation** (the counter is shared across plans, so each bump is recorded here when it
 is decided): **v8** = the module constant pool (§4.2, Round 62,
 [plans/external-modules-plan-v4.md](plans/external-modules-plan-v4.md) Phase 2) · **v9** = module
@@ -357,9 +366,12 @@ nothing consumes its imports (Phase 3b's linker is the first consumer).
    every instruction decodes and its opcode identity is `< kOpcodeUsedCount`,
    offsets strictly increasing with the last instruction ending exactly at
    `codeSize`, `locCount == offCount`, every const-pool operand in
-   `[0, poolCount)` (§4.2), all closure `funcIndex` in
-   `[0, funcCount)`, native slots unique and `>= 0`, all `registerCount >= 0`,
-   all `paramCount >= 0`. Decoding is what enforces the modifier rules of
+   `[0, poolCount)` (§4.2), every `callfn` operand in `[0, funcCount)`, all
+   closure `funcIndex` in `[0, funcCount)`, native slots unique and `>= 0`, all
+   `registerCount >= 0`, all `paramCount >= 0`. Both table-reference checks come
+   from one source, the `operandRole()` table in `QLangBytecode.h` — the same
+   table the linker consults to know which operands a merge must rewrite
+   (plan v4 Phase 3b). Decoding is what enforces the modifier rules of
    §4.5: reserved left width (3), reserved right kind (3), reserved immediate
    forms (12–15), a kind the opcode does not permit, and an unescaped `CALL`.
    The module tail (§4.6) is validated as it is read: a non-empty `moduleName`,
@@ -415,14 +427,26 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
 ```
 
 ```cpp
-// QLangContext additions
-void loadProgram(CompiledProgram &&prog);  // bind natives (validate), cache in pimpl
-void execute();                            // VM over the cached program (top level)
+// QLangContext additions — the module registry (plan v4 Phase 3b)
+std::shared_ptr<LoadedModule> loadProgram(std::istream &is,
+                                          const std::string &path = "");
+std::shared_ptr<LoadedModule> loadProgramFile(const std::string &path);
+const LoadedModule *loadedModule(const std::string &name) const;
+std::vector<std::shared_ptr<LoadedModule>> loadedModules() const;
 ```
 
-`loadProgram` is the public inverse of the compile half of `run()`: it
-performs the native wiring `run()` does today and stores the program in
-`m_pimpl->compiled`. `execute()` runs `QLangVM(compiled, *this).run()`.
+`loadProgram` is §5.2 step 2: it reads the image, re-resolves every native-slot
+name against the context's natives **and** its registered C++ modules, and keeps
+the result in the context's module registry, keyed by `program.moduleName` (the
+name `import` binds it under). A duplicate module name, an unresolvable native
+name or an unreadable image throws `QLangError(Io)`. `LoadedModule`
+(`QLangBytecodeIO.h`) is the image plus its provenance (`path`, the on-disk
+native-slot table) that `QLangLinker` merges.
+
+The registry is the reusable unit a future runtime module registry builds on;
+executing a loaded image is still `QLangVM(prog, ctx).run()` (the `codec_check`
+`qlc-exec` gate does exactly that), so no `execute()` was added — an image the
+host wants to run without importing it is loaded, then handed to the VM.
 Existing `run()` and `call()` are unaffected.
 
 ## 7. State snapshot (magic `QLS1`) — v2, not implemented
@@ -501,8 +525,8 @@ A codec is not "done" until all of these pass:
    version 8 (below `kQlcVersion`) and version 10 (above), opcode identity
    `>= kOpcodeUsedCount`, reserved modifier fields (left width 3, kind 3,
    immediate forms 12–15, unpermitted kind, unescaped `CALL`), truncated
-   instruction, const-pool operand `>= poolCount` (§4.2), dangling closure
-   index, duplicate native slot, negative count,
+   instruction, const-pool operand `>= poolCount` (§4.2), `callfn` operand
+   `>= funcCount`, dangling closure index, duplicate native slot, negative count,
    100-deep nested array, 70 Mi value count, and every §4.6 tail violation
    (empty module name, invalid kind, empty entry name, negative ref, an export
    ref past the function table or the register range, duplicate export name, a
@@ -519,11 +543,15 @@ A codec is not "done" until all of these pass:
 | Value codec (`serializeValue`/`deserializeValue`) | done — matches §3 |
 | Program writer (`writeQlc`, §4 incl. module pool + native-slot table + module tail) | done — v9, explicit little-endian, escape-byte code stream + offset table, loc side table, program-level constant pool, module name + export/import tables (§4.6) |
 | `QLangErrorKind::Io` | done |
-| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v9 only, pool-index range check, §4.6 tail validation |
+| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v9 only, pool-index and `callfn`-index range checks (both from `operandRole()`), §4.6 tail validation |
+| Writer refuses a linked program (§4, "A linked program is not an image") | done — `initSequence` or `pendingLinks` present → `writeQlc` returns false |
 | App writer (POC `QlcWriter` in `qlang_run.cpp`) | deleted — replaced by `writeQlc` |
 | Tests (`codec_check`: §9 items 1, 3) | done |
-| `QLangContext::loadProgram` / `execute` (§5.2, §9 item 2/4) | not started |
+| `QLangContext::loadProgram` (§5.2, §9 item 4) | done — plan v4 Phase 3b: reads an image, re-resolves every native-slot name against the context's natives **and** its registered C++ modules, reports all missing names in one `Io` error, and registers the module by name (`loadedModule`/`loadedModules`) |
+| `QLangContext::execute()` | not implemented — running a loaded image is `QLangVM(prog, ctx).run()`, which is what the `qlc-exec` gate and `qlang_run` do; a context-level `execute()` over the registry would be a second way to do the same thing |
+| `QLangLinker` (merge images into one program) | done — plan v4 Phase 3b (`QLangLinker.h`/`.cpp`, `linker` suite) |
 | Snapshot (v2) | not started |
 
-§9 item 2 (execute-from-image parity) and item 4 (native-mismatch report)
-require `loadProgram`/`execute` and are pending with them.
+§9 item 2 (execute-from-image parity) is discharged by the `codec_check`
+`qlc-exec` gate: compile → `writeQlc` → `readQlc` → `QLangVM` run, stdout
+byte-compared against the direct run, for all 23 corpus scripts.

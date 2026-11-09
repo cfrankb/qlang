@@ -4,12 +4,20 @@
 //
 //   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>]
 //             [--asm <file.qla>] [--asm-level <0-5>] [--rotate]
-//             file.ql | file.qlc
+//             [--import <lib.qlc>]... file.ql | file.qlc [lib.qlc]...
 //
 // A .ql input drives the pipeline directly (parse -> compile -> execute) so
 // the app can time each stage and hand the compiled program to the .qlc
 // writer. A .qlc input (QLC1 magic) is loaded with readQlc, its native
 // functions are re-bound by name, and the image is executed as-is.
+//
+// Library modules (external-modules plan v4 Phase 3b) are given as --import
+// arguments or as extra positional .qlc files. Each is loaded into the
+// context's module registry BEFORE the entry is compiled, so `import <name>`
+// resolves against its export table; the entry's cross-module references are
+// then merged with the loaded images by QLangLinker. A merged program is
+// runnable but not serializable (.qlc v9 has no section for the init
+// sequence), so --output is rejected for it.
 // Trace output goes to stderr; profile output goes to stderr and, when a
 // .qla listing is requested, is appended to that file as well. The script's
 // own program output (print/println) goes to stdout and is never affected.
@@ -23,6 +31,7 @@
 //   5  disassembly file could not be written
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -31,14 +40,17 @@
 #include <iomanip>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_set>
+#include <vector>
 
 #include <qlang/QLangBytecodeIO.h>
 #include <qlang/QLangCompiler.h>
 #include <qlang/QLangContext.h>
 #include <qlang/QLangErrors.h>
+#include <qlang/QLangLinker.h>
 #include <qlang/QLangVM.h>
 
 using namespace qlang;
@@ -59,7 +71,8 @@ namespace
   {
     std::cout << "Run a QLang (.ql) script or a compiled .qlc image (QLC1 v9).\n"
               << "\n"
-              << "usage: " << prog << " [options] <file.ql|file.qlc>\n"
+              << "usage: " << prog
+              << " [options] <file.ql|file.qlc> [library.qlc ...]\n"
               << "\n"
               << "options:\n"
               << "  --trace-level <n>   diagnostic verbosity (stderr):\n"
@@ -85,7 +98,14 @@ namespace
               << "                             statements bound (native slot,\n"
               << "                             call counts), its export table\n"
               << "                             (kind + resolved ref) and the\n"
-              << "                             top-level defs it did not export\n"
+              << "                             top-level defs it did not export;\n"
+              << "                             for a linked program also the\n"
+              << "                             merged import table and one block\n"
+              << "                             per linked module (where the\n"
+              << "                             linker placed it, its exports)\n"
+              << "  --import <lib.qlc>  load a compiled module image so the entry\n"
+              << "                        can `import` from it (repeatable; extra\n"
+              << "                        positional .qlc files are the same)\n"
               << "  --rotate            append a YYYYMMDDHHMM timestamp to --output/--asm file names\n"
               << "                        (e.g. cmp.qlc -> cmp_202611010513.qlc)\n"
               << "  -h, --help          show this help and exit\n"
@@ -160,6 +180,18 @@ namespace
     if (dot == std::string::npos || dot == 0)
       return base;
     return base.substr(0, dot);
+  }
+
+  // Case-insensitive suffix test used to tell an entry source file from a
+  // library image argument (".ql" / ".qlc").
+  bool hasExtension(const std::string &path, const std::string &ext)
+  {
+    if (path.size() < ext.size())
+      return false;
+    return std::equal(ext.rbegin(), ext.rend(), path.rbegin(),
+                      [](char a, char b)
+                      { return std::tolower(static_cast<unsigned char>(a)) ==
+                               std::tolower(static_cast<unsigned char>(b)); });
   }
 
   // ---------------------------------------------------------------------------
@@ -769,9 +801,14 @@ namespace
     return "?";
   }
 
+  // `libs` are the library images a linked program was merged from: level 5
+  // prints one block per module of `prog.initSequence`, which needs each
+  // image's own export table (its refs are module-local, the merged ones come
+  // from the linker's bases).
   std::string disassemble(const CompiledProgram &prog, const std::vector<std::string> &srcLines,
                           int level, const RegisterReport *report = nullptr,
-                          const std::vector<ModuleImport> &imports = {})
+                          const std::vector<ModuleImport> &imports = {},
+                          const std::vector<std::shared_ptr<LoadedModule>> &libs = {})
   {
     std::ostringstream ss;
     if (level >= 1)
@@ -1013,6 +1050,12 @@ namespace
             fnCalls[k.b]++;
         }
       std::unordered_set<std::string> classFuncs; // class methods/prototypes
+      // Names bound from a loaded `.ql` image: they are not natives, so the
+      // driver's slot lookup has nothing to say about them — the import table
+      // does (after a link its `ref` is the merged function index or cell).
+      std::map<std::string, const ImportEntry *> qlNames;
+      for (const auto &ie : prog.imports)
+        qlNames[ie.alias.empty() ? ie.name : ie.alias] = &ie;
       std::vector<std::string> importLines;
       std::unordered_set<std::string> listed, listedSlots;
       for (const auto &im : imports)
@@ -1035,7 +1078,14 @@ namespace
                << (cit == nativeCalls.end() ? 0 : cit->second) << " calls)";
         }
         else
-          line << "(not referenced)";
+        {
+          auto qit = qlNames.find(im.func);
+          if (qit != qlNames.end())
+            line << (qit->second->kind == ExportKind::Func ? "fn#" : "cell r")
+                 << qit->second->ref << " (loaded .ql module)";
+          else
+            line << "(not referenced)";
+        }
         importLines.push_back(line.str());
       }
       std::sort(importLines.begin(), importLines.end());
@@ -1103,10 +1153,15 @@ namespace
         ss << "\n";
       }
       // Top-level `def`s the module defines but did not export: still visible
-      // inside the module, invisible to an importer.
+      // inside the module, invisible to an importer. A linked program's function
+      // table also holds the merged libraries, so the scan stops where the first
+      // one begins (the linker concatenates in run order).
+      int entryFuncEnd = static_cast<int>(prog.functions.size());
+      if (!prog.initSequence.empty())
+        entryFuncEnd = prog.initSequence.front().funcIndex;
       ss << "  unexported defs:\n";
       bool anyExport = false;
-      for (size_t i = 1; i < prog.functions.size(); i++)
+      for (size_t i = 1; i < static_cast<size_t>(entryFuncEnd); i++)
       {
         const auto &f = prog.functions[i];
         if (f.name == "closure" || f.name == "ternary" || f.isGenerator ||
@@ -1121,7 +1176,98 @@ namespace
       }
       if (!anyExport)
         ss << "    (none)\n";
+      // Names bound from a loaded `.ql` module (SPEC §bytecodes "import table
+      // (lookup)"). After a link every `ref` is a merged handle, so the listing
+      // shows the defining module's name next to the number the code uses.
+      if (!prog.imports.empty())
+      {
+        ss << "  imported .ql names:\n";
+        for (const auto &im : prog.imports)
+        {
+          const char *kind = im.kind == ExportKind::Func
+                                 ? "fn"
+                                 : (im.kind == ExportKind::Const ? "const" : "var");
+          ss << "    " << std::left << std::setw(19)
+             << (im.alias.empty() ? im.name : im.alias) << std::setw(6) << kind
+             << im.module << "." << im.name << " -> ";
+          if (im.kind == ExportKind::Func)
+          {
+            const bool ok = im.ref >= 0 &&
+                            static_cast<size_t>(im.ref) < prog.functions.size();
+            auto cit = fnCalls.find(im.ref);
+            ss << "fn#" << im.ref << "  params " << std::setw(3)
+               << (ok ? prog.functions[im.ref].paramCount : 0) << "("
+               << (cit == fnCalls.end() ? 0 : cit->second) << " calls)  "
+               << (ok ? prog.functions[im.ref].name : "?");
+          }
+          else
+            ss << "r" << im.ref;
+          ss << "\n";
+        }
+      }
       ss << "\n";
+      // One block per module the linker merged in (plan v4 Phase 3b): where its
+      // code and its slice of the shared global register area landed, and what
+      // it publishes — each export shown as the module-local ref the image
+      // stores and the merged ref the running program uses.
+      if (!prog.initSequence.empty())
+      {
+        ss << "================================================================\n";
+        ss << "linked modules (" << prog.initSequence.size() << ")\n";
+        ss << "================================================================\n";
+        for (const ModuleInit &mi : prog.initSequence)
+        {
+          const LoadedModule *lm = nullptr;
+          for (const auto &sh : libs)
+            if (sh && sh->program.moduleName == mi.module)
+              lm = sh.get();
+          ss << "  module: " << mi.module << "\n";
+          ss << "    init: fn#" << mi.funcIndex << "  registers " << mi.regBase << ".."
+             << (mi.regBase + mi.registerCount - 1) << "\n";
+          if (!lm)
+          {
+            ss << "    (image not available)\n\n";
+            continue;
+          }
+          const CompiledProgram &mp = lm->program;
+          ss << "    exports:\n";
+          if (mp.exports.empty())
+            ss << "      (none)\n";
+          for (const auto &e : mp.exports)
+          {
+            const char *kind = e.kind == ExportKind::Func
+                                   ? "fn"
+                                   : (e.kind == ExportKind::Const ? "const" : "var");
+            ss << "      " << std::left << std::setw(19) << e.name << std::setw(6) << kind
+               << "r/f" << e.ref << " -> ";
+            if (e.kind == ExportKind::Func)
+            {
+              const int merged = mi.funcIndex + e.ref;
+              const bool ok = e.ref >= 0 &&
+                              static_cast<size_t>(e.ref) < mp.functions.size();
+              ss << "fn#" << merged << "  params " << std::setw(3)
+                 << (ok ? mp.functions[e.ref].paramCount : 0) << "  "
+                 << (ok ? mp.functions[e.ref].name : "?");
+            }
+            else
+              ss << "r" << mi.regBase + e.ref;
+            ss << "\n";
+          }
+          ss << "    imports:\n";
+          if (mp.imports.empty())
+            ss << "      (none)\n";
+          for (const auto &im : mp.imports)
+            ss << "      " << std::left << std::setw(19) << im.name << "from "
+               << im.module << "\n";
+          ss << "    natives:\n";
+          if (lm->nativeSlots.empty())
+            ss << "      (none)\n";
+          for (const auto &[slot, name] : lm->nativeSlots)
+            ss << "      " << std::left << std::setw(19) << name << "slot " << slot
+               << "\n";
+          ss << "\n";
+        }
+      }
     }
     return ss.str();
   }
@@ -1161,6 +1307,10 @@ int main(int argc, char **argv)
   std::string file;
   std::string output;
   std::string asmOut;
+  // Library images the entry may `import` from (--import, extra positional
+  // .qlc args). Loaded into the context's module registry before the entry is
+  // compiled, so the compiler can resolve against their export tables.
+  std::vector<std::string> moduleFiles;
 
   for (int i = 1; i < argc; i++)
   {
@@ -1272,6 +1422,23 @@ int main(int argc, char **argv)
       continue;
     }
 
+    if (arg == "--import")
+    {
+      if (i + 1 >= argc)
+      {
+        std::fprintf(stderr, "%s: --import requires a .qlc module file\n", kAppName);
+        return 1;
+      }
+      moduleFiles.push_back(argv[++i]);
+      continue;
+    }
+
+    if (arg.rfind("--import=", 0) == 0)
+    {
+      moduleFiles.push_back(arg.substr(9));
+      continue;
+    }
+
     if (!arg.empty() && arg[0] == '-' && arg != "-")
     {
       std::fprintf(stderr, "%s: unknown option '%s' (see --help)\n", kAppName, arg.c_str());
@@ -1280,9 +1447,20 @@ int main(int argc, char **argv)
 
     if (!file.empty())
     {
-      std::fprintf(stderr, "%s: unexpected extra argument '%s' (one script file expected)\n",
-                   kAppName, arg.c_str());
-      return 1;
+      // Extra positional files are library modules (external-modules plan v4
+      // Phase 3b): the entry is the only source file, a library is always a
+      // compiled image, because a `.ql` has no export table to import from
+      // until it has been compiled.
+      if (!hasExtension(arg, ".qlc"))
+      {
+        std::fprintf(stderr,
+                     "%s: unexpected extra argument '%s' (one script file expected; "
+                     "library modules must be .qlc images)\n",
+                     kAppName, arg.c_str());
+        return 1;
+      }
+      moduleFiles.push_back(arg);
+      continue;
     }
     file = arg;
   }
@@ -1313,6 +1491,32 @@ int main(int argc, char **argv)
 
   QLangContext ctx;
   ctx.setVerboseLevel(traceLevel);
+
+  // --- Library modules ---
+  // Every --import / extra positional image is registered in the context's
+  // module registry BEFORE the entry is compiled: `import <name>` resolves
+  // against a loaded image's export table (SPEC §bytecodes "import table
+  // (lookup)"), and a name that was never loaded is a compile error, so the
+  // driver has to load each library explicitly (plan v4 Phase 3b).
+  for (const std::string &mf : moduleFiles)
+  {
+    std::ifstream probe(mf, std::ios::binary);
+    if (!probe)
+    {
+      std::fprintf(stderr, "%s: cannot open module file '%s'\n", kAppName, mf.c_str());
+      return 2;
+    }
+    probe.close();
+    try
+    {
+      ctx.loadProgramFile(mf);
+    }
+    catch (const QLangError &e)
+    {
+      std::fprintf(stderr, "%s: %s: %s\n", kAppName, mf.c_str(), e.what());
+      return 3;
+    }
+  }
 
   // --- Load (.qlc) or parse + compile (.ql) ---
   // A .qlc file is a compiled program (QLC1 v9, docs/SERIALIZATION.md):
@@ -1447,11 +1651,46 @@ int main(int argc, char **argv)
       moduleImports.push_back({imp.module, imp.func, slot, imp.fromClass});
     }
   }
+
+  // --- Link ---
+  // The compiler lowered every cross-module reference with a handle into the
+  // DEFINING module (plan v4 Phase 3b); the linker merges those loaded images
+  // with the entry program into one runnable program. A program that imports
+  // nothing needs no link, so a single-file run is left exactly as it was.
+  bool linked = false;
+  if (!compiled.imports.empty())
+  {
+    try
+    {
+      QLangLinker linker(ctx.loadedModules());
+      CompiledProgram merged = linker.link(compiled, nativeIds);
+      compiled = std::move(merged);
+      linked = true;
+    }
+    catch (const QLangError &e)
+    {
+      std::fprintf(stderr, "%s: %s: link: %s\n", kAppName, file.c_str(), e.what());
+      return 3;
+    }
+  }
   const auto t2 = Clock::now();
 
   // --- Bytecode output ---
   if (!output.empty())
   {
+    if (linked)
+    {
+      // A merged program is runnable but not serializable: .qlc v9 has no
+      // section for the init sequence or the merged register slices, so
+      // writeQlc would reject it anyway. Say what to do instead.
+      std::fprintf(stderr,
+                   "%s: cannot write a linked program to '%s': the merged program is not a "
+                   ".qlc image (its init sequence is link-time information) — write each "
+                   "module's own image instead\n",
+                   kAppName, output.c_str());
+      return 4;
+    }
+
     size_t written = 0;
     if (!writeBytecode(compiled, nativeIds, output, written))
     {
@@ -1476,7 +1715,8 @@ int main(int argc, char **argv)
         srcLines.push_back(line);
     }
     const std::string text =
-        disassemble(compiled, srcLines, asmLevel, report, moduleImports);
+        disassemble(compiled, srcLines, asmLevel, report, moduleImports,
+                    ctx.loadedModules());
     std::ofstream out(asmOut, std::ios::trunc);
     if (!out)
     {

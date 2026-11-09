@@ -31,6 +31,7 @@ add_library(qlang
   src/QLangCompiler.cpp
   src/QLangVM.cpp
   src/QLangContext.cpp
+  src/QLangLinker.cpp
   src/QLangModules.cpp
   src/QLangObjects.cpp
 )
@@ -208,6 +209,17 @@ add_test(NAME builtin_table COMMAND builtin_table_test)
 add_executable(export_test tests/unit/export_test.cpp)
 target_link_libraries(export_test PRIVATE qlang)
 add_test(NAME export COMMAND export_test)
+
+# Loader + linker (SPEC §bytecodes "technical specifications" 1–5,
+# docs/plans/external-modules-plan-v4.md Phase 3b): QLangContext::loadProgram /
+# loadProgramFile and the module registry, QLangLinker's merge (one function
+# table, one folded pool per Q33, deduped native slots, disjoint register
+# slices), operand re-widening on the decoded RawInstr per Q32, the init
+# sequence per Q35, the shared exported cell per Q30, and the rejections
+# (already linked, not loaded, not linkable, a cycle, writeQlc of a merge).
+add_executable(linker_test tests/unit/linker_test.cpp)
+target_link_libraries(linker_test PRIVATE qlang)
+add_test(NAME linker COMMAND linker_test)
 
 # External C++ types (docs/EXTERNAL_TYPES.md): public-member setters,
 # read-only computed props, methods (incl. BoundMethod extraction), enum

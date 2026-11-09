@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "qlang/QLangBytecodeIO.h"
 #include "qlang/QLangErrors.h"
 
 namespace qlang {
@@ -39,7 +40,13 @@ ImmForm narrowestSignedForm(int64_t v) {
 // encodes them into the flat byte stream at finish() time. (The struct
 // itself lives in QLangCompiler.h so QLangCompiler can hold one by value.)
 // ---------------------------------------------------------------------------
-void FnEmitter::finish(Function &fn) {
+
+// Encode a raw instruction stream into a function body. Split out of
+// FnEmitter::finish() so the linker can re-encode a stream it decoded out of a
+// `.qlc` image and rewrote (external-modules plan v4 Phase 3b, Q32): operand
+// widths are chosen once, here, so a merged index that needs a wider operand
+// costs nothing extra and no encoded byte is ever patched in place.
+void encodeRawStream(Function &fn, const std::vector<RawInstr> &raw) {
   // Validate jump targets.
   for (size_t i = 0; i < raw.size(); i++) {
     if (raw[i].jumpTarget >= 0 &&
@@ -56,7 +63,7 @@ void FnEmitter::finish(Function &fn) {
     if (raw[i].jumpTarget >= 0)
       sizes[i] = 6;
     else {
-      auto [mod, escaped] = computeModifier(raw[i]);
+      auto [mod, escaped] = FnEmitter::computeModifier(raw[i]);
       sizes[i] = instructionSize(raw[i].op, escaped, mod);
     }
   }
@@ -122,7 +129,7 @@ void FnEmitter::finish(Function &fn) {
       di.escaped = sizes[i] > baseInstructionSize(raw[i].op);
       di.modifier = (sizes[i] >= 6) ? 1 : 0;
     } else {
-      auto [mod, escaped] = computeModifier(raw[i]);
+      auto [mod, escaped] = FnEmitter::computeModifier(raw[i]);
       di.escaped = escaped;
       di.modifier = mod;
       // The encoder re-reads the kind and the form from the modifier; mirror
@@ -145,6 +152,54 @@ void FnEmitter::finish(Function &fn) {
   for (size_t i = 0; i < raw.size(); i++)
     fn.loc[i] = {raw[i].line, raw[i].col};
 }
+
+// The inverse of encodeRawStream(): decode a function body back into raw
+// instructions. Jump offsets (relative to the end of the jump) become
+// instruction indices again, and the line/col side table is folded back into
+// each record, so a decoded stream round-trips through encodeRawStream() to
+// the same bytes unless a rewrite changed an operand.
+void decodeRawStream(const Function &fn, std::vector<RawInstr> &raw) {
+  raw.clear();
+  raw.reserve(fn.instrOffsets.size());
+  // Byte offset -> instruction index, for resolving relative jump targets.
+  std::unordered_map<size_t, int32_t> byOffset;
+  byOffset.reserve(fn.instrOffsets.size() * 2);
+  for (size_t i = 0; i < fn.instrOffsets.size(); i++)
+    byOffset[fn.instrOffsets[i]] = static_cast<int32_t>(i);
+
+  for (size_t i = 0; i < fn.instrOffsets.size(); i++) {
+    DecodedInstruction di;
+    decodeInstruction(fn.code.data(), fn.instrOffsets[i], fn.code.size(), di);
+    RawInstr r;
+    r.op = di.op;
+    r.a = di.a;
+    r.b = di.b;
+    r.c = di.c;
+    r.kind = di.rightKind;
+    r.payload = di.immPayload;
+    r.form = di.immForm;
+    r.imm = di.imm;
+    r.immUnsigned = di.immUnsigned;
+    r.immFloat = di.immFloat;
+    if (isJumpOpcode(di.op)) {
+      const size_t target =
+          fn.instrOffsets[i] + di.size +
+          static_cast<size_t>(static_cast<int64_t>(di.jumpOffset));
+      auto it = byOffset.find(target);
+      if (it == byOffset.end())
+        throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                         "jump target is not an instruction boundary");
+      r.jumpTarget = it->second;
+    }
+    if (i < fn.loc.size()) {
+      r.line = fn.loc[i].first;
+      r.col = fn.loc[i].second;
+    }
+    raw.push_back(r);
+  }
+}
+
+void FnEmitter::finish(Function &fn) { encodeRawStream(fn, raw); }
 
 ImmForm FnEmitter::immFormOf(const RawInstr &r) {
   if (r.form != ImmForm::Reserved)
@@ -1217,9 +1272,21 @@ CompiledProgram QLangCompiler::compile() {
     out.moduleName = m_moduleNameFromSource;
   else if (!m_moduleName.empty())
     out.moduleName = m_moduleName;
-  // The import table stays empty in Phase 3a: `import` still binds C++ module
-  // functions through the negative-slot space of `CALL` operand `b`
-  // (compileImport). It is populated when the loader resolves `.ql` imports.
+  // The import table (SPEC §bytecodes "import table (lookup)"): one entry per
+  // name bound from a loaded `.ql` module, `ref` still the DEFINING module's
+  // handle until the linker rewrites it. C++ module imports stay compile-time
+  // natives in the negative-slot space of `CALL` operand `b` (compileImport)
+  // and are not table entries.
+  checkImportCycles();
+  out.imports = std::move(m_imports);
+  // The top level's cross-module references sit in functions[0]; a function's
+  // were stamped when it closed (buildFunction).
+  for (PendingLink &pl : m_curPendingLinks) {
+    pl.funcIndex = 0;
+    m_pendingLinks.push_back(pl);
+  }
+  m_curPendingLinks.clear();
+  out.pendingLinks = std::move(m_pendingLinks);
   finishExports(out); // reads m_userFuncs / m_regs, so before they move out
   buildRegisterReport(); // before m_regs moves out (names are read from it)
   out.vars = std::move(m_regs);
@@ -1578,6 +1645,10 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_freeNamedRegs.clear();
   int savedNamedReg = m_nextNamedReg;
   bool savedInFunction = m_inFunction;
+  // Cross-module references recorded while the body compiles belong to THIS
+  // function; they are stamped and handed over when its index is known.
+  auto savedPendingLinks = std::move(m_curPendingLinks);
+  m_curPendingLinks.clear();
 
   // Fresh function context: params occupy registers 0..paramCount-1 and must
   // reserve those registers so temporaries never collide with a parameter.
@@ -1636,6 +1707,10 @@ int QLangCompiler::buildFunction(const std::string &name,
     }
     if (findBuiltin(id) >= 0) continue; // builtin
     if (m_nativeFuncIds.count(id)) continue; // native (C++) function
+    // A name imported from a loaded `.ql` module is not a variable of this
+    // module either: it resolves through the import table (plan Phase 3b), so
+    // capturing it as a free variable would be wrong.
+    if (m_qlImports.count(id)) continue;
     // Global consts are visible everywhere — capture them like free variables.
     if (m_constVars.count(id)) {
       if (std::find(updatedCaptures.begin(), updatedCaptures.end(), id) == updatedCaptures.end())
@@ -1707,15 +1782,45 @@ int QLangCompiler::buildFunction(const std::string &name,
     // register, so it must be the capture's real home register, not 0 (S1:
     // a closure outliving its creator frame must read the captured value,
     // not register 0).
+    // A global capture stores `-1 - <absolute global-table slot>` instead of a
+    // register: the slot is the capture's home in the shared table, and naming
+    // it absolutely (rather than letting the VM re-derive it from the name) is
+    // what lets a linked program resolve a library function's globals, where
+    // several modules share one table and the names are not in the image at all
+    // (external-modules plan v4 Phase 3b).
     int callerReg = 0;
-    if (savedRegs.count(var))
+    // A capture whose home is a module-level IMMUTABLE cell — a top-level const
+    // or an enum's hidden table var referenced by a top-level `def` — is named
+    // by its absolute table slot too. At module top level the register IS the
+    // slot (declareVar), so the unlinked program aliases the very cell it used
+    // to copy, and a linked program reaches it from another module's frame,
+    // where a frame-relative register would name the CALLER's storage instead
+    // (external-modules plan v4 Phase 3b: an imported `def` is called with
+    // CALLFN, so its capture spec cannot depend on who calls it). A mutable
+    // top-level capture keeps the frame-relative copy; `global` already routes
+    // through the slot map above.
+    const bool immutableCell =
+        !savedInFunction && m_scope &&
+        (m_constVars.count(var) ||
+         (var.compare(0, 7, "__enum_") == 0 && var.size() > 7));
+    if (m_globalRegMap.count(var))
+      callerReg = -1 - m_globalRegMap[var];
+    else if (immutableCell && savedRegs.count(var))
+      callerReg = -1 - savedRegs[var];
+    else if (savedRegs.count(var))
       callerReg = savedRegs[var];
-    else if (m_globalRegMap.count(var))
-      callerReg = m_globalRegMap[var];
     fn.captures[i].reg = callerReg; // bound at call time by the VM
   }
 
   int funcIndex = static_cast<int>(m_functions.size()) + 1; // +1 for prepended mainFn
+  // Hand this function's cross-module references to the program now that its
+  // index is known: the linker addresses a pending link by (function,
+  // instruction) (external-modules plan v4 Phase 3b).
+  for (PendingLink &pl : m_curPendingLinks) {
+    pl.funcIndex = funcIndex;
+    m_pendingLinks.push_back(pl);
+  }
+  m_curPendingLinks.clear();
   m_emitter.finish(fn);
   // Detect generator: any `yield` statement (at any nesting depth) makes this
   // a generator function.
@@ -1756,6 +1861,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_deferred = std::move(savedDeferred);
   m_protectStack = std::move(savedProtectStack);
   m_inFunction = savedInFunction;
+  m_curPendingLinks = std::move(savedPendingLinks);
 
   // Emit generator closure constant into the MAIN bytecode (not the temporary
   // function bytecode that was just moved into fn). MAKEGEN in compileExpr
@@ -1962,6 +2068,7 @@ void QLangCompiler::compileAssignment(const StmtPtr &s) {
     m_globalVars.insert(s->name);
   guardNotConst(s->name, "assignment");
   guardNotExportedFunc(s->name, "assign to");
+  guardNotImported(s->name, "assign to");
   const std::string &op = s->assignOp.text;
   // Array append: `name += value` where name is an array.
   if (op == "+=" && m_varTypes[s->name] == QLangValue::Type::Array) {
@@ -2010,6 +2117,7 @@ void QLangCompiler::compileAssignment(const StmtPtr &s) {
 }
 
 void QLangCompiler::compileDelete(const StmtPtr &s) {
+  guardNotImported(s->delName, "delete");
   int r = regOf(s->delName);
   if (r < 0) {
     if (m_externalVars.count(s->delName))
@@ -2541,6 +2649,7 @@ void QLangCompiler::compileExprStmt(const StmtPtr &s) {
                          "use of undeclared variable '" + opnd->name + "'");
       guardNotConst(opnd->name, "increment/decrement");
       guardNotExportedFunc(opnd->name, "increment/decrement");
+      guardNotImported(opnd->name, "increment/decrement");
       emit(s->value->uop.text == "++" ? Opcode::INC : Opcode::DEC, r, r);
       return;
     }
@@ -2710,6 +2819,203 @@ void QLangCompiler::compileGoto(const StmtPtr &s) {
   emit(Opcode::JMP, lit->second);
 }
 
+// Depth-first walk of the import graph looking for a path from `node` back to
+// `entry`; on success `path` holds the cycle (`a -> b -> a`). A cycle that does
+// not pass through the entry module is not this program's problem — the two
+// libraries involved could not have been loaded in this order in the first
+// place — so only a path back to the entry is reported.
+static bool importCyclePath(
+    const std::unordered_map<std::string, std::vector<std::string>> &edges,
+    const std::string &entry, const std::string &node,
+    std::vector<std::string> &path, std::unordered_set<std::string> &onPath) {
+  path.push_back(node);
+  onPath.insert(node);
+  auto it = edges.find(node);
+  if (it != edges.end()) {
+    for (const std::string &dep : it->second) {
+      if (dep == entry) {
+        path.push_back(dep);
+        return true;
+      }
+      if (onPath.count(dep))
+        continue;
+      if (importCyclePath(edges, entry, dep, path, onPath))
+        return true;
+    }
+  }
+  onPath.erase(node);
+  path.pop_back();
+  return false;
+}
+
+// SPEC §bytecodes "technical specifications" 4 / plan Phase 3b: an import cycle
+// is a compile error, raised here rather than at link time. The graph is the
+// entry module's import table plus every loaded image's, so the check stays
+// correct once a library can import a library (Phase 3c); in Phase 3b a library
+// cannot import one at all (compileQlImport), which makes it defensive.
+void QLangCompiler::checkImportCycles() const {
+  if (m_imports.empty() || !m_scope)
+    return;
+  const std::string entry = !m_moduleNameFromSource.empty()
+                                ? m_moduleNameFromSource
+                                : (m_moduleName.empty() ? std::string("main")
+                                                        : m_moduleName);
+  std::unordered_map<std::string, std::vector<std::string>> edges;
+  auto addEdge = [&edges](const std::string &from, const std::string &to) {
+    std::vector<std::string> &v = edges[from];
+    if (std::find(v.begin(), v.end(), to) == v.end())
+      v.push_back(to);
+  };
+  for (const ImportEntry &im : m_imports)
+    addEdge(entry, im.module);
+  for (const auto &lm : m_scope->loadedModules()) {
+    if (!lm)
+      continue;
+    for (const ImportEntry &im : lm->program.imports)
+      addEdge(lm->program.moduleName, im.module);
+  }
+  if (edges.count(entry) == 0)
+    return;
+  std::vector<std::string> path;
+  std::unordered_set<std::string> onPath;
+  if (!importCyclePath(edges, entry, entry, path, onPath))
+    return;
+  std::string msg = "import cycle: ";
+  for (size_t i = 0; i < path.size(); i++)
+    msg += (i ? " -> " : "") + path[i];
+  throw QLangError(QLangErrorKind::Parse, 0, 0, msg);
+}
+
+// The loaded `.ql` module an `import` names, honouring an `import m as a`
+// alias; nullptr when the name is not a loaded image (external-modules plan v4
+// Phase 3b). Finding a module by name *without* it having been loaded is the
+// registry's job (plan C8), so until that lands the driver has to load every
+// library explicitly — which is what `qlang_run` does.
+const LoadedModule *QLangCompiler::qlModule(const std::string &name) const {
+  if (!m_scope)
+    return nullptr;
+  auto ait = m_qlAliases.find(name);
+  return m_scope->loadedModule(ait == m_qlAliases.end() ? name : ait->second);
+}
+
+void QLangCompiler::recordPendingLink(int importIndex, int instrIndex,
+                                      PendingLinkKind kind, int poolIndex) {
+  m_curPendingLinks.push_back(
+      PendingLink{0, instrIndex, importIndex, kind, poolIndex});
+}
+
+void QLangCompiler::guardNotImported(const std::string &name,
+                                     const char *op) const {
+  auto it = m_qlImports.find(name);
+  if (it == m_qlImports.end())
+    return;
+  const ImportEntry &im = m_imports[static_cast<size_t>(it->second)];
+  throw QLangError(QLangErrorKind::Parse, m_curLine, m_curCol,
+                   std::string("cannot ") + op + " imported name '" + name +
+                       "' (from module '" + im.module +
+                       "'): the defining module owns it");
+}
+
+// Records one entity bound from a loaded module and returns its import index
+// (SPEC §bytecodes "import table (lookup)"). `ref` stays the DEFINING module's
+// handle — the entry program has no merged index yet, which is exactly what the
+// linker resolves (plan Phase 3b).
+int QLangCompiler::bindQlImport(const LoadedModule &mod, const ExportEntry &exp,
+                                const std::string &localName,
+                                const std::string &moduleAs,
+                                const StmtPtr &s) {
+  const std::string &modName = mod.program.moduleName;
+  // A name two sources both claim has no defined meaning, so it is a compile
+  // error rather than a precedence rule (plan Phase 3b: "a name in both a C++
+  // module and a .ql module = compile error").
+  if (m_nativeFuncIds.count(localName) || m_moduleFuncNames.count(localName))
+    throw QLangError(
+        QLangErrorKind::Parse, s->line, s->col,
+        "'" + localName + "' is exported by module '" + modName +
+            "' and is also a C++ module or native function name");
+  if (findBuiltin(localName) >= 0)
+    throw QLangError(
+        QLangErrorKind::Parse, s->line, s->col,
+        "'" + localName + "' is a built-in function name and cannot be "
+                          "imported from module '" +
+            modName + "'");
+  auto uit = m_userFuncs.find(localName);
+  if (uit != m_userFuncs.end())
+    throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                     "'" + localName + "' is imported from module '" + modName +
+                         "' and is also defined in this module");
+  auto it = m_qlImports.find(localName);
+  if (it != m_qlImports.end()) {
+    const ImportEntry &old = m_imports[static_cast<size_t>(it->second)];
+    // Re-importing the very same entity is a no-op, not a collision (the flat
+    // forms can reach the same export twice: `import m`, `from m import f`).
+    if (old.module == modName && old.name == exp.name)
+      return it->second;
+    throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                     "'" + localName + "' is already imported from module '" +
+                         old.module + "'");
+  }
+  m_imports.push_back(ImportEntry{modName, exp.name, exp.kind, exp.ref, ""});
+  int idx = static_cast<int>(m_imports.size()) - 1;
+  m_qlImports[localName] = idx;
+  // Provenance for diagnostics and the disassembler, same shape a C++ module
+  // import records (the alias is what the source spelled).
+  ImportedModuleFunc imp{moduleAs.empty() ? modName : moduleAs, exp.name, false};
+  bool seen = false;
+  for (const auto &e : m_importedModuleFuncs)
+    if (!e.fromClass && e.func == exp.name && e.module == imp.module) {
+      seen = true;
+      break;
+    }
+  if (!seen)
+    m_importedModuleFuncs.push_back(std::move(imp));
+  return idx;
+}
+
+// `import` resolved against a loaded image's export table (plan Phase 3b). The
+// five forms are the C++ resolver's; only the source of the names differs.
+void QLangCompiler::compileQlImport(const StmtPtr &s, const LoadedModule &mod) {
+  // A library cannot import a `.ql` module yet: the pending links Phase 3b
+  // lowers them to are a link artifact, not an image section, so they could not
+  // survive into this module's `.qlc`. Rejecting here beats emitting a module
+  // that cannot be linked; Phase 3c's GETIMPORT/CALLIMPORT make the references
+  // serializable.
+  if (m_libraryMode)
+    throw QLangError(
+        QLangErrorKind::Parse, s->line, s->col,
+        "a library module cannot import the .ql module '" + s->importModule +
+            "' yet: cross-module references inside a library need "
+            "GETIMPORT/CALLIMPORT (external-modules plan Phase 3c)");
+  // `import m as a`: the alias names the module for a later `import a.f`.
+  if (!s->importAlias.empty())
+    m_qlAliases[s->importAlias] = mod.program.moduleName;
+
+  // The export names to bind, per the form used.
+  std::vector<std::string> names;
+  if (!s->importFunc.empty())
+    names.push_back(s->importFunc); // `import m.f`
+  else if (s->importAll)            // `from m import *`
+    for (const auto &e : mod.program.exports)
+      names.push_back(e.name);
+  else if (!s->importFuncs.empty()) // `from m import a, b`
+    names = s->importFuncs;
+  else // `import m` — flat import all
+    for (const auto &e : mod.program.exports)
+      names.push_back(e.name);
+
+  for (const std::string &fname : names) {
+    const ExportEntry *exp = nullptr;
+    for (const auto &e : mod.program.exports)
+      if (e.name == fname) { exp = &e; break; }
+    if (!exp)
+      throw QLangError(
+          QLangErrorKind::Parse, s->line, s->col,
+          "module '" + mod.program.moduleName + "' does not export '" + fname +
+              "'");
+    bindQlImport(mod, *exp, fname, s->importAlias, s);
+  }
+}
+
 void QLangCompiler::compileImport(const StmtPtr &s) {
   // Resolve module functions at compile time and register them as external
   // funcs in the current scope. Supports:
@@ -2718,11 +3024,24 @@ void QLangCompiler::compileImport(const StmtPtr &s) {
   //   import math as m                     — register under alias, flat import all
   //   from math import *                   — flat import all
   //   from math import min, max            — flat import specific funcs
+  // The same five forms resolve against a loaded `.ql` module's export table
+  // when the name is one (external-modules plan v4 Phase 3b); being both is an
+  // error, never a precedence.
   if (!m_inFunction) {
     // Find the module.
     const QLangContext::Module *mod = nullptr;
     for (const auto &m : m_moduleFuncs) {
       if (m.name == s->importModule) { mod = &m; break; }
+    }
+    const LoadedModule *ql = qlModule(s->importModule);
+    if (ql && mod)
+      throw QLangError(
+          QLangErrorKind::Parse, s->line, s->col,
+          "module '" + s->importModule +
+              "' is registered both as a C++ module and as a loaded .ql module");
+    if (ql) {
+      compileQlImport(s, *ql);
+      return;
     }
     if (!mod)
       throw QLangError(QLangErrorKind::Parse, 0, 0,
@@ -2767,6 +3086,15 @@ void QLangCompiler::compileImport(const StmtPtr &s) {
 
     // Register each function as an external func in the current scope.
     for (const auto &fname : names) {
+      // The other direction of the collision check in bindQlImport: a name a
+      // loaded `.ql` module already bound cannot also arrive from a C++ module.
+      auto qit = m_qlImports.find(fname);
+      if (qit != m_qlImports.end())
+        throw QLangError(
+            QLangErrorKind::Parse, s->line, s->col,
+            "'" + fname + "' is imported from module '" +
+                m_imports[static_cast<size_t>(qit->second)].module +
+                "' and is also exported by C++ module '" + mod->name + "'");
       int idx = -1 - m_nativeFuncIds[fname];
       while (m_nativeFuncsResolved.size() <= static_cast<size_t>(idx))
         m_nativeFuncsResolved.push_back(nullptr);
@@ -3394,6 +3722,31 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         emit(Opcode::MOV, dest, r);
       break;
     }
+    // Imported from a loaded `.ql` module (external-modules plan v4 Phase 3b,
+    // provisional lowering): the value lives in the DEFINING module's cell, so
+    // it is read with a register move whose operand the linker rebases into the
+    // merged global area. A function body has private registers, so a
+    // cross-module cell read only exists at module top level until GETIMPORT
+    // (Phase 3c) reads the import table from anywhere.
+    auto iit = m_qlImports.find(e->name);
+    if (iit != m_qlImports.end()) {
+      const ImportEntry &im = m_imports[static_cast<size_t>(iit->second)];
+      if (im.kind == ExportKind::Func)
+        throw QLangError(
+            QLangErrorKind::Parse, 0, 0,
+            "'" + e->name + "' is a function imported from module '" +
+                im.module + "': call it instead of reading it");
+      if (m_inFunction)
+        throw QLangError(
+            QLangErrorKind::Parse, 0, 0,
+            "imported name '" + e->name +
+                "' cannot be read inside a function body yet: a function's "
+                "registers are private, so a cross-module cell read needs "
+                "GETIMPORT (external-modules plan Phase 3c)");
+      emit(Opcode::MOV, dest, im.ref);
+      recordPendingLink(iit->second, static_cast<int>(m_emitter.size()) - 1);
+      break;
+    }
     // Host-injected external variable (seeded via QLangContext::set, e.g.
     // a TypeRef from import<T>()): declare a register on first use so it
     // can be loaded; the VM seeds it from the scope at run start.
@@ -3849,6 +4202,77 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       {
         for (int j = 0; j < newArgCount; j++)
           emitImmNil(Opcode::MOV, newArgBase + j);
+      }
+      break;
+    }
+    // Called from a loaded `.ql` module (external-modules plan v4 Phase 3b,
+    // provisional lowering): the callee is the defining module's function, so
+    // the call names it with a module-local index the linker rewrites to the
+    // merged one. A call needs no register of the defining module, which is why
+    // an imported function is callable from any depth, unlike an imported
+    // variable.
+    auto iit = m_qlImports.find(e->callee);
+    if (iit != m_qlImports.end()) {
+      const int importIdx = iit->second;
+      const ImportEntry &im = m_imports[static_cast<size_t>(importIdx)];
+      const LoadedModule *dm =
+          m_scope ? m_scope->loadedModule(im.module) : nullptr;
+      if (!dm || im.ref < 0 ||
+          im.ref >= static_cast<int>(dm->program.functions.size()))
+        throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
+                         "imported function '" + e->callee +
+                             "' is not available: module '" + im.module +
+                             "' is not loaded");
+      if (im.kind != ExportKind::Func) {
+        // The name holds a closure value (an exported arrow or closure-typed
+        // variable): call what the cell holds. Reading the cell is top-level
+        // only until GETIMPORT, so the call is too.
+        if (m_inFunction)
+          throw QLangError(
+              QLangErrorKind::Parse, e->callLine, e->callCol,
+              "imported name '" + e->callee +
+                  "' cannot be called inside a function body yet: the closure "
+                  "lives in the defining module's cell, and reading it needs "
+                  "GETIMPORT (external-modules plan Phase 3c)");
+        emit(Opcode::MOV, dest, im.ref);
+        recordPendingLink(importIdx, static_cast<int>(m_emitter.size()) - 1);
+        emit(Opcode::CALLCLOS, dest, dest, argCount);
+        break;
+      }
+      const Function &df = dm->program.functions[static_cast<size_t>(im.ref)];
+      // A capture named by a register is seeded from the CALLER's frame, so a
+      // function with one cannot be called across a module boundary yet. A
+      // module-level `def`'s captures of its own module's consts and `global`s
+      // are absolute table slots (see the capture lowering in compileFunction),
+      // so this fires on the one case that is not: a def that calls a sibling
+      // def which itself has captures — that callee is materialized as a closure
+      // value in a top-level register, and the caller captures the register
+      // (frame-relative), which only the defining module's frame can seed.
+      for (const CaptureRef &cr : df.captures)
+        if (cr.reg >= 0)
+          throw QLangError(
+              QLangErrorKind::Parse, e->callLine, e->callCol,
+              "imported function '" + e->callee +
+                  "' captures a local of its own module and cannot be called "
+                  "across a module boundary yet (external-modules plan "
+                  "Phase 3c)");
+      if (df.isGenerator) {
+        // MAKEGEN builds the generator from a pool Closure naming the defining
+        // function; the linker rebases the constant's funcIndex (a plain
+        // operand rewrite would point it at the entry module's function).
+        auto closure = std::make_shared<Closure>();
+        closure->funcIndex = im.ref;
+        closure->captures = df.captures;
+        int constIdx = emitConst(QLangValue::Function(closure));
+        emit(Opcode::MAKEGEN, dest, constIdx, argCount);
+        recordPendingLink(importIdx, static_cast<int>(m_emitter.size()) - 1,
+                          PendingLinkKind::ClosureConst, constIdx);
+        // Clear arg regs so they don't leak into the next instruction.
+        for (int j = 0; j < argCount; j++)
+          emitImmNil(Opcode::MOV, argBase + j);
+      } else {
+        emit(Opcode::CALLFN, dest, im.ref, argCount);
+        recordPendingLink(importIdx, static_cast<int>(m_emitter.size()) - 1);
       }
       break;
     }

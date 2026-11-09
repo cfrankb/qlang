@@ -104,6 +104,54 @@ bool isJumpOpcode(Opcode op) {
 
 bool isRegConstOpcode(Opcode op) { return !isJumpOpcode(op); }
 
+OperandRole operandRole(Opcode op, int slot, RightKind kind) {
+  // The jump class stores nothing but the offset: `a` and `c` are not even
+  // encoded (plan §2.7), so only `b` carries meaning.
+  if (isJumpOpcode(op))
+    return slot == 1 ? OperandRole::JumpTarget : OperandRole::None;
+  if (slot == 0)
+    return op == Opcode::Nop ? OperandRole::None : OperandRole::Register;
+  if (slot == 2) {
+    // `c` is an argument count for the call family and a type id for `cast`;
+    // every other opcode that stores it reads it as a register (`seqget`'s
+    // index and `arrget`'s subscript are register operands).
+    switch (op) {
+    case Opcode::CALL:
+    case Opcode::CALLFN:
+    case Opcode::CALLCLOS:
+    case Opcode::MAKEGEN:
+    case Opcode::EMIT:
+    case Opcode::CAST:
+      return OperandRole::None;
+    default:
+      return OperandRole::Register;
+    }
+  }
+  // slot == 1: the right operand. Four opcodes give it a meaning the modifier
+  // byte does not express; `emit` is the one whose b indexes the pool although
+  // its kind stays register.
+  switch (op) {
+  case Opcode::CALL:
+    return OperandRole::NativeSlot;
+  case Opcode::CALLFN:
+    return OperandRole::FunctionIndex;
+  case Opcode::MAKEFUNC:
+  case Opcode::MAKEGEN:
+  case Opcode::EMIT:
+    return OperandRole::PoolIndex;
+  case Opcode::REFLOAD:
+  case Opcode::REFSTORE:
+    return OperandRole::CaptureIndex;
+  default:
+    break;
+  }
+  if (kind == RightKind::ConstPool)
+    return OperandRole::PoolIndex;
+  if (kind == RightKind::Immediate)
+    return OperandRole::None; // an inline literal, not an address
+  return OperandRole::Register;
+}
+
 // ---------------------------------------------------------------------------
 // Size computation
 // ---------------------------------------------------------------------------

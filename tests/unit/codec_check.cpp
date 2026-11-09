@@ -1791,6 +1791,33 @@ static void testV6LoadValidation() {
   rejects("v6-load: pool index beyond the module pool rejected",
           writeImage(programWithCode(poolRead, {0, 4})));
 
+  // `callfn` operands name a function record, so they are range-checked against
+  // the function table once every record has been read (external-modules plan
+  // v4 Phase 3b: the linker rewrites these operands when images merge, so an
+  // image must not be able to carry a function index that is not there). The
+  // base form of `callfn` is one byte each for a/b/c, so only `b` differs.
+  auto callfnImage = [](uint8_t target) {
+    return writeImage(programWithCode(
+        {static_cast<uint8_t>(Opcode::CALLFN), 0x00, target, 0x00,
+         static_cast<uint8_t>(Opcode::RETURN), 0x00},
+        {0, 4}));
+  };
+  {
+    CompiledProgram back3;
+    std::string e3;
+    check(readImage(callfnImage(0), back3, e3),
+          "v6-load: callfn naming a function of the image accepted (" + e3 +
+              ")");
+    // The reason is pinned, not just the failure: the pool-index case above
+    // would also reject this image if `callfn`'s `b` were misclassified.
+    CompiledProgram bad3;
+    std::string e4;
+    check(!readImage(callfnImage(5), bad3, e4) &&
+              e4.find("function index out of range") != std::string::npos,
+          "v6-load: callfn index beyond the function table rejected (" + e4 +
+              ")");
+  }
+
   // One malformed modifier field per image. The first instruction's modifier
   // byte is at code[1]; every field below is reserved (decision D7).
   auto rejectsModifier = [&](uint8_t e, const std::string &name) {

@@ -1,8 +1,8 @@
 # Plan v4: external modules (builtin name table, unified constant pool, import/export tables)
 
 Status: **Phase 1 ✓ implemented (Round 61, 2026-11-09); Phase 2 ✓ implemented (Round 62,
-2026-11-09); Phase 3a ✓ implemented (Round 63, 2026-11-09); Phase 3b gated on Q32 + Q33 + Q35,
-Phase 3c gated on Q31.**
+2026-11-09); Phase 3a ✓ implemented (Round 63, 2026-11-09); Phase 3b ✓ implemented (Round 64,
+2026-11-09); Phase 3c gated on Q31.**
 Re-audited 2026-11-08 against `HEAD = ac97651` (Round 60); Phase 1 landed on top of that
 baseline (library builtin name table — `builtinCount`/`builtinName`/`findBuiltin`/`builtinId`
 in `QLangBytecode.h`, `builtin_table` suite, 151 checks; spec
@@ -15,9 +15,18 @@ tables.** Phase 3a landed on top of Phase 2 (`.qlc` **v9**: `export`, the export
 tables, the module name; spec `docs/spec/13-bytecodes.md` `## keyword export` marked
 **Implemented**; compliance Round 63) — **Q29** and **Q30** were ratified in that round, both as
 defaulted, and **Q31** was left open on purpose: 3a emits no new opcode, so 73/74 stay reserved
-for 3c.
-What remains of Phase 3 is gated on **Q32** + **Q33** + **Q35** (3b) and **Q31** (3c) and, for
-automatic name-based import resolution only, on **C8** (`missing-features-plan.md`).
+for 3c. Phase 3b landed on top of Phase 3a (**no version bump** — still **v9**: what 3b adds is
+link-time state an image must not carry, plus two *refusals* in `writeQlc`; `QLangContext::loadProgram`
+/ `loadProgramFile` + the module registry, compile-time resolution of all five import forms against
+a loaded export table, the new `QLangLinker` unit, `CompiledProgram::initSequence` / `pendingLinks`,
+and the provisional lowering of an imported name to `callfn` / `mov`; spec
+`docs/spec/13-bytecodes.md` `## import table (lookup)` marked **Implemented** and
+`## technical specifications` given a per-item status; compliance Round 64) — **Q32**, **Q33** and
+**Q35** were ratified in that round, **Q32** *not as defaulted* (the linker's input is an encoded
+image, so the plan's fallback became the only path) and **Q31** again deliberately untouched.
+What remains of Phase 3 is **3c** (`GETIMPORT`/`CALLIMPORT`), gated on **Q31** and landing with the
+`09-modules.md` / `07-api.md` rewrites; automatic name-based import resolution stays with **C8**
+(`missing-features-plan.md`).
 Supersedes: `docs/plans/archive/external-modules-plan-v3.md` (2026-11-03) and,
 through it, v2 (2026-11-02) and v1 (all three under `docs/plans/archive/`). The language requirements are unchanged
 since v1; what keeps changing is the **machine** — `.qlc` is at **v9** with a
@@ -28,10 +37,12 @@ Builds on / blocked by: `missing-features-plan.md` **C8** (module search paths +
 external search callback, **Q23–Q26**) — the front end that lets `import mod`
 *find* a module; this plan owns what happens once it is found.
 Reference spec: `docs/spec/13-bytecodes.md` § `external modules`
-(**lines 599–797** as of Round 63 — `## table for build in function (qlang base)`,
-`## unified constant table` and `## keyword export` now carry **Implemented** markers and the two
-table sections carry what-is/what-is-not notes; the link model, `GETIMPORT`/`CALLIMPORT` and
-importer-side `readonly` are still open), `docs/spec/09-modules.md`,
+(**lines 599–867** as of Round 64 — `## table for build in function (qlang base)`,
+`## unified constant table`, `## keyword export` and `## import table (lookup)` now carry
+**Implemented** markers, the export-table section carries what reads it, and
+`## technical specifications` carries a status per item; what is still open is the
+runtime-registry link model, `GETIMPORT`/`CALLIMPORT`, and a *library* image importing another
+`.ql` — importer-side `readonly` is enforced since Round 64), `docs/spec/09-modules.md`,
 `docs/spec/07-api.md` (`## module search paths`, `## external search callback`).
 
 **v4 (2026-11-08) changes vs v3** — every one of them is a consequence of
@@ -222,7 +233,8 @@ Numbering continues the global **Q#** series of `missing-features-plan.md`
   `## technical specifications` 3 is write-through — a cell nobody may write is a constant, not a
   variable), while rebinding a name exported as a `def` is a compile error on assignment and on
   `++`/`--`. The wording is pinned in `13-bytecodes.md` `## keyword export`; importer-side
-  enforcement is 3b/3c work (nothing can import a `.ql` name yet).
+  enforcement landed with **3b** (Round 64) — `guardNotImported` rejects assignment, `++`/`--` and
+  `delete` through a name imported from a loaded `.ql` module.
 
 ### 3b/3c — encoding and merge mechanics
 
@@ -234,6 +246,9 @@ Numbering continues the global **Q#** series of `missing-features-plan.md`
   "append last, never renumber".
   **Unchanged by Round 63:** Phase 3a emits no opcode, so `kOpcodeUsedCount` stayed **72** and
   73/74 remain reserved (the import table is therefore always empty in a 3a image).
+  **Unchanged by Round 64:** 3b fills the import table but still emits no opcode — an imported
+  name lowers to the instruction the *merged* program can execute (see the 3b **DONE** note), so
+  `kOpcodeUsedCount` is still **72** and 73/74 stay reserved for 3c.
 - **Q32 Where does the linker rewrite operands?** — the v6 stream is
   variable-width, so a merged register/pool/function index may need a *wider*
   operand and byte-patching is impossible.
@@ -241,12 +256,26 @@ Numbering continues the global **Q#** series of `missing-features-plan.md`
   (widths are then chosen once, by the existing `computeModifier`); the
   fallback is decode → rewrite → `encodeInstruction`, which is only safe
   because jump offsets are relative and the merge preserves instruction count.
+  **Ratified — not as defaulted (Round 64, Phase 3b):** the linker's input is an
+  *encoded image*, not an emitter that has not finished yet, so "before `finish()`"
+  does not exist for it; the plan's fallback became the only path. It is made
+  mechanical rather than ad-hoc: `encodeRawStream()` was split out of
+  `FnEmitter::finish()` and `decodeRawStream()` added (`QLangCompiler.h`), so the
+  linker decodes → rewrites the `RawInstr` → re-encodes through the same code that
+  chose the widths, and a merged index needing a wider operand costs nothing.
+  Non-vacuity is pinned: a 300-`def` entry pushes a merged function index past the
+  1-byte operand range (`linker` suite).
 - **Q33 Does the merged pool fold cross-module duplicates?** — the spec
   requires a shared table *or* no duplicates (`:624`) and unique values
   (`:960`); per-module pools already dedup internally.
   **Default:** yes — concatenate with `valueKey` folding, since the linker
   rewrites every pool operand anyway (**Q32**). Without it a merged program can
   carry the same string twice, which `:960` forbids.
+  **Ratified as defaulted (Round 64, Phase 3b):** the merged pool folds through
+  `valueKey`. One ordering detail the plan did not spell out: a `Closure` constant
+  names a function index, so closure constants are **rebased before they are added**
+  to the merged pool — otherwise the fold would compare a defining-module index
+  against a merged one and either miss a duplicate or fold two different functions.
 - **Q34 Which `.qlc` version does each phase take?** — **decided 2026-11-09
   (Round 62):** **v8 = the unified pool** (Phase 2 shipped on it), **v9 = module
   tables** (Phase 3). `offset-table-elimination-plan.md` §9 (option A, not yet
@@ -256,6 +285,12 @@ Numbering continues the global **Q#** series of `missing-features-plan.md`
   a global-scope script with no `main` (spec `:656`), so each has an `<init>`.
   **Default:** each module's `<init>` runs exactly once, in dependency order
   (topological over the import graph), before the entry module's `<init>`.
+  **Ratified as defaulted (Round 64, Phase 3b):** the linker records the order as
+  `CompiledProgram::initSequence` (one `ModuleInit {funcIndex, regBase,
+  registerCount, module}` per module top level, dependencies first) and
+  `QLangVM::run()` executes it before the entry's top level — each as a main-like
+  frame aliasing the same `GlobalTable::slots` at its own `regBase`, so the cells
+  are live by the time the entry reads them.
 
 ---
 
@@ -487,7 +522,7 @@ Consequences of the spec's decisions:
 > byte-identical against a `HEAD` build. Spec `## keyword export` → **Implemented** with the
 > Q29/Q30 reading; compliance Round 63.
 
-### 3b — loader + linker
+### 3b — loader + linker — ✓ implemented (Round 64, 2026-11-09)
 
 1. **`QLangContext::loadProgram(...)`** — the library entry point the app
    already half-implements (`examples/qlang_run.cpp:1305–1335`): read a `.qlc`,
@@ -541,6 +576,78 @@ Consequences of the spec's decisions:
    compile + link an app against it, run; unknown export / cycle / version
    mismatch each produce a clean `QLangError`. `spec_check2`: end-to-end
    cross-module call and cross-module constant read.
+
+> **DONE (Round 64, 2026-11-09).** All five steps landed in one round, with **no `.qlc` version
+> change** — still **v9**. Everything 3b adds is either link-time state an image must not carry
+> (`initSequence`, `pendingLinks`) or a *refusal* (`writeQlc` rejects a merged program), so the
+> format needed no new section; `docs/SERIALIZATION.md` §4 records why ("a linked program is not an
+> image"). The 23-script corpus is stdout byte-identical.
+> 1. **Loader + registry** — `QLangContext::loadProgram(istream, path)` / `loadProgramFile(path)` /
+>    `loadedModule(name)` / `loadedModules()`, and `LoadedModule` (image + `path` + the on-disk
+>    native-slot table) in `QLangBytecodeIO.h`. The registry is a `ModuleRegistry` in the pimpl
+>    beside `ProgramCache`/`TypeRegistry`, keyed by `program.moduleName` — the name `import` binds it
+>    under — and rejects a duplicate name. Every native-slot **name** is re-resolved against this
+>    context's natives *and* its registered C++ modules, all missing names reported in one
+>    `QLangError(Io)` (`missing native function(s): 'a', 'b'`), so a library's `import math` works
+>    without the host repeating the mapping; `clear()` drops the registry. Deviation from the step as
+>    written: the app-side sketch became the library API, and `QLangContext::execute()` was **not**
+>    added — running an image is `QLangVM(prog, ctx).run()`, which `qlc-exec` and `qlang_run` already
+>    do.
+> 2. **Compile-time resolution** — `QLangCompiler::compileQlImport` checks the loaded images before
+>    the C++ modules for all five forms (`import m`, `import m.a`, `from m import *`,
+>    `from m import a, b`, `import m as x`), so `CompiledProgram::imports` is **no longer always
+>    empty**. Every error the step asks for is raised here, not at link time: unknown module, unknown
+>    export, a name claimed by both a C++ module and a `.ql` module, a write through an import
+>    (`guardNotImported` on assignment, `++`/`--` and `delete` — importer-side `readonly`, **Q30**,
+>    enforced at last), an import inside a function body, and an import cycle (`checkImportCycles`,
+>    with the loader-side half in the linker). C++ natives are untouched: still compile-time natives
+>    in `CALL`'s negative-slot space, never table entries. *Finding* a module nobody loaded stays
+>    **C8**'s.
+> 3. **Linker** — new unit `QLangLinker` (`include/qlang/QLangLinker.h`, `src/QLangLinker.cpp`),
+>    depth-first and dependencies first: one concatenated function table, one pool folded through
+>    `valueKey` (**Q33**, closure constants rebased *before* the fold), native slots concatenated and
+>    deduped by name, `CompiledProgram::initSequence` (**Q35**), and **Q32** discharged by decoding
+>    each body (`decodeRawStream`), rewriting the `RawInstr` and re-encoding with
+>    `encodeRawStream()` — the same code that chose the widths, so a merged index needing a wider
+>    operand costs nothing and no encoded byte is patched. Three deviations, all in the plan's
+>    favour: **(a)** no register operand is rewritten — a module's top-level frame gets a `base` into
+>    the shared `GlobalTable::slots`, so it keeps the numbers its own compiler assigned and only the
+>    operands the compiler flagged move; **(b)** the entry's `functions[0]` stays the entry's top
+>    level (the libraries' `<init>`s are appended and run through `initSequence`) rather than the
+>    entry being promoted to index 0; **(c)** `CALLIMPORT → CALLFN` could not happen — there is no
+>    `CALLIMPORT` yet — so an imported name lowers **provisionally** to `callfn` / `mov` carrying the
+>    *defining* module's handle, and since no unsigned operand can say "this is not mine" the
+>    reference is recorded as `PendingLink {funcIndex, instrIndex, importIndex, kind, poolIndex}`
+>    (`kind` = `OperandB` | `ClosureConst`, the latter for an imported generator's `MAKEGEN` spec).
+>    **Q31 untouched:** nothing was appended to the enum, `kOpcodeUsedCount` is still **72** and
+>    73/74 stay reserved. Related: a capture whose home is a module-level cell is now named
+>    absolutely (`-1 - <global slot>`) instead of by register, because a merged `vars` map holds only
+>    the entry module's names and a `.qlc` carries no capture names at all.
+> 4. **Driver** — `qlang_run app.ql [lib.qlc …]` and `--import <lib.qlc>` (repeatable, the same
+>    thing): libraries load into the context **before** the entry compiles and are linked after; the
+>    single-file invocation is unchanged. Level 5 gained the merged import table (`module.name ->
+>    merged handle`) and one block per linked module (`regBase`, function range, exports as both
+>    module-local and merged refs). `--output` is refused for a merged program.
+> 5. **Tests** — new suite `linker` (`tests/unit/linker_test.cpp`, **75** checks): the registry
+>    (stream/file load, lookup, load order, duplicate name, an unresolvable native name, `clear()`),
+>    the merge (one function table, one folded pool, deduped native slots, disjoint register slices),
+>    the rewrites (a 300-`def` entry pushes a merged function index past the 1-byte operand range, so
+>    the re-widening is measured, not assumed), the run (each `<init>` exactly once, dependencies
+>    first; an exported variable is one cell the defining module writes and the importer reads), and
+>    the rejections (already linked, not loaded, not linkable, `writeQlc` of a merge). Deviation: the
+>    end-to-end cases live there rather than in `spec_check2` (that harness is SPEC.md's; the
+>    loader/linker is plan-level). `codec_check` 352 → **354**: the `callfn` range check
+>    `operandRole()` implies (a `callfn` naming a function of its own image loads, one naming index 5
+>    of 1 is refused with `function index out of range`) — the accept/reject pair proves it is
+>    neither vacuous nor over-eager.
+> `cmake --build build` clean, `ctest --test-dir build` **53/53 green**; counted unit cases
+> 37 821 → **37 898**; corpus 23/23 stdout byte-identical against a `HEAD` build. Spec
+> `## import table (lookup)` → **Implemented**, `## technical specifications` now carries a status
+> per item; compliance Round 64. **Found, not fixed:** an exported `def` that calls a sibling `def`
+> with captures is refused at compile time (`imported function '<n>' captures a local of its own
+> module and cannot be called across a module boundary yet`) — a clean error, and 3c's to fix; a
+> **library** image importing another `.ql` is likewise refused (its unresolved references are a link
+> artifact the format does not carry).
 
 ### 3c — `GETIMPORT` + `CALLIMPORT`
 
@@ -664,8 +771,8 @@ run (AGENTS.md).
    Deviation: the pool manager is the new `ConstantPool` type, not
    `Bytecode::addConstant`/`setConstants` — see the Phase 2 **DONE** note.
 
-**Gated:** (3a was the last item blocked on **Q29**/**Q30** — it landed in Round 63 and is listed
-here only to keep the numbering of the phases stable)
+**Gated:** (3a and 3b were the items blocked on **Q29**/**Q30** and on **Q32**/**Q33**/**Q35** — they
+landed in Rounds 63 and 64 and are listed here only to keep the numbering of the phases stable)
 
 3. **Phase 3a** (export syntax + tables, `.qlc` v9 write side) — **✓ done (Round 63,
    2026-11-09):** `export` in both spec forms (global scope only, enforced in the parser and again
@@ -675,9 +782,18 @@ here only to keep the numbering of the phases stable)
    left open — nothing was appended to the enum, so `kOpcodeUsedCount` is still 72 and the import
    table is always empty. New suite `export` (88 checks), `codec_check` 337 → 352, corpus
    byte-identical, ctest 52/52. Deviations recorded in the 3a **DONE** note.
-4. **Phase 3b** (loader + linker) — needs **Q32**, **Q33**, **Q35**; needs the
-   driver to load libraries explicitly (automatic name resolution waits for
-   **C8**/**Q23–Q26**).
+4. **Phase 3b** (loader + linker) — **✓ done (Round 64, 2026-11-09):** `QLangContext::loadProgram` /
+   `loadProgramFile` and the module registry, all five import forms resolved against a loaded image's
+   export table at compile time, `QLangLinker` (one function table, one `valueKey`-folded pool, one
+   global register area sliced per module, `initSequence`), and the **provisional** lowering of an
+   imported name to `callfn` / `mov` plus `CompiledProgram::pendingLinks`. **Q32** was ratified *not
+   as defaulted* — the linker's input is an encoded image, so decode → rewrite → `encodeRawStream()`
+   is the only path — and **Q33** / **Q35** as defaulted; **Q31** again deliberately untouched
+   (`kOpcodeUsedCount` still 72). **No `.qlc` version change**: what 3b adds is link-time state, so
+   `writeQlc` refuses a merged program instead. New suite `linker` (75 checks), `codec_check`
+   352 → 354, corpus byte-identical, ctest 53/53. Automatic name-based resolution still waits for
+   **C8**/**Q23–Q26** — the driver loads libraries explicitly (`qlang_run app.ql lib.qlc`,
+   `--import`). Deviations recorded in the 3b **DONE** note.
 5. **Phase 3c** (`GETIMPORT`/`CALLIMPORT` + docs rewrite) — needs **Q31**;
    lands with the `09-modules.md` / `07-api.md` rewrites.
 

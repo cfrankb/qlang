@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <utility>
 
+#include "qlang/QLangBytecodeIO.h"
 #include "qlang/QLangCompiler.h"
 #include "qlang/QLangErrors.h"
 #include "qlang/QLangLexer.h"
@@ -169,6 +171,42 @@ namespace {
     std::vector<std::shared_ptr<TypeDescriptor>> m_types;
   };
 
+  // Module registry (external-modules plan v4 Phase 3b): the `.qlc` library
+  // images a context has loaded, keyed by the name `import` binds them under.
+  // Lives in the pimpl for the same reason as ProgramCache — LoadedModule
+  // embeds a CompiledProgram. Entries are shared_ptrs so a host or the linker
+  // can keep an image alive past clear(). Duplicate names are rejected: two
+  // images for one name would make `import <name>` ambiguous.
+  class ModuleRegistry
+  {
+  public:
+    std::shared_ptr<LoadedModule> add(std::shared_ptr<LoadedModule> m)
+    {
+      const std::string &name = m->program.moduleName;
+      for (const auto &e : m_modules)
+        if (e->program.moduleName == name)
+          throw QLangError(QLangErrorKind::Io, 0, 0,
+                           "module '" + name + "' is already loaded");
+      m_modules.push_back(std::move(m));
+      return m_modules.back();
+    }
+    std::shared_ptr<LoadedModule> find(const std::string &name) const
+    {
+      for (const auto &e : m_modules)
+        if (e->program.moduleName == name)
+          return e;
+      return nullptr;
+    }
+    const std::vector<std::shared_ptr<LoadedModule>> &all() const
+    {
+      return m_modules;
+    }
+    void clear() { m_modules.clear(); }
+
+  private:
+    std::vector<std::shared_ptr<LoadedModule>> m_modules;
+  };
+
   // Pimpl definition — breaks the circular include with QLangCompiler.h.
   // Phase 3 (H1): the context's program cache and type registry are separate
   // classes; the context itself is a thin public API.
@@ -176,6 +214,7 @@ namespace {
   {
     ProgramCache programs;
     TypeRegistry types;
+    ModuleRegistry modules;
   };
 
   QLangContext::QLangContext()
@@ -284,6 +323,90 @@ namespace {
       // reporting).
       throw QLangError::report(e);
     }
+  }
+
+  // Load a `.qlc` image into the context's module registry
+  // (SPEC §bytecodes "external modules"; plan v4 Phase 3b). The image stores
+  // native function NAMES only (docs/SERIALIZATION.md §4.3), so every slot is
+  // re-resolved here against this context's natives and its registered C++
+  // modules — a name that resolves nowhere is a load-time error rather than a
+  // runtime nil call. `path` is used for diagnostics only.
+  std::shared_ptr<LoadedModule> QLangContext::loadProgram(std::istream &is,
+                                                          const std::string &path)
+  {
+    bindThread();
+    auto mod = std::make_shared<LoadedModule>();
+    mod->path = path;
+    const std::string where = path.empty() ? std::string() : path + ": ";
+    std::string err;
+    if (!readQlc(is, mod->program, mod->nativeSlots, err))
+      throw QLangError(QLangErrorKind::Io, 0, 0, where + err);
+    // docs/SERIALIZATION.md §5.2: every missing name is reported in ONE error,
+    // not fail-on-first — a library image typically imports a whole module, and
+    // a host that forgot to register it wants the full list, not one name per
+    // load attempt.
+    std::vector<std::pair<int, NativeFunc>> resolved;
+    std::vector<std::string> missing;
+    resolved.reserve(mod->nativeSlots.size());
+    for (const auto &[slot, name] : mod->nativeSlots) {
+      NativeFunc fn;
+      const auto it = m_nativeFuncs.find(name);
+      if (it != m_nativeFuncs.end())
+        fn = it->second;
+      else
+        for (const auto &m : m_modules) {
+          const auto mit = m.funcs.find(name);
+          if (mit != m.funcs.end()) {
+            fn = mit->second;
+            break;
+          }
+        }
+      if (!fn) {
+        missing.push_back(name);
+        continue;
+      }
+      resolved.emplace_back(slot, fn);
+    }
+    if (!missing.empty()) {
+      std::string list;
+      for (const std::string &n : missing) {
+        if (!list.empty())
+          list += ", ";
+        list += "'" + n + "'";
+      }
+      throw QLangError(QLangErrorKind::Io, 0, 0,
+                       where + "missing native function(s): " + list);
+    }
+    auto &nf = mod->program.nativeFuncs;
+    for (const auto &[slot, fn] : resolved) {
+      while (nf.size() <= static_cast<size_t>(slot))
+        nf.push_back(nullptr);
+      nf[static_cast<size_t>(slot)] = fn;
+    }
+    return m_pimpl->modules.add(std::move(mod));
+  }
+
+  std::shared_ptr<LoadedModule> QLangContext::loadProgramFile(
+      const std::string &path)
+  {
+    bindThread();
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+      throw QLangError(QLangErrorKind::Io, 0, 0,
+                       "cannot open module file '" + path + "'");
+    return loadProgram(in, path);
+  }
+
+  const LoadedModule *QLangContext::loadedModule(const std::string &name) const
+  {
+    bindThread();
+    return m_pimpl->modules.find(name).get();
+  }
+
+  std::vector<std::shared_ptr<LoadedModule>> QLangContext::loadedModules() const
+  {
+    bindThread();
+    return m_pimpl->modules.all();
   }
 
   bool QLangContext::has(const std::string &name) const
@@ -517,6 +640,9 @@ namespace {
     // variables all die together; host code must re-run import<T>() after
     // clear().
     m_pimpl->types.clear();
+    // Loaded `.qlc` libraries die with the C++ modules they were resolved
+    // against (their native slots point at those functions).
+    m_pimpl->modules.clear();
   }
 
   void QLangContext::setFunc(const std::string &name, NativeFunc func)

@@ -602,9 +602,23 @@ external modules are modules not included in the base `qlang` system.
 
 each external module will have an import and export tables.
 
-example of external modules are `ql` files.
+example of external modules are `qlang` source files (`.ql`) compiled into module images
+(`.qlc`). The module — the thing a name refers to and an `import` binds — is the *artifact*:
+its identity, export table and import table are the three sections `## keyword export` and
+§4.6 of [../SERIALIZATION.md](../SERIALIZATION.md) define. The source file is how it was made.
 
 each module must be able to be compiled on it's own. when ingested by the `qlang` executor, it must be able to run (assuming they both share compatible bytecodes).
+
+**Implemented through Phase 3b (Round 64, 2026-11-09)** — plan
+[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md): a `.ql` compiles
+standalone into a `.qlc` that carries its name and both tables (**v9**), a host loads one into a
+context (`QLangContext::loadProgram` / `loadProgramFile`), an `import` resolves against its export
+table at compile time, and `QLangLinker` merges the images with the entry program into one
+runnable program (one function table, one folded constant pool, one global register area split
+into per-module slices, module top levels run in dependency order). What is *not* implemented is
+the second link model of `## technical specifications` 1 — executing a module image without
+merging it — which needs `GETIMPORT`/`CALLIMPORT` (Phase 3c), and finding a module by name
+without a host loading it first (search paths, `07-api.md`).
 
 ## export table (lookup)
 
@@ -624,10 +638,18 @@ and `.qlc` **v9** serializes it
 ([../SERIALIZATION.md](../SERIALIZATION.md) §4.6) with every `ref` range-checked at
 load. `--asm-level 5` lists it.
 
-*bytecode to reference the look up table* is **not** implemented: reading an
+**Consumed by the linker since Round 64 (2026-11-09)** — plan Phase 3b: a module
+that `import`s from a loaded image has its names resolved against this table at
+compile time, and `QLangLinker` turns each resolved entry into a handle of the
+merged program. So the table is now *read* — by the compiler and the linker.
+
+*bytecode to reference the look up table* is still **not** implemented: reading an
 import is `GETIMPORT` and calling one is `CALLIMPORT` (identities 73/74, reserved
-by plan **Q31**), Phase 3c. Until then the table is a property of the module —
-complete, serialized, listed — and no instruction reads it.
+by plan **Q31**), Phase 3c. A merged program therefore needs no instruction that
+names the table — the linker replaced every cross-module reference with a plain
+`callfn` / `mov` against the merged function table and register area — but a
+**module** image executed without merging (the future runtime registry's model)
+still cannot resolve one.
 
 ## import table (lookup)
 
@@ -635,17 +657,33 @@ this table will contain all the  global `functions`, `variables` and `constants`
 
 bytecode to reference the look up table.
 
-**Table implemented, nothing fills it yet (Round 63, 2026-11-09)** — plan
-[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phase 3a.
+**Implemented (Round 64, 2026-11-09)** — plan
+[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phase 3a (the
+section) + Phase 3b (what fills it).
 `CompiledProgram::imports` holds one `ImportEntry {module, name, kind, ref, alias}`
-per entity this module needs from another: `ref` is the *defining* module's handle,
-resolved at compile time and rewritten by the linker (Phase 3b), and `alias` is the
-local name when the import is aliased (`from m import f as g`), empty otherwise.
-`.qlc` v9 serializes and validates the section (§4.6), so a module image can
-already state what it needs. Phase 3a always emits an **empty** table — `import`
-still resolves C++-registered modules at compile time
-([09-modules.md](09-modules.md)) — and the opcodes that would consume it are
-Phase 3c, as for the export table above.
+per entity this module needs from another; `alias` is the local name when the import is
+aliased (`from m import f as g`), empty otherwise. `.qlc` v9 serializes and validates the
+section (§4.6), so a module image states what it needs.
+
+The compiler fills it when an `import` names a **loaded** `.ql` module
+(`QLangContext::loadProgram` / `loadProgramFile`, `docs/SERIALIZATION.md` §5.2): the five
+spec import forms resolve against that image's export table, a name in both a C++ module
+and a `.ql` module is a compile error, and so is an unknown module, an unknown export, a
+write through an import or an import cycle. C++-registered modules
+([09-modules.md](09-modules.md)) keep resolving the way they always did — compile-time
+natives in the negative-slot space of `CALL` — so they never appear here.
+
+`ref` is the **defining** module's handle (its function index, or its cell), because the
+importing program cannot name either yet. That is why an instruction cannot carry it
+directly at this phase: every operand that would is unsigned, so the reference is recorded
+as a `PendingLink` and `QLangLinker` rewrites it — and the operand holding it — into the
+merged program's space. After a link `ref` is a merged handle; before one it is a
+module-local handle, which is exactly what makes an image with pending links
+non-serializable (§4 of `docs/SERIALIZATION.md`).
+
+*bytecode to reference the look up table* is **not** implemented (`GETIMPORT` /
+`CALLIMPORT`, Phase 3c): a merged program needs none, and a module executed without
+merging still cannot read one.
 
 ## table for build in function (qlang base)
 
@@ -753,8 +791,10 @@ How the bullets above are read (plan **Q30** settles the second and fourth):
   no one may write is a constant, not a variable. What the defining module may not do is *rebind* a
   name exported as a `def` — the table holds its function index, so `f = 2` after `export def f()`
   would silently detach the export; assignment to and `++`/`--` of an exported function name are
-  compile errors. Importer-side `readonly` is **not** enforced yet: nothing can import a `.ql` name
-  (Phase 3b) and no instruction reads an import (Phase 3c).
+  compile errors. Importer-side `readonly` is enforced **since Round 64 (2026-11-09)**, plan
+  Phase 3b: a name bound from a loaded `.ql` module is not a variable of the importing module, so
+  assigning to it, `++`/`--` on it and `delete` of it are compile errors (`guardNotImported`), and
+  a closure may not capture it — reading it is what the import is for.
 - *functions can be executed but they not modified* — the entry is the function index and it is
   fixed for the life of the image.
 - *entities are shared and passed by pointer or reference* — `ExportEntry::ref` is the global
@@ -771,18 +811,36 @@ module may omit it, and its `export` statements change only the table, not the r
 Guard: `tests/unit/export_test.cpp` (`export`, 88 checks) — both forms and their kinds, forward
 references, the ten scope rejections (five inside a `def`/closure/`class`, five inside a
 global-scope block), `already exported`, the exported-function rebind guard, `MODULE_NAME`
-resolution, library mode, and the table through the `.qlc` v9 round trip.
+resolution, library mode, and the table through the `.qlc` v9 round trip. The importer side
+(resolution against a loaded export table, the write-through-import guards, the merge and the run)
+is guarded by `tests/unit/linker_test.cpp` (`linker`, 75 checks).
 
 ## technical specifications
 
+Status of each item as of Round 64 (2026-11-09) — plan
+[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phases 1–3b:
+
 1. **Link model** — both `link-time merge` and `runtime module registry`. should share a reusable solution
+   — ◐ **merge implemented (Round 64, Phase 3b)**: `QLangLinker`
+   (`include/qlang/QLangLinker.h`) merges the loaded images an entry imports into one program.
+   The reusable units the registry needs are in place and are what the merge consumes — the
+   tables (`CompiledProgram::exports`/`imports`), the registry (`QLangContext::loadProgram`,
+   `loadedModule`, `loadedModules`) and resolution against the export table (compile time). The
+   registry itself is **not** implemented: it needs the two opcodes of Phase 3c, because a
+   module executed on its own has no merged index to fall back on.
 2. **Entry point** — global scope script only at this point. no main function. single file qlang modules in this version only.
-
+   — ✓ **implemented (Round 63/64)**: a library compiles its top level as `<init>`
+   (`QLangCompiler::setLibraryMode`), and a merged program runs every module's `<init>` exactly
+   once, dependencies first, before the entry's (item 3's order, `CompiledProgram::initSequence`).
+   Single-file modules only, as specified.
 3. **Cross-module variable semantics** — shared cell (write-through, recommended)
-   
+   — ✓ **implemented (Round 64)**: one global register area per merged program, sliced per
+   module, so an exported variable is one cell the defining module writes and importers read
+   (`readonly` binds the importer — `## keyword export`). The defining module's writes are
+   visible to the importer; a write *through* an import is a compile error.
 4. **Export syntax** — see keyword export
-
-5. **Import graph rules** 
+   — ✓ **implemented (Round 63)**.
+5. **Import graph rules**
 
   C++ api can import `.ql modules` into a context.
   `.ql modules` may import `C++ modules`.
@@ -793,7 +851,19 @@ resolution, library mode, and the table through the `.qlc` v9 round trip.
 
   aliases is already a requirment. (e.g. `from m import f as g`)
 
+  — ◐ **implemented except one direction (Round 64)**: the C++ API loads `.ql` images into a
+  context and a `.ql` entry imports from them (all five import forms, aliases included), a `.ql`
+  keeps importing C++ modules (compile-time natives, unchanged), C++ modules still cannot load
+  `.ql`, and the cycle check is a compile error (`QLangCompiler::checkImportCycles`) with a
+  second, loader-side half in the linker. *"`.ql` modules may import `.ql` modules"* is **not**
+  available to a *library* image yet: only the entry program can hold the unresolved references
+  that a merge resolves (`CompiledProgram::pendingLinks` is a link artifact, not an image
+  section), so a library that imports another `.ql` is rejected until Phase 3c gives it
+  `GETIMPORT`/`CALLIMPORT`. An entry importing two libraries, each importing nothing, works.
 6. **Compatibility rule** — at this early stage, compatible bytecode is `qlang` bytecodes generated with the exact same compiler version. 
+   — ✓ **implemented**: the reader is single-version (`version != kQlcVersion` → rejected), the
+   builtin name table is library-side rather than serialized, and native slots store **names**
+   re-resolved against the loading context.
 
 ## bytecode encoding guidelines
 

@@ -378,6 +378,14 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
   for (const auto &c : prog.constants)
     if (!isDurable(c))
       return false;
+  // A linked program is not an image: its module-init sequence (Phase 3b) is
+  // link-time information the v9 format has no section for, and writing such a
+  // program out would silently drop the top levels of every imported module.
+  // Unresolved cross-module references are the same kind of artifact: the
+  // handles in them name the DEFINING module, so the image would run against
+  // the wrong functions and cells.
+  if (!prog.initSequence.empty() || !prog.pendingLinks.empty())
+    return false;
   // Header.
   putBytes(os, "QLC1", 4);
   // Format version (F1): written from the single shared constant
@@ -508,6 +516,9 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
     // only read after the function records (§4.2), so the operands are
     // collected here and range-checked once the pool exists.
     std::vector<int32_t> poolRefs;
+    // Same for `callfn` operands: they name a function record, so they can
+    // only be checked once every record has been read.
+    std::vector<int32_t> funcRefs;
     for (uint32_t i = 0; i < funcCount; i++) {
       Function fn;
       fn.name = r.str();
@@ -569,9 +580,18 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
           r.fail("invalid opcode");
         // Operand b names a pool entry whenever the right kind is `ConstPool`
         // (`mov` kind 2 / `makefunc` / `makegen`); `emit` is the one opcode
-        // whose b is a pool index though its kind stays register.
-        if (di.rightKind == RightKind::ConstPool || di.op == Opcode::EMIT)
+        // whose b is a pool index though its kind stays register. Both cases
+        // come from the single operand-role table.
+        switch (operandRole(di.op, 1, di.rightKind)) {
+        case OperandRole::PoolIndex:
           poolRefs.push_back(di.b);
+          break;
+        case OperandRole::FunctionIndex:
+          funcRefs.push_back(di.b);
+          break;
+        default:
+          break;
+        }
         lastEnd = fn.instrOffsets[j] + di.size;
         if (lastEnd > codeSize)
           r.fail("instruction overruns code stream");
@@ -586,6 +606,9 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
     // a library module (SPEC §bytecodes "keyword export").
     if (out.functions[0].name != "main" && out.functions[0].name != "<init>")
       r.fail("functions[0] is neither 'main' nor '<init>'");
+    for (int32_t idx : funcRefs)
+      if (idx < 0 || static_cast<size_t>(idx) >= out.functions.size())
+        r.fail("function index out of range");
 
     // 3. Module constant pool (§4.2): the single table every function's pool
     // operands index into.

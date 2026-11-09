@@ -78,13 +78,19 @@ private:
   struct RegFile {
     std::vector<QLangValue> owned;
     std::vector<QLangValue> *aliased = nullptr;
+    // Register 0 of this file's address space. A module top level of a LINKED
+    // program aliases the shared global table at its own module's offset, so
+    // each module keeps the register numbers its compiler assigned while
+    // occupying a disjoint slice of the table (external-modules plan v4
+    // Phase 3b) — no operand rewriting needed. Always 0 for an owned frame.
+    size_t base = 0;
     std::vector<QLangValue> &vec() { return aliased ? *aliased : owned; }
     const std::vector<QLangValue> &vec() const { return aliased ? *aliased : owned; }
-    size_t size() const { return vec().size(); }
-    bool empty() const { return vec().empty(); }
-    void resize(size_t n, const QLangValue &v = QLangValue()) { vec().resize(n, v); }
-    QLangValue &operator[](size_t i) { return vec()[i]; }
-    const QLangValue &operator[](size_t i) const { return vec()[i]; }
+    size_t size() const { return vec().size() > base ? vec().size() - base : 0; }
+    bool empty() const { return size() == 0; }
+    void resize(size_t n, const QLangValue &v = QLangValue()) { vec().resize(base + n, v); }
+    QLangValue &operator[](size_t i) { return vec()[base + i]; }
+    const QLangValue &operator[](size_t i) const { return vec()[base + i]; }
     // Move the owned storage out (generator suspend). Only generator frames
     // suspend, and they always own their storage (the main frame is the
     // sole alias and never yields).

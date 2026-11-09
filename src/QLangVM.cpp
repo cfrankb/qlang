@@ -1850,6 +1850,16 @@ void QLangVM::bindCaptures(Frame *frame, const Function &fn,
   EnvPtr env;
   for (size_t i = 0; i < spec.size(); i++) {
     const CaptureRef &cr = spec[i];
+    // A negative spec register is the compiler's sentinel for "this capture is
+    // a module global": the value is `-1 - <absolute global-table slot>`, so it
+    // needs no name lookup. That matters for a linked program, whose merged
+    // `vars` map holds only the entry module's names, and for a program loaded
+    // from a `.qlc` image, which does not carry capture names at all
+    // (external-modules plan v4 Phase 3b).
+    if (cr.reg < 0) {
+      out.push_back(CaptureRef{nullptr, -cr.reg - 1, -1}); // GLOBAL
+      continue;
+    }
     const std::string &name =
         (i < fn.captureNames.size()) ? fn.captureNames[i] : std::string();
     auto vit = m_prog.vars.find(name);
@@ -1966,6 +1976,23 @@ void QLangVM::run() {
   auto &slots = m_scope.globalSlots();
   if (slots.size() < static_cast<size_t>(m_prog.registerCount))
     slots.resize(static_cast<size_t>(m_prog.registerCount), QLangValue());
+  // A linked program runs every imported module's top level first, in
+  // dependency order, exactly once, before the entry module's (SPEC §bytecodes
+  // "technical specifications" 3, plan Q35). Each is a main-like frame aliasing
+  // the same table at its own register offset, so a module's globals are live
+  // in the table by the time the entry module reads them.
+  for (const ModuleInit &mi : m_prog.initSequence) {
+    Frame initFrame;
+    initFrame.funcIndex = mi.funcIndex;
+    initFrame.regs.aliased = &slots;
+    initFrame.regs.base = static_cast<size_t>(mi.regBase);
+    m_frames.push_back(std::move(initFrame));
+    m_cur = 0;
+    while (m_cur >= 0) {
+      if (runFrames() == RunResult::Yielded)
+        break;
+    }
+  }
   Frame mainFrame;
   mainFrame.funcIndex = 0;
   mainFrame.regs.aliased = &slots;

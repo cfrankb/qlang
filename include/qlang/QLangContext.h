@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstddef>
 #include <functional>
+#include <iosfwd>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -23,6 +24,11 @@ namespace qlang
   // runFinalizer() pass program shared_ptrs without including the compiler
   // header (the pimpl keeps the dependency one-way).
   struct CompiledProgram;
+
+  // Forward declaration (defined in QLangBytecodeIO.h, which includes this
+  // header): the loaded-module registry stores LoadedModule shared_ptrs in
+  // the pimpl, so the public API needs the name only.
+  struct LoadedModule;
 
   // Gated trace-output tiers, used by QLangVM::trace / QLangCompiler::trace.
   // 0 = silent (default); 1 = frame/call events; 2 = VM loop + opcodes +
@@ -221,6 +227,25 @@ namespace qlang
     // Name of the module this context runs. The context parses source into
     // the `main` module (SPEC # modules); error reports reference it.
     const char *moduleName() const { return "main"; }
+
+    // Loaded `.qlc` modules (SPEC §bytecodes "external modules"; plan v4
+    // Phase 3b).
+    //
+    // A compiled library image is loaded once and kept in the context's module
+    // registry, keyed by the name `import` binds it under (its
+    // `program.moduleName`). Loading re-resolves the image's native-slot names
+    // against this context's natives and its registered C++ modules, so a
+    // library's `import math` works without the host repeating the mapping.
+    // Both loaders throw QLangError(Io) on an unreadable or malformed image,
+    // an unresolvable native name, or a module name that is already loaded.
+    std::shared_ptr<LoadedModule> loadProgram(std::istream &is,
+                                              const std::string &path = "");
+    std::shared_ptr<LoadedModule> loadProgramFile(const std::string &path);
+    // The loaded module importable as `name`, or nullptr. Invalidated by
+    // clear().
+    const LoadedModule *loadedModule(const std::string &name) const;
+    // Every loaded module, in load order.
+    std::vector<std::shared_ptr<LoadedModule>> loadedModules() const;
 
     // External C++ type registration (docs/EXTERNAL_TYPES.md).
     //

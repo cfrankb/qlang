@@ -61,4 +61,19 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
              std::vector<std::pair<int, std::string>> &nativeSlots,
              std::string &err);
 
+// One `.qlc` image a QLangContext has loaded, with the provenance the linker
+// needs (external-modules plan v4 Phase 3b). QLangContext::loadProgram()
+// produces it, the context's module registry keeps it, and QLangLinker merges
+// `program` into the entry program.
+struct LoadedModule {
+  std::string path; // file it was read from ("" when loaded from a stream)
+  // The image. `program.moduleName` is the name `import` binds it under and
+  // the registry's key; `program.nativeFuncs` holds the re-resolved natives.
+  CompiledProgram program;
+  // The image's native-slot table (slot -> C++ function name,
+  // docs/SERIALIZATION.md §4.3) as stored on disk, kept for re-resolution and
+  // for the driver's module breakdown.
+  std::vector<std::pair<int, std::string>> nativeSlots;
+};
+
 } // namespace qlang

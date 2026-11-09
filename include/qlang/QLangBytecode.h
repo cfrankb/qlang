@@ -474,6 +474,28 @@ bool isJumpOpcode(Opcode op);
 // modifier kind, not an opcode identity).
 bool isRegConstOpcode(Opcode op);
 
+// What an operand slot *means*, as opposed to how wide it is (the modifier
+// byte's business). Two consumers need the answer and must not disagree: the
+// `.qlc` reader, which range-checks every table reference an image carries
+// (`docs/SERIALIZATION.md` §5.1), and the linker, which rewrites those
+// references when several module images merge into one program
+// (`docs/plans/external-modules-plan-v4.md` Phase 3b).
+enum class OperandRole : uint8_t {
+  None,          // not stored, or stored but not an address (arg count, type id)
+  Register,      // index into the executing frame's register file
+  PoolIndex,     // index into CompiledProgram::constants
+  FunctionIndex, // index into CompiledProgram::functions
+  NativeSlot,    // CALL's signed function id (negative: native slot -1 - id)
+  CaptureIndex,  // REFLOAD/REFSTORE b: index into the frame's capture table
+  JumpTarget     // jump offset (an instruction index before encoding)
+};
+
+// The role of operand `slot` (0 = a, 1 = b, 2 = c) of `op`. `kind` is the
+// right operand's RightKind: it is what decides whether `b` names a register,
+// an inline immediate or a pool entry, so a caller that does not know it must
+// pass `defaultRightKind(op)`.
+OperandRole operandRole(Opcode op, int slot, RightKind kind);
+
 // Size computation. The base (unescaped) form carries no modifier byte.
 //
 // Number of operand bytes of a base-form instruction (the opcode byte
