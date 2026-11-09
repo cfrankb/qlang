@@ -1,7 +1,7 @@
 # QLang Serialization / Deserialization Spec
 
-Status: **implemented** — `.qlc` program image (v8)
-Covers: `.qlc` program image (v8) and state snapshot (v2, future)
+Status: **implemented** — `.qlc` program image (v9)
+Covers: `.qlc` program image (v9) and state snapshot (v2, future)
 Reference implementation: `src/QLangBytecodeIO.cpp` (library codec)
 Architecture assessment of this change: [qlc-codec-assessment.md](qlc-codec-assessment.md)
 
@@ -92,13 +92,13 @@ Rules:
   materialises **fresh** payloads — a decoded value
   never aliases another value's storage.
 
-## 4. Program image (magic `QLC1`, version 8)
+## 4. Program image (magic `QLC1`, version 9)
 
 ```
 offset  field            type   notes
 ──────  ───────────────  ─────  ──────────────────────────────────────────
 0       magic            4s     "QLC1"
-4       version          u32    = 8  (kQlcVersion; readers accept 8 only)
+4       version          u32    = 9  (kQlcVersion; readers accept 9 only)
 8       funcCount        u32
 …       functions        funcCount × Function
         poolCount        u32
@@ -110,12 +110,17 @@ offset  field            type   notes
         constVarCount    u32
 …       constVars        constVarCount × String
         registerCount    i32
+        moduleName       String                   // module identity (§4.6)
+        exportCount      u32
+…       exports          exportCount × ExportEntry   (§4.6)
+        importCount      u32
+…       imports          importCount × ImportEntry   (§4.6)
 ```
 
 **Version allocation** (the counter is shared across plans, so each bump is recorded here when it
 is decided): **v8** = the module constant pool (§4.2, Round 62,
-[plans/external-modules-plan-v4.md](plans/external-modules-plan-v4.md) Phase 2) · **v9** = reserved
-for the same plan's Phase 3 module identity + export/import tables · the next free number belongs
+[plans/external-modules-plan-v4.md](plans/external-modules-plan-v4.md) Phase 2) · **v9** = module
+identity + export/import tables (§4.6, Round 63, same plan Phase 3a) · the next free number belongs
 to whoever lands next ([plans/offset-table-elimination-plan.md](plans/offset-table-elimination-plan.md)
 is the candidate).
 
@@ -135,7 +140,7 @@ u32   locCount, locCount × (u16 line, u16 col)
 ```
 
 The instruction stream is the **escape-byte format** introduced in v6 and
-unchanged in v7 and v8 (see `include/qlang/QLangBytecode.h`, §4.5): a flat byte stream
+unchanged in v7, v8 and v9 (see `include/qlang/QLangBytecode.h`, §4.5): a flat byte stream
 where each instruction starts with an opcode byte whose bit 7 is the escape flag
 and bits 0–6 are the opcode identity (128 base identities, 72 defined — v7
 retired `movc`, `movi`, `addi`, `subi`, `cmpi`, `jmpfalse` and `jmptrue` and
@@ -156,9 +161,13 @@ The source location is a per-function side table (`loc`), parallel to the
 offset table: `locCount` entries of `(u16 line, u16 col)` with
 `locCount == offCount` (a `(0,0)` entry means "no source location").
 
-- `functions[0]` is the implicit `main`. The writer MUST emit it first; the
-  reader MUST reject files where `functions[0].name != "main"` or
-  `funcCount < 1`.
+- `functions[0]` is the program's top level. The writer MUST emit it first; the
+  reader MUST reject files where `funcCount < 1` or `functions[0].name` is
+  neither `"main"` (a runnable script) nor `"<init>"` (a **library** module —
+  the compiled global scope of a module that exports entities instead of
+  running, §4.6; SPEC §bytecodes "technical specifications" 2, "no main
+  function"). Which of the two names appears is the compiler's choice
+  (`QLangCompiler::setLibraryMode`), not a flag in the image.
 - Every decoded opcode identity MUST be `< kOpcodeUsedCount` (72).
 - `line`/`col` in the loc side table are 0-based source positions (0,0 when
   unknown).
@@ -209,7 +218,7 @@ constVars: u32 nameLen, name bytes
 Backing containers are `std::unordered_map` / `std::unordered_set`: **order
 within both sections is unspecified**. Readers MUST NOT depend on it.
 
-### 4.5 Instruction stream (v6 layout, current in v8)
+### 4.5 Instruction stream (v6 layout, current in v9)
 
 Each instruction is `[opcode byte] [modifier byte] [operands…]`. In the opcode
 byte **bit 7 is the escape flag** and bits 0–6 are the opcode identity
@@ -284,20 +293,67 @@ both uniformly:
 - **Widest instruction: 15 bytes** (`op` + `e` = 2, left = 4, right = 8, third
   = 1 — e.g. `CONV`); the reader's `codeSize` guard is derived from it.
 
+### 4.6 Module identity and the export/import tables (new in v9)
+
+```
+String  moduleName
+u32     exportCount
+        exportCount × ExportEntry
+u32     importCount
+        importCount × ImportEntry
+
+ExportEntry:  u8 kind, String name, i32 ref
+ImportEntry:  String module, String name, u8 kind, i32 ref, String alias
+```
+
+The three sections are **appended at the tail**, after `registerCount`, so every
+v8 section keeps its byte position. They make an image a *module* rather than
+only a program: a name other modules import by, the entities it exposes, and the
+entities it needs from others (SPEC §bytecodes `## keyword export`,
+`## export table (lookup)`, `## import table (lookup)`;
+[plans/external-modules-plan-v4.md](plans/external-modules-plan-v4.md)
+Phase 3a).
+
+`kind` is the `ExportKind` enum: **0** `Var`, **1** `Const`, **2** `Func`.
+
+- `ref` is a handle into **this image**: for `Func` an index into the function
+  array (§4.1), for `Var`/`Const` the global register — the "shared cell" an
+  importer will read (SPEC `## technical specifications` 3).
+- `ImportEntry::ref` is the *defining* module's `ref`, resolved at compile time
+  and rewritten by Phase 3b's linker; `alias` is the local name when the import
+  is aliased (`from m import f as g`) and empty when it is not.
+- `moduleName` MUST be non-empty. The compiler takes it from the module's own
+  `export const MODULE_NAME = "<name>"` when present, else from the driver
+  (`QLangCompiler::setModuleName` — `qlang_run` passes the source file stem),
+  else `"main"`.
+- Export names are unique. The compiler rejects a second export of one name at
+  the source level (SPEC `## keyword export`: `already exported`); the reader
+  rejects a duplicate too, because a lookup table with two answers for one name
+  is not a lookup table.
+- Order within both sections is the compiler's emission order and is **not**
+  specified — readers MUST look names up, never index by position.
+
+**Phase 3a is the write side.** The VM reads neither table and the opcodes that
+would (`GETIMPORT` / `CALLIMPORT`, identities 73/74) are not defined yet, so the
+compiler always emits an **empty** import table. The reader still decodes and
+validates the section — a v9 image is a complete module description even while
+nothing consumes its imports (Phase 3b's linker is the first consumer).
+
 ## 5. Load contract (deserializer)
 
 ### 5.1 Validation sequence
 
-1. At least 12 bytes present; magic == `QLC1`; `version == 8`
+1. At least 12 bytes present; magic == `QLC1`; `version == 9`
    (`kQlcVersion`; anything else → "unsupported version", never a parse
-   attempt). Legacy v1–v7 files (fixed 8-byte instructions through v4, the
+   attempt). Legacy v1–v8 files (fixed 8-byte instructions through v4, the
    two-nibble modifier byte in v5, v6 — same layout but the seven identities
-   v7 retired — and v7, whose constant pools live in the function records) are
-   NOT accepted.
+   v7 retired — v7, whose constant pools live in the function records, and v8,
+   which simply ends at `registerCount` and carries no module tail) are NOT
+   accepted.
 2. Every read is bounds-checked. Truncation → `QLangError(Io)` with the byte
    offset where the read failed.
-3. Structural invariants: `funcCount >= 1`, `functions[0].name == "main"`,
-   `codeSize <= 64 Mi × 15` (§8 instruction cap × the widest instruction),
+3. Structural invariants: `funcCount >= 1`, `functions[0].name` is `"main"` or
+   `"<init>"`, `codeSize <= 64 Mi × 15` (§8 instruction cap × the widest instruction),
    every instruction decodes and its opcode identity is `< kOpcodeUsedCount`,
    offsets strictly increasing with the last instruction ending exactly at
    `codeSize`, `locCount == offCount`, every const-pool operand in
@@ -306,6 +362,11 @@ both uniformly:
    all `paramCount >= 0`. Decoding is what enforces the modifier rules of
    §4.5: reserved left width (3), reserved right kind (3), reserved immediate
    forms (12–15), a kind the opcode does not permit, and an unescaped `CALL`.
+   The module tail (§4.6) is validated as it is read: a non-empty `moduleName`,
+   `kind <= Func`, a non-empty entry name, a non-negative `ref`, a `Func` ref
+   inside `[0, funcCount)` and a `Var`/`Const` ref inside
+   `[0, registerCount)`, no duplicate export name, and neither count above the
+   §8 instruction cap.
 4. Value decoding enforces §8 limits (depth, sizes).
 
 Any violation produces one structured error; the reader never partially
@@ -437,12 +498,15 @@ A codec is not "done" until all of these pass:
    byte-identical to direct `ctx.run(source)`.
 3. **Malformed-input suite** (each case → clean `Io` error, no crash, no
    partial out-param): truncated at every section boundary, bad magic,
-   version 7 (below `kQlcVersion`) and version 9 (above), opcode identity
+   version 8 (below `kQlcVersion`) and version 10 (above), opcode identity
    `>= kOpcodeUsedCount`, reserved modifier fields (left width 3, kind 3,
    immediate forms 12–15, unpermitted kind, unescaped `CALL`), truncated
    instruction, const-pool operand `>= poolCount` (§4.2), dangling closure
    index, duplicate native slot, negative count,
-   100-deep nested array, 70 Mi value count.
+   100-deep nested array, 70 Mi value count, and every §4.6 tail violation
+   (empty module name, invalid kind, empty entry name, negative ref, an export
+   ref past the function table or the register range, duplicate export name, a
+   truncated tail).
 4. **Native mismatch**: program calling an unregistered native → single
    error naming all missing natives.
 5. **(v2) Snapshot/resume**: run a script to a checkpoint, snapshot, restore
@@ -453,9 +517,9 @@ A codec is not "done" until all of these pass:
 | Item | Status |
 |---|---|
 | Value codec (`serializeValue`/`deserializeValue`) | done — matches §3 |
-| Program writer (`writeQlc`, §4 incl. module pool + native-slot table) | done — v8, explicit little-endian, escape-byte code stream + offset table, loc side table, program-level constant pool |
+| Program writer (`writeQlc`, §4 incl. module pool + native-slot table + module tail) | done — v9, explicit little-endian, escape-byte code stream + offset table, loc side table, program-level constant pool, module name + export/import tables (§4.6) |
 | `QLangErrorKind::Io` | done |
-| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v8 only, pool-index range check |
+| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v9 only, pool-index range check, §4.6 tail validation |
 | App writer (POC `QlcWriter` in `qlang_run.cpp`) | deleted — replaced by `writeQlc` |
 | Tests (`codec_check`: §9 items 1, 3) | done |
 | `QLangContext::loadProgram` / `execute` (§5.2, §9 item 2/4) | not started |

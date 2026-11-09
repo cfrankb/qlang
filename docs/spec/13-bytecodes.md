@@ -612,11 +612,40 @@ includes all the global `functions`, `variables` and `constants` being exposed t
 
 bytecode to reference the look up table.
 
+**Implemented (Round 63, 2026-11-09)** — plan
+[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phase 3a.
+The table is `CompiledProgram::exports` (`include/qlang/QLangBytecode.h`): one
+`ExportEntry {kind, name, ref}` per exposed entity, in source order, where `kind`
+is `Var` / `Const` / `Func` and `ref` is the handle into this program — the
+function index for a `def`, the global register (the shared cell of
+`## technical specifications` 3) for a variable or a constant. The compiler builds
+it in a pre-pass over the top level, so the table exists before any body compiles,
+and `.qlc` **v9** serializes it
+([../SERIALIZATION.md](../SERIALIZATION.md) §4.6) with every `ref` range-checked at
+load. `--asm-level 5` lists it.
+
+*bytecode to reference the look up table* is **not** implemented: reading an
+import is `GETIMPORT` and calling one is `CALLIMPORT` (identities 73/74, reserved
+by plan **Q31**), Phase 3c. Until then the table is a property of the module —
+complete, serialized, listed — and no instruction reads it.
+
 ## import table (lookup)
 
 this table will contain all the  global `functions`, `variables` and `constants` being imported from other modules.
 
 bytecode to reference the look up table.
+
+**Table implemented, nothing fills it yet (Round 63, 2026-11-09)** — plan
+[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phase 3a.
+`CompiledProgram::imports` holds one `ImportEntry {module, name, kind, ref, alias}`
+per entity this module needs from another: `ref` is the *defining* module's handle,
+resolved at compile time and rewritten by the linker (Phase 3b), and `alias` is the
+local name when the import is aliased (`from m import f as g`), empty otherwise.
+`.qlc` v9 serializes and validates the section (§4.6), so a module image can
+already state what it needs. Phase 3a always emits an **empty** table — `import`
+still resolves C++-registered modules at compile time
+([09-modules.md](09-modules.md)) — and the opcodes that would consume it are
+Phase 3c, as for the export table above.
 
 ## table for build in function (qlang base)
 
@@ -705,6 +734,45 @@ const-pool operand against it.
 
 ```
 
+**Implemented (Round 63, 2026-11-09)** — plan
+[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phase 3a. Both forms
+parse: the **prefix** form (`export def`, `export const`, `export` before a variable assignment or
+an arrow closure) marks the declaration it prefixes, and the **standalone** form (`export AUTHOR;`)
+names a global declared earlier *or later* in the file — the table is built in a pre-pass over the
+top level, before any body compiles.
+
+How the bullets above are read (plan **Q30** settles the second and fourth):
+
+- *only valid at global scope* — enforced twice: the parser rejects the keyword inside a `def`, an
+  arrow closure or a `class` body, and the compiler's export pre-pass rejects it inside a
+  global-scope `if`/`for`/`while`/`switch` block, where it would otherwise be compiled and silently
+  dropped from the table.
+- *exported entities are `readonly`* / *variables can be read but not modified* — **`readonly` is a
+  property of the importer, not of the defining module.** The module that declares a name keeps
+  writing to it: `## technical specifications` 3 makes the cell shared and write-through, and a cell
+  no one may write is a constant, not a variable. What the defining module may not do is *rebind* a
+  name exported as a `def` — the table holds its function index, so `f = 2` after `export def f()`
+  would silently detach the export; assignment to and `++`/`--` of an exported function name are
+  compile errors. Importer-side `readonly` is **not** enforced yet: nothing can import a `.ql` name
+  (Phase 3b) and no instruction reads an import (Phase 3c).
+- *functions can be executed but they not modified* — the entry is the function index and it is
+  fixed for the life of the image.
+- *entities are shared and passed by pointer or reference* — `ExportEntry::ref` is the global
+  register (the shared cell) for a variable or a constant, the function index for a `def`.
+
+**Module identity** (plan **Q29**): the name is the value of the module's own
+`export const MODULE_NAME = "<name>"` when it declares one — a `const` holding a constant string,
+because a loader has to read the identity out of the image without running the module — else the
+name the driver supplies (`qlang_run` passes the source file stem), else `main`. A **library**
+compile (`QLangCompiler::setLibraryMode`) makes `MODULE_NAME` mandatory and compiles the top level
+as `<init>` rather than `main` (`## technical specifications` 2, "no main function"); an application
+module may omit it, and its `export` statements change only the table, not the run.
+
+Guard: `tests/unit/export_test.cpp` (`export`, 88 checks) — both forms and their kinds, forward
+references, the ten scope rejections (five inside a `def`/closure/`class`, five inside a
+global-scope block), `already exported`, the exported-function rebind guard, `MODULE_NAME`
+resolution, library mode, and the table through the `.qlc` v9 round trip.
+
 ## technical specifications
 
 1. **Link model** — both `link-time merge` and `runtime module registry`. should share a reusable solution
@@ -791,10 +859,18 @@ better encoding
 Normative summary of the instruction encoding beyond the base (unescaped) forms. Four versions
 are described in this document and it matters which one a passage refers to:
 
-- **Shipped — `.qlc` v8** (Round 62): the v7 instruction layout **unchanged**; what moved is where
-  the constants live — one module-level pool per program (`CompiledProgram::constants`) instead of
-  a pool inside every function record, so the pool section sits after the function records
-  ([../SERIALIZATION.md](../SERIALIZATION.md) §4.2) and every const-pool operand indexes it.
+- **Shipped — `.qlc` v9** (Round 63): the v8 image **unchanged**, plus a module tail after
+  `registerCount` — the module's name and its export and import tables
+  (`CompiledProgram::moduleName` / `exports` / `imports`,
+  [../SERIALIZATION.md](../SERIALIZATION.md) §4.6) — so an image describes a *module*, not only a
+  runnable program; `functions[0]` may now be a library module's `<init>` instead of `main`.
+  Implementation plan: [../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md)
+  Phase 3a; see `## keyword export` and `## export table (lookup)`.
+- **Layout — `.qlc` v8** (Round 62, superseded by v9): the v7 instruction layout **unchanged**; what
+  moved is where the constants live — one module-level pool per program
+  (`CompiledProgram::constants`) instead of a pool inside every function record, so the pool section
+  sits after the function records ([../SERIALIZATION.md](../SERIALIZATION.md) §4.2) and every
+  const-pool operand indexes it.
   Implementation plan: [../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md)
   Phase 2; see `## unified constant table`.
 - **Layout — `.qlc` v7** (Round 60, superseded by v8): the v6 layout **unchanged**, with the retired
@@ -812,7 +888,7 @@ are described in this document and it matters which one a passage refers to:
   on-disk contract: [../SERIALIZATION.md](../SERIALIZATION.md) §4.5.
 - **Retired — `.qlc` v5** (Round 37): the same flat stream, but the modifier carried two
   **nibbles** (low = left-operand form, high = right-operand form) and signed `Int` immediates
-  only. Readers accept v8 only; the historical record stays in
+  only. Readers accept v9 only; the historical record stays in
   [../plans/archive/instruction-format-escape-byte-plan.md](../plans/archive/instruction-format-escape-byte-plan.md).
 
 The flag-setting comparison family `eqf`/`ltf`/`gtf`/`ltef`/`gtef` is **implemented and

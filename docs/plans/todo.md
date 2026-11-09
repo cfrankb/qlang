@@ -101,6 +101,25 @@ closing the **Q#**s its item points at:
       **Implemented**; **Q34 settled** (v8 = pool, v9 = Phase 3, recorded in `SERIALIZATION.md` §4).
       Phase 3 (`export` + import/export tables, `GETIMPORT`/`CALLIMPORT`, `.qlc` v9) is next —
       gated on **Q29–Q33** + **Q35**, and on C8 for name-based resolution
+- [x] **`external-modules-plan-v4.md` Phase 3a (`export` + module identity + tables) ✓ implemented
+      (Round 63, 2026-11-09)**: `export` is a keyword with both spec forms — the prefix on a `def` /
+      `const` / assignment / arrow closure and the standalone `export NAME;` (forward references
+      allowed) — global scope only, enforced twice (the parser's body-depth guard, then the
+      compiler's export pre-pass for a global-scope `if`/`for`/`while`/`switch` block).
+      `CompiledProgram` gains `moduleName`, `exports` (`ExportEntry {kind, name, ref}`) and
+      `imports` (`ImportEntry {module, name, kind, ref, alias}`); `setModuleName` / `setLibraryMode`
+      are the new compiler options (library mode compiles the top level as `<init>` and requires
+      `export const MODULE_NAME`). **`.qlc` v8 → v9** — the three sections append after
+      `registerCount` (`docs/SERIALIZATION.md` §4.6), the reader stays single-version (v1–v8
+      rejected) and validates the tail at load. **Q29 / Q30 ratified as defaulted** (name = source
+      `MODULE_NAME` > driver stem > `main`, mandatory only in library mode; `readonly` binds the
+      *importer* — the defining module keeps writing to an exported variable, but a name exported
+      as a `def` cannot be rebound). **Q31 untouched**: no opcode was appended, `kOpcodeUsedCount`
+      stays **72** and the import table is always empty. `13-bytecodes.md` `## keyword export`
+      marked **Implemented**. New `export` suite (88 checks), `codec_check` 337 → 352, corpus
+      byte-identical, ctest **52/52**. Phase 3b (loader + linker) is next — gated on **Q32**,
+      **Q33**, **Q35** and, for name-based resolution, on **C8**; Phase 3c (`GETIMPORT` /
+      `CALLIMPORT` at 73/74) on **Q31**
 - [ ] `missing-features-plan.md` itself drifted after Rounds 56/59/60: the A5 row still says
       "pipeline still emits v5", Phase 2 still says "`kOpcodeUsedCount` is 73 … A5 raises it to
       80", Conventions still say "`.qlc` v5 stays the only supported format", and Dependencies
@@ -121,6 +140,11 @@ closing the **Q#**s its item points at:
       guard. Repro: `local n = 3` / `for i in range(5, n) step -1 { }` → "infinite loop (step
       limit)". Constant bounds take the other path and work. Marked with a `Defect` comment in
       `src/QLangCompiler.cpp:2178`
+- [ ] **compiler defect (pre-existing, found 2026-11-09 while verifying Round 63)**: a top-level
+      `const` interpolated inside an **f-string in a function body** evaluates to nil —
+      `const G = "hello"` / `def a(n) { return f"{G}" }` / `println(a(1))` prints `nil`, while the
+      plain (non-f-string) read of the same const works. Reproduced identically on a `HEAD`
+      worktree build, so it is not a Phase 3a regression; recorded in `history.md` Round 63
 - [ ] **perf**: `perf_stress` execute **10.974 ms** vs the committed baseline **10.382 ms**
       (+5.7 %, deliberately not re-baselined in Round 60). Either land the loop-direction hoist
       that recovers it (`archive/phase3-opcode-retirement-plan.md` §8: 8 → 7 instructions in the

@@ -52,6 +52,40 @@ private:
   std::unordered_map<std::string, int> m_keys;
 };
 
+// What one exported name binds to (SPEC §bytecodes "export table (lookup)":
+// the global `functions`, `variables` and `constants` a module exposes).
+enum class ExportKind : uint8_t {
+  Var = 0,   // a mutable global (register / shared cell)
+  Const = 1, // a `const` global (register the importer may not write)
+  Func = 2,  // a `def` function
+};
+
+// One entry of a module's export table (SPEC §bytecodes "export table
+// (lookup)"). `ref` is what a loader resolves the name to: for Func the index
+// into the program's function table, for Var/Const the register (global slot)
+// holding the value — the shared cell of SPEC §bytecodes "technical
+// specifications" 3.
+struct ExportEntry {
+  ExportKind kind = ExportKind::Var;
+  std::string name;
+  int32_t ref = -1;
+};
+
+// One entry of a module's import table (SPEC §bytecodes "import table
+// (lookup)"): a name bound from another module, `alias` being the name it is
+// bound under locally (empty when unaliased, SPEC §bytecodes "technical
+// specifications" 5). `ref` is the import-table slot GETIMPORT/CALLIMPORT
+// operand `b` indexes (plan Phase 3b); Phase 3a never populates the table,
+// because `import` still binds C++ module functions through the negative-slot
+// space of `CALL`.
+struct ImportEntry {
+  std::string module;
+  std::string name;
+  ExportKind kind = ExportKind::Func;
+  int32_t ref = -1;
+  std::string alias;
+};
+
 // Built-in function ids shared by the compiler (emits CALL with one of these)
 // and the VM (dispatches on them). Order is stable and used as the operand.
 enum class Builtin : int {

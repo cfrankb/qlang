@@ -18,6 +18,7 @@
 #include <map>
 #include <sstream>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -380,9 +381,9 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
   // Header.
   putBytes(os, "QLC1", 4);
   // Format version (F1): written from the single shared constant
-  // kQlcVersion (docs/SERIALIZATION.md §4). v8 is the v7 instruction format
-  // with the constant pool lifted out of the function record into one
-  // module-level section; the reader accepts v8 only.
+  // kQlcVersion (docs/SERIALIZATION.md §4). v9 is the v8 image plus the module
+  // identity and export/import tables appended at the tail; the reader accepts
+  // v9 only.
   putU32(os, kQlcVersion); // format version
 
   // Functions (functions[0] is the implicit "main"; the compiler emits it
@@ -446,6 +447,25 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
   for (const auto &name : prog.constVars)
     putStr(os, name);
   putI32(os, prog.registerCount);
+
+  // §4.6 module identity and the export/import tables (v9; SPEC §bytecodes
+  // "keyword export", "export table (lookup)", "import table (lookup)"). They
+  // are appended at the tail so every earlier section keeps its v8 bytes.
+  putStr(os, prog.moduleName);
+  putU32(os, static_cast<uint32_t>(prog.exports.size()));
+  for (const auto &e : prog.exports) {
+    putU8(os, static_cast<uint8_t>(e.kind));
+    putStr(os, e.name);
+    putI32(os, e.ref);
+  }
+  putU32(os, static_cast<uint32_t>(prog.imports.size()));
+  for (const auto &im : prog.imports) {
+    putStr(os, im.module);
+    putStr(os, im.name);
+    putU8(os, static_cast<uint8_t>(im.kind));
+    putI32(os, im.ref);
+    putStr(os, im.alias);
+  }
   return static_cast<bool>(os);
 }
 
@@ -468,9 +488,10 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       r.fail("bad magic");
     r.pos = 4;
     uint32_t version = r.u32();
-    // v8 only: legacy files (v1-v4 fixed 8-byte instructions, v5 the
+    // v9 only: legacy files (v1-v4 fixed 8-byte instructions, v5 the
     // two-nibble modifier byte, v6 the pre-Phase-3 identity table, v7 the
-    // per-function constant pool) and anything newer are rejected (F1).
+    // per-function constant pool, v8 the image that ends at registerCount
+    // and carries no module tail) and anything newer are rejected (F1).
     if (version != kQlcVersion)
       r.fail("unsupported version");
 
@@ -561,8 +582,10 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
         r.fail("code stream has trailing bytes");
       out.functions.push_back(std::move(fn));
     }
-    if (out.functions[0].name != "main")
-      r.fail("functions[0] is not 'main'");
+    // The top-level function is `main` for a runnable script and `<init>` for
+    // a library module (SPEC §bytecodes "keyword export").
+    if (out.functions[0].name != "main" && out.functions[0].name != "<init>")
+      r.fail("functions[0] is neither 'main' nor '<init>'");
 
     // 3. Module constant pool (§4.2): the single table every function's pool
     // operands index into.
@@ -606,7 +629,61 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
     if (out.registerCount < 0)
       r.fail("negative register count");
 
-    // 6. Closure funcIndex must reference a known function. The closures live
+    // 6. Module identity and the export/import tables (§4.6, v9; SPEC
+    // §bytecodes "export table (lookup)", "import table (lookup)"). A table
+    // entry is a handle into this image, so every reference is range-checked
+    // here rather than at the first use.
+    out.moduleName = r.str();
+    if (out.moduleName.empty())
+      r.fail("empty module name");
+    uint32_t exportCount = r.u32();
+    if (exportCount > kMaxInstructions)
+      r.fail("too many exports");
+    std::unordered_set<std::string> exportNames;
+    for (uint32_t i = 0; i < exportCount; i++) {
+      ExportEntry e;
+      uint8_t kind = r.u8();
+      if (kind > static_cast<uint8_t>(ExportKind::Func))
+        r.fail("invalid export kind");
+      e.kind = static_cast<ExportKind>(kind);
+      e.name = r.str();
+      e.ref = r.i32();
+      if (e.name.empty())
+        r.fail("empty export name");
+      if (e.ref < 0)
+        r.fail("negative export reference");
+      if (e.kind == ExportKind::Func) {
+        if (static_cast<size_t>(e.ref) >= out.functions.size())
+          r.fail("export function index out of range");
+      } else if (static_cast<size_t>(e.ref) >=
+                 static_cast<size_t>(out.registerCount)) {
+        r.fail("export register out of range");
+      }
+      if (!exportNames.insert(e.name).second)
+        r.fail("duplicate export name");
+      out.exports.push_back(std::move(e));
+    }
+    uint32_t importCount = r.u32();
+    if (importCount > kMaxInstructions)
+      r.fail("too many imports");
+    for (uint32_t i = 0; i < importCount; i++) {
+      ImportEntry im;
+      im.module = r.str();
+      im.name = r.str();
+      uint8_t kind = r.u8();
+      if (kind > static_cast<uint8_t>(ExportKind::Func))
+        r.fail("invalid import kind");
+      im.kind = static_cast<ExportKind>(kind);
+      im.ref = r.i32();
+      im.alias = r.str();
+      if (im.module.empty() || im.name.empty())
+        r.fail("empty import name");
+      if (im.ref < 0)
+        r.fail("negative import reference");
+      out.imports.push_back(std::move(im));
+    }
+
+    // 7. Closure funcIndex must reference a known function. The closures live
     // in the module pool (v8), so the scan walks the pool rather than the
     // per-function tables of v7.
     for (const auto &c : out.constants)

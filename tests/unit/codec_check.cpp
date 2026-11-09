@@ -409,22 +409,22 @@ static void testMovImmediate() {
     check(hasPoolRight(ps.functions[0], Opcode::MOV),
           "mov: string literal is a pool read");
 
-    // .qlc written at format version 8 (kQlcVersion); the reader accepts v8
-    // only (v1-v7 and v9+ are rejected).
+    // .qlc written at format version 9 (kQlcVersion); the reader accepts v9
+    // only (v1-v8 and v10+ are rejected).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "mov: writeQlc (v8)");
+    check(writeQlc(os, p, {}), "mov: writeQlc (v9)");
     std::string bytes = os.str();
     uint32_t version = static_cast<uint32_t>(static_cast<uint8_t>(bytes[4])) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[5])) << 8) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[6])) << 16) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[7])) << 24);
-    check(version == 8, "mov: format version 8");
+    check(version == 9, "mov: format version 9");
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
     check(readQlc(is, back, slots, err),
-          std::string("mov: readQlc v8 (") + err + ")");
+          std::string("mov: readQlc v9 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -1065,17 +1065,26 @@ struct Bin {
     u32(static_cast<uint32_t>(s.size()));
     b += s;
   }
+  // The §4.6 tail of a v9 image: the module name and the export and import
+  // tables (here both empty).
+  void tail(const std::string &module = "main") {
+    str(module);
+    u32(0); // exports
+    u32(0); // imports
+  }
 };
 
-// A valid file: one empty "main" function, no natives/vars, 1 register.
-// v8 layout: code blob (empty) + offset table (empty) + loc table (empty),
-// then the module-level pool section (empty) before the native-slot table.
-static std::string minimalFile() {
+// A valid file without its §4.6 tail: one empty top-level function, no
+// natives/vars, 1 register. v9 layout: code blob (empty) + offset table
+// (empty) + loc table (empty), then the module-level pool section (empty)
+// before the native-slot table, the variable map and the tail. `topName`
+// selects the runnable `main` or a library module's `<init>`.
+static std::string minimalFileTailless(const char *topName = "main") {
   Bin f;
   f.b += "QLC1";
   f.u32(kQlcVersion); // version
   f.u32(1); // funcCount
-  f.str("main");
+  f.str(topName);
   f.i32(0); // paramCount
   f.i32(1); // registerCount
   f.u8(0);  // isGenerator
@@ -1088,6 +1097,14 @@ static std::string minimalFile() {
   f.u32(0); // vars
   f.u32(0); // constVars
   f.i32(1); // registerCount
+  return f.b;
+}
+
+// minimalFileTailless plus the standard §4.6 tail: a complete valid v9 image.
+static std::string minimalFile() {
+  Bin f;
+  f.b = minimalFileTailless();
+  f.tail();
   return f.b;
 }
 
@@ -1128,6 +1145,7 @@ static std::string fileWithOneInstr() {
   f.u32(0); // vars
   f.u32(0); // constVars
   f.i32(1); // registerCount
+  f.tail(); // §4.6 module name + export/import tables
   return f.b;
 }
 
@@ -1185,6 +1203,7 @@ static void testMalformed() {
   truncInstr.u32(0); // vars
   truncInstr.u32(0); // constVars
   truncInstr.i32(1);
+  truncInstr.tail();
   rejects("malformed: truncated instruction", truncInstr.b);
 
   // Dangling closure: pool holds a Function value with funcIndex 5.
@@ -1208,6 +1227,7 @@ static void testMalformed() {
   dangling.u32(0);
   dangling.u32(0);
   dangling.i32(1);
+  dangling.tail();
   rejects("malformed: dangling closure funcIndex", dangling.b);
 
   // Native slot table invariants.
@@ -1234,6 +1254,7 @@ static void testMalformed() {
     f.u32(0);
     f.u32(0);
     f.i32(1);
+    f.tail();
     return f.b;
   };
   rejects("malformed: duplicate native slot", nativeFile(0, "a", 0, "b"));
@@ -1263,6 +1284,7 @@ static void testMalformed() {
     f.u32(0);
     f.u32(0);
     f.i32(1);
+    f.tail();
     return f.b;
   };
   rejects("malformed: invalid value tag",
@@ -1287,6 +1309,118 @@ static void testMalformed() {
             f.u8(5); // Short
             f.i32(70000);
           }));
+
+  // §4.6 (v9): the module identity and the export/import tables. Every entry
+  // is a handle into this image, so names, kinds and references are validated
+  // at load time (external-modules plan Phase 3a).
+  auto readTail = [](const std::string &bytes, CompiledProgram &prog,
+                     std::string &why) {
+    std::istringstream is(bytes, std::ios::binary);
+    std::vector<std::pair<int, std::string>> slots;
+    return readQlc(is, prog, slots, why);
+  };
+  // A v8 image stops after the register count: no §4.6 section at all.
+  rejects("malformed: missing module section", minimalFileTailless());
+
+  Bin noName;
+  noName.str(""); // empty module name
+  noName.u32(0);
+  noName.u32(0);
+  rejects("malformed: empty module name", minimalFileTailless() + noName.b);
+
+  // One export entry, described the way §4.6 spells it.
+  auto oneExport = [](uint8_t kind, const char *name, int32_t ref) {
+    Bin t;
+    t.str("main");
+    t.u32(1); // one export
+    t.u8(kind);
+    t.str(name);
+    t.i32(ref);
+    t.u32(0); // no imports
+    return minimalFileTailless() + t.b;
+  };
+  rejects("malformed: invalid export kind", oneExport(3, "f", 0));
+  rejects("malformed: empty export name", oneExport(2, "", 0));
+  rejects("malformed: negative export reference", oneExport(2, "f", -1));
+  // The image has one function and one register, so index 1 is out of range
+  // for either kind of reference.
+  rejects("malformed: export function index out of range",
+          oneExport(static_cast<uint8_t>(ExportKind::Func), "f", 1));
+  rejects("malformed: export register out of range",
+          oneExport(static_cast<uint8_t>(ExportKind::Var), "v", 1));
+  {
+    Bin t;
+    t.str("main");
+    t.u32(2);
+    t.u8(static_cast<uint8_t>(ExportKind::Var));
+    t.str("v");
+    t.i32(0);
+    t.u8(static_cast<uint8_t>(ExportKind::Const));
+    t.str("v"); // the same name twice
+    t.i32(0);
+    t.u32(0);
+    rejects("malformed: duplicate export name", minimalFileTailless() + t.b);
+  }
+
+  auto oneImport = [](uint8_t kind, const char *mod, const char *name,
+                      int32_t ref) {
+    Bin t;
+    t.str("main");
+    t.u32(0); // no exports
+    t.u32(1); // one import
+    t.str(mod);
+    t.str(name);
+    t.u8(kind);
+    t.i32(ref);
+    t.str(""); // no alias
+    return minimalFileTailless() + t.b;
+  };
+  rejects("malformed: invalid import kind", oneImport(3, "m", "f", 0));
+  rejects("malformed: empty import module", oneImport(2, "", "f", 0));
+  rejects("malformed: empty import name", oneImport(2, "m", "", 0));
+  rejects("malformed: negative import reference", oneImport(2, "m", "f", -1));
+
+  // A valid tail survives the round trip.
+  {
+    Bin t;
+    t.str("my_module");
+    t.u32(2);
+    t.u8(static_cast<uint8_t>(ExportKind::Func));
+    t.str("greeter");
+    t.i32(0);
+    t.u8(static_cast<uint8_t>(ExportKind::Const));
+    t.str("AUTHOR");
+    t.i32(0);
+    t.u32(1);
+    t.str("math");
+    t.str("min");
+    t.u8(static_cast<uint8_t>(ExportKind::Func));
+    t.i32(0);
+    t.str("minimum");
+    CompiledProgram prog;
+    std::string why;
+    bool ok = readTail(minimalFileTailless() + t.b, prog, why);
+    check(ok && prog.moduleName == "my_module" && prog.exports.size() == 2 &&
+              prog.exports[0].kind == ExportKind::Func &&
+              prog.exports[0].name == "greeter" && prog.exports[0].ref == 0 &&
+              prog.exports[1].kind == ExportKind::Const &&
+              prog.imports.size() == 1 && prog.imports[0].module == "math" &&
+              prog.imports[0].alias == "minimum",
+          "v9: module name and the tables survive (" + why + ")");
+  }
+
+  // A library image: functions[0] is `<init>`, not `main`.
+  {
+    Bin f;
+    f.b = minimalFileTailless("<init>");
+    f.tail("my_module");
+    CompiledProgram prog;
+    std::string why;
+    bool ok = readTail(f.b, prog, why);
+    check(ok && prog.functions[0].name == "<init>" &&
+              prog.moduleName == "my_module",
+          "v9: '<init>' is a valid top-level function (" + why + ")");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1613,8 +1747,8 @@ static void testV6LoadValidation() {
       (static_cast<uint32_t>(static_cast<uint8_t>(image[5])) << 8) |
       (static_cast<uint32_t>(static_cast<uint8_t>(image[6])) << 16) |
       (static_cast<uint32_t>(static_cast<uint8_t>(image[7])) << 24);
-  check(kQlcVersion == 8 && written == 8,
-        "v6-load: the image declares version 8");
+  check(kQlcVersion == 9 && written == 9,
+        "v6-load: the image declares version 9");
 
   CompiledProgram back;
   std::string err;
@@ -1623,11 +1757,11 @@ static void testV6LoadValidation() {
             back.functions[0].instrOffsets == offs,
         "v6-load: the code bytes and the offset table survived");
 
-  // The reader is single-version: v7 (the per-function-pool format Phase 2
-  // replaced) and every other number are refused with a version error, no
-  // migration shim (decision D5: one case below the current version, one
-  // above).
-  for (uint32_t bad : {3u, 4u, 5u, 6u, 7u, 9u}) {
+  // The reader is single-version: v8 (the image Phase 3a extended with the
+  // module identity and its tables) and every other number are refused with a
+  // version error, no migration shim (decision D5: one case below the current
+  // version, one above).
+  for (uint32_t bad : {3u, 4u, 5u, 6u, 7u, 8u, 10u}) {
     std::string m = image;
     for (int i = 0; i < 4; i++)
       m[4 + i] = static_cast<char>((bad >> (8 * i)) & 0xFF);

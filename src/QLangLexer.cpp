@@ -62,6 +62,7 @@ TokenType keywordType(const std::string &text) {
   if (text == "static") return TokenType::Static;
   if (text == "enum") return TokenType::Enum;
   if (text == "emit") return TokenType::Emit;
+  if (text == "export") return TokenType::Export;
   if (text == "nil") return TokenType::Nil;
   if (text == "eof") return TokenType::Eof;
   if (text == "yield") return TokenType::Yield;

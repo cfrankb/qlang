@@ -1,5 +1,5 @@
 // qlang_run — small driver that runs a .ql (QLang) script or a .qlc
-// (compiled QLC1 v8 image) with a selectable diagnostic trace level,
+// (compiled QLC1 v9 image) with a selectable diagnostic trace level,
 // optional stage timing, and bytecode output.
 //
 //   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>]
@@ -57,7 +57,7 @@ namespace
 
   void printHelp(const char *prog)
   {
-    std::cout << "Run a QLang (.ql) script or a compiled .qlc image (QLC1 v8).\n"
+    std::cout << "Run a QLang (.ql) script or a compiled .qlc image (QLC1 v9).\n"
               << "\n"
               << "usage: " << prog << " [options] <file.ql|file.qlc>\n"
               << "\n"
@@ -80,9 +80,12 @@ namespace
               << "                        5 = level 4 + end-of-compile register breakdown\n"
               << "                            (per register: named var / free pool / quarantine /\n"
               << "                             deferred / live temp / call-arg slot / unallocated)\n"
-              << "                            + module breakdown: imported module\n"
-              << "                             functions (native slot, call counts)\n"
-              << "                             and main's exportable defs\n"
+              << "                            + module breakdown: the module's\n"
+              << "                             name, the functions its `import`\n"
+              << "                             statements bound (native slot,\n"
+              << "                             call counts), its export table\n"
+              << "                             (kind + resolved ref) and the\n"
+              << "                             top-level defs it did not export\n"
               << "  --rotate            append a YYYYMMDDHHMM timestamp to --output/--asm file names\n"
               << "                        (e.g. cmp.qlc -> cmp_202611010513.qlc)\n"
               << "  -h, --help          show this help and exit\n"
@@ -144,6 +147,21 @@ namespace
     return dir + base.substr(0, dot) + "_" + rotateStamp() + base.substr(dot);
   }
 
+  // The module name a source file implies: its basename without the extension
+  // ("tests/scripts/hello.ql" -> "hello"). SPEC §bytecodes "keyword export"
+  // makes the name a property of the module itself (`export const MODULE_NAME`),
+  // which the compiler honours over this driver-supplied default; a file with no
+  // usable stem yields "" so the compiler falls back to "main".
+  std::string moduleStem(const std::string &path)
+  {
+    const size_t slash = path.find_last_of("/\\");
+    const std::string base = (slash == std::string::npos) ? path : path.substr(slash + 1);
+    const size_t dot = base.find_last_of('.');
+    if (dot == std::string::npos || dot == 0)
+      return base;
+    return base.substr(0, dot);
+  }
+
   // ---------------------------------------------------------------------------
   // .qlc binary output: the library codec (src/QLangBytecodeIO.cpp,
   // docs/SERIALIZATION.md). nativeIds maps native name -> negative opcode id
@@ -188,11 +206,13 @@ namespace
   //       (named var / dead-temp pool / dead-named pool / quarantine /
   //       deferred / live temp / call-arg slot / unallocated gap) plus a
   //       category summary, followed by a module breakdown (level 5 only): the
-  //       functions the
-  //       `import` statements bound (module -> native slot -> call count) and
-  //       the main module's exportable top-level `def`s (QLang has no
-  //       `export` syntax yet, so "exports" lists what the main module
-  //       defines; class methods/prototypes and closures are excluded)
+  //       module's name (SPEC §bytecodes "keyword export" — the source file's
+  //       stem unless the program declares `export const MODULE_NAME`), the
+  //       functions the `import` statements bound (module -> native slot ->
+  //       call count), the module's export table (`export` -> kind -> function
+  //       index or register), and the top-level `def`s the module defines
+  //       without exporting (class methods/prototypes and closures are
+  //       excluded from both lists)
   // ---------------------------------------------------------------------------
 
   // One `import`-bound function (module provenance from the compiler; see
@@ -1021,8 +1041,9 @@ namespace
       std::sort(importLines.begin(), importLines.end());
       ss << "\n";
       ss << "================================================================\n";
-      ss << "module breakdown (main)\n";
+      ss << "module breakdown (" << prog.moduleName << ")\n";
       ss << "================================================================\n";
+      ss << "  module: " << prog.moduleName << "\n";
       ss << "  imports:\n";
       if (importLines.empty())
         ss << "    (none)\n";
@@ -1043,25 +1064,63 @@ namespace
            << std::setw(12) << "?"
            << "native slot " << std::setw(4) << slot << "(" << count << " calls)\n";
       }
-      ss << "  exports (main):\n";
+      // The module's export table (SPEC §bytecodes "export table (lookup)"):
+      // the names `export` published and what each resolves to — a function
+      // index for a `def`, the register (the shared cell of SPEC §bytecodes
+      // "technical specifications" 3) for a variable or constant.
+      std::unordered_set<std::string> exportedNames;
+      for (const auto &e : prog.exports)
+        exportedNames.insert(e.name);
+      ss << "  exports:\n";
+      if (prog.exports.empty())
+        ss << "    (none)\n";
+      for (const auto &e : prog.exports)
+      {
+        const char *kind = e.kind == ExportKind::Func
+                               ? "fn"
+                               : (e.kind == ExportKind::Const ? "const" : "var");
+        ss << "    " << std::left << std::setw(19) << e.name << std::setw(6)
+           << kind;
+        if (e.kind == ExportKind::Func)
+        {
+          auto cit = fnCalls.find(e.ref);
+          const std::string fname = (e.ref >= 0 &&
+                                     static_cast<size_t>(e.ref) < prog.functions.size())
+                                        ? prog.functions[e.ref].name
+                                        : "?";
+          const int params = (e.ref >= 0 &&
+                              static_cast<size_t>(e.ref) < prog.functions.size())
+                                 ? prog.functions[e.ref].paramCount
+                                 : 0;
+          ss << "fn#" << e.ref << "  params " << std::setw(3) << params << "("
+             << (cit == fnCalls.end() ? 0 : cit->second) << " calls)  " << fname;
+        }
+        else
+        {
+          ss << "r" << e.ref << "  "
+             << (prog.constVars.count(e.name) ? "readonly" : "shared cell");
+        }
+        ss << "\n";
+      }
+      // Top-level `def`s the module defines but did not export: still visible
+      // inside the module, invisible to an importer.
+      ss << "  unexported defs:\n";
       bool anyExport = false;
       for (size_t i = 1; i < prog.functions.size(); i++)
       {
         const auto &f = prog.functions[i];
         if (f.name == "closure" || f.name == "ternary" || f.isGenerator ||
-            classFuncs.count(f.name))
+            classFuncs.count(f.name) || exportedNames.count(f.name))
           continue; // closures, generator bodies and class members are not
-                    // top-level defs of main
+                    // top-level defs of the module
         anyExport = true;
         auto cit = fnCalls.find(static_cast<int>(i));
         ss << "    " << std::left << std::setw(19) << f.name << "fn#" << i
            << "  params " << std::setw(3) << f.paramCount << "("
-           << (cit == fnCalls.end() ? 0 : cit->second) << " calls)  exportable\n";
+           << (cit == fnCalls.end() ? 0 : cit->second) << " calls)\n";
       }
       if (!anyExport)
         ss << "    (none)\n";
-      ss << "  note: QLang has no `export` syntax yet (spec 09-modules); the\n";
-      ss << "        list shows what the main module defines and could export.\n";
       ss << "\n";
     }
     return ss.str();
@@ -1256,7 +1315,7 @@ int main(int argc, char **argv)
   ctx.setVerboseLevel(traceLevel);
 
   // --- Load (.qlc) or parse + compile (.ql) ---
-  // A .qlc file is a compiled program (QLC1 v8, docs/SERIALIZATION.md):
+  // A .qlc file is a compiled program (QLC1 v9, docs/SERIALIZATION.md):
   // read it back and re-bind its native functions by name.
   const bool isQlc = source.size() >= 4 && source.compare(0, 4, "QLC1") == 0;
   CompiledProgram compiled;
@@ -1342,6 +1401,10 @@ int main(int argc, char **argv)
       nativeNames.insert(name);
     compiler.addExternalFuncs(nativeNames);
     compiler.addModules(ctx.modules());
+    // The entry module is named after its source file unless the program
+    // declares its own `export const MODULE_NAME` (SPEC §bytecodes "keyword
+    // export"). A .qlc input needs no equivalent: its image carries the name.
+    compiler.setModuleName(moduleStem(file));
 
     try
     {

@@ -77,6 +77,7 @@ enum class TokenType {
   Static,      // static (class-level member, new extension beyond v1)
   Enum,        // enum (immutable value collection)
   Emit,        // emit (signal emission statement)
+  Export,      // export (module export statement, SPEC §bytecodes "keyword export")
   True,        // true
   False,       // false
   Nil,         // nil (undefined/sentinel value)

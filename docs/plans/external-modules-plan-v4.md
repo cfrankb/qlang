@@ -1,7 +1,8 @@
 # Plan v4: external modules (builtin name table, unified constant pool, import/export tables)
 
 Status: **Phase 1 ✓ implemented (Round 61, 2026-11-09); Phase 2 ✓ implemented (Round 62,
-2026-11-09); Phase 3 gated on Q29–Q33 + Q35.**
+2026-11-09); Phase 3a ✓ implemented (Round 63, 2026-11-09); Phase 3b gated on Q32 + Q33 + Q35,
+Phase 3c gated on Q31.**
 Re-audited 2026-11-08 against `HEAD = ac97651` (Round 60); Phase 1 landed on top of that
 baseline (library builtin name table — `builtinCount`/`builtinName`/`findBuiltin`/`builtinId`
 in `QLangBytecode.h`, `builtin_table` suite, 151 checks; spec
@@ -10,12 +11,16 @@ in `QLangBytecode.h`, `builtin_table` suite, 151 checks; spec
 `CompiledProgram::constants`, `Function::constants` deleted; spec
 `docs/spec/13-bytecodes.md` `## unified constant table` marked **Implemented**; compliance
 Round 62) — **Q34 is settled by that round: v8 = the unified pool, v9 = Phase 3's module
-tables.**
-Phase 3 is gated on **Q29–Q33** + **Q35** (§ Open questions) and, for automatic
-name-based import resolution only, on **C8** (`missing-features-plan.md`).
+tables.** Phase 3a landed on top of Phase 2 (`.qlc` **v9**: `export`, the export and import
+tables, the module name; spec `docs/spec/13-bytecodes.md` `## keyword export` marked
+**Implemented**; compliance Round 63) — **Q29** and **Q30** were ratified in that round, both as
+defaulted, and **Q31** was left open on purpose: 3a emits no new opcode, so 73/74 stay reserved
+for 3c.
+What remains of Phase 3 is gated on **Q32** + **Q33** + **Q35** (3b) and **Q31** (3c) and, for
+automatic name-based import resolution only, on **C8** (`missing-features-plan.md`).
 Supersedes: `docs/plans/archive/external-modules-plan-v3.md` (2026-11-03) and,
 through it, v2 (2026-11-02) and v1 (all three under `docs/plans/archive/`). The language requirements are unchanged
-since v1; what changed twice is the **machine** — `.qlc` is at **v8** with a
+since v1; what keeps changing is the **machine** — `.qlc` is at **v9** with a
 single-version reader, the instruction stream is the v6 variable-width
 modifier-byte format, the `i`/`c`/`jmp*` opcode spellings are retired, and the
 constant pool is one deduplicated table per module.
@@ -23,7 +28,10 @@ Builds on / blocked by: `missing-features-plan.md` **C8** (module search paths +
 external search callback, **Q23–Q26**) — the front end that lets `import mod`
 *find* a module; this plan owns what happens once it is found.
 Reference spec: `docs/spec/13-bytecodes.md` § `external modules`
-(**lines 594–673**, still an unmarked proposal), `docs/spec/09-modules.md`,
+(**lines 599–797** as of Round 63 — `## table for build in function (qlang base)`,
+`## unified constant table` and `## keyword export` now carry **Implemented** markers and the two
+table sections carry what-is/what-is-not notes; the link model, `GETIMPORT`/`CALLIMPORT` and
+importer-side `readonly` are still open), `docs/spec/09-modules.md`,
 `docs/spec/07-api.md` (`## module search paths`, `## external search callback`).
 
 **v4 (2026-11-08) changes vs v3** — every one of them is a consequence of
@@ -197,6 +205,11 @@ Numbering continues the global **Q#** series of `missing-features-plan.md`
   `module` declaration and a `.qlc` carries no name today.
   **Default:** mandatory for a *library* compile; an application/entry module
   may omit it and takes the file stem (driver-supplied) as its name.
+  **Ratified as defaulted (Round 63, Phase 3a):** precedence is source > driver >
+  `"main"` — `export const MODULE_NAME` (a `const` holding a constant string, so a loader reads
+  the identity without running the module) wins over `QLangCompiler::setModuleName`, which
+  `qlang_run` supplies as the source file stem; mandatory only in library mode
+  (`setLibraryMode`).
 - **Q30 May the defining module mutate its exported variables?** — the spec
   says exported entities are `readonly` and "variables can be read but not
   modified" (`:631–633`) while also requiring shared-cell write-through
@@ -204,6 +217,12 @@ Numbering continues the global **Q#** series of `missing-features-plan.md`
   **Default:** the defining module may mutate; importers are readonly (a write
   through an import is a compile error). Pin the wording in `13-bytecodes.md`
   in the same round.
+  **Ratified as defaulted (Round 63, Phase 3a):** `readonly` is a property of the *importer*.
+  The defining module keeps writing to an exported variable (the shared cell of
+  `## technical specifications` 3 is write-through — a cell nobody may write is a constant, not a
+  variable), while rebinding a name exported as a `def` is a compile error on assignment and on
+  `++`/`--`. The wording is pinned in `13-bytecodes.md` `## keyword export`; importer-side
+  enforcement is 3b/3c work (nothing can import a `.ql` name yet).
 
 ### 3b/3c — encoding and merge mechanics
 
@@ -213,6 +232,8 @@ Numbering continues the global **Q#** series of `missing-features-plan.md`
   **Default:** M4 keeps 72; this plan appends `GETIMPORT = 73`,
   `CALLIMPORT = 74`. Whoever lands second takes the next slot — the rule is
   "append last, never renumber".
+  **Unchanged by Round 63:** Phase 3a emits no opcode, so `kOpcodeUsedCount` stayed **72** and
+  73/74 remain reserved (the import table is therefore always empty in a 3a image).
 - **Q32 Where does the linker rewrite operands?** — the v6 stream is
   variable-width, so a merged register/pool/function index may need a *wider*
   operand and byte-patching is impossible.
@@ -395,7 +416,7 @@ Consequences of the spec's decisions:
   emits `GETIMPORT`/`CALLIMPORT` with an import-table index; the merge linker
   rewrites `CALLIMPORT` → `CALLFN`; a registry model executes both directly.
 
-### 3a — module identity + `export` construct + tables (no VM change)
+### 3a — module identity + `export` construct + tables (no VM change) — ✓ implemented (Round 63, 2026-11-09)
 
 1. **Module name** — per **Q29**; no `module` declaration in this version.
 2. **Lexer/parser** — `export` keyword (today only `import` exists,
@@ -423,6 +444,48 @@ Consequences of the spec's decisions:
 5. **`.qlc` v8 → v9** — module name string, export-table section, import-table
    section (entries carry compile-time-resolved refs). The reader stays
    single-version; the `main` check becomes version/role-conditional.
+
+> **DONE (Round 63, 2026-11-09).** All five steps landed in one round — the **write side only**:
+> no instruction reads either table yet, and no module is resolved against another.
+> 1. **Module name** — `CompiledProgram::moduleName`, precedence source
+>    (`export const MODULE_NAME`) → driver (`QLangCompiler::setModuleName`; `qlang_run` passes the
+>    source file stem) → `"main"`, mandatory only in library mode (**Q29**, ratified as defaulted).
+> 2. **Lexer/parser** — the `export` keyword; `Stmt::isExported` carries the prefix form (`def`,
+>    `const`, variable assignment, arrow closure) and a new `StmtKind::ExportRef` the standalone
+>    form. Global scope is enforced **twice**: the parser's body-depth guard rejects the keyword
+>    inside a `def`, an arrow closure or a `class` body, and the compiler's pre-pass rejects it
+>    inside a global-scope `if`/`for`/`while`/`switch` block, where it would otherwise compile and
+>    be silently dropped from the table.
+> 3. **Export semantics** — `QLangCompiler::collectExports()` runs **before** `compile()` and
+>    `finishExports()` resolves each entry to its function index or register afterwards.
+>    Deviation from the step as written, twice: the pass is *pre-compile* rather than *post-parse*
+>    (the table must exist before any body compiles, so `already exported` and the rebind guard are
+>    live while the top level is emitted, and a standalone export resolves forward), and the
+>    defining-side protection is **not** the `constVars`/`guardNotConst` path — an exported
+>    *variable* must stay writable in its own module (**Q30**), so a name exported as a `def` rides
+>    its own guard (`guardNotExportedFunc`, on assignment and on `++`/`--`). Duplicate export →
+>    `'<name>' is already exported`.
+> 4. **Compiler** — `CompiledProgram` gains `moduleName`, `exports` (`ExportEntry {kind, name,
+>    ref}`; `ExportKind` = `Var` 0 / `Const` 1 / `Func` 2) and `imports` (`ImportEntry {module,
+>    name, kind, ref, alias}`); `setModuleName` / `setLibraryMode` are the new options, and library
+>    mode compiles the top level as `<init>` instead of `main`. The import table is **always empty**
+>    this round (**Q31** untouched) — `import` still binds C++ modules through `CALL`'s
+>    negative-slot space.
+> 5. **`.qlc` v8 → v9** — the three sections append **after `registerCount`**
+>    (`docs/SERIALIZATION.md` §4.6), so every v8 byte keeps its position: `hello.ql`'s image is
+>    3 792 B → 3 809 B, byte-identical through `registerCount` plus a 17-byte tail. The reader
+>    stays single-version (v1–v8 rejected) and validates the tail as it reads it (non-empty module
+>    name, `kind <= Func`, non-empty entry name, non-negative `ref`, a `Func` ref inside
+>    `[0, funcCount)` and a `Var`/`Const` ref inside `[0, registerCount)`, no duplicate export name,
+>    both counts under the §8 cap); the `functions[0].name == "main"` check becomes `"main"` **or**
+>    `"<init>"`.
+> `qlang_run` names the entry module after its source file, and level 5 prints `module:` + the
+> export table (`kind` → function index or register, `readonly` / `shared cell`), with the old
+> "exports (main)" list renamed `unexported defs`.
+> `cmake --build build` clean, `ctest --test-dir build` **52/52 green**: new suite `export`
+> (`tests/unit/export_test.cpp`, **88** checks), `codec_check` 337 → **352**, corpus 23/23 stdout
+> byte-identical against a `HEAD` build. Spec `## keyword export` → **Implemented** with the
+> Q29/Q30 reading; compliance Round 63.
 
 ### 3b — loader + linker
 
@@ -601,10 +664,17 @@ run (AGENTS.md).
    Deviation: the pool manager is the new `ConstantPool` type, not
    `Bytecode::addConstant`/`setConstants` — see the Phase 2 **DONE** note.
 
-**Gated:**
+**Gated:** (3a was the last item blocked on **Q29**/**Q30** — it landed in Round 63 and is listed
+here only to keep the numbering of the phases stable)
 
-3. **Phase 3a** (export syntax + tables, `.qlc` v9 write side) — needs
-   **Q29**, **Q30**, **Q31** (**Q34** settled in Round 62: v9 is reserved).
+3. **Phase 3a** (export syntax + tables, `.qlc` v9 write side) — **✓ done (Round 63,
+   2026-11-09):** `export` in both spec forms (global scope only, enforced in the parser and again
+   in the compiler's pre-pass), `CompiledProgram::moduleName` / `exports` / `imports`,
+   `setModuleName` / `setLibraryMode` (`<init>` top level), and `.qlc` **v9** with the §4.6 tail
+   validated at load. **Q29** and **Q30** ratified as defaulted in the round; **Q31** deliberately
+   left open — nothing was appended to the enum, so `kOpcodeUsedCount` is still 72 and the import
+   table is always empty. New suite `export` (88 checks), `codec_check` 337 → 352, corpus
+   byte-identical, ctest 52/52. Deviations recorded in the 3a **DONE** note.
 4. **Phase 3b** (loader + linker) — needs **Q32**, **Q33**, **Q35**; needs the
    driver to load libraries explicitly (automatic name resolution waits for
    **C8**/**Q23–Q26**).

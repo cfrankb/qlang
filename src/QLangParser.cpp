@@ -22,6 +22,15 @@ struct ParseDepthGuard {
   ~ParseDepthGuard() { --depth; }
 };
 
+// RAII guard: marks the parser as inside a function, method or class body.
+// `export` is a global-scope-only keyword (SPEC §bytecodes "keyword export"),
+// so parseExport rejects it while any of these guards is live.
+struct BodyDepthGuard {
+  int &depth;
+  BodyDepthGuard(int &d) : depth(d) { ++depth; }
+  ~BodyDepthGuard() { --depth; }
+};
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -199,6 +208,7 @@ StmtPtr QLangParser::parseStatementImpl() {
   if (check(TokenType::Switch)) return parseSwitch();
   if (check(TokenType::Global)) return parseGlobal();
   if (check(TokenType::Import) || check(TokenType::From)) return parseImport();
+  if (check(TokenType::Export)) return parseExport();
   if (check(TokenType::Class)) return parseClass();
   if (check(TokenType::Emit)) return parseEmit();
 
@@ -277,6 +287,7 @@ StmtPtr QLangParser::parseStatementImpl() {
       }
       consume(TokenType::RBracket, "']' to close capture list");
       // Body in braces.
+      BodyDepthGuard body{m_bodyDepth};
       if (match(TokenType::LBrace)) {
         while (!check(TokenType::RBrace) && !atEnd())
           stmt->body.push_back(parseStatement());
@@ -915,6 +926,49 @@ StmtPtr QLangParser::parseImport() {
   return stmt;
 }
 
+// `export` (SPEC §bytecodes "keyword export"). Two forms:
+//   export def f() ... end | export const k = 1 | export local x = 1 |
+//   export x = 1 | export f = (p)[] { ... }
+//       prefix form: the statement is parsed normally and marked isExported.
+//   export NAME [;]
+//       standalone form: a reference to an existing (or later-declared) global;
+//       the compiler resolves it and reports unknown or duplicate names.
+// Global scope only; inside a function, method or class body it is an error.
+StmtPtr QLangParser::parseExport() {
+  const Token &kw = current();
+  consume(TokenType::Export, "'export'");
+  if (m_bodyDepth > 0)
+    throw QLangError(QLangErrorKind::Parse, kw.line, kw.col,
+                     "export is only valid at global scope");
+
+  // Standalone form: a bare identifier that does not continue into an
+  // assignment (`export AUTHOR;`).
+  if (check(TokenType::Ident) && peek(1).type != TokenType::Assign) {
+    auto stmt = std::make_shared<Stmt>();
+    stmt->kind = StmtKind::ExportRef;
+    stmt->name = consume(TokenType::Ident, "exported name").value;
+    match(TokenType::Semicolon);
+    return stmt;
+  }
+
+  if (check(TokenType::Export))
+    throw QLangError(QLangErrorKind::Parse, current().line, current().col,
+                     "duplicate 'export'");
+
+  // Prefix form: delegate to the ordinary statement parser and mark the
+  // result. The outer parseStatement stamps this statement with the position
+  // of the `export` keyword.
+  StmtPtr inner = parseStatementImpl();
+  if (inner->kind != StmtKind::Def && inner->kind != StmtKind::Const &&
+      inner->kind != StmtKind::Declaration &&
+      inner->kind != StmtKind::Assignment && inner->kind != StmtKind::Arrow)
+    throw QLangError(QLangErrorKind::Parse, kw.line, kw.col,
+                     "export can only prefix def, const or a variable "
+                     "assignment");
+  inner->isExported = true;
+  return inner;
+}
+
 StmtPtr QLangParser::parseClass() {
   int line = current().line, col = current().col;
   (void)line;
@@ -930,6 +984,7 @@ StmtPtr QLangParser::parseClass() {
   // Static member names (new extension beyond v1); a static and an instance
   // member may not share a name.
   std::unordered_set<std::string> staticNames;
+  BodyDepthGuard classBody{m_bodyDepth};
   while (!check(TokenType::RBrace) && !atEnd()) {
     int stmtLine = current().line;
     int stmtCol = current().col;
@@ -1075,11 +1130,13 @@ StmtPtr QLangParser::parseFunction() {
 
   if (match(TokenType::LBrace)) {
     // Brace form: def name(params) { ... }
+    BodyDepthGuard body{m_bodyDepth};
     while (!check(TokenType::RBrace) && !atEnd())
       stmt->body.push_back(parseStatement());
     consume(TokenType::RBrace, "'}' to close function");
   } else {
     // End form: def name(params) ... end
+    BodyDepthGuard body{m_bodyDepth};
     while (!check(TokenType::End) && !atEnd())
       stmt->body.push_back(parseStatement());
     consume(TokenType::End, "'end' to close function");
@@ -1138,6 +1195,7 @@ StmtPtr QLangParser::parseArrowClosure(const std::string &varName) {
 
   // Body in braces.
   consume(TokenType::LBrace, "'{' to open arrow function body");
+  BodyDepthGuard body{m_bodyDepth};
   while (!check(TokenType::RBrace) && !atEnd())
     stmt->body.push_back(parseStatement());
   consume(TokenType::RBrace, "'}' to close arrow function body");

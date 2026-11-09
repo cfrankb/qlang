@@ -38,6 +38,17 @@ struct CompiledProgram {
   // by the negative opcode operand (index = -1 - opcode_b).
   std::vector<QLangContext::NativeFunc> nativeFuncs;
   int registerCount = 0;
+  // Module identity (SPEC §bytecodes "keyword export"): the name other modules
+  // import by. A module that declares `export const MODULE_NAME = "x"` carries
+  // that name; otherwise it is the name the driver supplied (the source file
+  // stem), defaulting to "main".
+  std::string moduleName = "main";
+  // The module's export and import tables (SPEC §bytecodes "export table
+  // (lookup)", "import table (lookup)"). The export table is filled by
+  // `export`; the import table stays empty until the loader resolves `.ql`
+  // imports (external-modules plan Phase 3b).
+  std::vector<ExportEntry> exports;
+  std::vector<ImportEntry> imports;
 };
 
 // Per-register breakdown of the MAIN program's register-allocator state,
@@ -242,6 +253,18 @@ public:
     return m_importedModuleFuncs;
   }
 
+  // Module identity of the compiled program (SPEC §bytecodes "keyword export").
+  // The driver names the entry module after its source file; a program that
+  // declares `export const MODULE_NAME = "x"` overrides it, and "main" is the
+  // fallback when neither is available. Ignored in library mode.
+  void setModuleName(const std::string &name) { m_moduleName = name; }
+
+  // Library mode compiles a `.ql` module rather than a runnable script: the
+  // top level becomes the module initializer `<init>` instead of `main`, and
+  // `export const MODULE_NAME = "<name>"` is mandatory (it is the name other
+  // modules import by). SPEC §bytecodes "keyword export".
+  void setLibraryMode(bool on = true) { m_libraryMode = on; }
+
   CompiledProgram compile();
 
   // Register-allocator breakdown at the end of compile() (see
@@ -371,6 +394,17 @@ private:
   void compileEnum(const StmtPtr &s);
   void compileGlobal(const StmtPtr &s, std::vector<std::string> *captures);
   void compileSwitch(const StmtPtr &s);
+  // Module exports (SPEC §bytecodes "keyword export"). collectExports() walks
+  // the top-level statements BEFORE compilation, so a standalone `export NAME;`
+  // can name a declaration that appears later in the file, and a second export
+  // of the same name is rejected. finishExports() then resolves every recorded
+  // name to its function index or register, once the program exists.
+  void collectExports();
+  void finishExports(CompiledProgram &out);
+  // Rejects writing through a name exported as a function: the export table
+  // holds its function index, so rebinding the name would silently detach the
+  // export (SPEC §bytecodes "keyword export": functions "not modified").
+  void guardNotExportedFunc(const std::string &name, const char *op) const;
   void compileExpr(const ExprPtr &e, int dest);
   // Lower a ternary block branch ({ ... return v ... }) to a closure call:
   // the block's `return` yields the ternary's value (SPEC §operators
@@ -615,6 +649,26 @@ private:
   int staticsTableReg();
   // End-of-compile allocator snapshot for registerReport().
   RegisterReport m_report;
+  // --- Module identity and exports (SPEC §bytecodes "keyword export") ---
+  // Library mode: the top level compiles as `<init>` and MODULE_NAME is
+  // mandatory (see setLibraryMode).
+  bool m_libraryMode = false;
+  // Module name supplied by the driver (normally the source file stem); empty
+  // falls back to "main".
+  std::string m_moduleName;
+  // Value of `export const MODULE_NAME` when the module declares one; it wins
+  // over the driver-supplied name.
+  std::string m_moduleNameFromSource;
+  // The export table in source order, built by collectExports() with `ref`
+  // still -1; finishExports() resolves the refs.
+  std::vector<ExportEntry> m_exports;
+  // Exported name -> kind: duplicate-export detection plus the guard that keeps
+  // an exported function's name from being rebound.
+  std::unordered_map<std::string, ExportKind> m_exportedKinds;
+  // Top-level declarations seen by collectExports(): name -> the statement
+  // that binds it, so a standalone `export NAME;` resolves forward references
+  // and can report the kind it exports the name as.
+  std::unordered_map<std::string, StmtPtr> m_globalDecls;
 };
 
 } // namespace qlang

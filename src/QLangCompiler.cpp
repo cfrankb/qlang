@@ -1161,6 +1161,13 @@ int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
 }
 
 CompiledProgram QLangCompiler::compile() {
+  // Module exports first (SPEC §bytecodes "keyword export"): the table must
+  // exist before the body compiles, so an exported name is known (and, for a
+  // function, un-rebindable) from the first statement on.
+  collectExports();
+  if (m_libraryMode && m_moduleNameFromSource.empty())
+    throw QLangError(QLangErrorKind::Parse, 0, 0,
+                     "library module requires export const MODULE_NAME = \"<name>\"");
   // Compile the top-level program into the main (scratch) function context.
   if (m_scope) {
     // Phase 2: the main program's non-global register space (locals, temps)
@@ -1185,9 +1192,11 @@ CompiledProgram QLangCompiler::compile() {
   // Implicit `return nil` at the end of the main program.
   emit(Opcode::RETURN, 0);
 
-  // Wrap the main stream into functions[0].
+  // Wrap the main stream into functions[0]. A library module's top level is
+  // its initializer `<init>`, not a runnable `main` (SPEC §bytecodes "keyword
+  // export", external-modules plan Phase 3a).
   Function mainFn;
-  mainFn.name = "main";
+  mainFn.name = m_libraryMode ? "<init>" : "main";
   mainFn.paramCount = 0;
   // Register 0 is always live (the implicit final `return regs[0]`).
   mainFn.registerCount = std::max(m_nextReg, 1);
@@ -1201,12 +1210,204 @@ CompiledProgram QLangCompiler::compile() {
   // The one pool every function's operands index into (SPEC §bytecodes
   // "unified constant table"); the dedup map dies with the compile.
   out.constants = m_pool.take();
+  // Module identity: the module's own `export const MODULE_NAME` wins over the
+  // name the driver supplied, which in turn wins over the default (SPEC
+  // §bytecodes "keyword export").
+  if (!m_moduleNameFromSource.empty())
+    out.moduleName = m_moduleNameFromSource;
+  else if (!m_moduleName.empty())
+    out.moduleName = m_moduleName;
+  // The import table stays empty in Phase 3a: `import` still binds C++ module
+  // functions through the negative-slot space of `CALL` operand `b`
+  // (compileImport). It is populated when the loader resolves `.ql` imports.
+  finishExports(out); // reads m_userFuncs / m_regs, so before they move out
   buildRegisterReport(); // before m_regs moves out (names are read from it)
   out.vars = std::move(m_regs);
   out.constVars = std::move(m_constVars);
   // Register 0 is always live (see mainFn.registerCount above).
   out.registerCount = std::max(m_nextReg, 1);
   return out;
+}
+
+// The exportable identity of a top-level statement (SPEC §bytecodes "export
+// table (lookup)": the global functions, variables and constants a module
+// exposes): the global name it binds and the kind the export table records it
+// as. False when the statement binds no exportable global.
+//
+// A top-level arrow closure is a Var, not a Func: unlike `def` it has no entry
+// in the function table — the register holds the closure value, and that
+// register is the cell an importer shares (SPEC §bytecodes "technical
+// specifications" 3).
+static bool exportableDecl(const StmtPtr &s, std::string &name,
+                           ExportKind &kind) {
+  switch (s->kind) {
+  case StmtKind::Def:
+    name = s->funcName;
+    kind = ExportKind::Func;
+    return !name.empty();
+  case StmtKind::Const:
+    name = s->name;
+    kind = ExportKind::Const;
+    return !name.empty();
+  case StmtKind::Arrow:
+    name = s->name;
+    kind = ExportKind::Var;
+    return !name.empty();
+  case StmtKind::Declaration:
+  case StmtKind::Assignment:
+    if (s->target) return false; // `a.b = 1` binds no global name
+    name = s->name;
+    kind = ExportKind::Var;
+    return !name.empty();
+  default:
+    return false;
+  }
+}
+
+// The initializer expression of an exportable declaration (`const`/`local` use
+// `value`, a bare assignment uses `assignValue`); null when there is none.
+static ExprPtr declInitValue(const StmtPtr &s) {
+  if (!s) return nullptr;
+  return s->kind == StmtKind::Assignment ? s->assignValue : s->value;
+}
+
+// `export` inside a control-flow block (SPEC §bytecodes "keyword export": the
+// keyword is global-scope only). The parser rejects it inside a function,
+// method or class body, but an `if`/`for`/`while`/`switch` body at global scope
+// is still a nested statement list, and the export pre-pass only walks the
+// top level — so an export there would be parsed, compiled and silently
+// dropped from the table. Rejecting it here is the only way it cannot be lost.
+// rejectNestedExports scans the statements NESTED inside `s`; the top-level
+// list is never passed to it, because there the two forms are legal.
+static void rejectNestedExports(const StmtPtr &s);
+
+static void rejectNestedExportsIn(const std::vector<StmtPtr> &stmts) {
+  for (const StmtPtr &s : stmts) {
+    if (!s) continue;
+    if (s->kind == StmtKind::ExportRef || s->isExported)
+      throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                       "export is only valid at global scope");
+    rejectNestedExports(s);
+  }
+}
+
+static void rejectNestedExports(const StmtPtr &s) {
+  if (!s) return;
+  switch (s->kind) {
+  case StmtKind::For:
+  case StmtKind::Def:
+    rejectNestedExportsIn(s->body);
+    break;
+  case StmtKind::While:
+    rejectNestedExportsIn(s->whileBody);
+    break;
+  case StmtKind::If:
+    rejectNestedExportsIn(s->ifBody);
+    rejectNestedExportsIn(s->elseBody);
+    break;
+  case StmtKind::Switch:
+    for (const auto &c : s->cases) rejectNestedExportsIn(c.body);
+    rejectNestedExportsIn(s->defaultBody);
+    break;
+  default:
+    break;
+  }
+}
+
+// Pre-pass over the top-level statements (SPEC §bytecodes "keyword export").
+// It runs BEFORE compilation for two reasons: a standalone `export NAME;` may
+// name a declaration that appears later in the file, and the export table has
+// to exist while the body compiles so an exported function's name is already
+// un-rebindable.
+void QLangCompiler::collectExports() {
+  // An `export` is a statement of the module, never of a block inside it.
+  for (const StmtPtr &s : m_program) rejectNestedExports(s);
+  // Pass 1: every top-level declaration, so a standalone export resolves
+  // forward. The first binding of a name wins — a later bare assignment to it
+  // is a write, not a new declaration.
+  for (const StmtPtr &s : m_program) {
+    std::string name;
+    ExportKind kind;
+    if (!exportableDecl(s, name, kind)) continue;
+    m_globalDecls.emplace(name, s);
+  }
+  // Pass 2: the exports themselves, kept in source order.
+  for (const StmtPtr &s : m_program) {
+    std::string name;
+    ExportKind kind;
+    const StmtPtr *decl = nullptr;
+    if (s->kind == StmtKind::ExportRef) {
+      name = s->name;
+      auto it = m_globalDecls.find(name);
+      if (it == m_globalDecls.end())
+        throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                         "export of undeclared name '" + name + "'");
+      decl = &it->second;
+      if (!exportableDecl(*decl, name, kind))
+        throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                         "export of undeclared name '" + name + "'");
+    } else if (s->isExported) {
+      if (!exportableDecl(s, name, kind)) // the parser already rejects this
+        throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                         "export can only prefix def, const or a variable "
+                         "assignment");
+      decl = &s;
+    } else {
+      continue;
+    }
+    if (!m_exportedKinds.emplace(name, kind).second)
+      throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                       "'" + name + "' is already exported");
+    m_exports.push_back(ExportEntry{kind, name, -1});
+    // The module's own name (SPEC §bytecodes "keyword export"): a `const`
+    // holding a constant string, because a loader has to read the identity out
+    // of the image without running the module. Any other shape — a variable, a
+    // missing initializer, a non-string or non-constant value — names nothing.
+    if (name == "MODULE_NAME") {
+      ExprPtr init = kind == ExportKind::Const ? declInitValue(*decl) : nullptr;
+      if (!init)
+        throw QLangError(
+            QLangErrorKind::Parse, s->line, s->col,
+            "MODULE_NAME must be `export const MODULE_NAME = \"<name>\"`");
+      QLangValue v = evalConstExpr(init); // throws when not a constant
+      if (v.type() != QLangValue::Type::String)
+        throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                         "MODULE_NAME must be a string");
+      m_moduleNameFromSource = v.asString();
+    }
+  }
+}
+
+// Resolves the collected export names to what a loader dereferences (SPEC
+// §bytecodes "export table (lookup)"): the function index for a `def`, the
+// register (global slot) for a variable or constant. Runs after the program is
+// compiled, when both exist.
+void QLangCompiler::finishExports(CompiledProgram &out) {
+  for (ExportEntry &e : m_exports) {
+    if (e.kind == ExportKind::Func) {
+      auto it = m_userFuncs.find(e.name);
+      if (it == m_userFuncs.end())
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "exported function '" + e.name + "' is not defined");
+      e.ref = it->second;
+    } else {
+      auto it = m_regs.find(e.name);
+      if (it == m_regs.end())
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "exported name '" + e.name + "' is not bound");
+      e.ref = it->second;
+    }
+  }
+  out.exports = std::move(m_exports);
+}
+
+void QLangCompiler::guardNotExportedFunc(const std::string &name,
+                                         const char *op) const {
+  auto it = m_exportedKinds.find(name);
+  if (it != m_exportedKinds.end() && it->second == ExportKind::Func)
+    throw QLangError(QLangErrorKind::Parse, m_curLine, m_curCol,
+                     std::string("cannot ") + op + " exported function '" +
+                         name + "'");
 }
 
 // Compile a function body (def body or arrow-closure body) into its own
@@ -1623,6 +1824,9 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
   case StmtKind::Label: compileLabel(s); break;
   case StmtKind::Goto: compileGoto(s); break;
   case StmtKind::Import: compileImport(s); break;
+  // `export NAME;` emits no code: the export table is built by the passes
+  // around compile() (SPEC §bytecodes "keyword export").
+  case StmtKind::ExportRef: break;
   case StmtKind::Class: compileClass(s); break;
   case StmtKind::Enum: compileEnum(s); break;
   case StmtKind::Global: compileGlobal(s, captures); break;
@@ -1757,6 +1961,7 @@ void QLangCompiler::compileAssignment(const StmtPtr &s) {
   if (!m_inFunction)
     m_globalVars.insert(s->name);
   guardNotConst(s->name, "assignment");
+  guardNotExportedFunc(s->name, "assign to");
   const std::string &op = s->assignOp.text;
   // Array append: `name += value` where name is an array.
   if (op == "+=" && m_varTypes[s->name] == QLangValue::Type::Array) {
@@ -2335,6 +2540,7 @@ void QLangCompiler::compileExprStmt(const StmtPtr &s) {
         throw QLangError(QLangErrorKind::Parse, 0, 0,
                          "use of undeclared variable '" + opnd->name + "'");
       guardNotConst(opnd->name, "increment/decrement");
+      guardNotExportedFunc(opnd->name, "increment/decrement");
       emit(s->value->uop.text == "++" ? Opcode::INC : Opcode::DEC, r, r);
       return;
     }

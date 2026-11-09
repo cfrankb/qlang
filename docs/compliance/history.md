@@ -1,3 +1,70 @@
+## Round 63 (2026-11-09)
+
+**External-modules plan Phase 3a — an image becomes a *module*: `export` syntax, the export and
+import tables, a module name, and `.qlc` v9.**
+Plan `docs/plans/external-modules-plan-v4.md` Phase 3a (steps 1–5); spec
+`docs/spec/13-bytecodes.md` `## keyword export` is now **Implemented**, alongside the
+`## export table (lookup)` / `## import table (lookup)` notes. **On-disk breaking change — `.qlc`
+v8 → v9** (single-version reader: v1–v8 rejected at the version field). Runtime behavior is
+unchanged — nothing executes the new sections yet; Phase 3a is the write side.
+
+- **Why it was worth doing.** Phase 3's linker needs a module to *say* what it exposes and what it
+  needs; until an image carried an export table there was nothing to resolve an `import` against,
+  and `qlang_run`'s level-5 listing could only print "what main defines and could export".
+- **What landed.** `export` is a keyword (`QLangLexer`) with both spec forms
+  (`docs/spec/13-bytecodes.md` `## keyword export`): the **prefix** form marks the `def` / `const` /
+  assignment / arrow-closure it prefixes (`Stmt::isExported`), the **standalone** form is a new
+  `StmtKind::ExportRef` naming a global declared earlier *or later*. Global scope only: the parser
+  tracks a `m_bodyDepth` (`BodyDepthGuard` in `def`/arrow/`class` bodies) and rejects the keyword
+  there, and the compiler's pre-pass rejects it inside a global-scope `if`/`for`/`while`/`switch`
+  block, where it would otherwise compile and be silently dropped from the table.
+  `QLangCompiler::collectExports()` runs **before** `compile()` — so a standalone export resolves
+  forward, a duplicate is `'<name>' is already exported`, and an exported `def`'s name is already
+  un-rebindable when the body compiles (`guardNotExportedFunc` on assignment and `++`/`--`);
+  `finishExports()` resolves each entry to its function index or register afterwards.
+  `CompiledProgram` gains `moduleName`, `exports` (`ExportEntry {kind, name, ref}`,
+  `ExportKind` = `Var` 0 / `Const` 1 / `Func` 2) and `imports`
+  (`ImportEntry {module, name, kind, ref, alias}`), declared in `include/qlang/QLangBytecode.h`.
+  `setModuleName` / `setLibraryMode` are the new compiler options: library mode compiles the top
+  level as `<init>` instead of `main` and requires `export const MODULE_NAME`.
+- **Decisions (plan §Open questions).** **Q29** ratified as defaulted — the name is the module's own
+  `export const MODULE_NAME` (a `const` holding a constant string, so a loader reads it without
+  running the module), else the driver's name (`qlang_run` passes the source file stem), else
+  `"main"`; mandatory only in library mode. **Q30** ratified as defaulted — `readonly` is a property
+  of the *importer*: the defining module keeps writing to an exported variable (the shared cell of
+  `## technical specifications` 3 is write-through), while rebinding a name exported as a `def` is a
+  compile error. **Q31** untouched: `GETIMPORT`/`CALLIMPORT` stay reserved at 73/74 for Phase 3c, so
+  `kOpcodeUsedCount` stays **72** and the import table is always **empty** here (`import` still binds
+  C++ modules through the negative-slot space of `CALL`).
+- **Format.** v9 appends three sections **after `registerCount`** — `moduleName`, the export table,
+  the import table (`docs/SERIALIZATION.md` new §4.6) — so every v8 section keeps its byte position:
+  `hello.ql`'s image is 3 792 B → 3 809 B, byte-identical through `registerCount` plus a 17-byte
+  tail. The reader validates the tail as it reads it (non-empty module name, `kind <= Func`,
+  non-empty entry name, non-negative `ref`, a `Func` ref inside `[0, funcCount)` and a `Var`/`Const`
+  ref inside `[0, registerCount)`, no duplicate export name, both counts under the §8 cap) and the
+  `functions[0].name == "main"` check becomes `"main"` **or** `"<init>"`.
+- **Verification.** `cmake -B build && cmake --build build` clean; `ctest --test-dir build`
+  **52/52 green**. `codec_check` 337 → **352** (+15: the version matrix moves to v9 — **3/4/5/6/7/8**
+  and **10** rejected — a tail-less v8 image is refused, every §4.6 violation rejected, and a valid
+  tail with two exports and one aliased import survives the round trip, as does a `<init>` top
+  level); new suite **`export`** (`tests/unit/export_test.cpp`, **88** checks). Corpus
+  `tests/scripts/*.ql` stdout **byte-identical** to the pre-change build (23/23, exit 0 on both;
+  measured against a `HEAD` build of `qlang_run` in a scratch tree), and the emitted image is the
+  v8 bytes plus the tail.
+- **Docs.** `docs/SERIALIZATION.md` §4 → version 9 (new §4.6 module identity + tables, §4.1
+  `main`/`<init>`, §5.1 v1–v8 rejected + the tail invariants, §9 v8/v10 probes + the tail violation
+  list, §10); `docs/spec/13-bytecodes.md` (`## keyword export` → Implemented with the Q29/Q30
+  reading, the two table sections, `## encoding extended` gains the v9 bullet and "readers accept
+  v9"); `examples/qlang_run.cpp` names the entry module after its source file, level 5 prints
+  `module:` + the export table (`kind` → function index or register, `readonly` / `shared cell`) and
+  renames the old "exports (main)" list to `unexported defs`, help text v9.
+- **Tallies re-recorded.** counted unit cases 37 718 → **37 821** (+88 `export`, +15 `codec_check`);
+  ctest entries **52**; `encoding_v6`, `flag_flow` and the perf baseline untouched.
+- **Found, not fixed (pre-existing).** A top-level `const` interpolated inside an **f-string in a
+  function body** evaluates to nil (`const G = "hello"` / `def a(n) { return f"{G}" }` /
+  `println(a(1))` → `nil`). Reproduced identically on the pre-change build, so it is not a Phase 3a
+  regression; filed in `docs/plans/todo.md`.
+
 ## Round 62 (2026-11-09)
 
 **External-modules plan Phase 2 — the constant pool becomes program-level: one

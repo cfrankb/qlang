@@ -132,6 +132,7 @@ enum class StmtKind {
   Yield,     // yield expression (generator)
   Global,    // global a, b (import top-level vars into function scope)
   Import,    // import math / import math.min
+  ExportRef, // export NAME (standalone export of an already-declared name)
   Class,     // class Name { fields + methods end }
   Enum,      // enum Name[:type] { A, B, C = 100, D }
   Emit       // emit obj.signal(args) (signal emission)
@@ -236,6 +237,14 @@ struct Stmt {
   std::string importAlias;   // alias for `import math as m`
   bool importAll = false;    // true for `from math import *`
 
+  // Export (SPEC §bytecodes "keyword export"): the prefix form (`export def f()`,
+  // `export const k = 1`, `export x = 1`) marks the statement it prefixes; the
+  // standalone form is a StmtKind::ExportRef naming an existing declaration.
+  // Global scope only — the parser rejects the keyword inside a function or
+  // class body, and the compiler records the marked statements in the module's
+  // export table.
+  bool isExported = false;
+
   // Class: class Name { fields + methods end }
   std::string className;
   std::vector<StmtPtr> classBody;
@@ -299,6 +308,7 @@ private:
   StmtPtr parseSwitch();
   StmtPtr parseGlobal();
   StmtPtr parseImport();
+  StmtPtr parseExport();
   StmtPtr parseClass();
   StmtPtr parseEnum();
   StmtPtr parseEmit();
@@ -330,6 +340,11 @@ private:
   // mutual-recursion entry points; past kMaxParseDepth the parser throws a
   // clean error instead of overflowing the C stack.
   int m_depth = 0;
+  // Nesting depth of function/class bodies (0 = global scope). `export` is a
+  // global-scope-only keyword (SPEC §bytecodes "keyword export"), so
+  // parseExport rejects it whenever this is non-zero; parseFunction,
+  // parseArrowClosure and parseClass bump it around their bodies.
+  int m_bodyDepth = 0;
 };
 
 } // namespace qlang

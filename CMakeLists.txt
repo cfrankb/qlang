@@ -199,6 +199,16 @@ add_executable(builtin_table_test tests/unit/builtin_table_test.cpp)
 target_link_libraries(builtin_table_test PRIVATE qlang)
 add_test(NAME builtin_table COMMAND builtin_table_test)
 
+# Module exports (SPEC §bytecodes "keyword export", "export table (lookup)",
+# docs/plans/external-modules-plan-v4.md Phase 3a): both spec forms, global-scope
+# only, the export table's kind + resolved ref (function index / register),
+# MODULE_NAME resolution (source > driver > "main"), library mode's `<init>`,
+# the duplicate-export and exported-function-rebind guards, and the table's
+# survival through the .qlc v9 round trip.
+add_executable(export_test tests/unit/export_test.cpp)
+target_link_libraries(export_test PRIVATE qlang)
+add_test(NAME export COMMAND export_test)
+
 # External C++ types (docs/EXTERNAL_TYPES.md): public-member setters,
 # read-only computed props, methods (incl. BoundMethod extraction), enum
 # constants, str, handoff integrity, registration-time validation.
