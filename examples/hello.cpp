@@ -153,7 +153,7 @@ static void dumpBytecode(const CompiledProgram &cp)
     return;
   }
   const auto &fn = cp.functions[0]; // main
-  const auto &consts = fn.constants;
+  const auto &consts = cp.constants; // the program's single pool
   std::cout << "\nBytecode (" << fn.instrOffsets.size() << " instructions, "
             << cp.registerCount << " registers, " << consts.size()
             << " constants):\n";

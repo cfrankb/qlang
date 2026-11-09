@@ -1,20 +1,24 @@
 # Plan v4: external modules (builtin name table, unified constant pool, import/export tables)
 
-Status: **Phase 1 ✓ implemented (Round 61, 2026-11-09); Phase 2 ready to start.**
+Status: **Phase 1 ✓ implemented (Round 61, 2026-11-09); Phase 2 ✓ implemented (Round 62,
+2026-11-09); Phase 3 gated on Q29–Q33 + Q35.**
 Re-audited 2026-11-08 against `HEAD = ac97651` (Round 60); Phase 1 landed on top of that
 baseline (library builtin name table — `builtinCount`/`builtinName`/`findBuiltin`/`builtinId`
 in `QLangBytecode.h`, `builtin_table` suite, 151 checks; spec
 `docs/spec/13-bytecodes.md` `## table for build in function (qlang base)` marked
-**Implemented**; compliance Round 61). Phase 2 is unblocked except for **Q34** (version
-allocation vs the offset-table plan).
-Phase 3 is gated on **Q29–Q35** (§ Open questions) and, for automatic
+**Implemented**; compliance Round 61). Phase 2 landed on top of Phase 1 (`.qlc` **v8**,
+`CompiledProgram::constants`, `Function::constants` deleted; spec
+`docs/spec/13-bytecodes.md` `## unified constant table` marked **Implemented**; compliance
+Round 62) — **Q34 is settled by that round: v8 = the unified pool, v9 = Phase 3's module
+tables.**
+Phase 3 is gated on **Q29–Q33** + **Q35** (§ Open questions) and, for automatic
 name-based import resolution only, on **C8** (`missing-features-plan.md`).
 Supersedes: `docs/plans/archive/external-modules-plan-v3.md` (2026-11-03) and,
 through it, v2 (2026-11-02) and v1 (all three under `docs/plans/archive/`). The language requirements are unchanged
-since v1; what changed twice is the **machine** — `.qlc` is at **v7** with a
+since v1; what changed twice is the **machine** — `.qlc` is at **v8** with a
 single-version reader, the instruction stream is the v6 variable-width
 modifier-byte format, the `i`/`c`/`jmp*` opcode spellings are retired, and the
-constant pool is deduplicated again.
+constant pool is one deduplicated table per module.
 Builds on / blocked by: `missing-features-plan.md` **C8** (module search paths +
 external search callback, **Q23–Q26**) — the front end that lets `import mod`
 *find* a module; this plan owns what happens once it is found.
@@ -96,8 +100,9 @@ version bumps and one encoding rewrite.
     `searchCallback`) is an inventory item with open questions **Q23–Q26**
     (`missing-features-plan.md` §C8) and is listed as this plan's front end in
     `docs/plans/todo.md`, `missing-features-plan.md` and
-    `docs/compliance/status.md`. `offset-table-elimination-plan.md` §9 may also
-    claim a bump (7 → 8) — version allocation is **Q34**.
+    `docs/compliance/status.md`. `offset-table-elimination-plan.md` §9 wanted the
+    same bump — **Q34 settled it in Round 62**: v8 went to this plan's Phase 2, so
+    that plan takes the number after Phase 3's v9.
 12. **Plan hygiene** (the gap `todo.md` §5 records): this document carries a
     `Status:` header, round tracking, an `## Open questions` section with
     defaults (so an item can start without a design round-trip), and an
@@ -221,12 +226,11 @@ Numbering continues the global **Q#** series of `missing-features-plan.md`
   **Default:** yes — concatenate with `valueKey` folding, since the linker
   rewrites every pool operand anyway (**Q32**). Without it a merged program can
   carry the same string twice, which `:960` forbids.
-- **Q34 Which `.qlc` version does each phase take?** — this plan wants v8
-  (Phase 2) and v9 (Phase 3); `offset-table-elimination-plan.md` §9 (option A,
-  not yet signed off, `todo.md` §4) also wants 7 → 8.
-  **Default:** v8 = unified pool, v9 = module tables; if the offset-table
-  decision lands first it takes v8 and both numbers shift by one. Record the
-  allocation in `docs/SERIALIZATION.md` §4 either way.
+- **Q34 Which `.qlc` version does each phase take?** — **decided 2026-11-09
+  (Round 62):** **v8 = the unified pool** (Phase 2 shipped on it), **v9 = module
+  tables** (Phase 3). `offset-table-elimination-plan.md` §9 (option A, not yet
+  signed off, `todo.md` §4) takes the next free number after v9. Recorded in
+  `docs/SERIALIZATION.md` §4 ("Version allocation").
 - **Q35 When does an imported module's top-level code run?** — every module is
   a global-scope script with no `main` (spec `:656`), so each has an `<init>`.
   **Default:** each module's `<init>` runs exactly once, in dependency order
@@ -327,8 +331,40 @@ Prerequisite for Phase 3's link-time merge. Behavior-invariant refactor.
    `13-bytecodes.md` § `unified constant table` (622–624) gets the
    "Implemented (Round N)" marker; compliance hashes after the green run.
 
+> **DONE (Round 62, 2026-11-09).** All seven steps landed in one round.
+> 1. `ConstantPool` (`include/qlang/QLangBytecode.h` / `src/QLangBytecode.cpp`) — the values plus
+>    their `valueKey` dedup index behind `add()` / `take()`; `Function::constants` deleted,
+>    `CompiledProgram::constants` is the home. Deviation from the step as written: the pool manager
+>    is a new `ConstantPool` type rather than `Bytecode::addConstant`/`setConstants` — `Bytecode`
+>    is the writer's view of *one* function and has no business owning a program-level table, so
+>    it shrank to the `name()` mnemonic instead.
+> 2. `QLangCompiler` owns one pool (`m_pool`); the emitter's `consts`/`constKeys`/`addConst()` and
+>    the save/restore swap are gone, so dedup spans function boundaries; `compile()` moves the pool
+>    into the program. `CompiledProgram::code` deleted (no consumers left once the writer reads
+>    `functions[0]` through `Bytecode`).
+> 3. `runFrames()` reads `m_prog.constants` (one line).
+> 4. `kQlcVersion` 7 → 8; the pool section moved after the function records, before the native-slot
+>    table — for a single-function file the bytes are identical to v7, so the hand-built fixtures
+>    needed no byte edits. Reader stays single-version (v1–v7 rejected, no remap). New invariant:
+>    const-pool operands (`mov` kind 2, `makefunc`, `makegen`, **and `emit`**, whose `b` is a pool
+>    index although its kind stays register) are collected during decode and range-checked once the
+>    pool is read → `constant pool index out of range`; the closure-`funcIndex` scan walks the
+>    program pool.
+> 5. `qlang_run` prints one flat `constants:` list above `function #0`; `hello.cpp` likewise.
+> 6. `codec_check` 330 → **337** (version matrix 3/4/5/6/7/9 rejected, v8 round-trip with
+>    program-pool equality, cross-`def` dedup, the pool-index accept/reject pair); `flag_flow`
+>    **1324** unchanged (its disassembly harness merges the pools it used to emit, renumbering
+>    operands through `decodeInstruction`/`encodeInstruction`); `phase0_api` F1 reads the program
+>    pool. Corpus: 23/23 `tests/scripts/*.ql` stdout byte-identical against a `HEAD` worktree build.
+> 7. `docs/SERIALIZATION.md` §4 → v8 (new §4.2, NativeSlot/VarEntry/instruction stream renumber to
+>    §4.3/§4.4/§4.5, §5.1 + §9 + §10), `13-bytecodes.md` `## unified constant table` → Implemented
+>    + the decompiler sample refreshed to real v8 output, compliance Round 62 (counted unit cases
+>    37 711 → **37 718**, ctest **51**).
+> `cmake --build build` clean, `ctest --test-dir build` **51/51 green**.
+
 Risks: behavior-invariant on its face, but it touches compiler, VM, codec and
 disassembler. Keep it a standalone round so a regression is easy to bisect.
+**Landed as a standalone round as planned** (Round 62, no other feature on top of it).
 
 ## Phase 3 — import/export tables, standalone modules, `GETIMPORT` + `CALLIMPORT` (L)
 
@@ -555,17 +591,20 @@ run (AGENTS.md).
    `findBuiltin` rather than resolving with the throwing `builtinId` — a non-builtin callee is a
    normal answer there (native slot / `unknown function`), so `builtinId` has no in-tree caller
    yet and is pinned by the suite instead.
-2. **Phase 2** (unified pool, `.qlc` v8) — steps 1–7. Decide **Q34** first
-   (version allocation vs the offset-table plan). Watch list:
-   `QLangCompiler.cpp` 1202–1209 / 1390 / 1539 / 2625 / 2905,
-   `QLangVM.cpp:1994`, `QLangBytecodeIO.cpp:374–380, 417–419, 549–552`,
-   `examples/qlang_run.cpp:855–857, 885–886`,
-   `tests/unit/codec_check.cpp:397–406, 1581–1602`, `SERIALIZATION.md` §4.
+2. **Phase 2** (unified pool, `.qlc` v8) — steps 1–7. **✓ done (Round 62,
+   2026-11-09):** `ConstantPool` lives in `CompiledProgram::constants` and is
+   owned by `QLangCompiler`, so dedup spans `def`s; `Function::constants`,
+   `FnEmitter::consts`/`constKeys`/`addConst()` and the `CompiledProgram::code`
+   mirror are deleted; `.qlc` is v8 with the pool as a module-level section and a
+   load-time const-pool index check; `codec_check` 330 → 337, corpus byte-identical,
+   ctest 51/51. **Q34** was decided first, as required (v8 here, v9 for Phase 3).
+   Deviation: the pool manager is the new `ConstantPool` type, not
+   `Bytecode::addConstant`/`setConstants` — see the Phase 2 **DONE** note.
 
 **Gated:**
 
 3. **Phase 3a** (export syntax + tables, `.qlc` v9 write side) — needs
-   **Q29**, **Q30**, **Q31**, **Q34**.
+   **Q29**, **Q30**, **Q31** (**Q34** settled in Round 62: v9 is reserved).
 4. **Phase 3b** (loader + linker) — needs **Q32**, **Q33**, **Q35**; needs the
    driver to load libraries explicitly (automatic name resolution waits for
    **C8**/**Q23–Q26**).
@@ -573,9 +612,9 @@ run (AGENTS.md).
    lands with the `09-modules.md` / `07-api.md` rewrites.
 
 Cross-plan coordination: `DECL` (M4) and this plan's two opcodes both append to
-the enum (**Q31**); the offset-table plan and Phase 2 both want a version bump
-(**Q34**). Record both allocations in `docs/SERIALIZATION.md` §4 when they are
-decided.
+the enum (**Q31** — still open). The version counter (**Q34**) is settled and
+recorded in `docs/SERIALIZATION.md` §4 "Version allocation": v8 taken by Phase 2,
+v9 reserved for Phase 3, the offset-table plan takes the next free number.
 
 ## Verification (per phase, per AGENTS.md)
 

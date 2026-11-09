@@ -1,7 +1,7 @@
 # QLang Serialization / Deserialization Spec
 
-Status: **implemented** — `.qlc` program image (v7)
-Covers: `.qlc` program image (v7) and state snapshot (v2, future)
+Status: **implemented** — `.qlc` program image (v8)
+Covers: `.qlc` program image (v8) and state snapshot (v2, future)
 Reference implementation: `src/QLangBytecodeIO.cpp` (library codec)
 Architecture assessment of this change: [qlc-codec-assessment.md](qlc-codec-assessment.md)
 
@@ -92,15 +92,17 @@ Rules:
   materialises **fresh** payloads — a decoded value
   never aliases another value's storage.
 
-## 4. Program image (magic `QLC1`, version 7)
+## 4. Program image (magic `QLC1`, version 8)
 
 ```
 offset  field            type   notes
 ──────  ───────────────  ─────  ──────────────────────────────────────────
 0       magic            4s     "QLC1"
-4       version          u32    = 7  (kQlcVersion; readers accept 7 only)
+4       version          u32    = 8  (kQlcVersion; readers accept 8 only)
 8       funcCount        u32
 …       functions        funcCount × Function
+        poolCount        u32
+…       pool             poolCount × Value        // module constant pool (§4.2)
         nativeCount      u32
 …       natives          nativeCount × NativeSlot
         varCount         u32
@@ -109,6 +111,13 @@ offset  field            type   notes
 …       constVars        constVarCount × String
         registerCount    i32
 ```
+
+**Version allocation** (the counter is shared across plans, so each bump is recorded here when it
+is decided): **v8** = the module constant pool (§4.2, Round 62,
+[plans/external-modules-plan-v4.md](plans/external-modules-plan-v4.md) Phase 2) · **v9** = reserved
+for the same plan's Phase 3 module identity + export/import tables · the next free number belongs
+to whoever lands next ([plans/offset-table-elimination-plan.md](plans/offset-table-elimination-plan.md)
+is the candidate).
 
 ### 4.1 Function record
 
@@ -123,11 +132,10 @@ u32   codeSize
 u32   offCount
       offCount × u32 offset // byte offset of each instruction (strictly increasing)
 u32   locCount, locCount × (u16 line, u16 col)
-u32   constCount, constCount × Value
 ```
 
 The instruction stream is the **escape-byte format** introduced in v6 and
-unchanged in v7 (see `include/qlang/QLangBytecode.h`, §4.4): a flat byte stream
+unchanged in v7 and v8 (see `include/qlang/QLangBytecode.h`, §4.5): a flat byte stream
 where each instruction starts with an opcode byte whose bit 7 is the escape flag
 and bits 0–6 are the opcode identity (128 base identities, 72 defined — v7
 retired `movc`, `movi`, `addi`, `subi`, `cmpi`, `jmpfalse` and `jmptrue` and
@@ -154,8 +162,29 @@ offset table: `locCount` entries of `(u16 line, u16 col)` with
 - Every decoded opcode identity MUST be `< kOpcodeUsedCount` (72).
 - `line`/`col` in the loc side table are 0-based source positions (0,0 when
   unknown).
+- Function records carry **no constant pool** since v8 — the pool is
+  program-level (§4.2).
 
-### 4.2 NativeSlot
+### 4.2 Module constant pool (new in v8)
+
+```
+u32   poolCount, poolCount × Value
+```
+
+One pool per **program**, shared by every function, replacing the per-function
+pools of v1–v7. `CompiledProgram::constants` is the in-memory home; a
+const-pool operand (`RightKind::ConstPool`, §4.5) is an index into it. The
+compiler dedups by value across the whole module, so the same literal emitted
+in two `def`s occupies one entry.
+
+- The section sits **after the function records, before the native-slot
+  table** (§4.3). For a single-function file the bytes are identical to v7's
+  per-function pool position.
+- Every const-pool operand in the decoded instruction streams MUST be
+  `< poolCount`; an out-of-range index → "constant pool index out of range".
+- Closure `funcIndex` scanning (the `EMIT`-operand check) walks this pool.
+
+### 4.3 NativeSlot
 
 ```
 i32   slot          index into CompiledProgram::nativeFuncs
@@ -170,7 +199,7 @@ table is what makes the image loadable: bytecode references natives by slot
 - Unbound (null) slots are omitted; the loader pads `nativeFuncs` with null.
 - `name` MUST be non-empty.
 
-### 4.3 VarEntry / constVars
+### 4.4 VarEntry / constVars
 
 ```
 VarEntry:  u32 nameLen, name bytes, i32 reg
@@ -180,7 +209,7 @@ constVars: u32 nameLen, name bytes
 Backing containers are `std::unordered_map` / `std::unordered_set`: **order
 within both sections is unspecified**. Readers MUST NOT depend on it.
 
-### 4.4 Instruction stream (v6 layout, current in v7)
+### 4.5 Instruction stream (v6 layout, current in v8)
 
 Each instruction is `[opcode byte] [modifier byte] [operands…]`. In the opcode
 byte **bit 7 is the escape flag** and bits 0–6 are the opcode identity
@@ -237,8 +266,8 @@ both uniformly:
 | base form of the identity | equivalent `e` |
 |---|---|
 | register right (`mov r3, r5`) | `0x04` |
-| immediate right (`movi r3, 5`) | `0x40` |
-| const-pool right (`movc r3, pool[5]`) | `0x08` |
+| immediate right (`mov r3, 5`, escaped) | `0x40` |
+| const-pool right (`mov r3, pool[5]`, escaped) | `0x08` |
 | jump class, zero-operand opcodes | none — `kNoBaseModifier` (`0xFF`) |
 
 - **Jump class**: the modifier byte is an **offset-width selector**, not a
@@ -259,21 +288,23 @@ both uniformly:
 
 ### 5.1 Validation sequence
 
-1. At least 12 bytes present; magic == `QLC1`; `version == 7`
+1. At least 12 bytes present; magic == `QLC1`; `version == 8`
    (`kQlcVersion`; anything else → "unsupported version", never a parse
-   attempt). Legacy v1–v6 files (fixed 8-byte instructions through v4, the
-   two-nibble modifier byte in v5, and v6 — same layout but the seven identities
-   v7 retired) are NOT accepted.
+   attempt). Legacy v1–v7 files (fixed 8-byte instructions through v4, the
+   two-nibble modifier byte in v5, v6 — same layout but the seven identities
+   v7 retired — and v7, whose constant pools live in the function records) are
+   NOT accepted.
 2. Every read is bounds-checked. Truncation → `QLangError(Io)` with the byte
    offset where the read failed.
 3. Structural invariants: `funcCount >= 1`, `functions[0].name == "main"`,
    `codeSize <= 64 Mi × 15` (§8 instruction cap × the widest instruction),
    every instruction decodes and its opcode identity is `< kOpcodeUsedCount`,
    offsets strictly increasing with the last instruction ending exactly at
-   `codeSize`, `locCount == offCount`, all closure `funcIndex` in
+   `codeSize`, `locCount == offCount`, every const-pool operand in
+   `[0, poolCount)` (§4.2), all closure `funcIndex` in
    `[0, funcCount)`, native slots unique and `>= 0`, all `registerCount >= 0`,
    all `paramCount >= 0`. Decoding is what enforces the modifier rules of
-   §4.4: reserved left width (3), reserved right kind (3), reserved immediate
+   §4.5: reserved left width (3), reserved right kind (3), reserved immediate
    forms (12–15), a kind the opcode does not permit, and an unescaped `CALL`.
 4. Value decoding enforces §8 limits (depth, sizes).
 
@@ -406,10 +437,11 @@ A codec is not "done" until all of these pass:
    byte-identical to direct `ctx.run(source)`.
 3. **Malformed-input suite** (each case → clean `Io` error, no crash, no
    partial out-param): truncated at every section boundary, bad magic,
-   version 6 (below `kQlcVersion`) and version 8 (above), opcode identity
+   version 7 (below `kQlcVersion`) and version 9 (above), opcode identity
    `>= kOpcodeUsedCount`, reserved modifier fields (left width 3, kind 3,
    immediate forms 12–15, unpermitted kind, unescaped `CALL`), truncated
-   instruction, dangling closure index, duplicate native slot, negative count,
+   instruction, const-pool operand `>= poolCount` (§4.2), dangling closure
+   index, duplicate native slot, negative count,
    100-deep nested array, 70 Mi value count.
 4. **Native mismatch**: program calling an unregistered native → single
    error naming all missing natives.
@@ -421,9 +453,9 @@ A codec is not "done" until all of these pass:
 | Item | Status |
 |---|---|
 | Value codec (`serializeValue`/`deserializeValue`) | done — matches §3 |
-| Program writer (`writeQlc`, §4 incl. native-slot table) | done — v7, explicit little-endian, escape-byte code stream + offset table, loc side table |
+| Program writer (`writeQlc`, §4 incl. module pool + native-slot table) | done — v8, explicit little-endian, escape-byte code stream + offset table, loc side table, program-level constant pool |
 | `QLangErrorKind::Io` | done |
-| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v7 only |
+| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v8 only, pool-index range check |
 | App writer (POC `QlcWriter` in `qlang_run.cpp`) | deleted — replaced by `writeQlc` |
 | Tests (`codec_check`: §9 items 1, 3) | done |
 | `QLangContext::loadProgram` / `execute` (§5.2, §9 item 2/4) | not started |

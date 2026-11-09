@@ -1,5 +1,5 @@
 // qlang_run — small driver that runs a .ql (QLang) script or a .qlc
-// (compiled QLC1 v7 image) with a selectable diagnostic trace level,
+// (compiled QLC1 v8 image) with a selectable diagnostic trace level,
 // optional stage timing, and bytecode output.
 //
 //   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>]
@@ -57,7 +57,7 @@ namespace
 
   void printHelp(const char *prog)
   {
-    std::cout << "Run a QLang (.ql) script or a compiled .qlc image (QLC1 v7).\n"
+    std::cout << "Run a QLang (.ql) script or a compiled .qlc image (QLC1 v8).\n"
               << "\n"
               << "usage: " << prog << " [options] <file.ql|file.qlc>\n"
               << "\n"
@@ -758,6 +758,13 @@ namespace
     {
       ss << "QLang disassembly (v1)\n";
       ss << "registers: " << prog.registerCount << "\n\n";
+      // The module constant pool (SPEC §bytecodes "unified constant table"):
+      // one table shared by every function, so it is printed once for the
+      // program rather than once per function.
+      ss << "constants:\n";
+      for (size_t j = 0; j < prog.constants.size(); j++)
+        ss << "    [" << j << "] " << valueText(prog.constants[j]) << "\n";
+      ss << "\n";
     }
     // Widest operand text and (level 4) pseudo-mnemonic in the whole
     // listing, so the operand, "; ...", and "# ..." columns align on
@@ -801,9 +808,6 @@ namespace
           for (const auto &[reg, name] : regs)
             ss << "    r" << reg << "  " << name << "\n";
         }
-        ss << "  constants:\n";
-        for (size_t j = 0; j < f.constants.size(); j++)
-          ss << "    [" << j << "] " << valueText(f.constants[j]) << "\n";
         ss << "  code:\n";
       }
       else
@@ -831,8 +835,8 @@ namespace
           if (ins.op == Opcode::EMIT)
             poolOperand = true;
           if (poolOperand && ins.b >= 0 &&
-              static_cast<size_t>(ins.b) < f.constants.size())
-            constNote = valueText(f.constants[static_cast<size_t>(ins.b)]);
+              static_cast<size_t>(ins.b) < prog.constants.size())
+            constNote = valueText(prog.constants[static_cast<size_t>(ins.b)]);
         }
         // Level 4: name the operands of CALL / CALLFN / CONV / CAST.
         if (level >= 4)
@@ -1252,7 +1256,7 @@ int main(int argc, char **argv)
   ctx.setVerboseLevel(traceLevel);
 
   // --- Load (.qlc) or parse + compile (.ql) ---
-  // A .qlc file is a compiled program (QLC1 v7, docs/SERIALIZATION.md):
+  // A .qlc file is a compiled program (QLC1 v8, docs/SERIALIZATION.md):
   // read it back and re-bind its native functions by name.
   const bool isQlc = source.size() >= 4 && source.compare(0, 4, "QLC1") == 0;
   CompiledProgram compiled;
@@ -1450,13 +1454,10 @@ int main(int argc, char **argv)
 
   if (profile)
   {
-    size_t constCount = 0;
-    for (const auto &f : compiled.functions)
-      constCount += f.constants.size();
     const std::string text =
         profileText(msBetween(t0, t1), stmtCount, msBetween(t1, t2), instrCount,
-                    constCount, compiled.functions.size(), msBetween(t3, t4),
-                    msBetween(t0, t4));
+                    compiled.constants.size(), compiled.functions.size(),
+                    msBetween(t3, t4), msBetween(t0, t4));
     std::fputs(text.c_str(), stderr);
     if (!asmOut.empty())
     {

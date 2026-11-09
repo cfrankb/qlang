@@ -1991,7 +1991,7 @@ RunResult QLangVM::runFrames() {
     const Function &fn =
         m_prog.functions[static_cast<size_t>(frame.funcIndex)];
     const auto &code = fn.code;
-    const auto &consts = fn.constants;
+    const auto &consts = m_prog.constants;
 
     if (frame.pc >= code.size()) {
       // Fell off the end without an explicit return: unwind with nil.

@@ -1,3 +1,59 @@
+## Round 62 (2026-11-09)
+
+**External-modules plan Phase 2 — the constant pool becomes program-level: one
+deduplicated table per module, `.qlc` v8, and a load-time pool-index check the
+per-function pools never needed.**
+Plan `docs/plans/external-modules-plan-v4.md` Phase 2 (steps 1–7); spec
+`docs/spec/13-bytecodes.md` `## unified constant table` is now **Implemented**.
+**On-disk breaking change — `.qlc` v7 → v8** (single-version reader: v1–v7 rejected
+at the version field). Runtime behavior is unchanged; disassembly *text* changes by
+design (one flat `constants:` list per program, indices shift).
+
+- **Why it was worth doing.** The spec requires "all the functions within a module
+  must share a common const table or at the very least must not duplicate constants"
+  — v7's per-function pools duplicated every literal used in two `def`s, and Phase
+  3's module merge needs one table per module to merge.
+- **What landed.** `ConstantPool` (`include/qlang/QLangBytecode.h` /
+  `src/QLangBytecode.cpp`): the pool plus its `valueKey` dedup index behind
+  `add()` / `take()`. `QLangCompiler` owns one (`m_pool`), so dedup spans function
+  boundaries — a string used in two `def`s folds to one slot — and `compile()`
+  moves it into the new `CompiledProgram::constants`. Deleted: `Function::constants`,
+  `FnEmitter::consts` / `constKeys` / `addConst()`, and the dead `CompiledProgram::code`
+  mirror — `Bytecode` shrinks to the `name()` mnemonic alone. The VM's frame loop
+  reads `m_prog.constants`.
+- **Format.** v8 moves the pool out of the function record into a module-level
+  section after the function records, before the native-slot table
+  (`docs/SERIALIZATION.md` new §4.2; NativeSlot/VarEntry/instruction-stream renumber
+  to §4.3/§4.4/§4.5). For a single-function file the bytes are identical to v7 —
+  the pool sits at the same offset — so the hand-built fixtures needed no byte
+  changes. New load-time invariant: every const-pool operand (`mov` kind 2,
+  `makefunc`, `makegen`, and `emit`, whose `b` is a pool index though its kind
+  stays register) is collected during decode and range-checked once the pool is
+  read → `constant pool index out of range`; the closure-`funcIndex` scan walks the
+  program pool.
+- **Verification.** `cmake -B build && cmake --build build` clean; `ctest
+  --test-dir build` **51/51 green**. `codec_check` 330 → **337** (+7: the version
+  matrix moves to v8 — v3–v7 and v9 rejected, v8 round-trip with **program-pool**
+  equality — plus the pool-index accept/reject pair); `flag_flow` **1324**
+  unchanged (the harness now merges per-function pools into the program pool with
+  operand renumbering through `decodeInstruction`/`encodeInstruction`);
+  `phase0_api` F1 corruption check reads the program pool. Corpus
+  `tests/scripts/*.ql` stdout byte-identical to the pre-change build (behavior
+  invariant).
+- **Docs.** `docs/SERIALIZATION.md` §4 → version 8 (new §4.2 module pool + Q34
+  version allocation, §5.1 v1–v7 rejected + pool-index invariant, §9 pool-index
+  case + v7/v9 probes, §10); `docs/spec/13-bytecodes.md` (`## unified constant
+  table` → Implemented, the `## opcode: MOVI` decompiler sample refreshed to the
+  real v8 output — flat pool, `mov e=0x08 … pool[00]`, no `movc` —, the three
+  stale operand-map rows `CONST`/`DELETE`/`IN` → `MOV (kind 2)`/`DELETEx`/`INx`,
+  `SERIALIZATION.md` §4.4 refs → §4.5); `examples/qlang_run.cpp` + `hello.cpp`
+  print the flat program pool, help text v8. **Q34 recorded:** v8 = unified pool
+  (this round), v9 = Phase 3 module tables; `offset-table-elimination-plan.md`
+  (unsigned) takes the next free number.
+- **Tallies re-recorded.** counted unit cases 37 711 → **37 718** (+7, all in
+  `codec_check`); ctest entries **51**; `encoding_v6`, `flag_flow` and the perf
+  baseline untouched.
+
 ## Round 61 (2026-11-09)
 
 **External-modules plan Phase 1 — the builtin-function names move into the library: one

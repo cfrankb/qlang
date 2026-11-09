@@ -144,7 +144,6 @@ void FnEmitter::finish(Function &fn) {
   fn.loc.resize(raw.size());
   for (size_t i = 0; i < raw.size(); i++)
     fn.loc[i] = {raw[i].line, raw[i].col};
-  fn.constants = std::move(consts);
 }
 
 ImmForm FnEmitter::immFormOf(const RawInstr &r) {
@@ -833,7 +832,7 @@ void QLangCompiler::compileArgsToSlots(const std::vector<ExprPtr> &args,
 }
 
 int QLangCompiler::emitConst(const QLangValue &value) {
-  int idx = m_emitter.addConst(value);
+  int idx = m_pool.add(value);
   std::string valStr;
   if (value.type() == QLangValue::Type::Int)
     valStr = std::to_string(value.asInt());
@@ -842,7 +841,7 @@ int QLangCompiler::emitConst(const QLangValue &value) {
   else
     valStr = std::string("(type=") + std::to_string((int)value.type()) + ")";
   trace(TRACE_FULL, "[DBG-CONST] Adding constant type=%d value=%s -> index=%d (pool size=%zu)\n",
-        (int)value.type(), valStr.c_str(), idx, m_emitter.consts.size());
+        (int)value.type(), valStr.c_str(), idx, m_pool.size());
   return idx;
 }
 
@@ -1199,14 +1198,9 @@ CompiledProgram QLangCompiler::compile() {
   for (auto &fn : m_functions)
     out.functions.push_back(std::move(fn));
 
-  Bytecode outCode;
-  outCode.setCode(out.functions[0].code);
-  outCode.setConstants(out.functions[0].constants);
-  // Copy (not move) so out.functions retains its instruction streams for the VM.
-  for (auto &fn : out.functions)
-    outCode.addFunction(fn.name, fn.paramCount, fn.registerCount,
-                        fn.code, fn.instrOffsets, fn.constants);
-  out.code = std::move(outCode);
+  // The one pool every function's operands index into (SPEC §bytecodes
+  // "unified constant table"); the dedup map dies with the compile.
+  out.constants = m_pool.take();
   buildRegisterReport(); // before m_regs moves out (names are read from it)
   out.vars = std::move(m_regs);
   out.constVars = std::move(m_constVars);
@@ -3139,9 +3133,9 @@ void QLangCompiler::compileSwitch(const StmtPtr &s) {
     const auto &inst = m_emitter.raw[i];
     trace(TRACE_FULL, "[DBG-SW]   [%zu] op=%d a=%d b=%d c=%d\n", i, (int)inst.op, inst.a, inst.b, inst.c);
   }
-  trace(TRACE_FULL, "[DBG-SW] constants.size()=%zu\n", m_emitter.consts.size());
-  for (size_t i = 0; i < m_emitter.consts.size(); i++) {
-    const auto &c = m_emitter.consts[i];
+  trace(TRACE_FULL, "[DBG-SW] constants.size()=%zu\n", m_pool.size());
+  for (size_t i = 0; i < m_pool.size(); i++) {
+    const auto &c = m_pool[i];
     std::string cv;
     if (c.type() == QLangValue::Type::Int)
       cv = std::to_string(c.asInt());

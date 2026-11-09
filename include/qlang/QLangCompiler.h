@@ -23,11 +23,15 @@ struct LoopCtx {
   int breakAddr; // target for `break` (just past the loop)
 };
 
-// The output of compilation: a compiled program plus the variable-to-register
-// map the VM needs to sync the scope.
+// The output of compilation: the compiled functions, the one constant pool they
+// all index (SPEC §bytecodes "unified constant table"), and the
+// variable-to-register map the VM needs to sync the scope.
 struct CompiledProgram {
-  Bytecode code;                 // scratch for main; functions() holds all fns
   std::vector<Function> functions; // functions[0] == the implicit "main"
+  // The program's single constant pool. Every `mov` kind-2 operand, every
+  // `makefunc`/`makegen` operand and `emit`'s operand b indexes into this
+  // vector; values are unique (ConstantPool folds duplicates).
+  std::vector<QLangValue> constants;
   std::unordered_map<std::string, int> vars; // script name -> register index
   std::unordered_set<std::string> constVars; // names that are const (cannot be reassigned)
   // Native (C++) functions registered via QLangContext::setFunc(), indexed
@@ -99,10 +103,6 @@ struct RawInstr {
 // QLangCompiler.cpp).
 struct FnEmitter {
   std::vector<RawInstr> raw;
-  std::vector<QLangValue> consts;
-  // Dedup index: serialized-value key -> pool index (SPEC §bytecodes
-  // "constant pool": unique values, duplicates folded into a single entry).
-  std::unordered_map<std::string, int> constKeys;
 
   size_t size() const { return raw.size(); }
 
@@ -174,19 +174,10 @@ struct FnEmitter {
     }
   }
 
-  int addConst(QLangValue v) {
-    std::string key = valueKey(v);
-    auto it = constKeys.find(key);
-    if (it != constKeys.end())
-      return it->second; // dedup: identical value already in the pool
-    int idx = static_cast<int>(consts.size());
-    constKeys.emplace(std::move(key), idx);
-    consts.push_back(std::move(v));
-    return idx;
-  }
-
   // Encode all accumulated instructions into fn's flat byte stream, filling
-  // fn.code, fn.instrOffsets, fn.loc, and fn.constants.
+  // fn.code, fn.instrOffsets and fn.loc. A function owns no constant pool:
+  // pool operands were assigned indices in the program's ConstantPool while
+  // the body was compiled (external-modules plan Phase 2).
   void finish(Function &fn);
 
 private:
@@ -436,8 +427,14 @@ private:
   static bool containsYield(const StmtPtr &s);
 
   // Active per-function raw instruction emitter (defined above; finish()
-  // and computeModifier() are implemented in QLangCompiler.cpp).
+  // and computeModifier() are implemented in QLangCompiler.cpp). The emitter
+  // carries instructions only — the constant pool below outlives it, so a
+  // nested `def` compiles against the same pool as its enclosing body.
   FnEmitter m_emitter;
+  // The program's single constant pool (SPEC §bytecodes "unified constant
+  // table"). Dedup spans every `def`, so a literal used in two functions
+  // occupies one slot; compile() moves it into CompiledProgram::constants.
+  ConstantPool m_pool;
   std::vector<StmtPtr> m_program;
   std::unordered_map<std::string, int> m_regs;
   // Block-scope name maps, innermost last. Only explicit `local`/`let`/`const`

@@ -89,7 +89,18 @@ closing the **Q#**s its item points at:
       `QLangCompiler::builtinId()` and the disassembler's hardcoded `builtinName()` switch
       deleted, `builtin_table` suite (151 checks) added; no format change, no `.qlc` bump.
       `13-bytecodes.md` `## table for build in function (qlang base)` marked **Implemented**.
-      Phase 2 (unified pool, `.qlc` v8) is next — decide **Q34** first
+- [x] **`external-modules-plan-v4.md` Phase 2 (unified constant pool) ✓ implemented (Round 62,
+      2026-11-09)**: `ConstantPool` (values + `valueKey` dedup index) lives in
+      `CompiledProgram::constants` and is owned by `QLangCompiler`, so dedup spans `def`s;
+      `Function::constants`, `FnEmitter::consts`/`constKeys`/`addConst()` and the dead
+      `CompiledProgram::code` mirror deleted; the VM's frame loop and the disassembler read the one
+      program pool. **`.qlc` v7 → v8** — pool section after the function records (single-version
+      reader, v1–v7 rejected), new load-time check: every const-pool operand (`mov` kind 2,
+      `makefunc`, `makegen`, `emit`) must be `< poolCount`. `codec_check` 330 → 337, corpus
+      byte-identical, ctest 51/51. `13-bytecodes.md` `## unified constant table` marked
+      **Implemented**; **Q34 settled** (v8 = pool, v9 = Phase 3, recorded in `SERIALIZATION.md` §4).
+      Phase 3 (`export` + import/export tables, `GETIMPORT`/`CALLIMPORT`, `.qlc` v9) is next —
+      gated on **Q29–Q33** + **Q35**, and on C8 for name-based resolution
 - [ ] `missing-features-plan.md` itself drifted after Rounds 56/59/60: the A5 row still says
       "pipeline still emits v5", Phase 2 still says "`kOpcodeUsedCount` is 73 … A5 raises it to
       80", Conventions still say "`.qlc` v5 stays the only supported format", and Dependencies

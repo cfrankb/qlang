@@ -57,16 +57,16 @@ Conventions:
 
 | Opcode | a | b | c | i32 | Notes |
 |--------|---|---|---|-----|-------|
-| CONST | dest reg | pool index | — | | |
+| MOV (kind 2) | dest reg | pool index | — | | was `CONST`; the pool load is `mov` with right-operand kind 2 |
 | MOV | dest reg | src reg | — | | |
 | CONV | dest reg | src reg | type id | | |
 | NEG | dest reg | src reg | — | | |
 | INC | dest reg | — | — | | |
 | DEC | dest reg | — | — | | |
-| ADD … IN (17 binary ops) | dest reg | left reg | right reg | | ADD SUB MUL DIV MOD AND OR XOR SHL SHR LAND LOR EQ NE LT GT LE GE POW IN |
+| ADD … INx (17 binary ops) | dest reg | left reg | right reg | | ADD SUB MUL DIV MOD AND OR XOR SHL SHR LAND LOR EQ NE LT GT LE GE POW INx |
 | NOT | dest reg | src reg | — | | |
 | CALL | dest / arg base | builtin id / native slot | arg count | | args in r[a+1..a+c] |
-| DELETE | reg to remove | — | — | | |
+| DELETEx | reg to remove | — | — | | |
 | CAST | dest reg | src reg | type id | | |
 | ARRGET | dest reg | array reg | index reg | | |
 | ARRPUT | array reg | index reg | value reg | | |
@@ -139,20 +139,25 @@ if the constant fits in a 4 bytes (32bits) integer, it should be encoded as `mov
 for `movi`. the target register is stored in `Instruction.a` and the immediate 32bit value is stored in `Instruction.i32`.
 
 
-sample decompiler output
+sample decompiler output — refreshed to `.qlc` v8 (Round 62): the `constants:`
+list is the flat **module pool** (one per program, printed above `function #0`),
+and the pool load is `mov` with right-operand kind 2 (`e=0x08`); `0` is an
+immediate (`e=0x40`), so neither `0` nor `nil` occupies a pool slot any more
+(`tests/scripts/len.ql`, `--asm-level 4`):
 ```
 constants:
-    [0] 0
-    [1] nil
-    [2] "%s is %s byte"
-    [3] true
-    [4] 1.24
+    [0] "%s is %s byte"
+
+function #0 'main'
+  params: 0  registers: 9
   code:
-  L 1:  local a:byte = 0
-  0000  movc         01, 00     ; r1 = pool[0]                # 0
-  0001  mov          00, 01     ; r0 = r1
-  0002  movc         01, 01     ; r1 = pool[1]                # nil
-  0003  conv         00, 00, 03 ; r0 = convert(r0, byte)      # type:byte
+
+  L1:  local a:byte = 0
+  0000  mov          e=0x40, 00, 0 ; r0 = 0
+  0004  conv         00, 00, 03 ; r0 = convert(r0, byte)      # type:byte
+
+  L2:  println(f"{type(a)} is {len(a)} byte")
+  0008  mov          e=0x08, 03, pool[00] ; r3 = pool[0]      # "%s is %s byte"
 ```
 
 proposal
@@ -663,6 +668,16 @@ native path.
 
 all the functions within a module must share a common const table or at the very least must not duplicate constants.
 
+**Implemented (Round 62, 2026-11-09)** — plan
+[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phase 2.
+The pool is `CompiledProgram::constants` (`include/qlang/QLangBytecode.h`): one table per
+program that every function's const-pool operands index into — `Function::constants` is
+deleted. The compiler owns the table and dedups by value across the whole module (one
+`valueKey` map, no per-function pools), so two `def`s using the same literal share one
+entry (`## constant pool`). `.qlc` v8 serializes it as the module-level pool section
+([../SERIALIZATION.md](../SERIALIZATION.md) §4.2); the reader range-checks every
+const-pool operand against it.
+
 ## keyword export
 
 `export` keyword exposes functions, variables and constants to other modules.
@@ -773,13 +788,19 @@ better encoding
 
 ## encoding extended
 
-Normative summary of the instruction encoding beyond the base (unescaped) forms. Three versions
+Normative summary of the instruction encoding beyond the base (unescaped) forms. Four versions
 are described in this document and it matters which one a passage refers to:
 
-- **Shipped — `.qlc` v7** (Round 60): the v6 layout **unchanged**, with the retired identities
-  removed — `movc`, `movi`, `addi`, `subi`, `cmpi`, `jmpfalse` and `jmptrue` no longer exist and
-  the remaining identities are compacted to `0..71` (`kOpcodeUsedCount` 79 → 72). Bare truthiness
-  tests lower to `tst` + `je`/`jne`. Implementation plan:
+- **Shipped — `.qlc` v8** (Round 62): the v7 instruction layout **unchanged**; what moved is where
+  the constants live — one module-level pool per program (`CompiledProgram::constants`) instead of
+  a pool inside every function record, so the pool section sits after the function records
+  ([../SERIALIZATION.md](../SERIALIZATION.md) §4.2) and every const-pool operand indexes it.
+  Implementation plan: [../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md)
+  Phase 2; see `## unified constant table`.
+- **Layout — `.qlc` v7** (Round 60, superseded by v8): the v6 layout **unchanged**, with the retired
+  identities removed — `movc`, `movi`, `addi`, `subi`, `cmpi`, `jmpfalse` and `jmptrue` no longer
+  exist and the remaining identities are compacted to `0..71` (`kOpcodeUsedCount` 79 → 72). Bare
+  truthiness tests lower to `tst` + `je`/`jne`. Implementation plan:
   [../plans/archive/phase3-opcode-retirement-plan.md](../plans/archive/phase3-opcode-retirement-plan.md);
   on-disk contract: [../SERIALIZATION.md](../SERIALIZATION.md) §4.
 - **Layout — `.qlc` v6** (Round 56, superseded by v7): flat byte stream, `pc` = byte offset,
@@ -788,10 +809,10 @@ are described in this document and it matters which one a passage refers to:
   (signed, unsigned, float, bool, nil) and the `i`/`c` suffix opcodes no longer emitted.
   Implementation plan:
   [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md);
-  on-disk contract: [../SERIALIZATION.md](../SERIALIZATION.md) §4.4.
+  on-disk contract: [../SERIALIZATION.md](../SERIALIZATION.md) §4.5.
 - **Retired — `.qlc` v5** (Round 37): the same flat stream, but the modifier carried two
   **nibbles** (low = left-operand form, high = right-operand form) and signed `Int` immediates
-  only. Readers accept v7 only; the historical record stays in
+  only. Readers accept v8 only; the historical record stays in
   [../plans/archive/instruction-format-escape-byte-plan.md](../plans/archive/instruction-format-escape-byte-plan.md).
 
 The flag-setting comparison family `eqf`/`ltf`/`gtf`/`ltef`/`gtef` is **implemented and
@@ -806,7 +827,7 @@ Still unimplemented: the `$$` declaration table, frame name map + bitset and `DE
 
 The "v7 spelling" column is what the compiler emits. The retired identities (`movi`, `movc`,
 `addi`, `subi`, `cmpi`, `jmpfalse`, `jmptrue`) no longer exist — they were removed in `.qlc` v7
-(Round 60), so a v7 stream cannot contain them; the first column names the *language* operations
+(Round 60), so a v7/v8 stream cannot contain them; the first column names the *language* operations
 they used to spell.
 
 | opCode family | type | v7 spelling |
@@ -828,7 +849,7 @@ they used to spell.
 (v6 layout) · [../plans/archive/phase3-opcode-retirement-plan.md](../plans/archive/phase3-opcode-retirement-plan.md)
 (v7, shipped — identity removal only) ·
 [../plans/archive/instruction-format-escape-byte-plan.md](../plans/archive/instruction-format-escape-byte-plan.md)
-(v5, retired) · on-disk layout: [../SERIALIZATION.md](../SERIALIZATION.md) §4.4
+(v5, retired) · on-disk layout: [../SERIALIZATION.md](../SERIALIZATION.md) §4.5
 
 there should be only one pool of registers and one pool of constants. extended addressing is
 2 byte, default addressing is 1 byte. if OpCode top bit is not set then both left and right
@@ -1055,7 +1076,8 @@ It is per-*event* state (whether a declaration has executed in this frame), not
 per-instruction state, so no operand field can express it — spare or not. It becomes a
 per-frame bitset indexed by declaration-site id, set by a `DECL siteId` marker opcode executed
 where the declaration executes, with the frame name map and the declaration table as function
-metadata in the `.qlc` function record (v7 as of Round 60). `indget`/`indput` are ordinary register-class
+metadata in the `.qlc` function record (v8 as of Round 62 — v8 moved only the constant pool out of
+the function record). `indget`/`indput` are ordinary register-class
 opcodes. `kind 3` and immediate forms 12–15 therefore stay reserved. See
 [../plans/encoding-v6-and-indirect-plan.md](../plans/encoding-v6-and-indirect-plan.md) §7 and
 [05-operators.md](05-operators.md) `## operator $$`.

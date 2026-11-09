@@ -1,5 +1,5 @@
 // .qlc codec check: value round-trips, program round-trip with native wiring,
-// the v7 version boundary and the v6-encoding load-time validation (modifier
+// the v8 version boundary and the v6-encoding load-time validation (modifier
 // fields, permitted kinds, the size guard), a malformed-input robustness
 // suite, and the script-corpus .qlc round-trip + execute gate
 // (docs/SERIALIZATION.md §9, docs/plans/m2-pipeline-switch-plan.md §11,
@@ -114,6 +114,18 @@ static bool valueEq(const QLangValue &x, const QLangValue &y) {
     return false; // not durable
   }
   return false;
+}
+
+// True when two constant pools hold the same values in the same order (the
+// v8 module pool is ordered, so a round trip must preserve it exactly).
+static bool poolEq(const std::vector<QLangValue> &a,
+                   const std::vector<QLangValue> &b) {
+  if (a.size() != b.size())
+    return false;
+  for (size_t i = 0; i < a.size(); i++)
+    if (!valueEq(a[i], b[i]))
+      return false;
+  return true;
 }
 
 static QLangValue roundTrip(const QLangValue &v) {
@@ -236,11 +248,11 @@ static void testProgram() {
               a.code == b.code && a.instrOffsets == b.instrOffsets;
       for (size_t k = 0; fnsOk && k < a.captures.size(); k++)
         fnsOk = a.captures[k].reg == b.captures[k].reg;
-      fnsOk = fnsOk && a.constants.size() == b.constants.size();
-      for (size_t j = 0; fnsOk && j < a.constants.size(); j++)
-        fnsOk = valueEq(a.constants[j], b.constants[j]);
     }
     check(fnsOk, "program: functions identical");
+    // v8: the pool is the program's, so the round trip compares one table.
+    check(poolEq(compiled.constants, back.constants),
+          "program: constant pool identical");
     check(slots == std::vector<std::pair<int, std::string>>(
                        {{0, "println"}, {1, "abs"}}),
           "program: native slots");
@@ -323,17 +335,20 @@ static bool hasPoolRight(const Function &fn, Opcode op) {
   return false;
 }
 
-static bool poolHasInt(const Function &fn, int32_t v) {
-  for (const auto &c : fn.constants)
+// The pool helpers below take CompiledProgram::constants: since v8 a program
+// has one pool, not one per function.
+static bool poolHasInt(const std::vector<QLangValue> &pool, int32_t v) {
+  for (const auto &c : pool)
     if (c.type() == QLangValue::Type::Int && c.asInt() == v)
       return true;
   return false;
 }
 
 // Number of pool entries of a given type (the pool-shrink assertions).
-static int poolCountType(const Function &fn, QLangValue::Type t) {
+static int poolCountType(const std::vector<QLangValue> &pool,
+                         QLangValue::Type t) {
   int n = 0;
-  for (const auto &c : fn.constants)
+  for (const auto &c : pool)
     if (c.type() == t)
       n++;
   return n;
@@ -346,7 +361,7 @@ static void testMovImmediate() {
     DecodedInstruction d;
     check(findImm(p.functions[0], Opcode::MOV, ImmForm::I8, 42, d),
           "mov: int literal emits a signed immediate");
-    check(!poolHasInt(p.functions[0], 42), "mov: no Int pool slot");
+    check(!poolHasInt(p.constants, 42), "mov: no Int pool slot");
 
     // Bool literal -> the zero-byte true form, 3 bytes, no pool entry
     // (§11 item 4).
@@ -356,7 +371,7 @@ static void testMovImmediate() {
                      ImmPayload::True, &boolSize),
           "mov: bool literal emits the true form");
     check(boolSize == 3, "mov: bool immediate costs 3 bytes");
-    check(poolCountType(pb.functions[0], QLangValue::Type::Bool) == 0,
+    check(poolCountType(pb.constants, QLangValue::Type::Bool) == 0,
           "mov: bool literal leaves the pool");
 
     // nil -> the zero-byte nil form, no pool entry. A function with no return
@@ -368,14 +383,14 @@ static void testMovImmediate() {
                      ImmPayload::Nil, &nilSize),
           "mov: nil stores as the nil form");
     check(nilSize == 3, "mov: nil immediate costs 3 bytes");
-    check(poolCountType(pn.functions[1], QLangValue::Type::Nil) == 0,
+    check(poolCountType(pn.constants, QLangValue::Type::Nil) == 0,
           "mov: nil leaves the pool");
 
     // Float literal -> the 8-byte float form, no pool entry.
     CompiledProgram pf = compileSrc("local f = 1.5\n");
     check(hasFloatImm(pf.functions[0], Opcode::MOV, 1.5),
           "mov: float literal emits the float form");
-    check(poolCountType(pf.functions[0], QLangValue::Type::Float) == 0,
+    check(poolCountType(pf.constants, QLangValue::Type::Float) == 0,
           "mov: float literal leaves the pool");
 
     // Typed decl: immediate into the target register + in-place CONV.
@@ -394,22 +409,22 @@ static void testMovImmediate() {
     check(hasPoolRight(ps.functions[0], Opcode::MOV),
           "mov: string literal is a pool read");
 
-    // .qlc written at format version 7 (kQlcVersion); the reader accepts v7
-    // only (v1-v6 and v8+ are rejected).
+    // .qlc written at format version 8 (kQlcVersion); the reader accepts v8
+    // only (v1-v7 and v9+ are rejected).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "mov: writeQlc (v7)");
+    check(writeQlc(os, p, {}), "mov: writeQlc (v8)");
     std::string bytes = os.str();
     uint32_t version = static_cast<uint32_t>(static_cast<uint8_t>(bytes[4])) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[5])) << 8) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[6])) << 16) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[7])) << 24);
-    check(version == 7, "mov: format version 7");
+    check(version == 8, "mov: format version 8");
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
     check(readQlc(is, back, slots, err),
-          std::string("mov: readQlc v7 (") + err + ")");
+          std::string("mov: readQlc v8 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -429,8 +444,8 @@ static void testMovImmediate() {
 // indices) also store as `mov` immediates, so the main function's constant
 // pool holds no Type::Int at all.
 // ---------------------------------------------------------------------------
-static bool poolHasAnyInt(const Function &fn) {
-  for (const auto &c : fn.constants)
+static bool poolHasAnyInt(const std::vector<QLangValue> &pool) {
+  for (const auto &c : pool)
     if (c.type() == QLangValue::Type::Int)
       return true;
   return false;
@@ -451,7 +466,7 @@ static void testCompilerMov() {
         "}\n"
         "local c = C()\n";
     CompiledProgram p = compileSrc(src);
-    check(!poolHasAnyInt(p.functions[0]),
+    check(!poolHasAnyInt(p.constants),
           "compiler-mov: no Type::Int in main pool (for + class)");
     // The for-loop's compiler-generated constants are `mov` immediates.
     check(hasImm(p.functions[0], Opcode::MOV, ImmForm::I8, 1) &&
@@ -477,7 +492,7 @@ static void testAddInPlace() {
           "add: int literal RHS emits a signed immediate");
     check(isInPlaceForm(d.op, d.rightKind) && d.size == 4,
           "add: immediate RHS is the in-place form (4 bytes)");
-    check(!poolHasInt(p.functions[0], 12), "add: no Int pool slot");
+    check(!poolHasInt(p.constants, 12), "add: no Int pool slot");
 
     // Float literal RHS: the in-place fold stays Int-only, so the literal is
     // loaded as an inline float immediate and the add keeps its 3-operand form.
@@ -485,7 +500,7 @@ static void testAddInPlace() {
     CompiledProgram pf = compileSrc("local f = 1.5\nf += 1.5\n");
     check(hasFloatImm(pf.functions[0], Opcode::MOV, 1.5),
           "add: float literal RHS loads as the float form");
-    check(poolCountType(pf.functions[0], QLangValue::Type::Float) == 0,
+    check(poolCountType(pf.constants, QLangValue::Type::Float) == 0,
           "add: float RHS leaves the pool");
 
     // .qlc round-trip of an in-place add program.
@@ -526,14 +541,14 @@ static void testSubInPlace() {
           "sub: int literal RHS emits a signed immediate");
     check(isInPlaceForm(d.op, d.rightKind) && d.size == 4,
           "sub: immediate RHS is the in-place form (4 bytes)");
-    check(!poolHasInt(p.functions[0], 12), "sub: no Int pool slot");
+    check(!poolHasInt(p.constants, 12), "sub: no Int pool slot");
 
     // Float literal RHS: Int-only fold, so an inline float immediate plus the
     // 3-operand sub — and no pool entry.
     CompiledProgram pf = compileSrc("local f = 1.5\nf -= 1.5\n");
     check(hasFloatImm(pf.functions[0], Opcode::MOV, 1.5),
           "sub: float literal RHS loads as the float form");
-    check(poolCountType(pf.functions[0], QLangValue::Type::Float) == 0,
+    check(poolCountType(pf.constants, QLangValue::Type::Float) == 0,
           "sub: float RHS leaves the pool");
 
     // .qlc round-trip of an in-place sub program.
@@ -658,10 +673,10 @@ static void testCmpJump() {
 // Since S5 only the pool-resident types (strings, blobs, containers, closures)
 // reach the pool at all, so the shrink is asserted alongside the dedup.
 // ---------------------------------------------------------------------------
-static bool poolHasDuplicates(const Function &fn) {
-  for (size_t i = 0; i < fn.constants.size(); i++)
-    for (size_t j = i + 1; j < fn.constants.size(); j++)
-      if (valueEq(fn.constants[i], fn.constants[j]))
+static bool poolHasDuplicates(const std::vector<QLangValue> &pool) {
+  for (size_t i = 0; i < pool.size(); i++)
+    for (size_t j = i + 1; j < pool.size(); j++)
+      if (valueEq(pool[i], pool[j]))
         return true;
   return false;
 }
@@ -673,9 +688,9 @@ static void testPoolDedup() {
         "local a = \"hello\"\n"
         "local b = \"hello\"\n"
         "local c = \"world\"\n");
-    check(poolCountType(p.functions[0], QLangValue::Type::String) == 2,
+    check(poolCountType(p.constants, QLangValue::Type::String) == 2,
           "pool-dedup: repeated strings fold (2 unique, not 3)");
-    check(!poolHasDuplicates(p.functions[0]),
+    check(!poolHasDuplicates(p.constants),
           "pool-dedup: no duplicate pool entries (strings)");
 
     // nil and float literals left the pool (plan decision D3): the float
@@ -687,9 +702,9 @@ static void testPoolDedup() {
         "def f(x) { return x }\n"
         "f(1.5 + 2.5)\n"
         "f(3.5 + 4.5)\n");
-    check(poolCountType(pn.functions[0], QLangValue::Type::Nil) == 0,
+    check(poolCountType(pn.constants, QLangValue::Type::Nil) == 0,
           "pool-dedup: nil clears leave no pool entry");
-    check(poolCountType(pn.functions[0], QLangValue::Type::Float) == 0,
+    check(poolCountType(pn.constants, QLangValue::Type::Float) == 0,
           "pool-dedup: float operands leave no pool entry");
     check(!hasZeroImm(pn.functions[0], Opcode::MOV, ImmForm::Nil,
                       ImmPayload::Nil),
@@ -703,7 +718,7 @@ static void testPoolDedup() {
         "def g() { return 1.5 }\n"
         "f(g(), 2.5)\n"
         "f(g(), 3.5)\n");
-    check(poolCountType(ps.functions[0], QLangValue::Type::Nil) == 0,
+    check(poolCountType(ps.constants, QLangValue::Type::Nil) == 0,
           "pool-dedup: scratch clears leave no pool entry");
     check(hasZeroImm(ps.functions[0], Opcode::MOV, ImmForm::Nil,
                      ImmPayload::Nil),
@@ -718,9 +733,9 @@ static void testPoolDedup() {
         "local d = true\n"
         "local e = true\n"
         "local f = false\n");
-    check(poolCountType(pf.functions[0], QLangValue::Type::Float) == 0,
+    check(poolCountType(pf.constants, QLangValue::Type::Float) == 0,
           "pool-dedup: float literals leave the pool");
-    check(poolCountType(pf.functions[0], QLangValue::Type::Bool) == 0,
+    check(poolCountType(pf.constants, QLangValue::Type::Bool) == 0,
           "pool-dedup: bool literals leave the pool");
     check(hasFloatImm(pf.functions[0], Opcode::MOV, 1.5) &&
               hasFloatImm(pf.functions[0], Opcode::MOV, 2.5),
@@ -730,7 +745,7 @@ static void testPoolDedup() {
               hasZeroImm(pf.functions[0], Opcode::MOV, ImmForm::False,
                          ImmPayload::False),
           "pool-dedup: both bool values are inline immediates");
-    check(!poolHasDuplicates(pf.functions[0]),
+    check(!poolHasDuplicates(pf.constants),
           "pool-dedup: no duplicate pool entries (float/bool)");
 
     // Nested collections: identical array literals fold, distinct do not.
@@ -738,9 +753,9 @@ static void testPoolDedup() {
         "local a = [1.5, \"x\"]\n"
         "local b = [1.5, \"x\"]\n"
         "local c = [1.5, \"y\"]\n");
-    check(poolCountType(pa.functions[0], QLangValue::Type::Array) == 2,
+    check(poolCountType(pa.constants, QLangValue::Type::Array) == 2,
           "pool-dedup: identical arrays fold (2 unique, not 3)");
-    check(!poolHasDuplicates(pa.functions[0]),
+    check(!poolHasDuplicates(pa.constants),
           "pool-dedup: no duplicate pool entries (arrays)");
 
     // Behavior unchanged: the folded pool loads the right values.
@@ -765,10 +780,29 @@ static void testPoolDedup() {
         "local x = greet(\"bob\")\n"
         "local y = greet(\"bob\")\n"
         "println(x)\n");
-    bool allClean = true;
-    for (const auto &fn : pr.functions)
-      allClean = allClean && !poolHasDuplicates(fn);
-    check(allClean, "pool-dedup: no duplicates in any function pool");
+    // v8: the program has ONE pool, so the duplicate scan covers values that
+    // live in different functions as well (SPEC §bytecodes "unified constant
+    // table").
+    check(!poolHasDuplicates(pr.constants),
+          "pool-dedup: no duplicates in the program pool");
+
+    // Cross-def dedup: the same string literal in two `def` bodies folds to
+    // one slot. Before v8 each function had its own pool, so the literal was
+    // stored once per function.
+    CompiledProgram px = compileSrc(
+        "def a() { return \"shared\" }\n"
+        "def b() { return \"shared\" }\n"
+        "local x = a()\n"
+        "local y = b()\n");
+    check(px.functions.size() == 3, "pool-dedup: cross-def program has 3 functions");
+    int shared = 0;
+    for (const auto &c : px.constants)
+      if (c.type() == QLangValue::Type::String && c.asString() == "shared")
+        shared++;
+    check(shared == 1,
+          "pool-dedup: one literal used by two defs occupies one pool slot");
+    check(!poolHasDuplicates(px.constants),
+          "pool-dedup: cross-def pool is duplicate-free");
   } catch (const QLangError &e) {
     check(false, std::string("pool-dedup: ") + e.what());
   }
@@ -1034,7 +1068,8 @@ struct Bin {
 };
 
 // A valid file: one empty "main" function, no natives/vars, 1 register.
-// v6 layout: code blob (empty) + offset table (empty) + loc table (empty).
+// v8 layout: code blob (empty) + offset table (empty) + loc table (empty),
+// then the module-level pool section (empty) before the native-slot table.
 static std::string minimalFile() {
   Bin f;
   f.b += "QLC1";
@@ -1048,7 +1083,7 @@ static std::string minimalFile() {
   f.u32(0); // codeSize (empty code stream)
   f.u32(0); // offCount (no instructions)
   f.u32(0); // locCount
-  f.u32(0); // constants
+  f.u32(0); // module pool
   f.u32(0); // natives
   f.u32(0); // vars
   f.u32(0); // constVars
@@ -1088,7 +1123,7 @@ static std::string fileWithOneInstr() {
   f.u32(1); // locCount
   f.u16(0); // line
   f.u16(0); // col
-  f.u32(0); // constants
+  f.u32(0); // module pool
   f.u32(0); // natives
   f.u32(0); // vars
   f.u32(0); // constVars
@@ -1105,7 +1140,7 @@ static void testMalformed() {
   rejects("malformed: bad magic", badMagic);
 
   std::string badVersion = minimalFile();
-  badVersion[4] = 6; // v7 is current; the previous format must be rejected
+  badVersion[4] = 7; // v8 is current; the previous format must be rejected
   rejects("malformed: unsupported version", badVersion);
 
   rejects("malformed: truncated", minimalFile().substr(0, 10));
@@ -1145,7 +1180,7 @@ static void testMalformed() {
   truncInstr.u32(1); // locCount
   truncInstr.u16(0);
   truncInstr.u16(0);
-  truncInstr.u32(0); // constants
+  truncInstr.u32(0); // module pool
   truncInstr.u32(0); // natives
   truncInstr.u32(0); // vars
   truncInstr.u32(0); // constVars
@@ -1190,7 +1225,7 @@ static void testMalformed() {
     f.u32(0); // codeSize
     f.u32(0); // offCount
     f.u32(0); // locCount
-    f.u32(0); // constants
+    f.u32(0); // module pool
     f.u32(2); // natives
     f.i32(slotA);
     f.str(nameA);
@@ -1578,8 +1613,8 @@ static void testV6LoadValidation() {
       (static_cast<uint32_t>(static_cast<uint8_t>(image[5])) << 8) |
       (static_cast<uint32_t>(static_cast<uint8_t>(image[6])) << 16) |
       (static_cast<uint32_t>(static_cast<uint8_t>(image[7])) << 24);
-  check(kQlcVersion == 7 && written == 7,
-        "v6-load: the image declares version 7");
+  check(kQlcVersion == 8 && written == 8,
+        "v6-load: the image declares version 8");
 
   CompiledProgram back;
   std::string err;
@@ -1588,10 +1623,11 @@ static void testV6LoadValidation() {
             back.functions[0].instrOffsets == offs,
         "v6-load: the code bytes and the offset table survived");
 
-  // The reader is single-version: v6 (the format Phase 3 replaced) and every
-  // other number are refused with a version error, no migration shim (decision
-  // D5: one case below the current version, one above).
-  for (uint32_t bad : {3u, 4u, 5u, 6u, 8u}) {
+  // The reader is single-version: v7 (the per-function-pool format Phase 2
+  // replaced) and every other number are refused with a version error, no
+  // migration shim (decision D5: one case below the current version, one
+  // above).
+  for (uint32_t bad : {3u, 4u, 5u, 6u, 7u, 9u}) {
     std::string m = image;
     for (int i = 0; i < 4; i++)
       m[4 + i] = static_cast<char>((bad >> (8 * i)) & 0xFF);
@@ -1601,6 +1637,25 @@ static void testV6LoadValidation() {
           "v6-load: version " + std::to_string(bad) +
               " rejected with a version error");
   }
+
+  // Pool operands are range-checked against the module pool (§4.2): the same
+  // `mov r0, pool[0]` / `return r0` stream is accepted with a one-entry pool
+  // and refused when the pool is empty (external-modules plan Phase 2 step 4).
+  const std::vector<uint8_t> poolRead = {
+      static_cast<uint8_t>(Opcode::MOV) | kOpcodeEscape,
+      makeModifier(OperandWidth::Byte, RightKind::ConstPool, 0), 0x00, 0x00,
+      static_cast<uint8_t>(Opcode::RETURN), 0x00};
+  {
+    CompiledProgram withPool = programWithCode(poolRead, {0, 4});
+    withPool.constants.push_back(QLangValue::Int(7));
+    CompiledProgram back2;
+    std::string e2;
+    check(readImage(writeImage(withPool), back2, e2),
+          "v6-load: pool operand inside the module pool accepted (" + e2 +
+              ")");
+  }
+  rejects("v6-load: pool index beyond the module pool rejected",
+          writeImage(programWithCode(poolRead, {0, 4})));
 
   // One malformed modifier field per image. The first instruction's modifier
   // byte is at code[1]; every field below is reserved (decision D7).
@@ -1668,9 +1723,13 @@ static void testV6LoadValidation() {
         {static_cast<uint8_t>(Opcode::TST), 0x01},
     };
     for (size_t i = 0; i < 4; i++) {
+      CompiledProgram prog = programWithCode(kAccepted[i], {0});
+      // The pool-kind spelling names pool index 2; v8 range-checks pool
+      // operands against the module pool, so it needs three entries.
+      prog.constants.assign(3, QLangValue());
       CompiledProgram p;
       std::string why;
-      check(readImage(writeImage(programWithCode(kAccepted[i], {0})), p, why),
+      check(readImage(writeImage(prog), p, why),
             "v6-load: legal flag-flow spelling " + std::to_string(i) + " loads");
     }
   }
@@ -1702,7 +1761,7 @@ static void testV6LoadValidation() {
     f.u32(0xFFFFFFFFu); // codeSize: larger than any legal stream
     f.u32(0);      // offCount
     f.u32(0);      // locCount
-    f.u32(0);      // constants
+    f.u32(0);      // module pool
     f.u32(0);      // natives
     f.u32(0);      // vars
     f.u32(0);      // constVars
@@ -1748,8 +1807,9 @@ static void testV6LoadValidation() {
 // it, written with writeQlc, read back with readQlc, and executed on a fresh
 // context (the same isolation `qlang_run file.qlc` gets from a new process).
 // The loaded run's stdout must be byte-identical to the freshly compiled
-// program's: the v6 -> v7 bump changes only the version field, so any
-// behavioural difference here is a codec bug, not a format question.
+// program's: the v7 -> v8 bump moves the constant pool into a module-level
+// section, so any behavioural difference here is a codec bug, not a format
+// question.
 //
 // The corpus is CMake's QL_SCRIPTS list (23 scripts, perf_stress.ql included —
 // the whole suite costs ~75 ms).
@@ -1878,16 +1938,15 @@ static void testScriptQlcRoundTrip() {
     check(version == kQlcVersion,
           label + " image declares v" + std::to_string(version));
 
-    // The code, the offset table and the constant pool survived byte for byte.
+    // The code and the offset table survived byte for byte; the pool is the
+    // program's (v8), so it is compared once, not per function.
     bool sameImage = back.functions.size() == prog.functions.size();
     for (size_t i = 0; sameImage && i < prog.functions.size(); i++) {
       const auto &a = prog.functions[i];
       const auto &b = back.functions[i];
-      sameImage = a.code == b.code && a.instrOffsets == b.instrOffsets &&
-                  a.constants.size() == b.constants.size();
-      for (size_t k = 0; sameImage && k < a.constants.size(); k++)
-        sameImage = valueEq(a.constants[k], b.constants[k]);
+      sameImage = a.code == b.code && a.instrOffsets == b.instrOffsets;
     }
+    sameImage = sameImage && poolEq(prog.constants, back.constants);
     check(sameImage, label + " image survives the round-trip");
 
     // --- Re-resolve the native slots on a fresh context, then execute both ---

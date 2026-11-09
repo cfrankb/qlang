@@ -120,6 +120,14 @@ bool jumpFires(Opcode jump, int f) {
 constexpr int kRes = 0, kLeft = 1, kRight = 2;
 constexpr int kRegCount = 4;
 
+// A hand-built function plus the pool entries its operands index. Since v8 a
+// program carries ONE pool (SPEC §bytecodes "unified constant table"), so the
+// pool travels beside the function until `runMain` merges the tables.
+struct Built {
+  Function fn;
+  std::vector<QLangValue> pool;
+};
+
 // A tiny two-pass assembler. A jump's offset is relative to the END of the jump
 // instruction (`off = target - (jump_pc + jump_size)`), so the whole layout has
 // to be known before any offset can be written; the base form is 2 bytes for
@@ -146,12 +154,11 @@ public:
     return static_cast<int>(m_pool.size()) - 1;
   }
 
-  Function build(int registerCount) const {
+  Built build(int registerCount) const {
     Function fn;
     fn.name = "main";
     fn.paramCount = 0;
     fn.registerCount = registerCount;
-    fn.constants = m_pool;
     std::vector<size_t> offs(m_ins.size());
     std::vector<uint8_t> scratch;
     for (size_t k = 0; k < m_ins.size(); k++) {
@@ -168,7 +175,7 @@ public:
       fn.loc.emplace_back(1, 1);
       encodeInstruction(fn.code, d);
     }
-    return fn;
+    return {std::move(fn), m_pool};
   }
 
 private:
@@ -237,8 +244,8 @@ void setRight(DecodedInstruction &d, OperandKind kind, const QLangValue &right,
 // `res` is seeded to 0, so the result is Int 1 when the jump fired and Int 0
 // when it did not. Anything else (nil, a throw) means the stream desynchronised
 // or the comparator raised.
-Function compareProgram(Opcode cmpOp, Opcode jump, OperandKind kind,
-                        const QLangValue &right) {
+Built compareProgram(Opcode cmpOp, Opcode jump, OperandKind kind,
+                     const QLangValue &right) {
   Asm a;
   DecodedInstruction c;
   c.op = cmpOp;
@@ -254,7 +261,7 @@ Function compareProgram(Opcode cmpOp, Opcode jump, OperandKind kind,
 }
 
 // `tst r1` + one flag jump (tst has one operand and no right operand at all).
-Function tstProgram(Opcode jump) {
+Built tstProgram(Opcode jump) {
   Asm a;
   DecodedInstruction t;
   t.op = Opcode::TST;
@@ -270,7 +277,7 @@ Function tstProgram(Opcode jump) {
 
 // The value-producing comparison `r0 = (r1 <op> r2)` (the 3-operand register
 // form), used as the reference for the error-text parity checks (D3).
-Function valueCompareProgram(Opcode op) {
+Built valueCompareProgram(Opcode op) {
   Asm a;
   DecodedInstruction d;
   d.op = op;
@@ -285,30 +292,53 @@ Function valueCompareProgram(Opcode op) {
 // A `__str__` body: `def __str__(self) { return "Point" }`, i.e.
 // `mov r0, pool[0]` / `return r0`. Installed as function index 1 so a table
 // value can carry a callable __str__ (SPEC `## operator == and !=`).
-Function strBodyFunction(const std::string &text) {
+Built strBodyFunction(const std::string &text) {
   Asm a;
   const int idx = a.pool(QLangValue::String(text));
   a.add(movPool(0, idx));
   a.add(ret(0));
-  Function fn = a.build(2);
-  fn.name = "__str__";
-  fn.paramCount = 1;
-  fn.registerCount = 2;
-  return fn;
+  Built b = a.build(2);
+  b.fn.name = "__str__";
+  b.fn.paramCount = 1;
+  b.fn.registerCount = 2;
+  return b;
+}
+
+// Shift every pool operand of `fn` by `delta`: v8 carries ONE pool per
+// program, so an extra function's private indices move when its entries are
+// appended after the main pool.
+void shiftPoolOperands(Function &fn, int delta) {
+  if (delta == 0) return;
+  std::vector<uint8_t> code;
+  for (size_t off : fn.instrOffsets) {
+    DecodedInstruction d;
+    decodeInstruction(fn.code.data(), off, fn.code.size(), d);
+    if (d.rightKind == RightKind::ConstPool) d.b += delta;
+    encodeInstruction(code, d);
+  }
+  fn.code = std::move(code);
 }
 
 // Runs one hand-built main program with `a`/`b` seeded into registers 1/2 and
 // returns the value of `res` (register 0). `extra` adds functions (index 1, 2…)
-// addressable by closure values seeded into the registers.
-QLangValue runMain(const Function &fn, const QLangValue &a, const QLangValue &b,
-                   const std::vector<Function> &extra = {}) {
+// addressable by closure values seeded into the registers. Every pool merges
+// into the program's single table (v8): main's first, each extra's entries
+// appended with that function's pool operands shifted to match.
+QLangValue runMain(const Built &main, const QLangValue &a, const QLangValue &b,
+                   const std::vector<Built> &extra = {}) {
   CompiledProgram p;
   p.registerCount = kRegCount;
   p.vars["res"] = kRes;
   p.vars["a"] = kLeft;
   p.vars["b"] = kRight;
-  p.functions.push_back(fn);
-  for (const Function &f : extra) p.functions.push_back(f);
+  p.constants = main.pool;
+  p.functions.push_back(main.fn);
+  for (const Built &e : extra) {
+    Function f = e.fn;
+    shiftPoolOperands(f, static_cast<int>(p.constants.size()));
+    p.constants.insert(p.constants.end(), e.pool.begin(), e.pool.end());
+    p.functions.push_back(std::move(f));
+  }
   QLangContext ctx;
   QLangVM vm(p, ctx); // adoptGlobals: name -> register
   ctx.set("a", a);
@@ -319,9 +349,9 @@ QLangValue runMain(const Function &fn, const QLangValue &a, const QLangValue &b,
 }
 
 // The message a program throws, or "" when it runs to completion.
-std::string runMessage(const Function &fn, const QLangValue &a,
+std::string runMessage(const Built &fn, const QLangValue &a,
                        const QLangValue &b,
-                       const std::vector<Function> &extra = {}) {
+                       const std::vector<Built> &extra = {}) {
   try {
     runMain(fn, a, b, extra);
     return {};
@@ -331,9 +361,9 @@ std::string runMessage(const Function &fn, const QLangValue &a,
 }
 
 // True when the run reported exactly `want` (taken / not taken).
-bool ranAs(const Function &fn, const QLangValue &a, const QLangValue &b,
+bool ranAs(const Built &fn, const QLangValue &a, const QLangValue &b,
            bool want, std::string &why,
-           const std::vector<Function> &extra = {}) {
+           const std::vector<Built> &extra = {}) {
   try {
     QLangValue res = runMain(fn, a, b, extra);
     if (res.type() != QLangValue::Type::Int) {
@@ -620,7 +650,7 @@ void testGeneralDomains() {
 //    `## operator == and !=`, `## operators < and >`).
 // ---------------------------------------------------------------------------
 void testObjectStrDispatch() {
-  const std::vector<Function> extra{strBodyFunction("Point")};
+  const std::vector<Built> extra{strBodyFunction("Point")};
   QLangValue obj = tableOf(
       {{"__class__", QLangValue::String("Point")},
        {"__str__",
@@ -846,8 +876,12 @@ void testReservedSlots() {
       {static_cast<uint8_t>(Opcode::TST), 0x01},
   };
   for (size_t i = 0; i < 4; i++) {
+    CompiledProgram prog = programWithCode(kAccepted[i], {0});
+    // The pool-kind spelling names pool index 2; v8 range-checks pool
+    // operands against the module pool, so it needs three entries.
+    prog.constants.assign(3, QLangValue());
     std::string err;
-    check(readImage(writeImage(programWithCode(kAccepted[i], {0})), err),
+    check(readImage(writeImage(prog), err),
           "legal flag-flow spelling " + std::to_string(i) + " loads (" + err +
               ")");
   }

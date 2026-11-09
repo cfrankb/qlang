@@ -371,19 +371,18 @@ QLangValue deserializeValue(std::istream &is) {
 
 bool writeQlc(std::ostream &os, const CompiledProgram &prog,
               const std::map<std::string, int> &nativeIds) {
-  // F1: reject programs whose constant pools hold non-durable values
+  // F1: reject programs whose constant pool holds a non-durable value
   // (Generator, Object, External, BoundMethod, TypeRef). serializeValue would
-  // silently remap them to Nil, corrupting a program that depends on them.
-  for (const auto &f : prog.functions)
-    for (const auto &c : f.constants)
-      if (!isDurable(c))
-        return false;
+  // silently remap it to Nil, corrupting a program that depends on it.
+  for (const auto &c : prog.constants)
+    if (!isDurable(c))
+      return false;
   // Header.
   putBytes(os, "QLC1", 4);
   // Format version (F1): written from the single shared constant
-  // kQlcVersion (docs/SERIALIZATION.md §4). v7 is the v6 2/2/4 modifier-byte
-  // instruction format after the Phase 3 identity compaction; the reader
-  // accepts v7 only.
+  // kQlcVersion (docs/SERIALIZATION.md §4). v8 is the v7 instruction format
+  // with the constant pool lifted out of the function record into one
+  // module-level section; the reader accepts v8 only.
   putU32(os, kQlcVersion); // format version
 
   // Functions (functions[0] is the implicit "main"; the compiler emits it
@@ -414,12 +413,17 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
       putU16(os, lc.first);
       putU16(os, lc.second);
     }
-    putU32(os, static_cast<uint32_t>(f.constants.size()));
-    for (const auto &c : f.constants)
-      serializeValue(os, c);
   }
 
-  // §4.2 native-slot table: the name per slot, ascending, no duplicates.
+  // §4.2 module constant pool: the one table every function's pool operands
+  // index into (SPEC §bytecodes "unified constant table"). v7 carried a pool
+  // per function record; v8 carries a single deduplicated one here, after the
+  // function records and before the native-slot table.
+  putU32(os, static_cast<uint32_t>(prog.constants.size()));
+  for (const auto &c : prog.constants)
+    serializeValue(os, c);
+
+  // §4.3 native-slot table: the name per slot, ascending, no duplicates.
   // nativeIds maps name -> negative opcode id; the slot is -1 - id.
   std::vector<std::pair<int, const std::string *>> slots;
   for (const auto &[name, id] : nativeIds)
@@ -464,9 +468,9 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       r.fail("bad magic");
     r.pos = 4;
     uint32_t version = r.u32();
-    // v7 only: legacy files (v1-v4 fixed 8-byte instructions, v5 the
-    // two-nibble modifier byte, v6 the pre-Phase-3 identity table) and
-    // anything newer are rejected (F1).
+    // v8 only: legacy files (v1-v4 fixed 8-byte instructions, v5 the
+    // two-nibble modifier byte, v6 the pre-Phase-3 identity table, v7 the
+    // per-function constant pool) and anything newer are rejected (F1).
     if (version != kQlcVersion)
       r.fail("unsupported version");
 
@@ -479,6 +483,10 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
     out.functions.reserve(funcCount);
     size_t totalInstrs = 0;
     size_t valueCount = 0;
+    // Pool operands seen while decoding the instruction streams. The pool is
+    // only read after the function records (§4.2), so the operands are
+    // collected here and range-checked once the pool exists.
+    std::vector<int32_t> poolRefs;
     for (uint32_t i = 0; i < funcCount; i++) {
       Function fn;
       fn.name = r.str();
@@ -538,6 +546,11 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
         }
         if (!isValidOpcode(di.op))
           r.fail("invalid opcode");
+        // Operand b names a pool entry whenever the right kind is `ConstPool`
+        // (`mov` kind 2 / `makefunc` / `makegen`); `emit` is the one opcode
+        // whose b is a pool index though its kind stays register.
+        if (di.rightKind == RightKind::ConstPool || di.op == Opcode::EMIT)
+          poolRefs.push_back(di.b);
         lastEnd = fn.instrOffsets[j] + di.size;
         if (lastEnd > codeSize)
           r.fail("instruction overruns code stream");
@@ -546,16 +559,22 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       }
       if (lastEnd != codeSize)
         r.fail("code stream has trailing bytes");
-      uint32_t constCount = r.u32();
-      fn.constants.reserve(constCount);
-      for (uint32_t j = 0; j < constCount; j++)
-        fn.constants.push_back(decodeValue(r, 0, valueCount));
       out.functions.push_back(std::move(fn));
     }
     if (out.functions[0].name != "main")
       r.fail("functions[0] is not 'main'");
 
-    // 3. Native-slot table (unique, ascending, non-empty names).
+    // 3. Module constant pool (§4.2): the single table every function's pool
+    // operands index into.
+    uint32_t constCount = r.u32();
+    out.constants.reserve(constCount);
+    for (uint32_t j = 0; j < constCount; j++)
+      out.constants.push_back(decodeValue(r, 0, valueCount));
+    for (int32_t idx : poolRefs)
+      if (idx < 0 || static_cast<size_t>(idx) >= out.constants.size())
+        r.fail("constant pool index out of range");
+
+    // 4. Native-slot table (unique, ascending, non-empty names).
     uint32_t nativeCount = r.u32();
     int lastSlot = -1;
     for (uint32_t i = 0; i < nativeCount; i++) {
@@ -571,7 +590,7 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       outSlots.emplace_back(slot, std::move(name));
     }
 
-    // 4. Variable map + const vars + register count.
+    // 5. Variable map + const vars + register count.
     uint32_t varCount = r.u32();
     for (uint32_t i = 0; i < varCount; i++) {
       std::string name = r.str();
@@ -587,14 +606,15 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
     if (out.registerCount < 0)
       r.fail("negative register count");
 
-    // 5. Closure funcIndex must reference a known function.
-    for (auto &fn : out.functions)
-      for (const auto &c : fn.constants)
-        if (c.type() == QLangValue::Type::Function) {
-          int fi = c.asFunction().funcIndex;
-          if (fi < 0 || fi >= static_cast<int>(out.functions.size()))
-            r.fail("dangling closure function index");
-        }
+    // 6. Closure funcIndex must reference a known function. The closures live
+    // in the module pool (v8), so the scan walks the pool rather than the
+    // per-function tables of v7.
+    for (const auto &c : out.constants)
+      if (c.type() == QLangValue::Type::Function) {
+        int fi = c.asFunction().funcIndex;
+        if (fi < 0 || fi >= static_cast<int>(out.functions.size()))
+          r.fail("dangling closure function index");
+      }
 
     if (r.pos != buf.size())
       r.fail("trailing bytes");

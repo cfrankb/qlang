@@ -20,6 +20,38 @@ class QLangContext; // forward declaration for CompiledProgram::nativeFuncs
 // TypeRef) key by identity so distinct objects never collide.
 std::string valueKey(const QLangValue &v);
 
+// The constant pool of one module (SPEC §bytecodes "unified constant table":
+// all the functions within a module share a common const table). A program has
+// exactly one, so the dedup index spans function boundaries: a string used in
+// two `def`s folds to one slot (SPEC §bytecodes "constant pool": unique values,
+// duplicates folded into a single one).
+class ConstantPool {
+public:
+  // Append a constant, returning its pool index; an identical value already in
+  // the pool returns that entry's index instead of appending.
+  int add(QLangValue value);
+
+  const std::vector<QLangValue> &values() const { return m_values; }
+  std::vector<QLangValue> &values() { return m_values; }
+  size_t size() const { return m_values.size(); }
+  bool empty() const { return m_values.empty(); }
+  const QLangValue &operator[](size_t i) const { return m_values[i]; }
+
+  // Moves the entries out, leaving an empty pool. The wire format and the VM
+  // both read a plain vector, so this is how a compiled pool reaches
+  // CompiledProgram::constants.
+  std::vector<QLangValue> take() {
+    m_keys.clear();
+    return std::move(m_values);
+  }
+
+private:
+  std::vector<QLangValue> m_values;
+  // Dedup index: serialized-value key -> pool index, kept in sync with
+  // m_values by add().
+  std::unordered_map<std::string, int> m_keys;
+};
+
 // Built-in function ids shared by the compiler (emits CALL with one of these)
 // and the VM (dispatches on them). Order is stable and used as the operand.
 enum class Builtin : int {
@@ -448,10 +480,12 @@ void encodeInstruction(std::vector<uint8_t>& out, const DecodedInstruction& in);
 void decodeInstruction(const uint8_t* code, size_t pc, size_t codeSize,
                        DecodedInstruction& out);
 
-// A compiled user-defined function: its instruction stream, constant pool, and
-// calling metadata. Index 0 of Bytecode::functions is the implicit "main"
+// A compiled user-defined function: its instruction stream and calling
+// metadata. Index 0 of CompiledProgram::functions is the implicit "main"
 // function (the top-level program). `registerCount` is the number of registers
-// the callee frame must allocate (params + temporaries).
+// the callee frame must allocate (params + temporaries). A function carries no
+// constant pool of its own: pool operands index the program's single
+// `ConstantPool` (SPEC §bytecodes "unified constant table").
 struct Function {
   std::string name;
   int paramCount = 0;
@@ -461,7 +495,6 @@ struct Function {
   // Parallel to instrOffsets: source location (line, col) per instruction.
   // Empty entries (0,0) mean "no source location". Only read on error.
   std::vector<std::pair<uint16_t, uint16_t>> loc;
-  std::vector<QLangValue> constants;
   // Capture spec for nested `def` functions: each entry maps a captured
   // variable name to the register index in the enclosing frame where its value
   // lives at the time the closure is constructed.
@@ -476,41 +509,14 @@ struct Function {
   bool isGenerator = false;
 };
 
-// The compiled program: an instruction stream plus a constant pool.
+// Opcode mnemonics for dumping/debugging. The compiled program itself is
+// `CompiledProgram` (QLangCompiler.h): a function vector plus the one constant
+// pool they share, so this class no longer carries code or constants of its
+// own (external-modules plan Phase 2).
 class Bytecode {
 public:
-  // Append a constant, returning its pool index.
-  int addConstant(QLangValue value);
-
-  // Append a compiled function (a `def` body or an arrow-closure body). The
-  // caller fills in the name/paramCount/registerCount; this appends the
-  // instruction stream and constant pool and returns the new function index.
-  int addFunction(const std::string &name, int paramCount, int registerCount,
-                  std::vector<uint8_t> code,
-                  std::vector<size_t> instrOffsets,
-                  std::vector<QLangValue> constants);
-
-  const std::vector<QLangValue> &constants() const { return m_consts; }
-  // Replaces the pool.
-  void setConstants(std::vector<QLangValue> consts);
-  const std::vector<Function> &functions() const { return m_functions; }
-  size_t size() const { return m_code.size(); }
-
-  const std::vector<uint8_t>& code() const { return m_code; }
-  std::vector<uint8_t>& code() { return m_code; }
-  void setCode(std::vector<uint8_t> c) { m_code = std::move(c); }
-
   // Human-readable opcode mnemonic (for dumping/debugging).
   static const char *name(Opcode op);
-
-private:
-  std::vector<uint8_t> m_code;
-  std::vector<QLangValue> m_consts;
-  // Dedup index: serialized-value key -> pool index. Kept in sync with
-  // m_consts by addConstant()/setConstants() so repeated identical
-  // constants reuse one pool slot.
-  std::unordered_map<std::string, int> m_constKeys;
-  std::vector<Function> m_functions;
 };
 
 } // namespace qlang

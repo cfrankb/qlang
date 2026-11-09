@@ -110,12 +110,13 @@ int main(int argc, char **argv) {
     fn.name = "main";
     fn.paramCount = 0;
     fn.registerCount = 1;
-    fn.constants.push_back(
+    prog.constants.push_back(
         QLangValue::Generator(std::make_shared<GeneratorState>()));
-    fn.constants.push_back(
+    prog.constants.push_back(
         QLangValue::External(nullptr, std::shared_ptr<void>()));
-    fn.constants.push_back(QLangValue::TypeRef(nullptr));
-    fn.constants.push_back(QLangValue::Object(std::make_shared<ObjectDescriptor>()));
+    prog.constants.push_back(QLangValue::TypeRef(nullptr));
+    prog.constants.push_back(
+        QLangValue::Object(std::make_shared<ObjectDescriptor>()));
     prog.functions.push_back(std::move(fn));
     prog.registerCount = 1;
 
@@ -130,10 +131,10 @@ int main(int argc, char **argv) {
       std::string err;
       std::istringstream is(os.str(), std::ios::binary);
       bool rd = readQlc(is, back, slots, err);
-      bool allNil = rd && back.functions.size() == 1 &&
-                    back.functions[0].constants.size() == 4;
+      bool allNil =
+          rd && back.functions.size() == 1 && back.constants.size() == 4;
       if (allNil)
-        for (const auto &c : back.functions[0].constants)
+        for (const auto &c : back.constants)
           if (c.type() != QLangValue::Type::Nil)
             allNil = false;
       fprintf(stderr,

@@ -1164,40 +1164,17 @@ std::string valueKey(const QLangValue &v) {
 }
 
 // ---------------------------------------------------------------------------
-// Bytecode class methods
+// ConstantPool
 // ---------------------------------------------------------------------------
 
-int Bytecode::addConstant(QLangValue value) {
+int ConstantPool::add(QLangValue value) {
   std::string key = valueKey(value);
-  auto it = m_constKeys.find(key);
-  if (it != m_constKeys.end())
+  auto it = m_keys.find(key);
+  if (it != m_keys.end())
     return it->second; // dedup: identical value already in the pool
-  int idx = static_cast<int>(m_consts.size());
-  m_consts.push_back(std::move(value));
-  m_constKeys.emplace(std::move(key), idx);
-  return idx;
-}
-
-void Bytecode::setConstants(std::vector<QLangValue> consts) {
-  m_consts = std::move(consts);
-  m_constKeys.clear();
-  for (size_t i = 0; i < m_consts.size(); i++)
-    m_constKeys.emplace(valueKey(m_consts[i]), static_cast<int>(i));
-}
-
-int Bytecode::addFunction(const std::string &name, int paramCount,
-                          int registerCount, std::vector<uint8_t> code,
-                          std::vector<size_t> instrOffsets,
-                          std::vector<QLangValue> constants) {
-  Function fn;
-  fn.name = name;
-  fn.paramCount = paramCount;
-  fn.registerCount = registerCount;
-  fn.code = std::move(code);
-  fn.instrOffsets = std::move(instrOffsets);
-  fn.constants = std::move(constants);
-  int idx = static_cast<int>(m_functions.size());
-  m_functions.push_back(std::move(fn));
+  int idx = static_cast<int>(m_values.size());
+  m_values.push_back(std::move(value));
+  m_keys.emplace(std::move(key), idx);
   return idx;
 }
 
