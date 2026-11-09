@@ -1,3 +1,60 @@
+## Round 61 (2026-11-09)
+
+**External-modules plan Phase 1 — the builtin-function names move into the library: one
+id ↔ name table for the compiler, the disassembler and any future tool.**
+Plan `docs/plans/external-modules-plan-v4.md` Phase 1 (steps 1–6); spec
+`docs/spec/13-bytecodes.md` `## table for build in function (qlang base)` is now
+**Implemented**. No format change, no `.qlc` bump, no behavior change.
+
+- **Why it was worth doing.** The 22 builtin names lived in four places: the `Builtin` enum,
+  `QLangCompiler::builtinId()` (a hardcoded `if` chain), the VM's `callBuiltin` switch, and a
+  second hardcoded `switch` inside the disassembler. The spec's requirement for this section is
+  precisely the last one — "hardcoding function names in the disassembly source (which is highly
+  discouraged) will not longer be required".
+- **What landed.** `include/qlang/QLangBytecode.h` / `src/QLangBytecode.cpp` gained the table
+  `k_builtin_names[]` (22 entries, `Builtin` order) plus four free functions:
+  `builtinCount()`, `builtinName(id)` (`nullptr` out of range), `findBuiltin(name)` (**−1** on a
+  miss) and `builtinId(name)` (**throws** on a miss). A `static_assert` on the array length vs
+  `Builtin::Deepcopy + 1` makes enum/table drift a build error instead of a silent `nullptr`.
+  The `str` → `toStr` and `int` → `toInt` aliases moved here from the compiler's chain, so both
+  lookups accept them.
+- **The two-API split is the design, not decoration.** `findBuiltin` is the **classification**
+  answer and `builtinId` the **resolution** answer. All four compiler sites classify
+  (`QLangCompiler.cpp` free-variable scan, `deepcopy` lowering guard, ternary-block capture scan,
+  and the `CALL` operand-`b` emit path): on the emit path a miss is *normal* — a native C++
+  function takes the negative-slot branch and an unknown name raises the compiler's own
+  `unknown function '<name>'`. Routing the emit path through the throwing API would have broken
+  every module call, so `builtinId` currently has no in-tree caller; it exists for the caller that
+  already knows the answer, and the suite pins both behaviours.
+- **Consumers rewired.** `QLangCompiler::builtinId()` (the member function) is deleted, together
+  with its declaration in `QLangCompiler.h`. `examples/qlang_run.cpp`'s app-local `builtinName()`
+  switch (51 lines) is deleted; both the level-4 `# builtin:<name>` note and the level-1..4
+  pseudo-mnemonic call `qlang::builtinName`. The VM's `callBuiltin` switch stays as-is — it is
+  keyed by the enum and never needs a name.
+- **Only observable difference: disassembly text.** The deleted switch spelled ids 0/1 `tostr` /
+  `toint`; the table returns the canonical `toStr` / `toInt`, so `--asm` listings now print
+  `# builtin:toStr` and the pseudo-mnemonic `toStr(r1)`. That is the *fix* — the old spellings
+  were not names the language accepts. No test asserted on them (grep over `tests/` finds none)
+  and no program output changed: corpus stdout is byte-identical, 23/23 scripts.
+- **Verification.** `cmake -B build && cmake --build build` clean; `ctest --test-dir build`
+  **51/51 green** (49 with `-E perf`, `doc_hashes` skipped). New `builtin_table` suite
+  (`tests/unit/builtin_table_test.cpp`, **151 checks**): id → name against an independent oracle
+  list, name uniqueness, `nullptr` out of range, the round trip through both APIs incl. the two
+  aliases, case-sensitivity/no-trim/no-prefix misses, the `-1`-vs-throw split and the throw text,
+  the ids the compiler actually emits for `len`/`toStr`/`str`/`int`/`toInt`/`type`/`println`, the
+  negative-slot native path (`import math` + `min(3,1,4)` still compiles to `b < 0` and runs),
+  `unknown function 'nope'` kept as a *compile* error, builtins inside closures not captured, and
+  `deepcopy` lowering + its arity guard.
+- **Tallies re-recorded.** counted unit cases 37 560 → **37 711** (+151); ctest entries 50 →
+  **51**; unit harnesses 24 → **25**. `codec`, `encoding_v6`, `flag_flow` and the perf baseline
+  are untouched — the change emits identical bytecode (it is a name lookup, not a codegen path).
+- **Still open (the plan's later phases).** Phase 2 (unified per-module constant pool, `.qlc`
+  v8) and Phase 3 (`export`, import/export tables, `GETIMPORT`/`CALLIMPORT`, `.qlc` v9) are
+  untouched; Phase 3a–3c stay gated on **Q29–Q35** and, for automatic name-based module
+  resolution, on **C8** (`missing-features-plan.md`, **Q23–Q26**). Serializing the table into
+  `.qlc` remains out of scope — the compatibility rule (`13-bytecodes.md` `## technical
+  specifications` 6) licenses a library-side table.
+
 ## Round 60 (2026-11-08)
 
 **Phase 3 opcode retirement — the seven spellings the v6 encoding made redundant are deleted,

@@ -208,60 +208,9 @@ namespace
     bool fromClass = false;
   };
 
-  // Builtin id (CALL operand b, >= 0) -> name. Order mirrors the Builtin enum
-  // in QLangBytecode.h.
-  const char *builtinName(int id)
-  {
-    switch (id)
-    {
-    case 0:
-      return "tostr";
-    case 1:
-      return "toint";
-    case 2:
-      return "type";
-    case 3:
-      return "print";
-    case 4:
-      return "println";
-    case 5:
-      return "printf";
-    case 6:
-      return "len";
-    case 7:
-      return "blob";
-    case 8:
-      return "substr";
-    case 9:
-      return "slice";
-    case 10:
-      return "range";
-    case 11:
-      return "join";
-    case 12:
-      return "isset";
-    case 13:
-      return "sprintf";
-    case 14:
-      return "format";
-    case 15:
-      return "assert";
-    case 16:
-      return "next";
-    case 17:
-      return "set_max_steps";
-    case 18:
-      return "get_max_steps";
-    case 19:
-      return "set";
-    case 20:
-      return "release";
-    case 21:
-      return "deepcopy";
-    default:
-      return nullptr;
-    }
-  }
+  // Builtin id (CALL operand b, >= 0) -> name comes from the library table
+  // (qlang::builtinName, qlang/QLangBytecode.h): the disassembler no longer
+  // hardcodes the names (SPEC §bytecodes "table for build in function").
 
   // Shortest decimal text that reads back as the same double (1.5, 0.1,
   // 3e+100), so a float immediate prints exactly as many digits as it needs.

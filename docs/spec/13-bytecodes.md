@@ -615,9 +615,49 @@ bytecode to reference the look up table.
 
 ## table for build in function (qlang base)
 
-must create a look up build in table is created from `qlang` build in functions. this table will be used in disassembly to find the exact function name. 
+**Implemented (Round 61, 2026-11-09)** — plan
+[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phase 1.
 
-thus hardcoding function names in the disassembly source (which is highly discourged) will not longer be required.
+one look up table is created from the `qlang` build in functions, in the library
+(`k_builtin_names[]` in `src/QLangBytecode.cpp`, declared in
+`include/qlang/QLangBytecode.h`). it is indexed by the `Builtin` enum order
+(`toStr` = 0 … `deepcopy` = 21), one name per id; a `static_assert` fails the
+build when the enum and the table drift apart.
+
+| api | answer |
+|-|-|
+| `builtinCount()` | number of ids — valid ids are `[0, builtinCount())` |
+| `builtinName(id)` | the canonical name, or `nullptr` when `id` is out of range |
+| `findBuiltin(name)` | the id, or `-1` when the name is not a builtin |
+| `builtinId(name)` | the id, or throws `QLangError` when the name is not a builtin |
+
+`findBuiltin` is the **classification** answer: what the compiler wants when it
+decides *what kind of callee* a name is, where a miss is normal (a native C++
+function takes the negative-slot branch of `CALL` operand `b`, an unknown name
+raises its own `unknown function '<name>'` compile error). `builtinId` is the
+**resolution** answer for a caller that already knows the name is a builtin,
+where a miss is a bug.
+
+the canonical spellings are the ones `builtinName` returns (`toStr`, `toInt`);
+both lookups additionally accept `str` and `int`, the short spellings of the two
+converters ([06-functions.md](06-functions.md) `## build-in functions`).
+
+**a library table, not a `.qlc` section.** `## technical specifications` 6 makes
+compatible bytecode the output of the exact same compiler version, so within a
+compatible pair the names cannot drift from the ids, and a serialized table
+would be a section no reader could use differently. Revisit if the compatibility
+rule is ever relaxed.
+
+consumers: the compiler (name classification and `CALL` operand `b`), the
+disassembler (`examples/qlang_run.cpp` — its hardcoded name switch is gone, so
+both the `# builtin:<name>` note and the pseudo-mnemonic come from this table)
+and any future tool. the VM's `callBuiltin` dispatch stays a `switch` on the
+ids: it never needs a name.
+
+guard: `tests/unit/builtin_table_test.cpp` (`builtin_table`) pins id → name
+against an independent list, the round trip through both lookups, the aliases,
+the `-1`/throw split, the ids the compiler actually emits, and the negative-slot
+native path.
 
 ## unified constant table
 

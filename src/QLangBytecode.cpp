@@ -7,6 +7,77 @@
 namespace qlang {
 
 // ---------------------------------------------------------------------------
+// Builtin-function name table (SPEC §bytecodes "table for build in function
+// (qlang base)")
+// ---------------------------------------------------------------------------
+
+// One entry per `Builtin` id, in enum order: index 0 is Builtin::ToStr, the
+// last is Builtin::Deepcopy. The static_assert is the drift guard — appending an
+// enumerator without its name fails the build instead of silently returning
+// nullptr from the disassembler. The canonical spellings are the ones the
+// language accepts (tests/unit/builtin_table_test.cpp pins id -> name and the
+// round trip through both lookup APIs).
+static const char *const k_builtin_names[] = {
+    "toStr",         // 0
+    "toInt",         // 1
+    "type",          // 2
+    "print",         // 3
+    "println",       // 4
+    "printf",        // 5
+    "len",           // 6
+    "blob",          // 7
+    "substr",        // 8
+    "slice",         // 9
+    "range",         // 10
+    "join",          // 11
+    "isset",         // 12
+    "sprintf",       // 13
+    "format",        // 14
+    "assert",        // 15
+    "next",          // 16
+    "set_max_steps", // 17
+    "get_max_steps", // 18
+    "set",           // 19
+    "release",       // 20
+    "deepcopy"       // 21
+};
+
+static_assert(sizeof(k_builtin_names) / sizeof(k_builtin_names[0]) ==
+                  static_cast<size_t>(Builtin::Deepcopy) + 1,
+              "k_builtin_names must carry exactly one name per Builtin id");
+
+int builtinCount() {
+  return static_cast<int>(sizeof(k_builtin_names) / sizeof(k_builtin_names[0]));
+}
+
+const char *builtinName(int id) {
+  if (id < 0 || id >= builtinCount())
+    return nullptr;
+  return k_builtin_names[id];
+}
+
+int findBuiltin(const std::string &name) {
+  // Aliases (SPEC §lexical): `str`/`int` are the short spellings of the two
+  // converters, so they classify to the same ids the table names.
+  if (name == "str")
+    return static_cast<int>(Builtin::ToStr);
+  if (name == "int")
+    return static_cast<int>(Builtin::ToInt);
+  for (int i = 0; i < builtinCount(); i++)
+    if (name == k_builtin_names[i])
+      return i;
+  return -1;
+}
+
+int builtinId(const std::string &name) {
+  int id = findBuiltin(name);
+  if (id < 0)
+    throw QLangError(QLangErrorKind::Runtime, 0, 0,
+                     "unknown builtin function '" + name + "'");
+  return id;
+}
+
+// ---------------------------------------------------------------------------
 // Class predicates
 // ---------------------------------------------------------------------------
 

@@ -190,6 +190,15 @@ add_executable(flag_flow_test tests/unit/flag_flow_test.cpp)
 target_link_libraries(flag_flow_test PRIVATE qlang)
 add_test(NAME flag_flow COMMAND flag_flow_test)
 
+# Builtin-function name table (SPEC §bytecodes "table for build in function
+# (qlang base)", docs/plans/external-modules-plan-v4.md Phase 1): id -> name and
+# the round trip through findBuiltin/builtinId, the str/int aliases, the -1 vs
+# throw split, and the compiler integration (emitted CALL ids, the negative-slot
+# native path, the capture scan and the deepcopy lowering guard).
+add_executable(builtin_table_test tests/unit/builtin_table_test.cpp)
+target_link_libraries(builtin_table_test PRIVATE qlang)
+add_test(NAME builtin_table COMMAND builtin_table_test)
+
 # External C++ types (docs/EXTERNAL_TYPES.md): public-member setters,
 # read-only computed props, methods (incl. BoundMethod extraction), enum
 # constants, str, handoff integrity, registration-time validation.

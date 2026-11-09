@@ -1,7 +1,12 @@
 # Plan v4: external modules (builtin name table, unified constant pool, import/export tables)
 
-Status: **planned — re-audited 2026-11-08 against `HEAD = ac97651` (Round 60).
-Nothing of Phases 1–3 has landed.** Phase 1 and Phase 2 are ready to start;
+Status: **Phase 1 ✓ implemented (Round 61, 2026-11-09); Phase 2 ready to start.**
+Re-audited 2026-11-08 against `HEAD = ac97651` (Round 60); Phase 1 landed on top of that
+baseline (library builtin name table — `builtinCount`/`builtinName`/`findBuiltin`/`builtinId`
+in `QLangBytecode.h`, `builtin_table` suite, 151 checks; spec
+`docs/spec/13-bytecodes.md` `## table for build in function (qlang base)` marked
+**Implemented**; compliance Round 61). Phase 2 is unblocked except for **Q34** (version
+allocation vs the offset-table plan).
 Phase 3 is gated on **Q29–Q35** (§ Open questions) and, for automatic
 name-based import resolution only, on **C8** (`missing-features-plan.md`).
 Supersedes: `docs/plans/archive/external-modules-plan-v3.md` (2026-11-03) and,
@@ -128,13 +133,17 @@ version bumps and one encoding rewrite.
   instruction at load (528–548), validates the native-slot table
   (unique/ascending/non-empty, 558–572), validates closure `funcIndex`
   against the function table (590–597), and rejects trailing bytes (599).
-- Builtin names are still hardcoded in **four places**: the `Builtin` enum
-  (`QLangBytecode.h:25–48`, 22 entries), `QLangCompiler::builtinId()`
+- Builtin names **were** hardcoded in **four places** (the Round-60 audit): the `Builtin`
+  enum (`QLangBytecode.h:25–48`, 22 entries), `QLangCompiler::builtinId()`
   (`QLangCompiler.cpp:4194`, returns `-1` on unknown, extra `str`/`int`
   aliases; call sites 1442, 3320, 3732, 4148), the VM `callBuiltin` switch
   (`src/QLangVM.cpp:501`, dispatched from `runFrames()` at 2250, native slots
   via `-1 - i.b` at 2234), and the disassembler's app-local `builtinName()`
-  (`examples/qlang_run.cpp:213`, used at 490 and 896).
+  (`examples/qlang_run.cpp:213`, used at 490 and 896). **Phase 1 (Round 61) collapsed the
+  three name-holding places into one:** `k_builtin_names[]` + `builtinCount`/`builtinName`/
+  `findBuiltin`/`builtinId` in `QLangBytecode.h`/`.cpp` (aliases included, `static_assert`-
+  guarded); the compiler member and the disassembler switch are deleted and their sites call the
+  library table. The VM switch remains — it dispatches on the enum, not on names.
 - The dispatch switch is still **single**: `QLangVM::runFrames()`
   (`src/QLangVM.cpp:1988`), driven by `run()`, `callFunction()` and generator
   resumption. Every new opcode lands in exactly one switch.
@@ -165,7 +174,7 @@ with `ctest --test-dir build` green:
 
 | Phase | Spec requirement (`13-bytecodes.md`) | Effort | Risk |
 |-------|--------------------------------------|--------|------|
-| 1 | builtin-function lookup table (616–620) | S | Low |
+| 1 ✓ | builtin-function lookup table (616–620) — **landed Round 61** | S | Low |
 | 2 | unified per-module constant table + `.qlc` v8 (622–624, 960) | M | Medium |
 | 3 | import/export tables + standalone modules + `GETIMPORT`/`CALLIMPORT` + `.qlc` v9 (594–673) | L | High |
 
@@ -225,7 +234,7 @@ Numbering continues the global **Q#** series of `missing-features-plan.md`
 
 ---
 
-## Phase 1 — builtin name table in the library (S)
+## Phase 1 — builtin name table in the library (S) — ✓ implemented (Round 61, 2026-11-09)
 
 Goal: one library-level id↔name table; the disassembler (and any future tool)
 consumes it. No format change, no behavior change, no `.qlc` bump.
@@ -538,7 +547,14 @@ run (AGENTS.md).
 **Ready now — no open questions block these:**
 
 1. **Phase 1** (builtin table) — steps 1–6 above. Smallest, zero format risk;
-   land it first so Phase 2's disassembler work builds on it.
+   land it first so Phase 2's disassembler work builds on it. **✓ done (Round 61,
+   2026-11-09):** the table and the four APIs are in `QLangBytecode.h`/`.cpp`, the compiler's
+   local `builtinId` is gone (all four sites classify through `findBuiltin`), the disassembler's
+   hardcoded switch is gone, and `builtin_table` (151 checks) is the 51st ctest entry. Deviation
+   from step 1 as written: the emit path (`compileExpr`, `CALL` operand `b`) also classifies with
+   `findBuiltin` rather than resolving with the throwing `builtinId` — a non-builtin callee is a
+   normal answer there (native slot / `unknown function`), so `builtinId` has no in-tree caller
+   yet and is pinned by the suite instead.
 2. **Phase 2** (unified pool, `.qlc` v8) — steps 1–7. Decide **Q34** first
    (version allocation vs the offset-table plan). Watch list:
    `QLangCompiler.cpp` 1202–1209 / 1390 / 1539 / 2625 / 2905,

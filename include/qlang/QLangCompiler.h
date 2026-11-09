@@ -404,8 +404,9 @@ private:
   // Throw if `name` was declared with `const` (guards against reassignment).
   void guardNotConst(const std::string &name, const char *op) const;
 
-  // Resolve a builtin function name to its Builtin id (throws if unknown).
-  int builtinId(const std::string &name) const;
+  // Builtin name -> id resolution lives in the library table
+  // (`findBuiltin`/`builtinId`, qlang/QLangBytecode.h): one table for the
+  // compiler, the VM and the disassembler.
   // Fold a constant array/table element expression into a QLangValue.
   QLangValue evalConstExpr(const ExprPtr &e);
   // Infer the runtime type of an expression (Array/Table/... or Unknown).

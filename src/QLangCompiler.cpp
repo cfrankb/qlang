@@ -1439,7 +1439,7 @@ int QLangCompiler::buildFunction(const std::string &name,
         updatedCaptures.push_back(id);
       continue;
     }
-    if (builtinId(id) >= 0) continue; // builtin
+    if (findBuiltin(id) >= 0) continue; // builtin
     if (m_nativeFuncIds.count(id)) continue; // native (C++) function
     // Global consts are visible everywhere — capture them like free variables.
     if (m_constVars.count(id)) {
@@ -3317,7 +3317,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     // compile errors (SPEC §functions "deepcopy"), and the compiler sees the
     // argument count on this path.
     if (!e->calleeMember &&
-        builtinId(e->callee) == static_cast<int>(Builtin::Deepcopy)) {
+        findBuiltin(e->callee) == static_cast<int>(Builtin::Deepcopy)) {
       if (e->args.size() != 1)
         throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
                          "deepcopy expects exactly one argument, got " +
@@ -3728,8 +3728,11 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       }
       break;
     }
-    // Built-in function.
-    int funcId = builtinId(e->callee);
+    // Built-in function. The classification API (`findBuiltin`), not the
+    // throwing `builtinId`: a name that is not a builtin is a normal answer on
+    // this path — a native (C++) function takes the negative-slot branch below
+    // and an unknown name raises its own compile error there.
+    int funcId = findBuiltin(e->callee);
     // Native (C++) function — use negative index.
     if (funcId < 0) {
       auto nit = m_nativeFuncIds.find(e->callee);
@@ -4145,7 +4148,7 @@ void QLangCompiler::compileTernaryBlock(const std::vector<StmtPtr> &block,
   for (const std::string &id : allIds) {
     if (localVars.count(id)) continue; // declared inside the block
     if (m_userFuncs.count(id)) continue; // buildFunction captures it if needed
-    if (builtinId(id) >= 0) continue;
+    if (findBuiltin(id) >= 0) continue;
     if (m_nativeFuncIds.count(id)) continue;
     if (m_constVars.count(id)) continue; // visible everywhere
     if (m_enums.count(id)) continue; // resolves to a hidden table var
@@ -4189,32 +4192,6 @@ void QLangCompiler::compileTernaryBlock(const std::vector<StmtPtr> &block,
   emit(Opcode::MAKEFUNC, closureReg, constIdx);
   emit(Opcode::CALLCLOS, closureReg, dest, 0);
   freeRegister(closureReg);
-}
-
-int QLangCompiler::builtinId(const std::string &name) const {
-  if (name == "toStr" || name == "str") return static_cast<int>(Builtin::ToStr);
-  if (name == "toInt" || name == "int") return static_cast<int>(Builtin::ToInt);
-  if (name == "type") return static_cast<int>(Builtin::Type);
-  if (name == "print") return static_cast<int>(Builtin::Print);
-  if (name == "println") return static_cast<int>(Builtin::Println);
-  if (name == "printf") return static_cast<int>(Builtin::Printf);
-  if (name == "len") return static_cast<int>(Builtin::Len);
-  if (name == "blob") return static_cast<int>(Builtin::Blob);
-  if (name == "substr") return static_cast<int>(Builtin::Substr);
-  if (name == "slice") return static_cast<int>(Builtin::Slice);
-  if (name == "range") return static_cast<int>(Builtin::Range);
-  if (name == "join") return static_cast<int>(Builtin::Join);
-  if (name == "isset") return static_cast<int>(Builtin::IsSet);
-  if (name == "sprintf") return static_cast<int>(Builtin::Sprintf);
-  if (name == "format") return static_cast<int>(Builtin::Format);
-  if (name == "assert") return static_cast<int>(Builtin::Assert);
-  if (name == "next") return static_cast<int>(Builtin::Next);
-  if (name == "set") return static_cast<int>(Builtin::Set);
-  if (name == "set_max_steps") return static_cast<int>(Builtin::SetMaxSteps);
-  if (name == "get_max_steps") return static_cast<int>(Builtin::GetMaxSteps);
-  if (name == "release") return static_cast<int>(Builtin::Release);
-  if (name == "deepcopy") return static_cast<int>(Builtin::Deepcopy);
-  return -1;
 }
 
 QLangValue QLangCompiler::evalConstExpr(const ExprPtr &e) {

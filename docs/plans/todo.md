@@ -80,9 +80,16 @@ closing the **Q#**s its item points at:
       pool) → **v8 → v9** (module tables); no byte-level patching of an encoded body (v6 operands
       are variable-width, so the merge happens on `RawInstr` before `finish()`); `mov` kind 2
       replaces `MOVC`; the two new opcodes append at **73/74** because M4 owns identity 72; pool
-      dedup is back and spec-mandated. v3 moved to `docs/plans/archive/`. Still **nothing
-      implemented**: Phase 1 + Phase 2 ready to start, Phase 3 gated on Q29–Q35 and (for
+      dedup is back and spec-mandated. v3 moved to `docs/plans/archive/`. State at that audit:
+      nothing implemented — Phase 1 + Phase 2 ready to start, Phase 3 gated on Q29–Q35 and (for
       name-based resolution only) C8
+- [x] **`external-modules-plan-v4.md` Phase 1 (builtin name table) ✓ implemented (Round 61,
+      2026-11-09)**: `k_builtin_names[]` + `builtinCount`/`builtinName`/`findBuiltin`/`builtinId`
+      in `QLangBytecode.h`/`.cpp` (22 ids, `static_assert`-guarded, `str`/`int` aliases),
+      `QLangCompiler::builtinId()` and the disassembler's hardcoded `builtinName()` switch
+      deleted, `builtin_table` suite (151 checks) added; no format change, no `.qlc` bump.
+      `13-bytecodes.md` `## table for build in function (qlang base)` marked **Implemented**.
+      Phase 2 (unified pool, `.qlc` v8) is next — decide **Q34** first
 - [ ] `missing-features-plan.md` itself drifted after Rounds 56/59/60: the A5 row still says
       "pipeline still emits v5", Phase 2 still says "`kOpcodeUsedCount` is 73 … A5 raises it to
       80", Conventions still say "`.qlc` v5 stays the only supported format", and Dependencies

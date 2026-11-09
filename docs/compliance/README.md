@@ -1,7 +1,7 @@
 # QLang Compliance — Module Index
 
 Entry point for the compliance reference (migrated from root `SPEC_COMPLIANCE.md`,
-2026-10-29; last audit Round 60, 2026-11-08). Content is verbatim from the
+2026-10-29; last audit Round 61, 2026-11-09). Content is verbatim from the
 original `SPEC_COMPLIANCE.md`. The recorded hashes are checked by the
 `doc_hashes` ctest entry (`cmake/check_doc_hashes.cmake`); re-record them after
 a verified doc edit with `./update-doc-hashes.sh` (`--check` verifies only).
@@ -16,12 +16,12 @@ below (spec hashes tracked in [../spec/README.md](../spec/README.md)); the
 
 | Module | Content | Validates spec module(s) | SHA256 (self) |
 |--------|---------|--------------------------|---------------|
-| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `bc5d3547c07c0d7175b174161a81ee6989332d998d195766ab0053e5bb932425` |
+| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `b7a93ce01aa8c6f251747dbe86bccd641870958e02fb987e4625fe33cf265965` |
 | [coverage.md](coverage.md) | reserved-word coverage, value-type coverage | 02-lexical, 01-types | `789a0b58112961a6f32e98426923c17c88be737f0cfbc3a809ad771b11c898eb` |
-| [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `64e32da896720517c63f6b6f743597958858971b2cacc72096eb9985ceb8f354` |
-| [history.md](history.md) | audit rounds 7–60 (append-only) | mixed (per round) | `e8b61f1eb1af54df099b5b30f722e4fa946591fcd67aa2049c104244d77ac733` |
+| [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `94af6ab69942d6496906b0bd33763cf5825c6b73a0fcb4a75a600af2016cb56c` |
+| [history.md](history.md) | audit rounds 7–61 (append-only) | mixed (per round) | `412657aca968689234df65ae006e4c2d97cee6e4f4d8c218a6163116042ca81f` |
 | [classes.md](classes.md) | class implementation details, class spec conformance | 10-classes | `c95a835ae11f6e25c87facb30dd7210a18e928b56ab9b3592e25acf805e99b40` |
-| [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `069186393b00e81a1f53ca63a2837223927205e82f23935ecdd46a60d34e0838` |
+| [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `2e3face60c4c090214ce59486a65611e73316396422ab3a9754b17a443467400` |
 | [migration-value-semantics.md](migration-value-semantics.md) | copy→share migration note for `array`/`set`/`blob` (Round 43) | 01-types | `3b38a16ad6e8f04386092ee2f588adb27d5f1bdfcada749135c7168066547e7d` |
 
 **New spec modules:** every new module in `docs/spec/` must get, at creation,

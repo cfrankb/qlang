@@ -10,6 +10,7 @@
 - `tests/unit/encoding_v6_test.cpp` — the instruction encoding suite (added Round 55, the only one since Round 56): 2/2/4 modifier fields and reserved-slot rejection, the width and form tables, base-form byte-for-byte equivalence, the escaped-size table, immediate boundaries (`u8`…`u64`, `i8`…`i64`, bit-exact `double`, zero-byte `bool`/`nil`), `CALL`, the unchanged jump class, encoder range checks, truncated streams, the exhaustive sweep of all **72** opcodes × 256 modifier bytes (cross-checked between size, encoder and decoder; 1 872 accepted / 14 274 rejected pairs after the Round 60 compaction, was 2 029/15 401 at 79 identities) and, since Round 57, the **decoder/size-table parity** sweep: `escapedInstructionSize` is the oracle for the shipped decoder over all 128 identities × 256 modifiers — identical rejection message, identical accepted size, and every truncation of an accepted instruction must throw (re-tallied after Round 60: 30 392 rejected modifiers, 2 376 accepted, 15 144 truncations). Result: **35 083 checks passed.**
   `tests/unit/encoding_test.cpp` (the v5 encoding harness, 41 checks) was retired and deleted with `.qlc` v5 in Round 56.
 - `tests/unit/flag_flow_test.cpp` — the M3 flag-flow suite (Round 59): 6 comparators × 6 flag jumps × 3 relations × 3 right-operand kinds, the "no bit set" state case by case (the D1 rationale), the `tst` truth table (emitted for bare truthiness since Round 60 — this suite remains the only exhaustive coverage of it), the general value domains with error-text parity (D3), `__str__` dispatch, `cmp`'s Int-only contract (D2), the alias name table (D6), reserved-slot rejection. Result: **1324 checks passed.**
+- `tests/unit/builtin_table_test.cpp` — the builtin-function name table suite (added Round 61, `docs/plans/external-modules-plan-v4.md` Phase 1): id → name against an independent oracle list (the drift guard for `Builtin` vs `k_builtin_names[]`, which the `static_assert` also enforces at build time), name uniqueness, `nullptr` out of range, the round trip through `findBuiltin`/`builtinId` incl. the `str`/`int` aliases, exact case-sensitive matching, the −1-vs-throw split between the two lookups, and the compiler integration — the ids emitted for `len`/`toStr`/`str`/`int`/`toInt`/`type`/`println`, the negative-slot native path (`import math` + `min(3,1,4)`, which is why the emit path classifies and must not throw), `unknown function 'nope'` staying a compile error, builtins not captured as free variables, and `deepcopy` lowering + its arity guard. Result: **151 checks passed.**
 - `tests/unit/test_external.cpp` — external (C++) type bindings: `QL_` declarative meta, `External`/`BoundMethod`/`TypeRef`, method dispatch, RTTI handoff validation (Phase 3), `registerEnum` injection (Round 41). Result: **49 checks passed.**
 Compile against the static lib:
 `g++ -std=c++20 -Iinclude tests/unit/spec_check2.cpp build/libqlang.a -o /tmp/sc && /tmp/sc 2>/dev/null`
@@ -75,8 +76,8 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-**Current tally (re-verified Round 60, 2026-11-08): 37560 counted unit cases + 23
-script regressions + `smoke` + the perf gate + `doc_hashes` = 50 ctest entries, all
+**Current tally (re-verified Round 61, 2026-11-09): 37711 counted unit cases + 23
+script regressions + `smoke` + the perf gate + `doc_hashes` = 51 ctest entries, all
 green** — the authoritative,
 per-suite breakdown lives in `docs/compliance/tests.md` (ctest matrix) and
 `docs/compliance/status.md` (`## Current Status`); this module deliberately no
