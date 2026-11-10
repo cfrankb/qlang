@@ -118,7 +118,7 @@ offset  field            type   notes
 ```
 
 **A linked program is not an image.** `QLangLinker`
-([plans/external-modules-plan-v4.md](plans/external-modules-plan-v4.md) Phase 3b) merges the
+([plans/archive/external-modules-plan-v4.md](plans/archive/external-modules-plan-v4.md) Phase 3b) merges the
 module images one program imports into a single runnable `CompiledProgram`, and that program
 carries a link-time field the layout above has no section for: `initSequence` (the module top
 levels to run before `functions[0]`, each with the slice of the shared global register area it
@@ -130,7 +130,7 @@ transitively.
 
 **Version allocation** (the counter is shared across plans, so each bump is recorded here when it
 is decided): **v8** = the module constant pool (§4.2, Round 62,
-[plans/external-modules-plan-v4.md](plans/external-modules-plan-v4.md) Phase 2) · **v9** = module
+[plans/archive/external-modules-plan-v4.md](plans/archive/external-modules-plan-v4.md) Phase 2) · **v9** = module
 identity + export/import tables (§4.6, Round 63, same plan Phase 3a) · the next free number belongs
 to whoever lands next ([plans/offset-table-elimination-plan.md](plans/offset-table-elimination-plan.md)
 is the candidate).
@@ -322,7 +322,7 @@ v8 section keeps its byte position. They make an image a *module* rather than
 only a program: a name other modules import by, the entities it exposes, and the
 entities it needs from others (SPEC §bytecodes `## keyword export`,
 `## export table (lookup)`, `## import table (lookup)`;
-[plans/external-modules-plan-v4.md](plans/external-modules-plan-v4.md)
+[plans/archive/external-modules-plan-v4.md](plans/archive/external-modules-plan-v4.md)
 Phase 3a).
 
 `kind` is the `ExportKind` enum: **0** `Var`, **1** `Const`, **2** `Func`.

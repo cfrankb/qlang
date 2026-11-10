@@ -19,11 +19,11 @@ defined against C++20.
 | [06-functions.md](06-functions.md) | built-in functions incl. `deepcopy`, qlang native functions, C++ API | `8e7ac79a3f42b0e91bab2578551ef66d40b437e9a46683522f1e63cc1de3fe8c` |
 | [07-api.md](07-api.md) | module registration, QLang import syntax, `ctx.clear()`, verbose level, step budget, threading contract, module search paths, external search callback | `4ae53517095f6f4aeae982fdedcf7cc3ee1d882024fcf11fe23269eaacc27ed5` |
 | [08-generators.md](08-generators.md) | generators, PROTOTYPE 1, Syntax, EOF sentinel | `a99107445f3850d8b600e84cf5d0e5860babc4173cda0e2a183debab0123200d` |
-| [09-modules.md](09-modules.md) | internal modules, import statement, math module | `2ce15f8d3acefe12fb3e06c4b1c28efb1db20a743f7df7c6f5784074e8cf12bd` |
+| [09-modules.md](09-modules.md) | internal modules, import statement, math module | `4fe5f503a0658415b9fa14c983c61cad7b3af8a39e25565d78e2c7f84374518e` |
 | [10-classes.md](10-classes.md) | user-defined classes, `static`, `::`, `deepcopy`, restrictions | `6f2cacb5b2135951a9aa27b2d69aa9b898a3fa27aeeaa56559dd18522621c458` |
 | [11-external-types.md](11-external-types.md) | conformance with external (C++) types | `fa9a7cb866d47ece2408e07742ede8946353f538b7657a70c42b94cd60449c69` |
 | [12-errors-trace.md](12-errors-trace.md) | error reporting, requirements, execution trace, format | `f0814e4811e60570546d4771c048ecb1e903e6737ad388ee752d9699b9e68ff8` |
-| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `05dd0fa6e379c11d86ba36d0c190c44afead4a1e937bb7eb21bddb77679ae8c5` |
+| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `00c5d4acfe8f27aaa7cda2a43c16b3e712a029e325e99179df6bd9ea2f892940` |
 | [14-scope.md](14-scope.md) | visibility scope. execution context | `ec1eadb21c4716b94590261fec12a16b1f11a715a5bfed53b5ca46232b6a0999` |
 | [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
 | [16-strict_typing.md](16-strict_typing.md) | strict typing | `0e2c24e5d5121b784c31561d2a9b94bf32e52eb518df2b9f65531c11eafed4fd` |

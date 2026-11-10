@@ -1,9 +1,12 @@
 # Plan v4: external modules (builtin name table, unified constant pool, import/export tables)
 
-Status: **Phases 1, 2, 3a, 3b and 3c ✓ implemented (Rounds 61–65, 2026-11-09). The plan is
-complete; what is left of `## external modules` is not this plan's — a runtime module registry
-(`## technical specifications` 1, second model) and name-based module discovery, which belong to
-C8 (`missing-features-plan.md`).**
+Status: **DONE 2026-11-09 (compliance Rounds 61–65) — archived.** Phases 1, 2, 3a, 3b and 3c are
+all implemented and the plan is complete; re-verified 2026-11-09 at `8a25945`:
+`ctest --test-dir build` **53/53** green. What is left of `## external modules` is not this plan's
+— a runtime module registry (`## technical specifications` 1, second model) and name-based module
+discovery, which belong to **C8** (`docs/plans/missing-features-plan.md`, **Q23–Q26**); the
+remaining backlog is tracked in `docs/plans/todo.md`. Paths in this document are repo-root-relative
+except bare sibling-plan filenames, which live in `docs/plans/`.
 Re-audited 2026-11-08 against `HEAD = ac97651` (Round 60); Phase 1 landed on top of that
 baseline (library builtin name table — `builtinCount`/`builtinName`/`findBuiltin`/`builtinId`
 in `QLangBytecode.h`, `builtin_table` suite, 151 checks; spec

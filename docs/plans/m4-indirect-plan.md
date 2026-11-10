@@ -1,7 +1,7 @@
 # Plan M4: `$$` indirect access (A3)
 
 Status: **plan — not started**.
-Baseline `HEAD = a32f066` ("imported names name the import table (Q31, Phase 3c)");
+Baseline `HEAD = 8a25945` ("imported names name the import table (Q31, Phase 3c)");
 `cmake --build build` clean, `ctest --test-dir build` **53/53** green including `doc_hashes`.
 Parent plan: [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md) — this plan
 executes **§7** (`$$` inside the new framework, which closes A3 **Q6**), the declaration-table
@@ -126,7 +126,7 @@ not change; M4 only adds messages behind the `indirect variable error:` prefix.
 | Spec duplicate-declaration sentence is garbled (**Q28**: "is a compile warning declares into the enclosing function frame") | `docs/spec/05-operators.md:329-331` |
 | Compliance rows to flip | `docs/compliance/coverage.md:53`, `docs/compliance/status.md:287`, `:361` |
 
-**Measured today** (`HEAD = a32f066`, Debug build, commands re-run in this round):
+**Measured today** (`HEAD = 8a25945`, Debug build, commands re-run in this round):
 
 | Measurement | Value |
 |---|---|
@@ -373,10 +373,14 @@ Effort: S1 0.5 d · S2 1 d · S3 1.5 d · S4 1.5 d · S5 1 d · S6 0.5 d · S7 0
   current inline-string choice (D5) is deliberate for small tables.
 - `$$` interaction with `Env`/reference captures (`REFLOAD` names) if captures ever become
   targetable — today they are deliberately invisible (D6).
-- Archiving `external-modules-plan-v4.md` to `docs/plans/archive/` (AGENTS.md: a fully
-  implemented plan moves to the archive) — it is complete as of Round 65; the move needs the live
-  links in `docs/README.md`, `todo.md`, `missing-features-plan.md` and
-  `encoding-v6-and-indirect-plan.md` re-pointed, so it belongs in its own docs commit.
+- Archiving `external-modules-plan-v4.md` — **done 2026-11-09** (before this plan was executed): it moved to
+  `docs/plans/archive/external-modules-plan-v4.md` (complete as of Round 65) with its status header
+  corrected to **DONE — archived**, and every live path re-pointed at `plans/archive/`
+  (`docs/README.md`, `plans/todo.md`, `plans/missing-features-plan.md`, `docs/SERIALIZATION.md`,
+  `docs/spec/{13-bytecodes,09-modules}.md`, `docs/compliance/{status,tests,harness}.md`,
+  `CMakeLists.txt`, `include/qlang/QLangBytecode.h`, the three `tests/unit` headers);
+  `docs/compliance/history.md` was not rewritten (append-only). `encoding-v6-and-indirect-plan.md`
+  names the plan in prose only, so it needed no edit.
 
 ---
 

@@ -332,7 +332,7 @@ enum class Opcode : uint8_t {
   TST, // flags = truth(regs[a]) ? EQ : 0
 
   // Cross-module access (SPEC §bytecodes "import table (lookup)"; plan
-  // docs/plans/external-modules-plan-v4.md Phase 3c). Both name an entry of
+  // docs/plans/archive/external-modules-plan-v4.md Phase 3c). Both name an entry of
   // the program's import table rather than a register, a pool entry or a
   // function, so `b` carries OperandRole::ImportIndex and the kind field only
   // selects its addressing width (register class, like `callfn`'s function
@@ -499,7 +499,7 @@ bool isRegConstOpcode(Opcode op);
 // `.qlc` reader, which range-checks every table reference an image carries
 // (`docs/SERIALIZATION.md` §5.1), and the linker, which rewrites those
 // references when several module images merge into one program
-// (`docs/plans/external-modules-plan-v4.md` Phase 3b).
+// (`docs/plans/archive/external-modules-plan-v4.md` Phase 3b).
 enum class OperandRole : uint8_t {
   None,          // not stored, or stored but not an address (arg count, type id)
   Register,      // index into the executing frame's register file

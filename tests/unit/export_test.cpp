@@ -1,5 +1,5 @@
 // Module exports (SPEC §bytecodes "keyword export", "export table (lookup)",
-// plan docs/plans/external-modules-plan-v4.md Phase 3a).
+// plan docs/plans/archive/external-modules-plan-v4.md Phase 3a).
 //
 // `export` is the construct that turns a script into a module: it publishes a
 // global name (a `def`, a `const`, or a variable) into the program's export

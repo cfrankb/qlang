@@ -651,7 +651,7 @@ its identity, export table and import table are the three sections `## keyword e
 each module must be able to be compiled on it's own. when ingested by the `qlang` executor, it must be able to run (assuming they both share compatible bytecodes).
 
 **Implemented through Phase 3c (Round 65, 2026-11-09)** — plan
-[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md): a `.ql` compiles
+[../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md): a `.ql` compiles
 standalone into a `.qlc` that carries its name and both tables (**v9**), a host loads one into a
 context (`QLangContext::loadProgram` / `loadProgramFile`), an `import` resolves against its export
 table at compile time, and `QLangLinker` merges the images with the entry program into one
@@ -671,7 +671,7 @@ includes all the global `functions`, `variables` and `constants` being exposed t
 bytecode to reference the look up table.
 
 **Implemented (Round 63, 2026-11-09)** — plan
-[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phase 3a.
+[../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phase 3a.
 The table is `CompiledProgram::exports` (`include/qlang/QLangBytecode.h`): one
 `ExportEntry {kind, name, ref}` per exposed entity, in source order, where `kind`
 is `Var` / `Const` / `Func` and `ref` is the handle into this program — the
@@ -703,7 +703,7 @@ this table will contain all the  global `functions`, `variables` and `constants`
 bytecode to reference the look up table.
 
 **Implemented (Round 64, 2026-11-09)** — plan
-[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phase 3a (the
+[../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phase 3a (the
 section) + Phase 3b (what fills it).
 `CompiledProgram::imports` holds one `ImportEntry {module, name, kind, ref, alias}`
 per entity this module needs from another; `alias` is the local name when the import is
@@ -738,7 +738,7 @@ the merged program.
 ## table for build in function (qlang base)
 
 **Implemented (Round 61, 2026-11-09)** — plan
-[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phase 1.
+[../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phase 1.
 
 one look up table is created from the `qlang` build in functions, in the library
 (`k_builtin_names[]` in `src/QLangBytecode.cpp`, declared in
@@ -786,7 +786,7 @@ native path.
 all the functions within a module must share a common const table or at the very least must not duplicate constants.
 
 **Implemented (Round 62, 2026-11-09)** — plan
-[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phase 2.
+[../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phase 2.
 The pool is `CompiledProgram::constants` (`include/qlang/QLangBytecode.h`): one table per
 program that every function's const-pool operands index into — `Function::constants` is
 deleted. The compiler owns the table and dedups by value across the whole module (one
@@ -823,7 +823,7 @@ const-pool operand against it.
 ```
 
 **Implemented (Round 63, 2026-11-09)** — plan
-[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phase 3a. Both forms
+[../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phase 3a. Both forms
 parse: the **prefix** form (`export def`, `export const`, `export` before a variable assignment or
 an arrow closure) marks the declaration it prefixes, and the **standalone** form (`export AUTHOR;`)
 names a global declared earlier *or later* in the file — the table is built in a pre-pass over the
@@ -868,7 +868,7 @@ opcodes and the run) is guarded by `tests/unit/linker_test.cpp` (`linker`, 126 c
 ## technical specifications
 
 Status of each item as of Round 65 (2026-11-09) — plan
-[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phases 1–3c:
+[../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phases 1–3c:
 
 1. **Link model** — both `link-time merge` and `runtime module registry`. should share a reusable solution
    — ◐ **merge implemented (Round 64, Phase 3b)**: `QLangLinker`
@@ -990,14 +990,14 @@ are described in this document and it matters which one a passage refers to:
   (`CompiledProgram::moduleName` / `exports` / `imports`,
   [../SERIALIZATION.md](../SERIALIZATION.md) §4.6) — so an image describes a *module*, not only a
   runnable program; `functions[0]` may now be a library module's `<init>` instead of `main`.
-  Implementation plan: [../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md)
+  Implementation plan: [../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md)
   Phase 3a; see `## keyword export` and `## export table (lookup)`.
 - **Layout — `.qlc` v8** (Round 62, superseded by v9): the v7 instruction layout **unchanged**; what
   moved is where the constants live — one module-level pool per program
   (`CompiledProgram::constants`) instead of a pool inside every function record, so the pool section
   sits after the function records ([../SERIALIZATION.md](../SERIALIZATION.md) §4.2) and every
   const-pool operand indexes it.
-  Implementation plan: [../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md)
+  Implementation plan: [../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md)
   Phase 2; see `## unified constant table`.
 - **Layout — `.qlc` v7** (Round 60, superseded by v8): the v6 layout **unchanged**, with the retired
   identities removed — `movc`, `movi`, `addi`, `subi`, `cmpi`, `jmpfalse` and `jmptrue` no longer

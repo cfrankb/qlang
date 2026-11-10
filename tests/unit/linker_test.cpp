@@ -1,5 +1,5 @@
 // The loader and the linker (SPEC §bytecodes "external modules", "technical
-// specifications" 1–5; plan docs/plans/external-modules-plan-v4.md Phases
+// specifications" 1–5; plan docs/plans/archive/external-modules-plan-v4.md Phases
 // 3b/3c).
 //
 // A library is a `.qlc` image with an export table. `QLangContext::loadProgram`

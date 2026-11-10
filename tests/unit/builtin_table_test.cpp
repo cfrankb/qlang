@@ -1,5 +1,5 @@
 // Builtin-function name table (SPEC §bytecodes "table for build in function
-// (qlang base)", plan docs/plans/external-modules-plan-v4.md Phase 1).
+// (qlang base)", plan docs/plans/archive/external-modules-plan-v4.md Phase 1).
 //
 // The table is the single source of truth for id <-> name: the compiler uses it
 // to classify a callee and to fill `CALL`'s operand b, the disassembler uses it

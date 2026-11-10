@@ -128,7 +128,7 @@ needs ([13-bytecodes.md](13-bytecodes.md) `## keyword export`,
   `qlang_run app.ql lib.qlc` / `--import lib.qlc` names libraries explicitly.
 
 **Implemented (Round 65, 2026-11-09)** — plan
-[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phases 1–3c:
+[../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phases 1–3c:
 everything above except a runtime module registry (executing an image without merging it — the
 two opcodes run, the feature around them does not exist) and name-based discovery. A `.ql`
 module that imports a name whose captures belong to the defining module's frame is refused at

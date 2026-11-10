@@ -8,7 +8,7 @@ Maintained alongside `docs/plans/`; per AGENTS.md a plan that is fully implement
 [missing-features-plan.md](missing-features-plan.md),
 [offset-table-elimination-plan.md](offset-table-elimination-plan.md).
 
-## 1. Closed 2026-11-08 (this session)
+## 1. Closed 2026-11-08 / 2026-11-09 (recent sessions)
 
 - [x] **Phase 3 S7** — the docs commit landed as `be2ea56` "docs: opcode retirement shipped
       (Round 60)"; S1–S4 were `b86460b` / `801498c` / `a6737b9`
@@ -20,16 +20,24 @@ Maintained alongside `docs/plans/`; per AGENTS.md a plan that is fully implement
       `encoding-v6-and-indirect-plan.md`) re-pointed at `plans/archive/`.
       `docs/compliance/history.md` was **not** rewritten (append-only record).
 - [x] `docs/plans/notes.txt` deleted (`f192ad0`)
+- [x] **`external-modules-plan-v4.md` moved to `docs/plans/archive/` (2026-11-09)** — complete as
+      of Round 65 (Phases 1–3c, `ctest` **53/53** at `8a25945`), so AGENTS.md's housekeeping rule
+      applies; its status header was corrected to **DONE 2026-11-09 — archived** and every live path
+      re-pointed at `plans/archive/` (`docs/README.md`, `plans/todo.md`,
+      `plans/missing-features-plan.md`, `docs/SERIALIZATION.md`,
+      `docs/spec/{13-bytecodes,09-modules}.md`, `docs/compliance/{status,tests,harness}.md`,
+      `CMakeLists.txt`, `include/qlang/QLangBytecode.h`, the three `tests/unit` headers).
+      `docs/compliance/history.md` was **not** rewritten (append-only record).
 
 ## 2. M4 — `$$` indirect access (A3) — next milestone
 
-Design is settled by parent plan §7 (**Q6 closed**: the declaration bit is not encoded), but the
-implementation plan does not exist yet.
+Design is settled by parent plan §7 (**Q6 closed**: the declaration bit is not encoded). The
+implementation plan now exists: [m4-indirect-plan.md](m4-indirect-plan.md) — written 2026-11-09,
+**not started**; the rows below are its summary, S1–S8 there are authoritative.
 
-- [ ] **Write `docs/plans/m4-indirect-plan.md`** first (missing-features Phase 2 item 3 and the
-      plan's own convention: one detailed plan per item before coding) — close **Q7–Q11**, spell
-      out the six-stage check pipeline and the test plan, and follow the milestone-plan structure
-      of `archive/m3-flag-flow-plan.md`
+- [x] **`docs/plans/m4-indirect-plan.md` written (2026-11-09)** — closes **Q7–Q11** (each as a
+      recorded default), spells out the six-stage check pipeline and the test plan, and follows the
+      milestone-plan structure of `archive/m3-flag-flow-plan.md`
 - [ ] `DECL siteId` opcode — identity **74** (external-modules Phase 3c took **72/73** in Round 65,
       its **Q31**, "append last, never renumber"; the parent plan's "79 → 80" and this row's earlier
       "72" both predate that), `kOpcodeUsedCount` 74 → 75
@@ -75,8 +83,8 @@ closing the **Q#**s its item points at:
 - [ ] **C5** inheritance (`ObjectOps::base` returns null) — spec decision first (**Q21**); plan
 - [ ] **C7** enum-name string form — design decision first (**Q22**); plan
 - [ ] **C8** module search paths + `searchCallback` — **Q23–Q26**; plan; front end for
-      `external-modules-plan-v4.md`
-- [x] **`external-modules-plan-v3.md` re-audited → `docs/plans/external-modules-plan-v4.md`**
+      `archive/external-modules-plan-v4.md`
+- [x] **`external-modules-plan-v3.md` re-audited → `docs/plans/archive/external-modules-plan-v4.md`**
       (2026-11-08): v4 adds the `Status:` header, the **Q29–Q35** open-question set and an
       implementation order, and re-bases the machine on the tree — `.qlc` **v7 → v8** (unified
       pool) → **v8 → v9** (module tables); no byte-level patching of an encoded body (v6 operands
@@ -85,13 +93,13 @@ closing the **Q#**s its item points at:
       dedup is back and spec-mandated. v3 moved to `docs/plans/archive/`. State at that audit:
       nothing implemented — Phase 1 + Phase 2 ready to start, Phase 3 gated on Q29–Q35 and (for
       name-based resolution only) C8
-- [x] **`external-modules-plan-v4.md` Phase 1 (builtin name table) ✓ implemented (Round 61,
+- [x] **`archive/external-modules-plan-v4.md` Phase 1 (builtin name table) ✓ implemented (Round 61,
       2026-11-09)**: `k_builtin_names[]` + `builtinCount`/`builtinName`/`findBuiltin`/`builtinId`
       in `QLangBytecode.h`/`.cpp` (22 ids, `static_assert`-guarded, `str`/`int` aliases),
       `QLangCompiler::builtinId()` and the disassembler's hardcoded `builtinName()` switch
       deleted, `builtin_table` suite (151 checks) added; no format change, no `.qlc` bump.
       `13-bytecodes.md` `## table for build in function (qlang base)` marked **Implemented**.
-- [x] **`external-modules-plan-v4.md` Phase 2 (unified constant pool) ✓ implemented (Round 62,
+- [x] **`archive/external-modules-plan-v4.md` Phase 2 (unified constant pool) ✓ implemented (Round 62,
       2026-11-09)**: `ConstantPool` (values + `valueKey` dedup index) lives in
       `CompiledProgram::constants` and is owned by `QLangCompiler`, so dedup spans `def`s;
       `Function::constants`, `FnEmitter::consts`/`constKeys`/`addConst()` and the dead
@@ -103,7 +111,7 @@ closing the **Q#**s its item points at:
       **Implemented**; **Q34 settled** (v8 = pool, v9 = Phase 3, recorded in `SERIALIZATION.md` §4).
       Phase 3 (`export` + import/export tables, `GETIMPORT`/`CALLIMPORT`, `.qlc` v9) is next —
       gated on **Q29–Q33** + **Q35**, and on C8 for name-based resolution
-- [x] **`external-modules-plan-v4.md` Phase 3a (`export` + module identity + tables) ✓ implemented
+- [x] **`archive/external-modules-plan-v4.md` Phase 3a (`export` + module identity + tables) ✓ implemented
       (Round 63, 2026-11-09)**: `export` is a keyword with both spec forms — the prefix on a `def` /
       `const` / assignment / arrow closure and the standalone `export NAME;` (forward references
       allowed) — global scope only, enforced twice (the parser's body-depth guard, then the
@@ -122,7 +130,7 @@ closing the **Q#**s its item points at:
       byte-identical, ctest **52/52**. Phase 3b (loader + linker) is next — gated on **Q32**,
       **Q33**, **Q35** and, for name-based resolution, on **C8**; Phase 3c (`GETIMPORT` /
       `CALLIMPORT`) on **Q31**
-- [x] **`external-modules-plan-v4.md` Phase 3b (loader + linker) ✓ implemented (Round 64,
+- [x] **`archive/external-modules-plan-v4.md` Phase 3b (loader + linker) ✓ implemented (Round 64,
       2026-11-09)**: `QLangContext::loadProgram` / `loadProgramFile` + the module registry
       (`loadedModule` / `loadedModules`, native-slot **names** re-resolved, all missing names in one
       `Io` error), compile-time resolution of all five import forms against a loaded export table,
@@ -133,7 +141,7 @@ closing the **Q#**s its item points at:
       decode → rewrite → `encodeRawStream()` is the only path), **Q33** / **Q35** as defaulted,
       **Q31** untouched. New `linker` suite (75 checks), `codec_check` 352 → 354, corpus
       byte-identical, ctest **53/53**
-- [x] **`external-modules-plan-v4.md` Phase 3c (`GETIMPORT` + `CALLIMPORT`) ✓ implemented (Round 65,
+- [x] **`archive/external-modules-plan-v4.md` Phase 3c (`GETIMPORT` + `CALLIMPORT`) ✓ implemented (Round 65,
       2026-11-09) — the plan is complete**: `GETIMPORT` / `CALLIMPORT` emitted for every imported
       name and executed in `runFrames()`; **Q31 ratified *not as defaulted*** — identities **72/73**
       (not 73/74: M4 has not landed, "append last, never renumber"), `kOpcodeUsedCount` **72 → 74**,

@@ -192,7 +192,7 @@ target_link_libraries(flag_flow_test PRIVATE qlang)
 add_test(NAME flag_flow COMMAND flag_flow_test)
 
 # Builtin-function name table (SPEC §bytecodes "table for build in function
-# (qlang base)", docs/plans/external-modules-plan-v4.md Phase 1): id -> name and
+# (qlang base)", docs/plans/archive/external-modules-plan-v4.md Phase 1): id -> name and
 # the round trip through findBuiltin/builtinId, the str/int aliases, the -1 vs
 # throw split, and the compiler integration (emitted CALL ids, the negative-slot
 # native path, the capture scan and the deepcopy lowering guard).
@@ -201,7 +201,7 @@ target_link_libraries(builtin_table_test PRIVATE qlang)
 add_test(NAME builtin_table COMMAND builtin_table_test)
 
 # Module exports (SPEC §bytecodes "keyword export", "export table (lookup)",
-# docs/plans/external-modules-plan-v4.md Phase 3a): both spec forms, global-scope
+# docs/plans/archive/external-modules-plan-v4.md Phase 3a): both spec forms, global-scope
 # only, the export table's kind + resolved ref (function index / register),
 # MODULE_NAME resolution (source > driver > "main"), library mode's `<init>`,
 # the duplicate-export and exported-function-rebind guards, and the table's
@@ -211,7 +211,7 @@ target_link_libraries(export_test PRIVATE qlang)
 add_test(NAME export COMMAND export_test)
 
 # Loader + linker (SPEC §bytecodes "technical specifications" 1–5,
-# docs/plans/external-modules-plan-v4.md Phase 3b): QLangContext::loadProgram /
+# docs/plans/archive/external-modules-plan-v4.md Phase 3b): QLangContext::loadProgram /
 # loadProgramFile and the module registry, QLangLinker's merge (one function
 # table, one folded pool per Q33, deduped native slots, disjoint register
 # slices), operand re-widening on the decoded RawInstr per Q32, the init
