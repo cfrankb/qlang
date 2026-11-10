@@ -21,10 +21,12 @@
 //
 // Library modules are found, not named: an `import <name>` the context cannot
 // answer from its registry is resolved against the module search paths
-// (SPEC §api "module search paths"; plan C8a), which default to the working
-// directory and are extended with --module-path. A discovered image is
-// registered under its own declared name and its own imports are resolved with
-// it, so `qlang_run app.ql` needs no library arguments at all. --import (and
+// (SPEC §api "module search paths"; plans C8a + C8b) — the entry file's own
+// directory, then the working directory, then each --module-path — where a
+// <name>.qlc is taken in as an image and a <name>.ql is compiled into one. A
+// discovered module is registered under its own declared name and its own
+// imports are resolved with it, so `qlang_run app.ql` needs no library
+// arguments at all. --import (and
 // extra positional library arguments) still loads a module explicitly — useful
 // for a library outside every search path — and now accepts a name, a
 // directory, or a .ql/.qlc path: the .qlc is used when it exists, carries the
@@ -132,10 +134,15 @@ namespace
               << "  --module-path <dir> add <dir> to the module search paths,\n"
               << "                        which `import <name>` resolves against\n"
               << "                        after the registry (repeatable). The\n"
-              << "                        list starts as the working directory;\n"
+              << "                        entry file's own directory is searched\n"
+              << "                        first, then the working directory;\n"
               << "                        a directory is searched for <name>.qlc\n"
-              << "                        before <name>.ql, and one that does not\n"
-              << "                        exist is skipped\n"
+              << "                        before <name>.ql, which is compiled when\n"
+              << "                        it is what is found; one that does not\n"
+              << "                        exist is skipped. A library's own\n"
+              << "                        imports use these same paths — a\n"
+              << "                        library's directory is searched only\n"
+              << "                        when it is the entry's or is listed\n"
               << "  --no-module-search  search no paths at all: `import <name>`\n"
               << "                        resolves only against C++ modules and\n"
               << "                        images named on this command line\n"
@@ -1572,12 +1579,13 @@ namespace
   // The compile runs on a private context, not on the run context: a library's
   // top level declares globals and the global table belongs to the context, so
   // compiling there would leak them into the entry's global area. The private
-  // context gets the same search paths plus a search callback, which is where
-  // the driver answers a `.ql` hit the engine's own resolver refuses (plan C8b)
-  // — a library may depend on a library that has no image yet.
+  // context gets the same search paths plus a search callback that compiles a
+  // dependency's own `.ql` on the spot — a library may depend on a library that
+  // has no image yet.
   //
   // Library mode is what makes the result loadable at all: the top level becomes
-  // `<init>` and `export const MODULE_NAME` is mandatory (QLangCompiler.h).
+  // `<init>` and the module has to be namable — its own `export const
+  // MODULE_NAME`, or the name the driver is writing the file under.
   bool compileLibrary(const std::string &qlPath, const std::string &qlcPath,
                       const ModuleLoader &loader, std::string &err)
   {
@@ -2016,12 +2024,26 @@ int main(int argc, char **argv)
 
   // --- Module search paths ---
   // The context starts with the working directory (SPEC §api "module search
-  // paths"); --no-module-search drops it, and --module-path then appends, so
+  // paths"); the entry file's own directory goes in front of it,
+  // --no-module-search drops both, and --module-path then appends, so
   // `--no-module-search --module-path X` searches X and nothing else. A
   // directory that is not there is skipped by the resolver, so a typo is
   // warned about rather than made fatal — the run may still find everything.
   if (noModuleSearch)
     ctx.setModuleSearchPaths({});
+  // The entry script's own directory goes first: `import mymod` in a script
+  // that sits beside mymod.ql is what its author means, and the working
+  // directory is wherever the host happened to start.
+  if (!noModuleSearch)
+  {
+    const std::string entryDir = moduleDirectory(file);
+    if (!entryDir.empty() && entryDir != ".")
+    {
+      std::vector<std::string> paths = ctx.moduleSearchPaths();
+      paths.insert(paths.begin(), entryDir);
+      ctx.setModuleSearchPaths(paths);
+    }
+  }
   for (const std::string &p : modulePaths)
   {
     std::error_code ec;

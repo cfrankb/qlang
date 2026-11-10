@@ -105,7 +105,7 @@ warning toggle still exists is **Q27**.
 | C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | draft spec — C++ API "to be provided"; examples show runtime exceptions at call/return sites; **now also owns the duplicate-declaration diagnostic (B2) and warning emission (B1)** |
 | C5 | Inheritance (`ObjectOps::base`) | `10-classes.md` v1 restrictions, `EXTERNAL_TYPES.md` §10.3 | reserved, returns null; base-chain walk deferred to v2 |
 | C7 | Enum-name string form for enum-valued properties | `EXTERNAL_TYPES.md` §10.5 | no dispatch point sees both field value and type context |
-| C8 | Module search paths + external search callback | `07-api.md` `## module search paths`, `## external search callback` | **C8a ✓ implemented (Round 67, 2026-11-10)** — `moduleSearchPaths`/`setModuleSearchPaths`/`addModuleSearchPath`/`setModuleSearchCallback`/`moduleSearchCallback`/`findModule` on `QLangContext`, `import` resolves through it, `qlang_run --module-path` / `--no-module-search`, `--import` deprecated; **C8b open** (`.ql` discovery + nested compile, Q36–Q38); front end for `archive/external-modules-plan-v4.md` |
+| C8 | Module search paths + external search callback | `07-api.md` `## module search paths`, `## external search callback` | **✓ implemented (C8a Round 67, C8b Round 69, 2026-11-10)** — `moduleSearchPaths`/`setModuleSearchPaths`/`addModuleSearchPath`/`setModuleSearchCallback`/`moduleSearchCallback`/`findModule` on `QLangContext`, `import` resolves through it, `qlang_run --module-path` / `--no-module-search`, `--import` deprecated; a `[name].ql` hit is compiled into an image and taken in (Q36–Q38 answered); front end for `archive/external-modules-plan-v4.md` |
 
 C2 enum injection (Round 41), C3 `hasMethod`/`callMethod` (`c4ee131`,
 2026-11-06), C4 RTTI handoff validation (Phase 3) and C6 signals (Round 40) are
@@ -363,11 +363,14 @@ than deleted, since the landing cites them.
 ### C8 — module search paths
 
 **Decided 2026-11-09 (Q23), spec re-worded in `07-api.md` the same day.**
-**C8a ✓ implemented (Round 67, 2026-11-10)** — the path list, the callback and
-`findModule` on `QLangContext`, `compileImport` resolving through it, and
-`qlang_run --module-path` / `--no-module-search` (`--import` deprecated); guard
-`module_search` (81 checks), demo `examples/module_search.cpp`. A discovered `.ql`
-is found but refused, pointing here; **C8b open**, gated on Q36–Q38.
+**✓ Implemented in two rounds: C8a Round 67, C8b Round 69 (2026-11-10).** C8a grew
+the path list, the callback and `findModule` on `QLangContext`, `resolveImport`
+resolving through it, and `qlang_run --module-path` / `--no-module-search` (`--import`
+deprecated). C8b delivers the half C8a left refused: a `[name].ql` hit is compiled into
+an image and taken in by the same path, so the spec's source search works with no host
+help — `qlang_run app.ql` finds `lib.ql` beside `app.ql`. Guard `module_search` (81 →
+**103** checks), script regression `script_ql_module` (+ its fixture `ql_module_dep.ql`),
+demo `examples/module_search.cpp`.
 
 - **Q23 does C8 include loading `.ql` source?** **DECIDED: yes — C8 owns
   compile-from-source, landed in two rounds.** The spec's search finds
@@ -387,7 +390,10 @@ is found but refused, pointing here; **C8b open**, gated on Q36–Q38.
   discovered `.ql` must report that file, `12-errors-trace.md`).
   **C8a** = path list + callback + resolution order, resolving `.qlc` through
   `loadProgramFile` — no compiler change, and it retires `qlang_run --import`.
-  **C8b** = `.ql` discovery + the nested compile.
+  **C8b** = `.ql` discovery + the nested compile. **✓ Round 69**: the compile runs on a
+  private scratch context whose imports are answered by the parent (one resolution, one
+  cycle chain), the image round-trips `writeQlc` → `loadProgram`, and every diagnostic
+  names the discovered file.
 - **Q24 precedence** — **RESOLVED by the spec (2026-11-09):** native module →
   already-loaded registry entry → search paths in order; the callback sits
   between the registry and the paths, so it can supply or shadow a file module
@@ -404,12 +410,24 @@ is found but refused, pointing here; **C8b open**, gated on Q36–Q38.
 - **Q36 filename vs declared identity** — `foo.ql` declaring
   `export const MODULE_NAME = "bar"` resolves `import bar` to a module
   registered as `bar`, not `foo`. Reject the mismatch, or accept and key on
-  `MODULE_NAME`? **Default:** accept, key on `MODULE_NAME`, warn on mismatch.
+  `MODULE_NAME`? **Answered (C8b, Round 69): accept, key on `MODULE_NAME`** — the
+  same rule `.qlc` discovery has had since C8a, so `import foo` binds the module
+  named `bar` through the alias the compiler already records. The default's
+  *warn on mismatch* half is not implemented: nothing warns for a `.qlc` whose
+  name differs either, and a name that resolves is not a problem to report.
 - **Q37 a discovered `.ql` with no `MODULE_NAME`** — a library compile requires
   it, a plain script has none. Mandatory for a discovered file, or fall back to
-  the filename stem? **Default:** fall back to the stem.
+  the filename stem? **Answered (C8b, Round 69): fall back to the stem** — and to
+  make that possible the library-mode rule was re-worded from "must declare
+  `MODULE_NAME`" to "must be namable" (`setModuleName` above), which is also what
+  `qlang_run --import lib.ql` has always wanted. A discovered file with no name of
+  its own is compiled under the stem of the file that was searched for.
 - **Q38 what the callback sees** — the requested name only, or the search paths
-  too (so a Qt resource can mirror the directory list)? **Default:** name only.
+  too (so a Qt resource can mirror the directory list)? **Answered (C8b, Round 69):
+  name only.** The nested compile answers its own imports by calling the parent's
+  `findModule`, so a callback sees the same name the entry did and the paths stay
+  the engine's business; a host that wants to mirror a directory list already owns
+  the list it set.
 
 Scope note: C8 is *discovery*. `QLangContext::run()` still does not link —
 `QLangLinker` is driven by `qlang_run` — so the **runtime module registry** stays
@@ -531,8 +549,8 @@ cross-references.
    `str(e.options)` sees a bare `Int`. **Q22** is the design decision (enum
    table on the property binding vs a value tag) and must be settled before
    implementation. Effort: small–medium once designed.
-5. **C8 module search paths + external search callback** — **C8a ✓ implemented
-   (Round 67, 2026-11-10); C8b open.** New in the Round 52 re-audit; Q23 decided
+5. **C8 module search paths + external search callback** — **✓ implemented (C8a
+   Round 67, C8b Round 69, 2026-11-10).** New in the Round 52 re-audit; Q23 decided
    2026-11-09, spec re-worded the same day.
    Spec `07-api.md` `## module search paths` ("API C++ will
    provide a means to set the search paths to find modules"; POC modules are
@@ -549,12 +567,13 @@ cross-references.
    lexer, parser or VM change was needed. Prerequisite/front end for
    `docs/plans/archive/external-modules-plan-v4.md` (import/export tables assume a module
    can be *found* before it can be linked). **C8a** (paths + callback + order,
-   `.qlc` only) is small and touches no compiler; **C8b** (`.ql` discovery + the
-   nested compile, reentrancy, in-flight cycle set, error provenance) is
-   medium. Open questions: **Q36–Q38** (identity vs filename, a discovered file
-   with no `MODULE_NAME`, what the callback sees). Tests: `module_search` (81 checks)
-   landed with C8a; a `tests/scripts/` regression waits for `.ql` file loading
-   (C8b). Effort: medium (C8b).
+   `.qlc` only) landed Round 67; **C8b** (`.ql` discovery + the nested compile,
+   reentrancy, in-flight cycle chain, error provenance) landed Round 69. Open
+   questions **Q36–Q38 are answered** (a declared `MODULE_NAME` wins and is the
+   registry key, a source with none takes its file stem, the callback sees the
+   requested name only). Tests: `module_search` (81 → 103 checks) and
+   `script_ql_module`, which loads a sibling `.ql` through the driver.
+   Effort: done.
 
 C2 enum injection (Round 41), C6 signals (Round 40) and C3
 `hasMethod`/`callMethod` (`c4ee131`, 2026-11-06, pending the `BoundMethod`
@@ -746,9 +765,11 @@ spec writing ──> C5 (inheritance)
 design decision ──> C7 (enum-name string form)
 C8 (module search paths) ──> archive/external-modules-plan-v4.md (import/export tables)
                             ✅ done 2026-11-09 (Rounds 61–65) — the plan shipped and moved to
-                            docs/plans/archive/; C8 (discovery) is still open
+                            docs/plans/archive/; C8 (discovery) landed Round 69
 C8a (paths + callback, .qlc) ──> C8b (.ql discovery + nested compile)
-                            C8a ✓ landed Round 67; Q36–Q38 gate C8b only
+                            ✓ both landed — C8a Round 67, C8b Round 69 (Q36–Q38
+                            answered with it); C8 itself is closed, the runtime
+                            module registry in QLangContext::run() is not part of it
 A3, A5, C8: otherwise independent of each other and of the above
 
 open questions gate the work (see §Open questions):
@@ -761,7 +782,8 @@ open questions gate the work (see §Open questions):
   Q21 ──> C5 spec, Q22 ──> C7 design
   Q23    ──> C8 scope (DECIDED 2026-11-09: C8 owns compile-from-source)
   Q24–Q26 ──> C8 resolution contract (RESOLVED by the 07-api.md spec edit)
-  Q36–Q38 ──> C8b (identity vs filename, missing MODULE_NAME, callback input)
+  Q36–Q38 ──> C8b (identity vs filename, missing MODULE_NAME, callback input) —
+             ANSWERED with C8b (Round 69)
 
 landed since this plan was written: A1 + A2 (Round 39) · C6 (Round 40) ·
 C2 (Round 41) · A4 Phases 1–4 (Rounds 42–45) · C4 (Phase 3 host-API hardening)

@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <sstream>
 #include <utility>
 
 #include "qlang/QLangBytecodeIO.h"
@@ -552,6 +554,133 @@ namespace {
     }
   }
 
+  // Compiles a discovered `.ql` source into an image and takes it in — the
+  // other half of SPEC §api "module search paths" ("...before `[modulename].ql`,
+  // which it compiles into an image and takes in by the same path"; plan C8b).
+  //
+  // The compile runs on a PRIVATE context, never here, for two reasons: a
+  // module's top level declares globals and the global table belongs to a
+  // context, so compiling here would leak the library's names into the entry's
+  // global area; and a module image numbers its registers from 0 because
+  // QLangLinker re-bases them at link time, while a compile here would start
+  // them above this context's existing globals. The scratch borrows everything
+  // that is not a global area — this context's natives and C++ modules — and
+  // answers its own imports by asking `this`, so a dependency is discovered,
+  // registered and cached ONCE here instead of once per scratch (and a cycle is
+  // caught by one chain). Host-injected consts and enums are not carried over:
+  // a library sees the same names a `.qlc` image of it would.
+  //
+  // The image goes out through the codec and back in through `loadProgram`, so
+  // a compiled source and a `.qlc` file on disk share one path: natives are
+  // stored as NAMES and re-resolved against this context (docs/SERIALIZATION.md
+  // §4.3), and the registry keeps the same provenance either way.
+  std::shared_ptr<LoadedModule>
+  QLangContext::compileModuleSource(const std::string &path)
+  {
+    // Every diagnostic names the file it came from (SPEC §12 error reporting):
+    // the compiler reports a failed resolution at the `import` statement, so
+    // only the source file's own path can say which module is broken.
+    const std::string where = path + ": ";
+
+    // Cycles. No image exists until a module's compile finishes, so the import
+    // graph the compiler checks (checkImportCycles) cannot see a nested one:
+    // `a.ql` importing `b.ql` importing `a.ql` would recurse until the stack
+    // gave up. The key is the FILE, not the requested name — a cycle is a file
+    // reached again, whatever name each import spelled it as.
+    std::error_code ec;
+    std::string key = std::filesystem::absolute(path, ec).lexically_normal().string();
+    if (ec || key.empty())
+      key = path;
+    for (const std::string &running : m_compilingSources)
+      if (running == key)
+      {
+        std::string chain = "import cycle:";
+        for (const std::string &c : m_compilingSources)
+          chain += " " + c + " ->";
+        throw QLangError(QLangErrorKind::Io, 0, 0,
+                         chain + " " + key + " is already being compiled");
+      }
+    m_compilingSources.push_back(key);
+    // A compile that threw must not leave its file marked: the next import of
+    // an unrelated module would be told it is a cycle.
+    struct InFlight
+    {
+      std::vector<std::string> &chain;
+      ~InFlight() { chain.pop_back(); }
+    } inFlight{m_compilingSources};
+
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+      throw QLangError(QLangErrorKind::Io, 0, 0,
+                       "cannot open module source '" + path + "'");
+    std::ostringstream text;
+    text << in.rdbuf();
+
+    QLangContext scratch;
+    scratch.setVerboseLevel(verboseLevel());
+    scratch.setModuleSearchPaths({}); // resolution is answered by `this`, below
+    for (const auto &[name, func] : m_nativeFuncs)
+      scratch.setFunc(name, func);
+    for (const auto &mod : m_modules)
+    {
+      bool have = false;
+      for (const auto &existing : scratch.modules())
+        have = have || existing.name == mod.name;
+      if (!have)
+        scratch.registerModule(mod.name, mod);
+    }
+    scratch.setModuleSearchCallback(
+        [this](const std::string &name, std::string &error)
+            -> std::shared_ptr<LoadedModule>
+        {
+          try
+          {
+            return findModule(name);
+          }
+          catch (const std::exception &e) // the callback must not throw
+          {
+            error = e.what();
+            return nullptr;
+          }
+        });
+
+    CompiledProgram prog;
+    std::map<std::string, int> nativeIds; // the slot table writeQlc wants
+    try
+    {
+      std::vector<StmtPtr> ast = scratch.parse(text.str());
+      QLangCompiler compiler(std::move(ast), &scratch);
+      compiler.addExternalConsts({});
+      std::unordered_set<std::string> nativeNames;
+      for (const auto &[name, _] : scratch.nativeFuncs())
+        nativeNames.insert(name);
+      compiler.addExternalFuncs(nativeNames);
+      compiler.addModules(scratch.modules());
+      // The module's identity (SPEC §bytecodes "keyword export"): what it
+      // declares wins; a source that declares nothing takes the filename stem
+      // (plan Q37), which is also what its import name is expected to be. A
+      // declared name that disagrees with the file is still what the registry
+      // keys on (Q36 — findModule's `accept`, which traces the substitution).
+      compiler.setModuleName(std::filesystem::path(path).stem().string());
+      compiler.setLibraryMode(true);
+      prog = compiler.compile();
+      const auto &ids = compiler.nativeFuncIds();
+      nativeIds = std::map<std::string, int>(ids.begin(), ids.end());
+    }
+    catch (const QLangError &e)
+    {
+      throw QLangError(e.kind(), e.line(), e.col(), where + e.message());
+    }
+
+    std::ostringstream image(std::ios::binary);
+    if (!writeQlc(image, prog, nativeIds))
+      throw QLangError(QLangErrorKind::Io, 0, 0,
+                       where + "cannot build an image for module '" +
+                           prog.moduleName + "'");
+    std::istringstream bytes(image.str(), std::ios::binary);
+    return loadProgram(bytes, path);
+  }
+
   std::shared_ptr<LoadedModule>
   QLangContext::findModule(const std::string &name)
   {
@@ -682,12 +811,16 @@ namespace {
         sourceHit = source;
     }
 
+    // A source file and no image: compile it and take the result in (SPEC §api
+    // "module search paths", plan C8b). A source that is there but does not
+    // compile is reported, never skipped for a same-named file further down the
+    // list — the same rule the `.qlc` hit above follows.
     if (!sourceHit.empty())
-      throw QLangError(
-          QLangErrorKind::Io, 0, 0,
-          "module '" + name + "' was found at '" + sourceHit +
-              "', but resolving a .ql source file is not implemented yet: "
-              "compile it to .qlc (plan C8b) or load it with loadProgramFile");
+    {
+      trace(TRACE_FULL, "[MODULE] '%s' found at %s (compiling)\n", name.c_str(),
+            sourceHit.c_str());
+      return accept(compileModuleSource(sourceHit));
+    }
 
     trace(TRACE_FULL, "[MODULE] '%s' not found\n", name.c_str());
     return nullptr;

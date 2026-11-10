@@ -863,7 +863,8 @@ How the bullets above are read (plan **Q30** settles the second and fourth):
 `export const MODULE_NAME = "<name>"` when it declares one — a `const` holding a constant string,
 because a loader has to read the identity out of the image without running the module — else the
 name the driver supplies (`qlang_run` passes the source file stem), else `main`. A **library**
-compile (`QLangCompiler::setLibraryMode`) makes `MODULE_NAME` mandatory and compiles the top level
+compile (`QLangCompiler::setLibraryMode`) requires that name to exist — its own `MODULE_NAME` or
+the driver's, since a library no name reaches cannot be imported — and compiles the top level
 as `<init>` rather than `main` (`## technical specifications` 2, "no main function"); an application
 module may omit it, and its `export` statements change only the table, not the run.
 

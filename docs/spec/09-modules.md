@@ -129,9 +129,11 @@ needs ([13-bytecodes.md](13-bytecodes.md) `## keyword export`,
 `## export table (lookup)`, `## import table (lookup)`). The module an `import` binds is that
 **artifact**; the `.ql` is how it was made.
 
-- **Identity** — `export const MODULE_NAME = "<name>"`, mandatory in a library compile
-  (`QLangCompiler::setLibraryMode`), whose top level then compiles as `<init>` instead of
-  `main`.
+- **Identity** — `export const MODULE_NAME = "<name>"`, the name other modules import by and the
+  registry's key. A library compile (`QLangCompiler::setLibraryMode`) needs the module to be
+  **namable**: its own `MODULE_NAME`, or the name the host is compiling the file under (the
+  driver passes the source file's stem), since a module no name reaches cannot be imported. Its
+  top level then compiles as `<init>` instead of `main`.
 - **Exports** — `export` on a `def` / `const` / assignment / arrow closure, or standalone
   `export NAME`. Global scope only. An exported variable is a **shared cell**: the defining
   module writes it, importers read it; assigning through an import, `++`/`--` on it and
@@ -145,9 +147,11 @@ needs ([13-bytecodes.md](13-bytecodes.md) `## keyword export`,
   import table, and every module's `<init>` run exactly once, dependencies first. A library may
   import another library; the chain is followed transitively.
 - **Loading** — the host loads an image into the context
-  (`QLangContext::loadProgram` / `loadProgramFile`); finding one by name (search paths, an
-  external search callback) is [07-api.md](07-api.md) and not implemented yet, so
-  `qlang_run app.ql lib.qlc` / `--import lib.qlc` names libraries explicitly.
+  (`QLangContext::loadProgram` / `loadProgramFile`). Finding one by name — the search paths, the
+  external search callback, and a `[name].ql` hit compiled on the spot — is
+  [07-api.md](07-api.md) `## module search paths`, so `qlang_run app.ql` resolves `import lib`
+  from a `lib.qlc` or `lib.ql` on the path; `--import lib.ql` / `qlang_run app.ql lib.qlc` name
+  libraries explicitly and keep the image beside the source.
 
 **Implemented (Round 65, 2026-11-09)** — plan
 [../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phases 1–3c:

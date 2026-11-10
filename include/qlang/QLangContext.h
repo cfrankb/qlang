@@ -287,24 +287,27 @@ namespace qlang
     const ModuleSearchCallback &moduleSearchCallback() const;
 
     // Resolve `name` to a loaded module (SPEC §api "module search paths";
-    // plan C8a). The order is the spec's: a registered C++ module (answered
-    // nullptr — the caller binds it as natives, not as an image), an entry
-    // already in the registry, the search callback, then the search paths in
-    // order, trying `<name>.qlc` before `<name>.ql` within each directory.
-    // A `.qlc` hit is taken in by loadProgramFile; a `.ql` hit is reported as
-    // unresolvable, because compiling a discovered source file is plan C8b.
+    // plan C8a + C8b). The order is the spec's: a registered C++ module
+    // (answered nullptr — the caller binds it as natives, not as an image), an
+    // entry already in the registry, the search callback, then the search paths
+    // in order, trying `<name>.qlc` before `<name>.ql` within each directory.
+    // A `.qlc` hit is taken in by loadProgramFile; a `.ql` hit is COMPILED into
+    // an image and taken in by the same path (compileModuleSource), so the
+    // spec's `[modulename].ql` search works with no host help.
     //
     // Resolution happens once per context: the result is cached under the
     // requested name, so a second request for the same name — or for the
     // module's own declared name — reuses it even when the two differ. The
     // image's own imports are resolved transitively through the same order, so
     // a discovered library's dependencies arrive with it; a dependency that
-    // cannot be found is an error naming the module that asked for it.
+    // cannot be found is an error naming the module that asked for it. A source
+    // that is itself still being compiled further up the same resolution is an
+    // import cycle, reported with the chain that produced it.
     //
     // Returns nullptr when nothing matched (a C++ module, or simply absent).
     // Throws QLangError(Io) when a candidate was found but could not be used:
-    // the callback reported a reason, an image is malformed, or a transitive
-    // dependency is missing.
+    // the callback reported a reason, an image is malformed, a discovered
+    // source does not compile, or a transitive dependency is missing.
     std::shared_ptr<LoadedModule> findModule(const std::string &name);
 
     // External C++ type registration (docs/EXTERNAL_TYPES.md).
@@ -445,6 +448,18 @@ namespace qlang
     // clear() drops the module registry but keeps both.
     std::vector<std::string> m_moduleSearchPaths;
     ModuleSearchCallback m_moduleSearchCallback;
+    // Compiles one discovered `.ql` source into an image and takes it in
+    // (SPEC §api "module search paths": a `[modulename].ql` hit "compiles into
+    // an image and takes in by the same path"; plan C8b). Called by findModule,
+    // on a scratch context rather than this one, so a library's top level never
+    // touches this context's global area.
+    std::shared_ptr<LoadedModule> compileModuleSource(const std::string &path);
+    // The `.ql` files whose compile is in progress on this context, outermost
+    // first (plan C8b). An image exists only once its compile finishes, so the
+    // import graph's own cycle check cannot see a nested cycle; this chain is
+    // the guard, and every nested compile is reached through this context's
+    // findModule, so one chain covers the whole tree.
+    std::vector<std::string> m_compilingSources;
     // Signal connection registry (docs/spec/17-signals.md): handle ->
     // connection. The handle is a monotonically increasing int (its order is
     // the delivery order); it does not wrap in practice.

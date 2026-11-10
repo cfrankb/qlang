@@ -1,3 +1,63 @@
+## Round 69 (2026-11-10)
+
+**C8b lands — a `.ql` on the search path is compiled into the module it stands for** (spec
+`docs/spec/07-api.md` `## module search paths`, `docs/spec/09-modules.md` `## QLang (`.ql`)
+modules`, `docs/spec/13-bytecodes.md` `**Module identity**`; code `src/QLangContext.cpp/.h`,
+`src/QLangCompiler.cpp`, `examples/qlang_run.cpp`). No opcode, no `.qlc` change, no new error
+kind. The sentence the spec has carried since 2026-11-09 — "tries `[modulename].qlc` … before
+`[modulename].ql`, which it compiles into an image and takes in by the same path" — is now true,
+so `qlang_run tests/scripts/neo.ql`, whose `from mymod import *` names a file that has never
+been compiled into anything, runs instead of refusing with "resolving a .ql source file is not
+implemented yet".
+
+- **Where it runs.** `QLangContext::compileModuleSource(path)`, called by `findModule` on a `.ql`
+  hit. A **private scratch context** does the compile — the caller's global table would otherwise
+  absorb the module's top level, and a module image has to number its registers from 0 for
+  `QLangLinker` to re-base them — which carries over this context's natives and C++ modules and
+  **no** search paths of its own: its callback asks `this->findModule`, so every nested source is
+  discovered, registered and cached on the context that owns the resolution, and nothing is
+  written to disk. The image then goes out through `writeQlc` and back in through
+  `loadProgram(istream, path)`, so a compiled source and a precompiled `.qlc` share the rest of
+  the road: natives stored as **names** and re-resolved against this context
+  (`SERIALIZATION.md` §4.3), identical registry provenance.
+- **Identity (Q36 + Q37).** The result is keyed on its own `export const MODULE_NAME` — `mis.ql`
+  declaring `renamed` registers as `renamed` and is what `import mis` binds, through the alias the
+  compiler already records for a `.qlc` that disagrees with its filename — and on the file's
+  **stem** when it declares none. Making the stem usable meant relaxing the library-mode check
+  from "declares `MODULE_NAME`" to "has a name" (`setModuleName` above), which is also what
+  `--import nameless.ql` needed; `09-modules.md` **Identity** and `13-bytecodes.md` **Module
+  identity** now say *namable* where they said *mandatory*. Q38 stands as defaulted: the callback
+  sees the requested name only, which is exactly what the nested compile forwards.
+- **Cycles and provenance.** An image exists only when a module's compile finishes, so
+  `checkImportCycles` cannot see `a.ql → b.ql → a.ql` — it would recurse until the stack gave up.
+  The guard is `m_compilingSources`, an in-flight chain of **absolute file paths** on the context
+  that owns the resolution (every nested compile funnels back through its `findModule`), keyed on
+  the file rather than the requested name because a cycle is a file reached again whatever each
+  import spelled it as, and erased by RAII whether the compile threw or succeeded. A source that
+  does not compile reports the compiler's message with the discovered file's path in front of it,
+  registers nothing, and is not left cached — fixing the file makes it resolve.
+- **Driver.** The entry file's own directory became the **first** module search path (the spec
+  records it in §api "module search paths"), which is what makes a same-directory `import` work
+  with no `--module-path`; `--no-module-search` drops it as it drops the working directory, and
+  `--help` plus the file header say so.
+- **Tests.** `module_search` 81 → **103**: a lone `.ql` compiled, linked and run; the stem
+  fallback; the declared-name alias; a `.ql` importing a `.ql` that lives in a second directory;
+  a cycle naming both files in the chain; a broken source naming the discovered file, registering
+  nothing and resolving once fixed; the caller's global table unchanged by a scratch compile. New
+  script regression `script_ql_module` with its fixture `tests/scripts/ql_module_dep.ql` — the
+  first script that imports a module nobody named on the command line, from the build tree as cwd
+  (the entry directory is what answers). ctest **56/56** green.
+- **Recorded, not fixed:** Q36's "warn on mismatch" half — nothing warns for a `.qlc` whose
+  declared name differs from its file either, and a name that resolves is not a problem to
+  report. A module's exported `const` reads **empty** through a qualified import
+  (`export const GREETING = "hello"` then `kv.GREETING` prints nothing, and `kv.greet()` in the
+  same module prints `" world"`): reproduced identically through the pre-existing driver path
+  (`--import kv.ql` → `.qlc` → `QLangLinker` → VM), so it predates this round and lives in the
+  linker's module-register slicing / `<init>` area, not in discovery. And the driver's own
+  `--import` still compiles a dependency its own way, caching a `.qlc` beside the source, rather
+  than routing through the engine's in-memory compile — two roads to the same image, left alone
+  deliberately because the on-disk cache is the driver's documented contract.
+
 ## Round 68 (2026-11-10)
 
 **`import` binds the module — module-level access is enforced and implicit flat loading is

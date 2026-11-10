@@ -294,9 +294,10 @@ public:
   void setModuleName(const std::string &name) { m_moduleName = name; }
 
   // Library mode compiles a `.ql` module rather than a runnable script: the
-  // top level becomes the module initializer `<init>` instead of `main`, and
-  // `export const MODULE_NAME = "<name>"` is mandatory (it is the name other
-  // modules import by). SPEC §bytecodes "keyword export".
+  // top level becomes the module initializer `<init>` instead of `main`, and the
+  // module must be namable — `export const MODULE_NAME = "<name>"`, or the
+  // driver name above (a module neither names cannot be imported).
+  // SPEC §bytecodes "keyword export".
   void setLibraryMode(bool on = true) { m_libraryMode = on; }
 
   CompiledProgram compile();

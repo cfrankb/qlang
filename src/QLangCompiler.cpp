@@ -1219,7 +1219,12 @@ CompiledProgram QLangCompiler::compile() {
   // exist before the body compiles, so an exported name is known (and, for a
   // function, un-rebindable) from the first statement on.
   collectExports();
-  if (m_libraryMode && m_moduleNameFromSource.empty())
+  // A library must be NAMABLE (SPEC §bytecodes "keyword export"): the name other
+  // modules import by comes either from its own `export const MODULE_NAME` or
+  // from the driver that named the file (plan Q37 — a discovered source with no
+  // MODULE_NAME is named by its filename stem). Neither, and there is no way to
+  // import the result.
+  if (m_libraryMode && m_moduleNameFromSource.empty() && m_moduleName.empty())
     throw QLangError(QLangErrorKind::Parse, 0, 0,
                      "library module requires export const MODULE_NAME = \"<name>\"");
   // Every top-level `import` resolves here, BEFORE the program body compiles,

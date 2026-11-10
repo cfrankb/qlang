@@ -286,7 +286,10 @@ void addModuleSearchPath(std::string dir);  // append
 ```
 
 default search paths includes `the current directory` (pwd) — the working
-directory at the moment the context is constructed.
+directory at the moment the context is constructed. A host that compiles an
+entry file puts **that file's own directory** on the list too, ahead of the
+working directory: a module imported by name from a script sits beside it, and
+the working directory is wherever the host happened to be started.
 
 provide C++ API to query the search paths and change them.
 
@@ -297,9 +300,13 @@ first then try to find the module in the search path. The full order is:
 2. a module **already in the registry** (`loadProgram` / `loadProgramFile`);
 3. the **search paths**, in order.
 
-Since all modules in the POC are single file then it will simply search for `[modulename].ql` in all the directories listed in the search paths. Within a directory the engine tries `[modulename].qlc` — a compiled image, taken in by `loadProgramFile` — before `[modulename].ql`, which it compiles into an image and takes in by the same path. A directory that does not exist is skipped, not an error; the first match wins.
+Since all modules in the POC are single file then it will simply search for `[modulename].ql` in all the directories listed in the search paths. Within a directory the engine tries `[modulename].qlc` — a compiled image, taken in by `loadProgramFile` — before `[modulename].ql`, which it compiles into an image and takes in by the same path. A directory that does not exist is skipped, not an error; the first match wins. A source that does not compile is reported as an error naming that file, not skipped in favour of a same-named file further down the list.
+
+The list belongs to the **context**, not to the module being resolved: a module's own imports are searched in these same paths, so a dependency that sits only beside a module which was found outside every path is not found. A host that wants a tree of sources found by name puts the directory of each tree on the list.
 
 A module is resolved **once per context**: the first successful resolution is cached under the resolved module's own name (`program.moduleName`) and a later request for that name reuses it. An import cycle is an error.
+
+A compiled source is named like an image: its own `export const MODULE_NAME` is what the registry keys and `import` binds — so `[other].ql` declaring `MODULE_NAME = "beta"` is what `import other` binds, under `beta` — and a source that declares none is named by the file's stem, which is the name its own file was searched under ([09-modules.md](09-modules.md) `## QLang (.ql) modules` **Identity**). Compiling it runs on the context's behalf, so its own imports are resolved by this same order and a file reached twice in one resolution chain is the cycle above, reported with the chain that produced it.
 
 ## external search callback
 

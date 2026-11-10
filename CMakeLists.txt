@@ -312,7 +312,9 @@ add_test(NAME codegen_size COMMAND codegen_size_check)
 # Script-level regression suite (tests/scripts/). Each .ql script is driven
 # by qlang_run (the smoke-test app); a non-zero exit code fails the suite.
 # Explicit list (Phase 5, F7) — no file(GLOB), so a new script is a deliberate
-# CMake edit, not a silent pickup.
+# CMake edit, not a silent pickup. `ql_module.ql` is the exception that proves
+# the rule: it imports `ql_module_dep.ql`, a sibling source module with no image
+# (plan C8b), which is a fixture and so is not listed here.
 set(QL_SCRIPTS
   cmp.ql
   cast.ql
@@ -327,6 +329,7 @@ set(QL_SCRIPTS
   len.ql
   money.ql
   moneyv2.ql
+  ql_module.ql
   perf_stress.ql
   table_subscript.ql
   test_assert.ql

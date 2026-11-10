@@ -1,6 +1,6 @@
 // Module search paths and the external search callback (SPEC §api
 // "module search paths" + §api "external search callback"; plan
-// docs/plans/missing-features-plan.md §C8a).
+// docs/plans/missing-features-plan.md §C8a + §C8b).
 //
 // `QLangContext::findModule` is the one resolution order the spec gives: a
 // registered C++ module, an entry already in the registry, the host's callback,
@@ -16,7 +16,8 @@
 //     `set` replaces, `add` appends, an empty list disables discovery;
 //   * the order: first match wins, a missing directory (or a plain file used as
 //     a path) is skipped, `.qlc` beats `.ql` in the same directory, and a `.ql`
-//     with no image beside it is reported as unresolved rather than as absent;
+//     with no image beside it is compiled and taken in like the image it stands
+//     for (plan C8b);
 //   * the cache: one resolution per context, reached again by the requested
 //     name or by the module's own, and `clear()` drops the registry and the
 //     cache but keeps the paths and the callback;
@@ -28,6 +29,11 @@
 //     missing dependency names the module that asked, and a cycle terminates;
 //   * the identity rule: `foo.qlc` declaring `MODULE_NAME = "bar"` registers as
 //     `bar` and is still what `import foo` binds (Q36);
+//   * compiling a discovered `.ql` (plan C8b): the scratch compile leaves the
+//     caller's globals alone, a `.ql` that imports another `.ql` resolves it
+//     through the parent's one path list, a cycle between two sources names the
+//     chain instead of recursing, and a source that fails to compile names the
+//     file it came from;
 //   * the end to end: an entry compiled with nothing pre-loaded resolves, links
 //     and runs, and a C++ module of the same name still beats the file.
 //
@@ -326,8 +332,11 @@ void testSearchOrder() {
   // The same module as a `.qlc` and as a `.ql`: the image wins.
   tree.write("mixed/two.qlc", whoLibrary("two", "image", err));
   tree.write("mixed/two.ql", "export const MODULE_NAME = \"two\"\n");
-  // A source file with no image beside it: C8b's job, so unresolved here.
-  tree.write("sourceonly/three.ql", "export const MODULE_NAME = \"three\"\n");
+  // A source file with no image beside it: C8b compiles it.
+  tree.write("sourceonly/three.ql", "export const MODULE_NAME = \"three\"\n"
+                                    "export def who()\n"
+                                    "  return \"source\"\n"
+                                    "end\n");
 
   QLangContext ctx;
   ctx.setModuleSearchPaths({first, second});
@@ -357,11 +366,20 @@ void testSearchOrder() {
 
   QLangContext s;
   s.setModuleSearchPaths({sourceOnly});
-  const std::string serr = errorOf([&] { s.findModule("three"); });
-  check(serr.find("three.ql") != std::string::npos &&
-            serr.find("C8b") != std::string::npos,
-        "order: a lone .ql is reported as found-but-unresolved, not absent: " + serr);
-  check(s.loadedModules().empty(), "order: a .ql hit loads nothing");
+  auto lone = s.findModule("three");
+  if (!check(lone != nullptr, "order: a lone .ql is compiled, not refused"))
+    return;
+  check(lone->path == sourceOnly + "/three.ql",
+        "order: the compiled source is the file that answered");
+  check(lone->program.moduleName == "three" &&
+            s.loadedModule("three") == lone.get(),
+        "order: the compiled source is registered like an image");
+  CompiledProgram fromSource;
+  if (!check(buildLinked(s, "import three\nprintln(three.who())\n", fromSource, err),
+             "order: a compiled source links into a program (" + err + ")"))
+    return;
+  check(runText(fromSource, s) == "source\n",
+        "order: the compiled source is what the program runs");
 
   // An empty entry means the working directory (SPEC: the default list is the
   // cwd; an explicit "" is the same directory).
@@ -789,6 +807,128 @@ void testNativeBeatsFile() {
   check(runText(prog, ctx) == "native\n", "native: the C++ module answered");
 }
 
+// --- compiling a discovered `.ql` (plan C8b) --------------------------------
+
+// A `.ql` hit is compiled on the spot: on a private scratch context, against
+// this context's natives and loaded modules, with its own imports resolved back
+// through this context. What comes out is an ordinary image — the registry, the
+// linker and the run behave exactly as for the `.qlc` the file could have been
+// precompiled to (SPEC §modules "technical requirements" 4).
+void testCompiledSource() {
+  TempTree tree("compiled");
+  const std::string libs = tree.dir("libs");
+  const std::string deep = tree.dir("deep");
+  std::string err;
+
+  // No MODULE_NAME at all: the name it is found under is its name (plan Q37).
+  tree.write("libs/stemmy.ql",
+             "export def hi()\n"
+             "  return \"stem\"\n"
+             "end\n");
+  // Declares a name that is NOT the file's: the declared one wins the registry,
+  // exactly as `foo.qlc` declaring `bar` does (plan Q36).
+  tree.write("libs/mis.ql",
+             "export const MODULE_NAME = \"renamed\"\n"
+             "export def hi()\n"
+             "  return \"declared\"\n"
+             "end\n");
+  // A source whose OWN import is another source, in a different directory: the
+  // nested compile resolves it through this context, so one path list covers
+  // the whole tree.
+  tree.write("libs/user.ql",
+             "export const MODULE_NAME = \"user\"\n"
+             "from dep import hi\n"
+             "export def hi()\n"
+             "  return \"user+\" + hi()\n"
+             "end\n");
+  tree.write("deep/dep.ql",
+             "export const MODULE_NAME = \"dep\"\n"
+             "export def hi()\n"
+             "  return \"dep\"\n"
+             "end\n");
+  // Two sources that import each other: a cycle has to stop, naming the chain.
+  tree.write("libs/cyc_a.ql",
+             "import cyc_b\n"
+             "export def hi()\n"
+             "  return cyc_b.hi()\n"
+             "end\n");
+  tree.write("libs/cyc_b.ql",
+             "import cyc_a\n"
+             "export def hi()\n"
+             "  return \"b\"\n"
+             "end\n");
+
+  QLangContext ctx;
+  ctx.setModuleSearchPaths({libs, deep});
+  const size_t globalsBefore = ctx.globalCount();
+
+  auto stem = ctx.findModule("stemmy");
+  if (!check(stem != nullptr, "source: a source file is compiled (" + err + ")"))
+    return;
+  check(stem->program.moduleName == "stemmy",
+        "source: with no MODULE_NAME the file's stem is the name");
+  check(ctx.loadedModule("stemmy") == stem.get(),
+        "source: the compiled source is registered");
+  check(ctx.globalCount() == globalsBefore,
+        "source: the scratch compile leaves the caller's globals alone");
+  check(ctx.findModule("stemmy") == stem, "source: it is cached like an image");
+
+  auto mis = ctx.findModule("mis");
+  if (!check(mis != nullptr, "source: a source with its own name compiles"))
+    return;
+  check(mis->program.moduleName == "renamed",
+        "source: the declared MODULE_NAME is its name");
+  check(ctx.loadedModule("renamed") == mis.get() &&
+            ctx.loadedModule("mis") == nullptr,
+        "source: the registry keys the declared name, not the filename");
+
+  CompiledProgram merged;
+  if (!check(buildLinked(ctx, "import user\nprintln(user.hi())\n", merged, err),
+             "source: a source that imports a source compiles (" + err + ")"))
+    return;
+  check(ctx.loadedModule("dep") != nullptr,
+        "source: the nested source arrived through this context");
+  check(runText(merged, ctx) == "user+dep\n",
+        "source: a nested source import runs");
+
+  // The declared-name alias works through a source too.
+  QLangContext aliased;
+  aliased.setModuleSearchPaths({libs});
+  CompiledProgram amerged;
+  if (!check(buildLinked(aliased, "import mis\nprintln(mis.hi())\n", amerged, err),
+             "source: the requested name aliases the declared one (" + err + ")"))
+    return;
+  check(runText(amerged, aliased) == "declared\n",
+        "source: the aliased source module runs");
+
+  QLangContext cyc;
+  cyc.setModuleSearchPaths({libs});
+  const std::string cerr = errorOf([&] { cyc.findModule("cyc_a"); });
+  check(cerr.find("import cycle") != std::string::npos &&
+            cerr.find("cyc_a.ql") != std::string::npos &&
+            cerr.find("cyc_b.ql") != std::string::npos,
+        "source: a cycle names the chain instead of recursing: " + cerr);
+  check(cyc.loadedModules().empty(), "source: a cycle registers no module");
+
+  // A source that does not compile names the file it came from, and the failed
+  // lookup is not left in place: a fixed file still resolves.
+  QLangContext bad;
+  bad.setModuleSearchPaths({libs});
+  const std::string berr = errorOf([&] { bad.findModule("nothing"); });
+  check(berr.empty(), "source: a name with no file at all is not an error here");
+  tree.write("libs/nothing.ql", "export def bad( {\n  return 1\nend\n");
+  const std::string ferr = errorOf([&] { bad.findModule("nothing"); });
+  check(ferr.find("nothing.ql") != std::string::npos,
+        "source: a compile failure names the discovered file: " + ferr);
+  check(bad.loadedModules().empty(), "source: a failed compile registers nothing");
+  tree.write("libs/nothing.ql",
+             "export def hi()\n"
+             "  return \"fixed\"\n"
+             "end\n");
+  check(bad.findModule("nothing") != nullptr,
+        "source: a fixed file resolves — the in-flight entry did not stick");
+}
+
 } // namespace
 
 int main() {
@@ -801,6 +941,7 @@ int main() {
   testDeclaredName();
   testCompileDiscovers();
   testNativeBeatsFile();
+  testCompiledSource();
 
   std::cout << (fails == 0 ? "ALL PASS" : "FAILURES") << ": " << passes
             << " passed, " << fails << " failed\n";
