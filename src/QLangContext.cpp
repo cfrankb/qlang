@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <utility>
 
@@ -197,14 +199,55 @@ namespace {
           return e;
       return nullptr;
     }
+    // Resolutions already performed, keyed by the name that was ASKED FOR
+    // (SPEC §api "module search paths": "a module is resolved once per
+    // context"). The registry keys on the module's own declared name, which a
+    // file's name may disagree with (`foo.qlc` declaring MODULE_NAME = "bar"),
+    // so the requested name needs its own entry or every later `import foo`
+    // would search again and collide with the loaded `bar`.
+    void remember(const std::string &requested,
+                  const std::shared_ptr<LoadedModule> &m)
+    {
+      m_resolved[requested] = m;
+    }
+    std::shared_ptr<LoadedModule> resolved(const std::string &requested) const
+    {
+      const auto it = m_resolved.find(requested);
+      return it == m_resolved.end() ? nullptr : it->second;
+    }
     const std::vector<std::shared_ptr<LoadedModule>> &all() const
     {
       return m_modules;
     }
-    void clear() { m_modules.clear(); }
+    // Undo an add()/remember() pair when taking the module in failed midway
+    // (a dependency of the newly loaded image resolved nowhere): the registry
+    // must not keep a module the caller was told about as an error. Cache
+    // entries pointing at the removed image go too, whatever name they were
+    // requested under.
+    void remove(const std::string &name)
+    {
+      for (auto it = m_modules.begin(); it != m_modules.end(); ++it)
+        if ((*it)->program.moduleName == name)
+        {
+          m_modules.erase(it);
+          break;
+        }
+      for (auto it = m_resolved.begin(); it != m_resolved.end();)
+        if (it->second && it->second->program.moduleName == name)
+          it = m_resolved.erase(it);
+        else
+          ++it;
+    }
+    void forget(const std::string &requested) { m_resolved.erase(requested); }
+    void clear()
+    {
+      m_modules.clear();
+      m_resolved.clear();
+    }
 
   private:
     std::vector<std::shared_ptr<LoadedModule>> m_modules;
+    std::unordered_map<std::string, std::shared_ptr<LoadedModule>> m_resolved;
   };
 
   // Pimpl definition — breaks the circular include with QLangCompiler.h.
@@ -220,6 +263,15 @@ namespace {
   QLangContext::QLangContext()
   {
     m_pimpl = std::make_unique<Pimpl>();
+    // The default search path is the working directory AT CONSTRUCTION
+    // (SPEC §api "module search paths") — snapshotted, not re-read per lookup,
+    // so a host that chdir()s keeps resolving against where it started. An
+    // empty list (a context built where the cwd is unreadable, or a host that
+    // calls setModuleSearchPaths({})) simply disables file discovery.
+    std::error_code ec;
+    const std::string cwd = std::filesystem::current_path(ec).string();
+    if (!ec && !cwd.empty())
+      m_moduleSearchPaths.push_back(cwd);
     registerBuiltinModules(*this);
     // Application-wide verbose level, adjustable from QLang via set_verbose().
     setFunc("set_verbose", setVerboseFunc);
@@ -407,6 +459,214 @@ namespace {
   {
     bindThread();
     return m_pimpl->modules.all();
+  }
+
+  // --- Module search paths + external search callback ---
+  // SPEC §api "module search paths" and §api "external search callback";
+  // plan docs/plans/missing-features-plan.md §C8a. The context owns the path
+  // list and the callback; `findModule` is the one resolution order both the
+  // compiler and a host go through.
+
+  const std::vector<std::string> &QLangContext::moduleSearchPaths() const
+  {
+    bindThread();
+    return m_moduleSearchPaths;
+  }
+
+  void QLangContext::setModuleSearchPaths(std::vector<std::string> paths)
+  {
+    bindThread();
+    m_moduleSearchPaths = std::move(paths);
+  }
+
+  void QLangContext::addModuleSearchPath(std::string dir)
+  {
+    bindThread();
+    m_moduleSearchPaths.push_back(std::move(dir));
+  }
+
+  void QLangContext::setModuleSearchCallback(ModuleSearchCallback callback)
+  {
+    bindThread();
+    m_moduleSearchCallback = std::move(callback);
+  }
+
+  const QLangContext::ModuleSearchCallback &
+  QLangContext::moduleSearchCallback() const
+  {
+    bindThread();
+    return m_moduleSearchCallback;
+  }
+
+  // Every module `mod` itself imports, each name resolved through findModule
+  // (SPEC §api "module search paths"; plan C8a). An image's import table names
+  // the DEFINING module of every name it bound, and only `.ql` imports appear
+  // there — a C++ module's names become native slots — so the table is the
+  // image's complete dependency list. Each dependency goes through the same
+  // order (registry, callback, paths); one that resolves nowhere is reported
+  // against the module that asked for it, because the link would otherwise fail
+  // later saying only that a module is not loaded. Recursion terminates on the
+  // registry: `mod` is registered before its dependencies are walked, so a cycle
+  // finds it already resolved (and checkImportCycles still rejects the graph).
+  static void resolveModuleDependencies(QLangContext &ctx,
+                                        const LoadedModule &mod)
+  {
+    std::unordered_set<std::string> seen;
+    for (const ImportEntry &imp : mod.program.imports)
+    {
+      if (imp.module.empty() || !seen.insert(imp.module).second)
+        continue;
+      if (ctx.findModule(imp.module))
+        continue;
+      std::string from = "module '" + mod.program.moduleName + "'";
+      if (!mod.path.empty())
+        from += " (found at " + mod.path + ")";
+      throw QLangError(QLangErrorKind::Io, 0, 0,
+                       from + " imports module '" + imp.module +
+                           "', which could not be found in the module search "
+                           "paths");
+    }
+  }
+
+  std::shared_ptr<LoadedModule>
+  QLangContext::findModule(const std::string &name)
+  {
+    bindThread();
+    if (name.empty())
+      return nullptr;
+
+    // 1. A registered C++ module outranks every file (SPEC §api "module search
+    //    paths", order step 1). It is not an image, so the answer is "nothing
+    //    to load" — the caller binds the module's natives instead. This is also
+    //    why the callback cannot shadow a C++ module.
+    for (const auto &m : m_modules)
+      if (m.name == name)
+        return nullptr;
+
+    // 2. Already resolved under this name, or already in the registry under its
+    //    own (step 2 — the host may have loaded it with loadProgramFile).
+    if (auto loaded = m_pimpl->modules.resolved(name))
+      return loaded;
+    if (auto loaded = m_pimpl->modules.find(name))
+      return loaded;
+
+    // What a successful resolution does, however the image was found: register
+    // it under its own declared name, cache it under the name that was asked
+    // for, and bring in whatever it imports.
+    // `hostSupplied` marks the callback's image: one the host hands over that
+    // is ALREADY registered stays registered if this resolution fails — the
+    // host put it there, not us.
+    auto accept = [this, &name](std::shared_ptr<LoadedModule> mod,
+                                bool hostSupplied = false)
+    {
+      if (mod->program.moduleName.empty())
+        throw QLangError(
+            QLangErrorKind::Io, 0, 0,
+            "module '" + name + "': the loaded image declares no module name");
+      const auto existing = m_pimpl->modules.find(mod->program.moduleName);
+      if (existing && existing != mod)
+        throw QLangError(QLangErrorKind::Io, 0, 0,
+                         "module '" + mod->program.moduleName +
+                             "' is already loaded");
+      if (!existing)
+        m_pimpl->modules.add(mod);
+      if (mod->program.moduleName != name)
+        trace(TRACE_FULL, "[MODULE] '%s' resolved as '%s'\n", name.c_str(),
+              mod->program.moduleName.c_str());
+      m_pimpl->modules.remember(name, mod);
+      try
+      {
+        resolveModuleDependencies(*this, *mod);
+      }
+      catch (...)
+      {
+        // A dependency resolved nowhere: the module is not left half-taken-in.
+        // `remove` undoes the registration (which `loadProgram` performs as it
+        // reads the image) and every cache entry pointing at it, under this or
+        // any other requested name; a host-supplied image that was already
+        // registered only loses this name's cache entry. Its own resolved
+        // dependencies stay registered — they are valid modules; only this
+        // resolution is undone.
+        if (hostSupplied && existing)
+          m_pimpl->modules.forget(name);
+        else
+          m_pimpl->modules.remove(mod->program.moduleName);
+        throw;
+      }
+      return mod;
+    };
+
+    // 3. The host's callback (SPEC §api "external search callback"), consulted
+    //    after the registry and before the paths so it can shadow a file.
+    if (m_moduleSearchCallback)
+    {
+      std::string err;
+      std::shared_ptr<LoadedModule> mod;
+      try
+      {
+        mod = m_moduleSearchCallback(name, err);
+      }
+      catch (const std::exception &e)
+      {
+        // The contract says the callback must not throw. A host that breaks it
+        // gets the exception reported as a resolution failure rather than
+        // unwound through the caller.
+        mod = nullptr;
+        err = std::string("the module search callback threw: ") + e.what();
+      }
+      catch (...)
+      {
+        mod = nullptr;
+        err = "the module search callback threw an unknown exception";
+      }
+      if (mod)
+      {
+        trace(TRACE_FULL, "[MODULE] '%s' supplied by the search callback\n",
+              name.c_str());
+        return accept(mod, /*hostSupplied=*/true);
+      }
+      if (!err.empty())
+        throw QLangError(QLangErrorKind::Io, 0, 0,
+                         "module '" + name + "': " + err);
+      // nullptr + empty error: not found, continue with the paths.
+    }
+
+    // 4. The search paths, in order; within a directory `.qlc` before `.ql`.
+    std::string sourceHit; // the first `<name>.ql` seen, reported below
+    for (const std::string &dir : m_moduleSearchPaths)
+    {
+      const std::string base = dir.empty() ? std::string(".") : dir;
+      std::error_code ec;
+      if (!std::filesystem::is_directory(base, ec))
+        continue; // a directory that is not there is skipped, not an error
+      const std::string image =
+          (std::filesystem::path(base) / (name + ".qlc")).string();
+      std::error_code iec;
+      if (std::filesystem::is_regular_file(image, iec))
+      {
+        // The first match wins, so an image that is there but cannot be taken
+        // in is reported, not skipped: silently falling through to a
+        // same-named file further down the list would run something else.
+        trace(TRACE_FULL, "[MODULE] '%s' found at %s\n", name.c_str(),
+              image.c_str());
+        return accept(loadProgramFile(image));
+      }
+      const std::string source =
+          (std::filesystem::path(base) / (name + ".ql")).string();
+      std::error_code sec;
+      if (sourceHit.empty() && std::filesystem::is_regular_file(source, sec))
+        sourceHit = source;
+    }
+
+    if (!sourceHit.empty())
+      throw QLangError(
+          QLangErrorKind::Io, 0, 0,
+          "module '" + name + "' was found at '" + sourceHit +
+              "', but resolving a .ql source file is not implemented yet: "
+              "compile it to .qlc (plan C8b) or load it with loadProgramFile");
+
+    trace(TRACE_FULL, "[MODULE] '%s' not found\n", name.c_str());
+    return nullptr;
   }
 
   bool QLangContext::has(const std::string &name) const
@@ -641,7 +901,11 @@ namespace {
     // clear().
     m_pimpl->types.clear();
     // Loaded `.qlc` libraries die with the C++ modules they were resolved
-    // against (their native slots point at those functions).
+    // against (their native slots point at those functions), and so does the
+    // resolution cache that keyed them by requested name. The search paths and
+    // the search callback do NOT: they are host configuration, not program
+    // state, so a host does not have to re-point the context at its libraries
+    // after every clear() (SPEC §api "module search paths").
     m_pimpl->modules.clear();
   }
 

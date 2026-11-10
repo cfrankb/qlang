@@ -1,3 +1,51 @@
+## Round 67 (2026-11-10)
+
+**C8a lands — the engine can now *find* a module nobody loaded: search paths, the external
+search callback, and `findModule` (plan `docs/plans/missing-features-plan.md` §C8; spec
+`docs/spec/07-api.md` `## module search paths` + `## external search callback`).**
+No spec change, no opcode, no `.qlc` change — Round 66 settled the contract; this round is
+the C++ surface, the compiler hook, and the driver.
+
+- **`QLangContext` (the whole new surface).** `moduleSearchPaths()` / `setModuleSearchPaths()`
+  / `addModuleSearchPath()` — the list defaults to the working directory at construction, a
+  directory that does not exist is skipped, an empty entry means the working directory, and
+  `clear()` keeps the paths (host configuration, like registered modules).
+  `setModuleSearchCallback()` / `moduleSearchCallback()` — the spec's prototype as
+  `std::function<std::shared_ptr<LoadedModule>(const std::string &modulename, std::string &error)>`;
+  `nullptr` + empty `error` continues to the paths, `nullptr` + message stops and reports, and
+  a **throwing** callback is caught and turned into a resolution error (the must-not-throw
+  rule is enforced, not assumed). `findModule(name)` resolves in the spec's order — registered
+  C++ module (answered `nullptr`: the caller binds it as natives, not as an image) → resolved
+  cache → registry → callback → search paths in order, `<name>.qlc` (via `loadProgramFile`)
+  before `<name>.ql` within each directory, first match wins — once per context, cached under
+  both the requested name and the image's declared `program.moduleName`.
+- **Transitive dependencies.** After an image is taken in, every name in its `imports` is
+  resolved through the same order; a registry hit terminates a cycle, a missing dependency is
+  an error naming both sides, and the failed module is rolled back out of the registry (a
+  callback-supplied image keeps its own registration and loses only the cache entry —
+  `loadProgram` registers as it loads, so the rollback must not undo the host's registration).
+- **Q36 partially exercised.** A `foo.qlc` declaring `MODULE_NAME = "bar"` registers as `bar`
+  and is found under both names; the compiler records the alias (`import foo` binds the image
+  declared as `bar`). The question stays open for C8b's *discovered sources* (warning policy,
+  missing `MODULE_NAME`, callback input).
+- **`.ql` is found but refused.** A discovered `[modulename].ql` is recorded, and resolution
+  ends with an `Io` error pointing at **C8b** — the nested compile (reentrancy, in-flight
+  cycle set, error provenance) is not implemented, so the spec's source search is
+  half-delivered by design (Q23's split).
+- **Compiler.** `compileImport` asks `m_scope->findModule` for a name unknown to C++ modules
+  and the registry; a resolution failure surfaces as a parse error at the `import` statement,
+  and `undefined module '<n>'` now lists the searched paths. `checkImportCycles` needed no
+  change — discovered images are in the registry before the entry compiles.
+- **Driver.** `qlang_run --module-path <dir>` (repeatable; a non-directory warns and is
+  skipped) and `--no-module-search`; `--import <lib.qlc>` is **deprecated** but still
+  functional — C8a retires it per the plan.
+- **Tests + demo.** New `module_search` ctest suite, **81 checks** (path order, `.qlc`-before-`.ql`,
+  missing-dir skip, cwd default, callback three-row contract + throw guard, precedence
+  C++ > callback > file, alias registration, transitive deps + rollback, cycle termination,
+  `.ql` refusal, `clear()` keeping paths). New demo `examples/module_search.cpp` (disk
+  discovery, a callback shadowing a file, a C++ module beating the callback — consulted 0
+  times). ctest matrix 53 → **54** entries, 54/54 green (`perf` skipped); `tests.md` updated.
+
 ## Round 66 (2026-11-09)
 
 **Spec only — the module search path / external search callback contract is settled (C8, Q23).**

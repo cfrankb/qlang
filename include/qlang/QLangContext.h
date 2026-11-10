@@ -185,6 +185,17 @@ namespace qlang
     // True when the current level is >= minLevel (used to gate trace output).
     bool isAt(int minLevel) const { return m_verboseLevel >= minLevel; }
 
+    // Gated diagnostic emit (mirrors QLangVM::trace / QLangCompiler::trace):
+    // printf-style output to stderr only when the level is >= minLevel. Used
+    // by the context's own diagnostics — module resolution (plan C8a).
+    template <typename... Args>
+    void trace(int minLevel, const char *fmt, Args &&...args) const {
+      if (!isAt(minLevel)) return;
+      char buf[2048];
+      int n = std::snprintf(buf, sizeof(buf), fmt, std::forward<Args>(args)...);
+      if (n > 0) std::fputs(buf, stderr);
+    }
+
     // Infinite-loop step limit for the VM. The VM reads this live at every
     // step, so it can be lowered from QLang via set_max_steps(n) (or raised)
     // and the change takes effect immediately — useful for tests that want a
@@ -246,6 +257,55 @@ namespace qlang
     const LoadedModule *loadedModule(const std::string &name) const;
     // Every loaded module, in load order.
     std::vector<std::shared_ptr<LoadedModule>> loadedModules() const;
+
+    // Module search paths (SPEC §api "module search paths"; plan C8a).
+    //
+    // Where the engine looks for a module nobody loaded. The list defaults to
+    // the working directory at construction; `addModuleSearchPath` appends.
+    // A path is a directory: one that does not exist (or is not a directory)
+    // is skipped rather than an error, and an empty entry means the working
+    // directory. Paths are host configuration, so clear() keeps them.
+    const std::vector<std::string> &moduleSearchPaths() const;
+    void setModuleSearchPaths(std::vector<std::string> paths);
+    void addModuleSearchPath(std::string dir); // append
+
+    // External search callback (SPEC §api "external search callback"): lets a
+    // host supply modules from a non-standard filesystem (a Qt `:/...` resource,
+    // an archive, an embedded table). The callback is consulted between the
+    // registry and the search paths, so it can supply or shadow a file module
+    // but never a C++ module the host registered. It must not throw — a
+    // failure is reported through `error`:
+    //
+    //   module          resolved, registered under its own `program.moduleName`
+    //   nullptr + ""    not found: resolution continues with the search paths
+    //   nullptr + msg   found but unusable: resolution stops and reports msg
+    //
+    // Assigning nullptr restores the default (filesystem search only).
+    using ModuleSearchCallback = std::function<std::shared_ptr<LoadedModule>(
+        const std::string &modulename, std::string &error)>;
+    void setModuleSearchCallback(ModuleSearchCallback callback);
+    const ModuleSearchCallback &moduleSearchCallback() const;
+
+    // Resolve `name` to a loaded module (SPEC §api "module search paths";
+    // plan C8a). The order is the spec's: a registered C++ module (answered
+    // nullptr — the caller binds it as natives, not as an image), an entry
+    // already in the registry, the search callback, then the search paths in
+    // order, trying `<name>.qlc` before `<name>.ql` within each directory.
+    // A `.qlc` hit is taken in by loadProgramFile; a `.ql` hit is reported as
+    // unresolvable, because compiling a discovered source file is plan C8b.
+    //
+    // Resolution happens once per context: the result is cached under the
+    // requested name, so a second request for the same name — or for the
+    // module's own declared name — reuses it even when the two differ. The
+    // image's own imports are resolved transitively through the same order, so
+    // a discovered library's dependencies arrive with it; a dependency that
+    // cannot be found is an error naming the module that asked for it.
+    //
+    // Returns nullptr when nothing matched (a C++ module, or simply absent).
+    // Throws QLangError(Io) when a candidate was found but could not be used:
+    // the callback reported a reason, an image is malformed, or a transitive
+    // dependency is missing.
+    std::shared_ptr<LoadedModule> findModule(const std::string &name);
 
     // External C++ type registration (docs/EXTERNAL_TYPES.md).
     //
@@ -377,6 +437,11 @@ namespace qlang
     mutable std::thread::id m_thread;
     void bindThread() const;
     std::vector<Module> m_modules;
+    // Module search paths + the external search callback (SPEC §api "module
+    // search paths", "external search callback"; plan C8a). Host configuration:
+    // clear() drops the module registry but keeps both.
+    std::vector<std::string> m_moduleSearchPaths;
+    ModuleSearchCallback m_moduleSearchCallback;
     // Signal connection registry (docs/spec/17-signals.md): handle ->
     // connection. The handle is a monotonically increasing int (its order is
     // the delivery order); it does not wrap in practice.

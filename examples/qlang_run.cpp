@@ -4,6 +4,7 @@
 //
 //   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>]
 //             [--asm <file.qla>] [--asm-level <0-5>] [--rotate]
+//             [--module-path <dir>]... [--no-module-search]
 //             [--import <lib.qlc>]... file.ql | file.qlc [lib.qlc]...
 //
 // A .ql input drives the pipeline directly (parse -> compile -> execute) so
@@ -11,13 +12,17 @@
 // writer. A .qlc input (QLC1 magic) is loaded with readQlc, its native
 // functions are re-bound by name, and the image is executed as-is.
 //
-// Library modules (external-modules plan v4 Phase 3b) are given as --import
-// arguments or as extra positional .qlc files. Each is loaded into the
-// context's module registry BEFORE the entry is compiled, so `import <name>`
-// resolves against its export table; the entry's cross-module references are
-// then merged with the loaded images by QLangLinker. A merged program is
-// runnable but not serializable (.qlc v9 has no section for the init
-// sequence), so --output is rejected for it.
+// Library modules are found, not named: an `import <name>` the context cannot
+// answer from its registry is resolved against the module search paths
+// (SPEC §api "module search paths"; plan C8a), which default to the working
+// directory and are extended with --module-path. A discovered image is
+// registered under its own declared name and its own imports are resolved with
+// it, so `qlang_run app.ql` needs no library arguments at all. --import (and
+// extra positional .qlc files) still loads an image explicitly — useful for a
+// library outside every search path — but is no longer required. The entry's
+// cross-module references are then merged with every loaded image by
+// QLangLinker. A merged program is runnable but not serializable (.qlc v9 has
+// no section for the init sequence), so --output is rejected for it.
 // Trace output goes to stderr; profile output goes to stderr and, when a
 // .qla listing is requested, is appended to that file as well. The script's
 // own program output (print/println) goes to stdout and is never affected.
@@ -36,6 +41,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -103,8 +109,18 @@ namespace
               << "                             merged import table and one block\n"
               << "                             per linked module (where the\n"
               << "                             linker placed it, its exports)\n"
-              << "  --import <lib.qlc>  load a compiled module image so the entry\n"
-              << "                        can `import` from it (repeatable; extra\n"
+              << "  --module-path <dir> add <dir> to the module search paths,\n"
+              << "                        which `import <name>` resolves against\n"
+              << "                        after the registry (repeatable). The\n"
+              << "                        list starts as the working directory;\n"
+              << "                        a directory is searched for <name>.qlc\n"
+              << "                        before <name>.ql, and one that does not\n"
+              << "                        exist is skipped\n"
+              << "  --no-module-search  search no paths at all: `import <name>`\n"
+              << "                        resolves only against C++ modules and\n"
+              << "                        images named on this command line\n"
+              << "  --import <lib.qlc>  load one image explicitly instead of\n"
+              << "                        letting it be found (repeatable; extra\n"
               << "                        positional .qlc files are the same)\n"
               << "  --rotate            append a YYYYMMDDHHMM timestamp to --output/--asm file names\n"
               << "                        (e.g. cmp.qlc -> cmp_202611010513.qlc)\n"
@@ -1311,6 +1327,10 @@ int main(int argc, char **argv)
   // .qlc args). Loaded into the context's module registry before the entry is
   // compiled, so the compiler can resolve against their export tables.
   std::vector<std::string> moduleFiles;
+  // Directories `import <name>` searches after the registry (--module-path),
+  // and the switch that turns file discovery off entirely (--no-module-search).
+  std::vector<std::string> modulePaths;
+  bool noModuleSearch = false;
 
   for (int i = 1; i < argc; i++)
   {
@@ -1439,6 +1459,29 @@ int main(int argc, char **argv)
       continue;
     }
 
+    if (arg == "--module-path")
+    {
+      if (i + 1 >= argc)
+      {
+        std::fprintf(stderr, "%s: --module-path requires a directory\n", kAppName);
+        return 1;
+      }
+      modulePaths.push_back(argv[++i]);
+      continue;
+    }
+
+    if (arg.rfind("--module-path=", 0) == 0)
+    {
+      modulePaths.push_back(arg.substr(14));
+      continue;
+    }
+
+    if (arg == "--no-module-search")
+    {
+      noModuleSearch = true;
+      continue;
+    }
+
     if (!arg.empty() && arg[0] == '-' && arg != "-")
     {
       std::fprintf(stderr, "%s: unknown option '%s' (see --help)\n", kAppName, arg.c_str());
@@ -1492,12 +1535,31 @@ int main(int argc, char **argv)
   QLangContext ctx;
   ctx.setVerboseLevel(traceLevel);
 
+  // --- Module search paths ---
+  // The context starts with the working directory (SPEC §api "module search
+  // paths"); --no-module-search drops it, and --module-path then appends, so
+  // `--no-module-search --module-path X` searches X and nothing else. A
+  // directory that is not there is skipped by the resolver, so a typo is
+  // warned about rather than made fatal — the run may still find everything.
+  if (noModuleSearch)
+    ctx.setModuleSearchPaths({});
+  for (const std::string &p : modulePaths)
+  {
+    std::error_code ec;
+    if (!std::filesystem::is_directory(p, ec))
+      std::fprintf(stderr, "%s: warning: module path '%s' is not a directory, skipped\n",
+                   kAppName, p.c_str());
+    ctx.addModuleSearchPath(p);
+  }
+
   // --- Library modules ---
   // Every --import / extra positional image is registered in the context's
-  // module registry BEFORE the entry is compiled: `import <name>` resolves
-  // against a loaded image's export table (SPEC §bytecodes "import table
-  // (lookup)"), and a name that was never loaded is a compile error, so the
-  // driver has to load each library explicitly (plan v4 Phase 3b).
+  // module registry BEFORE the entry is compiled, so `import <name>` resolves
+  // against its export table (SPEC §bytecodes "import table (lookup)"). It is
+  // no longer the only way a library arrives: a name the registry cannot answer
+  // is looked for on the search paths while the entry compiles (plan C8a), so
+  // these arguments are for a library that lives outside every path — and the
+  // linker below merges whatever the registry holds by then either way.
   for (const std::string &mf : moduleFiles)
   {
     std::ifstream probe(mf, std::ios::binary);

@@ -17,13 +17,14 @@ Phases 0–5, not from the legacy monolith.
 | GitHub CI: library + smoke app + test suite against `msvc`, `g++`, `mingw`, `wasm`, `clang` | ✓ | three workflows, per the spec's "three separate ci/cd yaml" — see CI matrix |
 | Running on C++20 | ✓ | `CMAKE_CXX_STANDARD 20` (root `CMakeLists.txt`) |
 
-### Layout (verified 2026-11-09)
+### Layout (verified 2026-11-10)
 
 ```
 tests/
   unit/     spec_check.cpp spec_check2.cpp spec_cast_test.cpp gen_test.cpp
             range_check.cpp codec_check.cpp encoding_v6_test.cpp flag_flow_test.cpp
             builtin_table_test.cpp export_test.cpp linker_test.cpp
+            module_search_test.cpp
             class_str_test.cpp class_static_test.cpp signal_test.cpp
             test_module.cpp test_external.cpp test_inject.cpp test_dollar_operator.cpp
             test_native.cpp test_call.cpp
@@ -44,7 +45,7 @@ tests/
 `examples/` retains only real demos: `hello.cpp` (smoke app) and `qlang_run.cpp`
 (script runner / smoke-test app).
 
-### ctest matrix — 53 entries (53/53 green, 2026-11-09)
+### ctest matrix — 54 entries (54/54 green, 2026-11-10)
 
 Unit (27 harnesses + `smoke`):
 
@@ -68,6 +69,7 @@ Unit (27 harnesses + `smoke`):
 | `builtin_table` | `builtin_table_test` | `tests/unit/builtin_table_test.cpp` | 151 checks passed (added Round 61, `docs/plans/archive/external-modules-plan-v4.md` Phase 1; SPEC §bytecodes "table for build in function (qlang base)") — the library builtin-name table `k_builtin_names[]` and its four APIs (`builtinCount`/`builtinName`/`findBuiltin`/`builtinId`): id → name against an **independent oracle list** (so reordering `Builtin` without the matching table edit fails here, not silently in the disassembly), name uniqueness, `nullptr` for out-of-range ids, the round trip through both lookups incl. the `str`/`int` aliases, exact case-sensitive matching (no case folding, no trim, no prefix match), the **−1-vs-throw split** (`findBuiltin` classifies, `builtinId` throws `unknown builtin function '<name>'`), and the compiler integration: the ids actually emitted for `len`/`toStr`/`str`/`int`/`toInt`/`type`/`println`, the **negative-slot** native path (`import math` + `min(3,1,4)` → `b < 0`, no builtin name, still runs — the guard for why the emit path classifies instead of resolving), `unknown function 'nope'` kept as a *compile* error rather than the table's throw, builtins inside closures not captured as free variables, and `deepcopy` lowering + its one-argument arity guard |
 | `export` | `export_test` | `tests/unit/export_test.cpp` | 88 checks passed (added Round 63, `docs/plans/archive/external-modules-plan-v4.md` Phase 3a; SPEC §bytecodes "keyword export" + "export table (lookup)") — both spec forms of `export` (the prefix on a `def` / `const` / assignment / arrow closure, the standalone `export NAME;`) and the entry each produces (`kind` = `Func`/`Const`/`Var`, `ref` = the function index or the global register — the handle a loader dereferences), in source order; forward references (the table is built in a pre-pass, so a standalone export may name a global declared later); the ten scope rejections (five inside a `def`/arrow closure/`class` body — the parser's body-depth guard — five inside a global-scope `if`/`for`/`while`/`switch` block — the compiler's pre-pass); `'<name>' is already exported` for a second export of the same name in any mix of forms; the exported-function rebind guard on assignment and on `++`/`--`; `MODULE_NAME` resolution (source > driver > `main`) and library mode (top level compiles as `<init>`, `MODULE_NAME` mandatory); the import table pinned **empty** (Phase 3a never populates it); and the whole table through the `.qlc` v9 write → read round trip |
 | `linker` | `linker_test` | `tests/unit/linker_test.cpp` | 126 checks passed (added Round 64 with 75, `docs/plans/archive/external-modules-plan-v4.md` Phase 3b; SPEC §bytecodes "external modules" + "import table (lookup)" + "technical specifications" 1–5) — the module registry (`loadProgram` from a stream / `loadProgramFile` from disk / a non-image file, `loadedModule` / `loadedModules` in load order, a duplicate module name, an image whose native-slot **name** this context cannot resolve, `clear()`), the merge (one concatenated function table, one pool folded through `valueKey` so a literal two modules share occupies **one** slot, one native-slot table deduped by name, disjoint per-module slices of the shared global register area), the rewrites (**Q32**: a 300-`def` entry pushes a merged function index past the 1-byte operand range, so the re-widening through `encodeRawStream()` is measured rather than assumed), the run (**Q35**: each module's `<init>` executes exactly once, dependencies first, before the entry's; **Q30**: an exported variable is one cell the defining module writes and the importer reads), and the rejections (already linked, not loaded, not linkable, `writeQlc` of a merge). **+51 in Round 65 (`getimport`/`callimport`):** the merged import table deduped by (defining module, exported name) — two importers of one export share one cell; every `callimport` is resolved away (into `callfn`, or into `makegen` with a closure synthesized from the merged function for an exported generator), so a merged program contains **no** `callimport`; `getimport` reads the merged cell at any depth and a write through an import is visible to the defining module, while rebinding an exported function name is refused; a module-A closure capturing a global used from module B; the transitive chain app → middle → leaf (a library may now import another `.ql`); and the **unlinked** form — both opcodes execute on a program the linker never touched, the shape a future runtime registry hands over |
+| `module_search` | `module_search_test` | `tests/unit/module_search_test.cpp` | 81 checks passed (added Round 67, `docs/plans/missing-features-plan.md` §C8a; SPEC §api "module search paths" + "external search callback") — the `QLangContext` search surface: the cwd default and `setModuleSearchPaths`/`addModuleSearchPath`, missing directories skipped, an empty entry meaning the working directory, `.qlc` taken before `.ql` within a directory and a `.ql` hit refused with an error naming plan C8b, first-match-wins across the path list, the callback's three-row contract (module / `nullptr`+"" continues / `nullptr`+msg stops and reports) and its throw guard, the precedence **C++ module > registry > callback > paths** (the callback consulted 0 times for a native module's name), resolution cached once per context under both the requested and the declared `MODULE_NAME` (a `foo.qlc` declaring `bar` found under both, `import foo` binding it), transitive dependency resolution across directories with rollback of a failed module (a callback-supplied image keeps its own registration), a dependency cycle terminated by the registry, `clear()` dropping the registry but keeping paths + callback, and the compiler integration: `import` resolving through `findModule`, a resolution failure reported at the `import` statement, and `undefined module` listing the searched paths |
 | `external` | `test_external` | `tests/unit/test_external.cpp` | 49 checks passed (incl. `registerEnum` injection, Round 41) |
 | `test_inject` | `test_inject` | `tests/unit/test_inject.cpp` | `ALL PASS` |
 | `test_dollar_operator` | `test_dollar_operator` | `tests/unit/test_dollar_operator.cpp` | 8 passed |
@@ -174,7 +176,7 @@ gate or `./update-doc-hashes.sh --check` directly (Round 49).
 Triggers: `ci.yml` and `ci-wasm.yml` on push to `main`; `ci-msvc.yml` on push to
 `master` (the branch rename is still pending — Round 48).
 
-`-E perf` is a **regex**, so the clang and MSVC jobs run 51 of the 53 entries: it
+`-E perf` is a **regex**, so the clang and MSVC jobs run 52 of the 54 entries: it
 drops `perf` **and** `script_perf_stress`.
 
 The `windows-latest` image sets `core.autocrlf=true` in git's system config, so

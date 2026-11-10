@@ -98,6 +98,11 @@ target_link_libraries(qlang_example PRIVATE qlang)
 add_executable(qlang_run examples/qlang_run.cpp)
 target_link_libraries(qlang_run PRIVATE qlang)
 
+# Module search paths demo (plan C8a): finds a library by path, by host
+# callback, and shows a registered C++ module outranking both.
+add_executable(module_search examples/module_search.cpp)
+target_link_libraries(module_search PRIVATE qlang)
+
 enable_testing()
 add_test(NAME smoke COMMAND qlang_example)
 
@@ -220,6 +225,18 @@ add_test(NAME export COMMAND export_test)
 add_executable(linker_test tests/unit/linker_test.cpp)
 target_link_libraries(linker_test PRIVATE qlang)
 add_test(NAME linker COMMAND linker_test)
+
+# Module search paths + the external search callback (SPEC §api "module search
+# paths", §api "external search callback"; docs/plans/missing-features-plan.md
+# C8a): QLangContext::moduleSearchPaths/setModuleSearchPaths/addModuleSearchPath
+# and findModule's resolution order (C++ module, registry, callback, paths;
+# .qlc before .ql, missing directories skipped, first match wins, resolved once
+# per context), the callback's three answers and its precedence, transitive
+# resolution of a discovered image's own imports, MODULE_NAME vs filename, and
+# an entry that compiles, links and runs with nothing pre-loaded.
+add_executable(module_search_test tests/unit/module_search_test.cpp)
+target_link_libraries(module_search_test PRIVATE qlang)
+add_test(NAME module_search COMMAND module_search_test)
 
 # External C++ types (docs/EXTERNAL_TYPES.md): public-member setters,
 # read-only computed props, methods (incl. BoundMethod extraction), enum

@@ -2886,9 +2886,11 @@ void QLangCompiler::checkImportCycles() const {
 
 // The loaded `.ql` module an `import` names, honouring an `import m as a`
 // alias; nullptr when the name is not a loaded image (external-modules plan v4
-// Phase 3b). Finding a module by name *without* it having been loaded is the
-// registry's job (plan C8), so until that lands the driver has to load every
-// library explicitly — which is what `qlang_run` does.
+// Phase 3b). A name that is not loaded is not yet a failure: compileImport
+// hands it to QLangContext::findModule, which resolves it through the search
+// callback and the search paths (SPEC §api "module search paths"; plan C8a) —
+// and a module discovered that way is registered under its own declared name,
+// which is what the alias map also carries.
 const LoadedModule *QLangCompiler::qlModule(const std::string &name) const {
   if (!m_scope)
     return nullptr;
@@ -3046,13 +3048,51 @@ void QLangCompiler::compileImport(const StmtPtr &s) {
           QLangErrorKind::Parse, s->line, s->col,
           "module '" + s->importModule +
               "' is registered both as a C++ module and as a loaded .ql module");
+    // Nobody loaded it: ask the context to find it (SPEC §api "module search
+    // paths"; plan C8a). The C++ module lookup comes first precisely because a
+    // native module outranks a file, so discovery runs only when neither
+    // lookup above matched. A candidate that was found but could not be taken
+    // in (a malformed image, a callback refusal, a missing dependency) throws
+    // with the reason; re-thrown as a compile error so the report points at
+    // the `import`.
+    if (!ql && !mod && m_scope) {
+      std::shared_ptr<LoadedModule> found;
+      try {
+        found = m_scope->findModule(s->importModule);
+      } catch (const QLangError &e) {
+        throw QLangError(QLangErrorKind::Parse, s->line, s->col, e.what());
+      }
+      if (found) {
+        // The image is registered under its own declared name, which may
+        // disagree with the name the import asked for (`foo.qlc` declaring
+        // `MODULE_NAME = "bar"`). Record the mapping — the same shape an
+        // `import m as a` alias uses — so this import and every later
+        // reference to the requested name resolve (Q36: key on MODULE_NAME).
+        if (found->program.moduleName != s->importModule)
+          m_qlAliases[s->importModule] = found->program.moduleName;
+        ql = qlModule(s->importModule);
+      }
+    }
     if (ql) {
       compileQlImport(s, *ql);
       return;
     }
-    if (!mod)
-      throw QLangError(QLangErrorKind::Parse, 0, 0,
-                       "undefined module '" + s->importModule + "'");
+    if (!mod) {
+      // Say what was searched: "undefined module" alone cannot tell a host
+      // whether the name was wrong or the path list was.
+      std::string msg = "undefined module '" + s->importModule + "'";
+      if (m_scope) {
+        std::string searched;
+        for (const std::string &p : m_scope->moduleSearchPaths()) {
+          if (!searched.empty())
+            searched += ", ";
+          searched += p.empty() ? std::string("<working directory>") : p;
+        }
+        if (!searched.empty())
+          msg += " (searched " + searched + ")";
+      }
+      throw QLangError(QLangErrorKind::Parse, 0, 0, msg);
+    }
 
     // If alias specified, register the module under the alias name.
     if (!s->importAlias.empty()) {
