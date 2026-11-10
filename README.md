@@ -43,7 +43,7 @@ byte code encoding
 include/qlang/   Public API headers
 src/             Library implementation (libqlang.a)
 examples/        qlang_run driver, demos, and per-feature test suites
-docs/            spec/ (15 modules), compliance/, plans/, design docs
+docs/            spec/ (18 modules), compliance/, plans/, design docs
 SPEC.md          Stub — spec migrated to docs/spec/ (authoritative)
 SPEC_COMPLIANCE.md  Stub — tracker migrated to docs/compliance/ (SHA256-gated)
 ```
@@ -162,16 +162,28 @@ for the full open-items list.
 
 ## Driver
 
-`qlang_run <file> [args...]` runs a script. Flags:
+`qlang_run [options] <file.ql|file.qlc> [library ...]` runs a script or a
+compiled image; the contract is `docs/spec/18-qlang-run.md`. Flags:
 
 | Flag | Effect |
 |------|--------|
 | `--trace-level <0-3>` | Diagnostic verbosity on stderr (0 = off, 3 = full detail) |
 | `--profile` | Report parse / compile / execute times in ms |
-| `--output <file.qlc>` | Write the compiled bytecode (`QLC1` v1) |
-| `--asm <file.qla>` | Write a disassembly listing |
+| `-c` | Save the compiled entry image as `<stem>.qlc` |
+| `-a` | Save a disassembly listing as `<stem>.qla` |
 | `--asm-level <0-5>` | Disassembly detail (0 = instructions, 5 = register breakdown) |
-| `--rotate` | Append a timestamp to `--output`/`--asm` file names |
+| `--output-path <dir>` | Directory the `-c`/`-a` artifacts go to (created when missing); defaults to the entry file's own directory |
+| `-r`, `--rotate` | Append a timestamp to the `-c`/`-a` names (`cmp.qlc` → `cmp_202611010513.qlc`) |
+| `--module-path <dir>` | Add a directory `import <name>` resolves against (repeatable) |
+| `--no-module-search` | Resolve `import` only against C++ modules and images named on this command line |
+| `--import <lib>` | Load one module explicitly (a name, a directory, or a `.ql`/`.qlc` path) |
+
+Artifacts are named, not specified: `-c` and `-a` write `<entry stem>.qlc` and
+`<entry stem>.qla`. A module argument (`--import` or a positional library) is
+reused from its `.qlc` only when that image exists, carries this build's `.qlc`
+version and is not older than its `.ql`; otherwise the `.ql` is compiled, the
+image saved beside the source (never rotated) and then loaded. `-a` also lists
+every image generated that way.
 
 Exit codes 0–5 (completion → write failures) are documented in `--help`.
 
@@ -179,7 +191,7 @@ Exit codes 0–5 (completion → write failures) are documented in `--help`.
 
 | Doc | Covers |
 |-----|--------|
-| `docs/spec/README.md` | The language itself — 15 modules, authoritative |
+| `docs/spec/README.md` | The language itself — 18 modules, authoritative |
 | `docs/compliance/README.md` | Spec ↔ implementation tracker (SHA256-gated) |
 | `docs/SERIALIZATION.md` | `.qlc` (bytecode) and `.qls` (state snapshot) formats, step counter |
 | `docs/EXTERNAL_TYPES.md` | C++ object import: the `ObjectOps` dispatch surface, ownership model |

@@ -28,6 +28,7 @@ defined against C++20.
 | [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
 | [16-strict_typing.md](16-strict_typing.md) | strict typing | `0e2c24e5d5121b784c31561d2a9b94bf32e52eb518df2b9f65531c11eafed4fd` |
 | [17-signals.md](17-signals.md) | signals | `ede443b5ab88d73af308203e90444a56c0593e66459d8ed60d07f6fef0815e1d` |
+| [18-qlang-run.md](18-qlang-run.md) | qlang_run loader | `84e80170f2d4959d01fea220db6daf6fa44d72bbfc46f1889b234cab22cbbb9f` |
 
 Compliance: see [../compliance/README.md](../compliance/README.md).
 Migration plan: [../plans/archive/spec_migration_plan.md](../plans/archive/spec_migration_plan.md).

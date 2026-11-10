@@ -9,10 +9,10 @@ Phases 0–5, not from the legacy monolith.
 
 | Requirement (15-tests.md) | Status | Evidence |
 |---|---|---|
-| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (27 C++ harnesses), `tests/scripts/` (23 `.ql`), `tests/perf/`; `examples/` holds demo only — `hello.cpp` (smoke app) + `qlang_run.cpp` (runner) |
+| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (28 C++ harnesses), `tests/scripts/` (23 `.ql`), `tests/perf/`; `examples/` holds demo only — `hello.cpp` (smoke app) + `qlang_run.cpp` (runner) |
 | Tests run after every task (regression gate) | ✓ | ctest is the gate (AGENTS.md "Build & test"); CI on every push to `main` |
-| Regression tests exist | ✓ | 23 script regressions (`script_*`, driven by `qlang_run`) + all 27 unit harnesses |
-| Unit tests exist (features + edge cases) | ✓ | 27 unit suites — see ctest matrix below |
+| Regression tests exist | ✓ | 23 script regressions (`script_*`, driven by `qlang_run`) + all 28 unit harnesses + the `qlang_run_cli` driver gate |
+| Unit tests exist (features + edge cases) | ✓ | 28 unit suites — see ctest matrix below |
 | Performance tests: immutable baseline for parser/compiler/execution time, logged and compared | ✓ | `tests/perf/perf_bench.cpp` + committed `tests/perf/baseline.json`; ctest `perf` gate (±20% / 0.5 ms) |
 | GitHub CI: library + smoke app + test suite against `msvc`, `g++`, `mingw`, `wasm`, `clang` | ✓ | three workflows, per the spec's "three separate ci/cd yaml" — see CI matrix |
 | Running on C++20 | ✓ | `CMAKE_CXX_STANDARD 20` (root `CMakeLists.txt`) |
@@ -45,9 +45,9 @@ tests/
 `examples/` retains only real demos: `hello.cpp` (smoke app) and `qlang_run.cpp`
 (script runner / smoke-test app).
 
-### ctest matrix — 54 entries (54/54 green, 2026-11-10)
+### ctest matrix — 55 entries (55/55 green, 2026-11-10)
 
-Unit (27 harnesses + `smoke`):
+Unit (28 harnesses + `smoke`):
 
 | ctest | binary | source | result |
 |---|---|---|---|
@@ -92,10 +92,34 @@ Script (23): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
 
 Perf (1): `perf` — `perf_bench` compared against `baseline.json` (below).
 
+Driver (1): `qlang_run_cli` — `cmake -P cmake/check_qlang_run_cli.cmake` (script
+mode, no binary, so it runs on every CI job including MSVC): the `qlang_run`
+command-line contract of [`docs/spec/18-qlang-run.md`](../spec/18-qlang-run.md),
+driven the way a user drives it — **58 checks** over a generated fixture tree
+(one library, an entry importing it, a `main → aa → bb` chain, a script with no
+imports) asserting exit codes and observable side effects only: `--output` /
+`--asm` are pinned **gone** (exit 1, `unknown option`); `-c` / `-a` derive
+`<stem>.qlc` / `<stem>.qla` and default to the entry's own directory;
+`--output-path` (both spellings) is created and holds them; `-r` / `--rotate`
+stamp exactly those two names; `--import` compiles a `.ql`, saves the image
+beside the source and reloads it without recompiling, while a source newer than
+its image or an image of another `.qlc` version rebuilds, a bare name resolves on
+the module search paths (`.qlc` before `.ql`), an image with no source loads
+as-is, and an unresolvable name exits 2; `-a` lists every image it generates,
+transitive dependencies included, and a generated image is **never** rotated; a
+positional library behaves like `--import`; `-c` on an importing entry writes the
+entry's own module image and says the merged program is not serializable, and
+`-c` whose target is the file it read from skips the write instead of truncating
+it. The scratch directory is wiped and rebuilt on every run, so the gate is
+repeatable and never touches the source tree; the freshness cases sleep 1.1 s
+before touching a source, because the rule compares mtimes and some volumes
+stamp them to the second.
+
 Docs (1): `doc_hashes` — `cmake -P cmake/check_doc_hashes.cmake` (script mode,
 no binary): every SHA256 recorded in `docs/spec/README.md` and
 `docs/compliance/README.md` must match its module, every module must have a
-row, and no row may name a deleted file (24 modules). The hash is taken over
+row, and no row may name a deleted file (25 modules: 18 spec + 7 compliance).
+The hash is taken over
 **LF-normalized** content, so a working tree with CRLF line endings (Windows +
 `core.autocrlf=true`) is not reported as drift; `.gitattributes` pins `eol=lf`
 so a normal checkout matches the recorded hash byte for byte (Round 48).
@@ -176,8 +200,10 @@ gate or `./update-doc-hashes.sh --check` directly (Round 49).
 Triggers: `ci.yml` and `ci-wasm.yml` on push to `main`; `ci-msvc.yml` on push to
 `master` (the branch rename is still pending — Round 48).
 
-`-E perf` is a **regex**, so the clang and MSVC jobs run 52 of the 54 entries: it
-drops `perf` **and** `script_perf_stress`.
+`-E perf` is a **regex**, so the clang and MSVC jobs run 53 of the 55 entries: it
+drops `perf` **and** `script_perf_stress` (the `qlang_run_cli` gate is not
+matched by that regex, so those jobs do run it — which is why it is written in
+CMake script mode rather than as a C++ harness).
 
 The `windows-latest` image sets `core.autocrlf=true` in git's system config, so
 `actions/checkout` would rewrite every text file to CRLF; `.gitattributes`

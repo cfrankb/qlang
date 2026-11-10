@@ -94,7 +94,7 @@ install(FILES
 add_executable(qlang_example examples/hello.cpp)
 target_link_libraries(qlang_example PRIVATE qlang)
 
-# Small script runner: qlang_run [--trace-level <0-3>] [--output <file.qlc>] [--asm <file.qla>] [--asm-level <0-4>] file.ql
+# Small script runner: qlang_run [options] file.ql|file.qlc (see docs/spec/18-qlang-run.md)
 add_executable(qlang_run examples/qlang_run.cpp)
 target_link_libraries(qlang_run PRIVATE qlang)
 
@@ -343,6 +343,21 @@ foreach(ql_script IN LISTS QL_SCRIPTS)
   add_test(NAME script_${ql_name}
            COMMAND qlang_run ${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/${ql_script})
 endforeach()
+
+# Driver contract gate (docs/spec/18-qlang-run.md): drives the real qlang_run
+# executable over a generated fixture tree and checks the observable surface —
+# the removed --output/--asm, the -c/-a/-r/--output-path artifact rules, and the
+# --import compile-and-cache rule (an image is reused only when it carries this
+# build's .qlc version and is not older than its source). CMake script mode —
+# no binary, no shell — so it runs on every CI job including MSVC (same
+# reasoning as doc_hashes). The scratch directory is wiped and rebuilt by the
+# script on every run, so the suite is repeatable and never touches the source
+# tree.
+add_test(NAME qlang_run_cli
+         COMMAND ${CMAKE_COMMAND}
+                 -DQLANG_RUN=$<TARGET_FILE:qlang_run>
+                 -DQLANG_CLI_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/_qlang_run_cli
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_qlang_run_cli.cmake)
 
 # Performance baseline harness (SPEC # performance tests): median-of-5 per
 # stage (parse/compile/execute) over a fixed corpus, compared against

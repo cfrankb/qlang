@@ -1,16 +1,23 @@
-// qlang_run — small driver that runs a .ql (QLang) script or a .qlc
-// (compiled QLC1 v9 image) with a selectable diagnostic trace level,
-// optional stage timing, and bytecode output.
+// qlang_run — the .ql / .qlc loader (SPEC §qlang-run): runs a QLang script or
+// a compiled QLC1 v9 image with a selectable diagnostic trace level, optional
+// stage timing, and optional artifacts on disk.
 //
-//   qlang_run [--trace-level <0-3>] [--profile] [--output <file.qlc>]
-//             [--asm <file.qla>] [--asm-level <0-5>] [--rotate]
+//   qlang_run [--trace-level <0-3>] [--profile] [-c] [-a] [-r]
+//             [--output-path <dir>] [--asm-level <0-5>]
 //             [--module-path <dir>]... [--no-module-search]
-//             [--import <lib.qlc>]... file.ql | file.qlc [lib.qlc]...
+//             [--import <lib>]... file.ql | file.qlc [lib]...
 //
 // A .ql input drives the pipeline directly (parse -> compile -> execute) so
 // the app can time each stage and hand the compiled program to the .qlc
 // writer. A .qlc input (QLC1 magic) is loaded with readQlc, its native
 // functions are re-bound by name, and the image is executed as-is.
+//
+// Artifacts are named, not specified: -c saves the entry's compiled image and
+// -a writes a disassembly listing, both as <entry stem>.qlc / <entry stem>.qla
+// in --output-path, or in the entry source's own directory when no
+// --output-path is given. -r rotates those two names only (cmp.qlc ->
+// cmp_202611010513.qlc). An artifact is never written over the file the entry
+// was read from.
 //
 // Library modules are found, not named: an `import <name>` the context cannot
 // answer from its registry is resolved against the module search paths
@@ -18,11 +25,15 @@
 // directory and are extended with --module-path. A discovered image is
 // registered under its own declared name and its own imports are resolved with
 // it, so `qlang_run app.ql` needs no library arguments at all. --import (and
-// extra positional .qlc files) still loads an image explicitly — useful for a
-// library outside every search path — but is no longer required. The entry's
-// cross-module references are then merged with every loaded image by
-// QLangLinker. A merged program is runnable but not serializable (.qlc v9 has
-// no section for the init sequence), so --output is rejected for it.
+// extra positional library arguments) still loads a module explicitly — useful
+// for a library outside every search path — and now accepts a name, a
+// directory, or a .ql/.qlc path: the .qlc is used when it exists, carries the
+// current kQlcVersion and is not older than its .ql; otherwise the .ql is
+// compiled, its image is saved next to the source (never rotated) and that
+// image is loaded. With -a every image generated this way also gets a .qla
+// listing beside it. The entry's cross-module references are then merged with
+// every loaded image by QLangLinker; -c writes the entry's own module image
+// (the pre-link program), since a merged program is not serializable.
 // Trace output goes to stderr; profile output goes to stderr and, when a
 // .qla listing is requested, is appended to that file as well. The script's
 // own program output (print/println) goes to stdout and is never affected.
@@ -30,7 +41,7 @@
 // Exit codes:
 //   0  script ran to completion
 //   1  usage error (bad/missing arguments)
-//   2  script file could not be read
+//   2  a required file could not be read
 //   3  QLang error (lex/parse/type/runtime)
 //   4  bytecode file could not be written
 //   5  disassembly file could not be written
@@ -38,8 +49,10 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -47,6 +60,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -78,7 +92,7 @@ namespace
     std::cout << "Run a QLang (.ql) script or a compiled .qlc image (QLC1 v9).\n"
               << "\n"
               << "usage: " << prog
-              << " [options] <file.ql|file.qlc> [library.qlc ...]\n"
+              << " [options] <file.ql|file.qlc> [library ...]\n"
               << "\n"
               << "options:\n"
               << "  --trace-level <n>   diagnostic verbosity (stderr):\n"
@@ -87,9 +101,15 @@ namespace
               << "                        2 = VM loop + opcodes + returns\n"
               << "                        3 = full detail (generators, table ops, compile)\n"
               << "  --profile           report parse / compile / execute times in ms (stderr,\n"
-              << "                        also appended to the --asm .qla listing when given)\n"
-              << "  --output <file.qlc> write the compiled bytecode to <file.qlc>\n"
-              << "  --asm <file.qla>    write a disassembly listing to <file.qla>\n"
+              << "                        also appended to the -a .qla listing when given)\n"
+              << "  -c                  save the compiled entry image as <stem>.qlc in the\n"
+              << "                        output path (see --output-path). The entry's own\n"
+              << "                        module image is written, not the linked program\n"
+              << "  -a                  save a disassembly listing as <stem>.qla in the output\n"
+              << "                        path; every image --import generates gets one too\n"
+              << "  -r                  alias for --rotate\n"
+              << "  --output-path <dir> directory the -c/-a artifacts are written to (created\n"
+              << "                        when missing); defaults to the entry file's directory\n"
               << "  --asm-level <n>     disassembly detail (default 1):\n"
               << "                        0 = instructions only\n"
               << "                        1 = instructions + constants + function info\n"
@@ -119,17 +139,24 @@ namespace
               << "  --no-module-search  search no paths at all: `import <name>`\n"
               << "                        resolves only against C++ modules and\n"
               << "                        images named on this command line\n"
-              << "  --import <lib.qlc>  load one image explicitly instead of\n"
-              << "                        letting it be found (repeatable; extra\n"
-              << "                        positional .qlc files are the same)\n"
-              << "  --rotate            append a YYYYMMDDHHMM timestamp to --output/--asm file names\n"
-              << "                        (e.g. cmp.qlc -> cmp_202611010513.qlc)\n"
+              << "  --import <lib>      load one module explicitly instead of letting\n"
+              << "                        it be found (repeatable; extra positional\n"
+              << "                        library arguments are the same). <lib> is a\n"
+              << "                        bare name, a directory holding <name>.qlc /\n"
+              << "                        <name>.ql, or a .ql/.qlc path. A .qlc is used\n"
+              << "                        when it exists, carries this build's .qlc\n"
+              << "                        version and is not older than its .ql; the .ql\n"
+              << "                        is otherwise compiled, its image saved beside\n"
+              << "                        the source (never rotated) and then loaded\n"
+              << "  --rotate            append a YYYYMMDDHHMM timestamp to the -c/-a\n"
+              << "                        file names (e.g. cmp.qlc -> cmp_202611010513.qlc);\n"
+              << "                        images generated by --import are never rotated\n"
               << "  -h, --help          show this help and exit\n"
               << "\n"
               << "exit codes:\n"
               << "  0  script ran to completion\n"
               << "  1  usage error\n"
-              << "  2  script file could not be read\n"
+              << "  2  a required file could not be read\n"
               << "  3  QLang error (lex/parse/type/runtime)\n"
               << "  4  bytecode file could not be written\n"
               << "  5  disassembly file could not be written\n";
@@ -208,6 +235,195 @@ namespace
                       [](char a, char b)
                       { return std::tolower(static_cast<unsigned char>(a)) ==
                                std::tolower(static_cast<unsigned char>(b)); });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Artifact paths (SPEC §qlang-run). -c/-a name their files, they are not
+  // named on the command line: <entry stem>.qlc / <entry stem>.qla inside
+  // --output-path, or inside the entry file's own directory when that flag is
+  // absent ("the full qualified path of the original module").
+  // ---------------------------------------------------------------------------
+
+  // The directory a file lives in, made absolute ("tests/scripts/hello.ql" ->
+  // "<cwd>/tests/scripts"). A path with no directory component ("" for a bare
+  // "hello.ql") becomes the working directory, spelled ".".
+  std::string moduleDirectory(const std::string &path)
+  {
+    std::error_code ec;
+    std::filesystem::path p = std::filesystem::absolute(path, ec);
+    if (ec)
+      p = std::filesystem::path(path);
+    const std::filesystem::path dir = p.parent_path();
+    return dir.empty() ? std::string(".") : dir.string();
+  }
+
+  // One artifact path: <dir>/<stem><ext>, with the -r stamp inserted before the
+  // extension when rotation was asked for.
+  std::string outputName(const std::string &dir, const std::string &stem,
+                         const std::string &ext, bool rotateNames)
+  {
+    const std::string name = stem + ext;
+    const std::string path = (std::filesystem::path(dir) / name).string();
+    return rotateNames ? rotatePath(path) : path;
+  }
+
+  // True when two spellings name the same file. Guards against writing an
+  // artifact over the file it was read from (`qlang_run -c lib.qlc` with the
+  // default output path would otherwise rewrite the image in place). Falls back
+  // to a string compare when the filesystem cannot canonicalise either path.
+  bool samePath(const std::string &a, const std::string &b)
+  {
+    std::error_code ec;
+    const std::filesystem::path pa = std::filesystem::absolute(a, ec);
+    if (ec)
+      return a == b;
+    const std::filesystem::path pb = std::filesystem::absolute(b, ec);
+    if (ec)
+      return a == b;
+    const std::filesystem::path ra = std::filesystem::weakly_canonical(pa, ec);
+    if (ec)
+      return pa == pb;
+    const std::filesystem::path rb = std::filesystem::weakly_canonical(pb, ec);
+    return ec ? (pa == pb) : (ra == rb);
+  }
+
+  // Write a whole byte buffer, creating or truncating the file. Returns false
+  // with a message when the file cannot be opened or the write does not land.
+  bool writeBinaryFile(const std::string &path, const std::string &bytes,
+                       std::string &err)
+  {
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out)
+    {
+      err = "cannot open '" + path + "' for writing";
+      return false;
+    }
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    out.flush();
+    if (!out)
+    {
+      err = "cannot write '" + path + "'";
+      return false;
+    }
+    return true;
+  }
+
+  // The .qlc format version a file on disk carries: the header is "QLC1" plus a
+  // little-endian uint32 (docs/SERIALIZATION.md §4). 0 when the file cannot be
+  // opened, is shorter than the header, or has no QLC1 magic, so a caller
+  // comparing against kQlcVersion treats a corrupt or foreign file as stale.
+  uint32_t qlcFileVersion(const std::string &path)
+  {
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+      return 0;
+    unsigned char hdr[8] = {0};
+    in.read(reinterpret_cast<char *>(hdr), 8);
+    if (in.gcount() < 8 || std::memcmp(hdr, "QLC1", 4) != 0)
+      return 0;
+    uint32_t v = 0;
+    for (int i = 0; i < 4; i++)
+      v |= static_cast<uint32_t>(hdr[4 + i]) << (8 * i);
+    return v;
+  }
+
+  // SPEC §qlang-run "--import <lib>": reuse the image only when it is there,
+  // was written by this build of the codec, and is at least as new as the source
+  // it came from. Anything else — missing, v1-v8 or v10+, a touched .ql — means
+  // recompiling. `qlPath` is empty for a module that has no source beside its
+  // image, which leaves the version check as the only test. A filesystem error
+  // reading a timestamp counts as "not current" rather than as a failure: the
+  // source is then simply compiled again.
+  bool imageIsCurrent(const std::string &qlcPath, const std::string &qlPath)
+  {
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(qlcPath, ec))
+      return false;
+    if (qlcFileVersion(qlcPath) != kQlcVersion)
+      return false;
+    if (qlPath.empty())
+      return true;
+    const auto src = std::filesystem::last_write_time(qlPath, ec);
+    if (ec)
+      return false;
+    const auto img = std::filesystem::last_write_time(qlcPath, ec);
+    if (ec)
+      return false;
+    return !(src > img);
+  }
+
+  // Where a `--import <lib>` (or positional library) argument points: the module
+  // name it implies and the two files it can be satisfied from; either may be
+  // empty when it is not there.
+  struct ModuleFiles
+  {
+    std::string name; // name the argument implies (the file's stem)
+    std::string ql;   // source to compile when the image is missing or stale
+    std::string qlc;  // image to load when it is current
+  };
+
+  // Resolve a library argument to files. Two shapes:
+  //   a path with a .ql/.qlc suffix ("libs/gfx.ql", "./gfx.qlc") -- that file is
+  //            the one asked for, and the sibling extension is still probed so a
+  //            source newer than its image still forces a recompile;
+  //   any other name ("gfx", "libs/gfx") -- tried as spelled (relative to the
+  //            working directory) and then on every module search path,
+  //            <name>.qlc before <name>.ql, exactly as the engine's own resolver
+  //            orders them (SPEC §api "module search paths").
+  // The name is always the file's stem. SPEC §bytecodes "keyword export" makes
+  // the real name a property of the module (`export const MODULE_NAME`), which
+  // the loader honours over this guess; the stem only picks the file.
+  bool resolveModuleFiles(const std::string &spec,
+                          const std::vector<std::string> &searchPaths,
+                          ModuleFiles &out, std::string &err)
+  {
+    // Both extensions beside one base name, image first.
+    auto probe = [](const std::string &base)
+    {
+      ModuleFiles m;
+      m.name = moduleStem(base);
+      std::error_code ec;
+      if (std::filesystem::is_regular_file(base + ".qlc", ec))
+        m.qlc = base + ".qlc";
+      if (std::filesystem::is_regular_file(base + ".ql", ec))
+        m.ql = base + ".ql";
+      return m;
+    };
+
+    if (hasExtension(spec, ".qlc") || hasExtension(spec, ".ql"))
+    {
+      const bool image = hasExtension(spec, ".qlc");
+      ModuleFiles m = probe(spec.substr(0, spec.size() - (image ? 4 : 3)));
+      if (image)
+        m.qlc = spec;
+      else
+        m.ql = spec;
+      if (m.qlc.empty() && m.ql.empty())
+      {
+        err = "module file '" + spec + "' does not exist";
+        return false;
+      }
+      out = m;
+      return true;
+    }
+
+    std::vector<std::string> bases;
+    bases.push_back(spec);
+    for (const std::string &dir : searchPaths)
+      bases.push_back((std::filesystem::path(dir.empty() ? "." : dir) / spec).string());
+    for (const std::string &base : bases)
+    {
+      ModuleFiles m = probe(base);
+      if (!m.qlc.empty() || !m.ql.empty())
+      {
+        out = m;
+        return true;
+      }
+    }
+    // Wording note: the engine prefixes a callback failure with "module '<n>': ",
+    // so the names below carry the module rather than repeating it.
+    err = "no '" + spec + ".qlc' or '" + spec + ".ql' on the module search paths";
+    return false;
   }
 
   // ---------------------------------------------------------------------------
@@ -1288,6 +1504,286 @@ namespace
     return ss.str();
   }
 
+  // ---------------------------------------------------------------------------
+  // Module loading for --import and the positional library arguments
+  // (SPEC §qlang-run). An argument names a module, not a file: its current .qlc
+  // is loaded, and its .ql is otherwise compiled, saved beside the source (never
+  // rotated) and then loaded.
+  // ---------------------------------------------------------------------------
+
+  // What the loader needs to know from the command line.
+  struct ModuleLoader
+  {
+    std::vector<std::string> searchPaths;  // where a bare module name is found
+    int traceLevel = TRACE_OFF;            // trace level of a scratch context
+    int asmLevel = 1;                      // detail of a generated .qla
+    bool listing = false;                  // -a: every image gets a .qla
+  };
+
+  // Why a module could not be loaded, and the exit code the driver reports: 2
+  // when a file the argument names is simply not there, 3 for anything the
+  // engine rejected (a malformed image, a compile error, a duplicate name).
+  struct LoadFailure
+  {
+    std::string message;
+    int exitCode = 3;
+  };
+
+  std::shared_ptr<LoadedModule> ensureModule(
+      QLangContext &target, const std::string &spec,
+      const ModuleLoader &loader, LoadFailure &failure);
+
+  // Bring a module's own dependencies into `target` too. The engine does this for
+  // a module it discovers itself (QLangContext::findModule walks the image's
+  // import table), but a module the driver hands over through the search
+  // callback is registered as-is, and QLangLinker needs every module a merged
+  // image refers to present. Each dependency is resolved by the same rule as its
+  // dependent: a current image, otherwise compile the source.
+  bool resolveImportedModules(
+      QLangContext &target, const std::shared_ptr<LoadedModule> &mod,
+      const ModuleLoader &loader, LoadFailure &failure)
+  {
+    std::unordered_set<std::string> seen;
+    for (const ImportEntry &imp : mod->program.imports)
+    {
+      if (imp.module.empty() || !seen.insert(imp.module).second)
+        continue;
+      // A C++ module the host registered is bound as natives, never as an image
+      // (and never appears in an image's import table, but do not rely on it).
+      bool native = false;
+      for (const auto &m : target.modules())
+        if (m.name == imp.module)
+          native = true;
+      if (native || target.loadedModule(imp.module))
+        continue;
+      if (!ensureModule(target, imp.module, loader, failure))
+      {
+        failure.message =
+            "module '" + mod->program.moduleName + "' imports " + failure.message;
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Compile one library source into its .qlc image (and, with -a, a .qla listing
+  // beside it).
+  //
+  // The compile runs on a private context, not on the run context: a library's
+  // top level declares globals and the global table belongs to the context, so
+  // compiling there would leak them into the entry's global area. The private
+  // context gets the same search paths plus a search callback, which is where
+  // the driver answers a `.ql` hit the engine's own resolver refuses (plan C8b)
+  // — a library may depend on a library that has no image yet.
+  //
+  // Library mode is what makes the result loadable at all: the top level becomes
+  // `<init>` and `export const MODULE_NAME` is mandatory (QLangCompiler.h).
+  bool compileLibrary(const std::string &qlPath, const std::string &qlcPath,
+                      const ModuleLoader &loader, std::string &err)
+  {
+    std::ifstream in(qlPath, std::ios::binary);
+    if (!in)
+    {
+      err = "cannot open module source '" + qlPath + "'";
+      return false;
+    }
+    std::ostringstream src;
+    src << in.rdbuf();
+    const std::string source = src.str();
+
+    QLangContext scratch;
+    scratch.setVerboseLevel(loader.traceLevel);
+    scratch.setModuleSearchPaths(loader.searchPaths);
+    scratch.setModuleSearchCallback(
+        [&scratch, &loader](const std::string &name, std::string &error)
+            -> std::shared_ptr<LoadedModule>
+        {
+          LoadFailure failure;
+          std::shared_ptr<LoadedModule> mod =
+              ensureModule(scratch, name, loader, failure);
+          // The contract is "must not throw": report through `error` instead
+          // (QLangContext.h, "external search callback").
+          if (!mod && error.empty())
+            error = failure.message;
+          return mod;
+        });
+
+    std::vector<StmtPtr> ast;
+    try
+    {
+      ast = scratch.parse(source);
+    }
+    catch (const QLangError &e)
+    {
+      err = qlPath + ": " + e.what();
+      return false;
+    }
+
+    QLangCompiler compiler(std::move(ast), &scratch);
+    compiler.addExternalConsts({});
+    std::unordered_set<std::string> nativeNames;
+    for (const auto &[name, _] : scratch.nativeFuncs())
+      nativeNames.insert(name);
+    compiler.addExternalFuncs(nativeNames);
+    compiler.addModules(scratch.modules());
+    compiler.setModuleName(moduleStem(qlPath));
+    compiler.setLibraryMode(true);
+
+    CompiledProgram prog;
+    try
+    {
+      prog = compiler.compile();
+    }
+    catch (const QLangError &e)
+    {
+      err = qlPath + ": " + e.what();
+      return false;
+    }
+
+    // Wire the natives exactly as the entry's compile does, so the image's
+    // native-slot table names functions this (or any) context can re-resolve.
+    for (const auto &[name, func] : scratch.nativeFuncs())
+    {
+      auto it = compiler.nativeFuncIds().find(name);
+      if (it == compiler.nativeFuncIds().end())
+        continue;
+      const int idx = -1 - it->second;
+      while (prog.nativeFuncs.size() <= static_cast<size_t>(idx))
+        prog.nativeFuncs.push_back(nullptr);
+      prog.nativeFuncs[static_cast<size_t>(idx)] = func;
+    }
+    const auto &resolved = compiler.nativeFuncsResolved();
+    for (size_t i = 0; i < resolved.size(); i++)
+    {
+      while (prog.nativeFuncs.size() <= i)
+        prog.nativeFuncs.push_back(nullptr);
+      if (resolved[i])
+        prog.nativeFuncs[i] = resolved[i];
+    }
+
+    // The codec wants the slot table ordered by name (docs/SERIALIZATION.md
+    // §4.3); the compiler keeps it hashed.
+    const std::map<std::string, int> nativeIds(compiler.nativeFuncIds().begin(),
+                                               compiler.nativeFuncIds().end());
+    std::ostringstream os(std::ios::binary);
+    if (!writeQlc(os, prog, nativeIds))
+    {
+      err = qlPath + ": cannot build a .qlc image for module '" + prog.moduleName + "'";
+      return false;
+    }
+    const std::string bytes = os.str();
+    if (!writeBinaryFile(qlcPath, bytes, err))
+      return false;
+    std::fprintf(stderr, "module compiled: %s -> %s (%zu bytes, %zu functions)\n",
+                 qlPath.c_str(), qlcPath.c_str(), bytes.size(),
+                 prog.functions.size());
+
+    // SPEC §qlang-run: "if -a is defined then a disassembly listing is generated
+    // for all generated qlc files" — beside the image, never in --output-path.
+    if (loader.listing)
+    {
+      std::vector<std::string> srcLines;
+      std::istringstream ls(source);
+      std::string line;
+      while (std::getline(ls, line))
+        srcLines.push_back(line);
+      std::vector<ModuleImport> imports;
+      for (const auto &imp : compiler.importedModuleFuncs())
+      {
+        int slot = -1;
+        auto nit = compiler.nativeFuncIds().find(imp.func);
+        if (nit != compiler.nativeFuncIds().end())
+          slot = -1 - nit->second;
+        imports.push_back({imp.module, imp.func, slot, imp.fromClass});
+      }
+      const std::string text =
+          disassemble(prog, srcLines, loader.asmLevel,
+                      &compiler.registerReport(), imports,
+                      scratch.loadedModules());
+      const std::string listingPath =
+          (std::filesystem::path(moduleDirectory(qlcPath)) /
+           (moduleStem(qlcPath) + ".qla"))
+              .string();
+      if (!writeBinaryFile(listingPath, text, err))
+        return false;
+      std::fprintf(stderr, "disassembly written: %s (%zu functions)\n", listingPath.c_str(),
+                   prog.functions.size());
+    }
+    return true;
+  }
+
+  // Load one module into `target`, building its image first when it is missing,
+  // unreadable, of another .qlc version, or older than its source.
+  std::shared_ptr<LoadedModule> ensureModule(
+      QLangContext &target, const std::string &spec,
+      const ModuleLoader &loader, LoadFailure &failure)
+  {
+    ModuleFiles files;
+    std::string err;
+    if (!resolveModuleFiles(spec, loader.searchPaths, files, err))
+    {
+      failure = {err, 2};
+      return nullptr;
+    }
+    // The image always lives beside the source, under the name the file implies.
+    // It is never rotated: -r is for the entry's artifacts, and a rotated
+    // dependency image could never be found again by name.
+    const std::string home =
+        !files.qlc.empty() ? files.qlc : files.ql;
+    const std::string image =
+        (std::filesystem::path(moduleDirectory(home)) /
+         (files.name + ".qlc"))
+            .string();
+
+    // Already taken in from this exact file (the same module named twice, or a
+    // dependency shared by two libraries): reuse it, since loading a module name
+    // twice is an error.
+    for (const auto &sh : target.loadedModules())
+      if (!sh->path.empty() && samePath(sh->path, image))
+        return sh;
+
+    std::shared_ptr<LoadedModule> mod;
+    if (imageIsCurrent(image, files.ql))
+    {
+      try
+      {
+        mod = target.loadProgramFile(image);
+      }
+      catch (const QLangError &e)
+      {
+        failure = {image + ": " + e.what(), 3};
+        return nullptr;
+      }
+    }
+    else
+    {
+      if (files.ql.empty())
+      {
+        failure = {image + ": not a current .qlc image and no '" + files.name +
+                       ".ql' to compile",
+                   3};
+        return nullptr;
+      }
+      if (!compileLibrary(files.ql, image, loader, err))
+      {
+        failure = {err, 3};
+        return nullptr;
+      }
+      try
+      {
+        mod = target.loadProgramFile(image);
+      }
+      catch (const QLangError &e)
+      {
+        failure = {image + ": " + e.what(), 3};
+        return nullptr;
+      }
+    }
+    if (!resolveImportedModules(target, mod, loader, failure))
+      return nullptr;
+    return mod;
+  }
+
   // Profile report as plain text — the same lines the --profile flag prints
   // to stderr — so the block can also be appended to the .qla listing when
   // both --profile and --asm are given.
@@ -1320,11 +1816,14 @@ int main(int argc, char **argv)
   bool profile = false;
   bool rotate = false;
   int asmLevel = 1;
+  // -c / -a: save the entry's image and/or its disassembly listing. The names
+  // are derived (SPEC §qlang-run), only the directory is given (--output-path).
+  bool saveImage = false;
+  bool saveListing = false;
+  std::string outputPath;
   std::string file;
-  std::string output;
-  std::string asmOut;
-  // Library images the entry may `import` from (--import, extra positional
-  // .qlc args). Loaded into the context's module registry before the entry is
+  // Library modules the entry may `import` from (--import, extra positional
+  // arguments). Resolved into the context's module registry before the entry is
   // compiled, so the compiler can resolve against their export tables.
   std::vector<std::string> moduleFiles;
   // Directories `import <name>` searches after the registry (--module-path),
@@ -1375,43 +1874,39 @@ int main(int argc, char **argv)
       continue;
     }
 
-    if (arg == "--rotate")
+    // -r is the short form of --rotate (SPEC §qlang-run).
+    if (arg == "--rotate" || arg == "-r")
     {
       rotate = true;
       continue;
     }
 
-    if (arg == "--output")
+    if (arg == "-c")
+    {
+      saveImage = true;
+      continue;
+    }
+
+    if (arg == "-a")
+    {
+      saveListing = true;
+      continue;
+    }
+
+    if (arg == "--output-path")
     {
       if (i + 1 >= argc)
       {
-        std::fprintf(stderr, "%s: --output requires a file name\n", kAppName);
+        std::fprintf(stderr, "%s: --output-path requires a directory\n", kAppName);
         return 1;
       }
-      output = argv[++i];
+      outputPath = argv[++i];
       continue;
     }
 
-    if (arg.rfind("--output=", 0) == 0)
+    if (arg.rfind("--output-path=", 0) == 0)
     {
-      output = arg.substr(9);
-      continue;
-    }
-
-    if (arg == "--asm")
-    {
-      if (i + 1 >= argc)
-      {
-        std::fprintf(stderr, "%s: --asm requires a file name\n", kAppName);
-        return 1;
-      }
-      asmOut = argv[++i];
-      continue;
-    }
-
-    if (arg.rfind("--asm=", 0) == 0)
-    {
-      asmOut = arg.substr(6);
+      outputPath = arg.substr(14);
       continue;
     }
 
@@ -1490,18 +1985,10 @@ int main(int argc, char **argv)
 
     if (!file.empty())
     {
-      // Extra positional files are library modules (external-modules plan v4
-      // Phase 3b): the entry is the only source file, a library is always a
-      // compiled image, because a `.ql` has no export table to import from
-      // until it has been compiled.
-      if (!hasExtension(arg, ".qlc"))
-      {
-        std::fprintf(stderr,
-                     "%s: unexpected extra argument '%s' (one script file expected; "
-                     "library modules must be .qlc images)\n",
-                     kAppName, arg.c_str());
-        return 1;
-      }
+      // Extra positional arguments are library modules — the same as --import
+      // (SPEC §qlang-run): a bare name or a .ql/.qlc path. A `.ql` is compiled
+      // to its image first, which is what the old "library modules must be .qlc
+      // images" rule required the caller to do by hand.
       moduleFiles.push_back(arg);
       continue;
     }
@@ -1512,14 +1999,6 @@ int main(int argc, char **argv)
   {
     std::fprintf(stderr, "%s: missing script file (see --help)\n", kAppName);
     return 1;
-  }
-
-  if (rotate)
-  {
-    if (!output.empty())
-      output = rotatePath(output);
-    if (!asmOut.empty())
-      asmOut = rotatePath(asmOut);
   }
 
   std::ifstream in(file, std::ios::binary);
@@ -1552,31 +2031,53 @@ int main(int argc, char **argv)
     ctx.addModuleSearchPath(p);
   }
 
+  // --- Artifacts: where -c and -a write (SPEC §qlang-run) ---
+  // The names are derived from the entry file, never given: <stem>.qlc and
+  // <stem>.qla. --output-path says which directory; without it the entry's own
+  // directory is used ("the full qualified path of the original module"). -r
+  // rotates these two names only — an image --import generates is found again
+  // by name, so rotating it would hide it.
+  const std::string outDir =
+      outputPath.empty() ? moduleDirectory(file) : outputPath;
+  if ((saveImage || saveListing) && !outputPath.empty())
+  {
+    std::error_code ec;
+    std::filesystem::create_directories(outDir, ec);
+    if (ec && !std::filesystem::is_directory(outDir))
+    {
+      std::fprintf(stderr, "%s: cannot create output path '%s': %s\n", kAppName,
+                   outDir.c_str(), ec.message().c_str());
+      return 1;
+    }
+  }
+  const std::string entryStem = moduleStem(file);
+  const std::string imageOut =
+      saveImage ? outputName(outDir, entryStem, ".qlc", rotate) : std::string();
+  const std::string listingOut =
+      saveListing ? outputName(outDir, entryStem, ".qla", rotate) : std::string();
+
   // --- Library modules ---
-  // Every --import / extra positional image is registered in the context's
-  // module registry BEFORE the entry is compiled, so `import <name>` resolves
-  // against its export table (SPEC §bytecodes "import table (lookup)"). It is
-  // no longer the only way a library arrives: a name the registry cannot answer
-  // is looked for on the search paths while the entry compiles (plan C8a), so
-  // these arguments are for a library that lives outside every path — and the
-  // linker below merges whatever the registry holds by then either way.
+  // Every --import / extra positional argument is resolved into the context's
+  // module registry BEFORE the entry is compiled, so `import <name>` finds it
+  // there and resolves against its export table (SPEC §bytecodes "import table
+  // (lookup)"). A current image is loaded as-is; otherwise the source is
+  // compiled and its image saved beside it first (SPEC §qlang-run). These
+  // arguments are no longer the only way a library arrives: a name the registry
+  // cannot answer is looked for on the search paths while the entry compiles
+  // (plan C8a), and the linker below merges whatever the registry holds by then
+  // either way.
+  ModuleLoader loader;
+  loader.searchPaths = ctx.moduleSearchPaths();
+  loader.traceLevel = traceLevel;
+  loader.asmLevel = asmLevel;
+  loader.listing = saveListing;
   for (const std::string &mf : moduleFiles)
   {
-    std::ifstream probe(mf, std::ios::binary);
-    if (!probe)
+    LoadFailure failure;
+    if (!ensureModule(ctx, mf, loader, failure))
     {
-      std::fprintf(stderr, "%s: cannot open module file '%s'\n", kAppName, mf.c_str());
-      return 2;
-    }
-    probe.close();
-    try
-    {
-      ctx.loadProgramFile(mf);
-    }
-    catch (const QLangError &e)
-    {
-      std::fprintf(stderr, "%s: %s: %s\n", kAppName, mf.c_str(), e.what());
-      return 3;
+      std::fprintf(stderr, "%s: %s\n", kAppName, failure.message.c_str());
+      return failure.exitCode;
     }
   }
 
@@ -1719,6 +2220,18 @@ int main(int argc, char **argv)
   // DEFINING module (plan v4 Phase 3b); the linker merges those loaded images
   // with the entry program into one runnable program. A program that imports
   // nothing needs no link, so a single-file run is left exactly as it was.
+  // -c writes the entry's own module image, so it is snapshotted here: the link
+  // below replaces `compiled` with the merged program, which is runnable but not
+  // serializable (.qlc v9 has no section for the init sequence). A program that
+  // imports nothing needs no link at all, so for it the snapshot is the program.
+  std::optional<CompiledProgram> entryImage;
+  std::map<std::string, int> entryNativeIds;
+  if (saveImage)
+  {
+    entryImage = compiled;
+    entryNativeIds = nativeIds;
+  }
+
   bool linked = false;
   if (!compiled.imports.empty())
   {
@@ -1737,34 +2250,38 @@ int main(int argc, char **argv)
   }
   const auto t2 = Clock::now();
 
-  // --- Bytecode output ---
-  if (!output.empty())
+  // --- Bytecode output (-c) ---
+  if (saveImage)
   {
-    if (linked)
+    if (samePath(imageOut, file))
     {
-      // A merged program is runnable but not serializable: .qlc v9 has no
-      // section for the init sequence or the merged register slices, so
-      // writeQlc would reject it anyway. Say what to do instead.
-      std::fprintf(stderr,
-                   "%s: cannot write a linked program to '%s': the merged program is not a "
-                   ".qlc image (its init sequence is link-time information) — write each "
-                   "module's own image instead\n",
-                   kAppName, output.c_str());
-      return 4;
+      // The artifact would land on top of the file it was read from: running a
+      // .qlc in its own directory with -c. Report it instead of rewriting the
+      // image with itself.
+      std::fprintf(stderr, "%s: skipping bytecode output: '%s' is the file it was read from\n",
+                   kAppName, imageOut.c_str());
     }
-
-    size_t written = 0;
-    if (!writeBytecode(compiled, nativeIds, output, written))
+    else
     {
-      std::fprintf(stderr, "%s: cannot write bytecode file '%s'\n", kAppName, output.c_str());
-      return 4;
+      size_t written = 0;
+      if (!writeBytecode(*entryImage, entryNativeIds, imageOut, written))
+      {
+        std::fprintf(stderr, "%s: cannot write bytecode file '%s'\n", kAppName,
+                     imageOut.c_str());
+        return 4;
+      }
+      std::fprintf(stderr, "bytecode written: %s (%zu bytes, %zu functions)\n",
+                   imageOut.c_str(), written, entryImage->functions.size());
+      if (linked)
+        std::fprintf(stderr,
+                     "%s: note: '%s' is the entry module image; the linked program is not "
+                     "serializable (.qlc v9 has no init-sequence section)\n",
+                     kAppName, imageOut.c_str());
     }
-    std::fprintf(stderr, "bytecode written: %s (%zu bytes, %zu functions)\n",
-                 output.c_str(), written, compiled.functions.size());
   }
 
-  // --- Disassembly output ---
-  if (!asmOut.empty())
+  // --- Disassembly output (-a) ---
+  if (saveListing)
   {
     // .qlc input has no source text: level 2 source interleaving is simply
     // skipped, and the register breakdown (level 5) is unavailable.
@@ -1779,20 +2296,15 @@ int main(int argc, char **argv)
     const std::string text =
         disassemble(compiled, srcLines, asmLevel, report, moduleImports,
                     ctx.loadedModules());
-    std::ofstream out(asmOut, std::ios::trunc);
-    if (!out)
+    std::string err;
+    if (!writeBinaryFile(listingOut, text, err))
     {
-      std::fprintf(stderr, "%s: cannot write disassembly file '%s'\n", kAppName, asmOut.c_str());
-      return 5;
-    }
-    out.write(text.data(), static_cast<std::streamsize>(text.size()));
-    if (!out)
-    {
-      std::fprintf(stderr, "%s: cannot write disassembly file '%s'\n", kAppName, asmOut.c_str());
+      std::fprintf(stderr, "%s: cannot write disassembly file '%s': %s\n", kAppName,
+                   listingOut.c_str(), err.c_str());
       return 5;
     }
     std::fprintf(stderr, "disassembly written: %s (%zu functions)\n",
-                 asmOut.c_str(), compiled.functions.size());
+                 listingOut.c_str(), compiled.functions.size());
   }
 
   // --- Execute ---
@@ -1824,15 +2336,17 @@ int main(int argc, char **argv)
                     compiled.constants.size(), compiled.functions.size(),
                     msBetween(t3, t4), msBetween(t0, t4));
     std::fputs(text.c_str(), stderr);
-    if (!asmOut.empty())
+    if (saveListing)
     {
       // The listing was written before execution, so the profile block can
       // only be added now: execute time is not known until vm.run() returns.
-      std::ofstream aout(asmOut, std::ios::app);
+      // Only the entry's listing gets it — the images --import generated each
+      // keep their own listing beside them.
+      std::ofstream aout(listingOut, std::ios::app);
       if (!aout)
       {
         std::fprintf(stderr, "%s: cannot append profile to disassembly file '%s'\n",
-                     kAppName, asmOut.c_str());
+                     kAppName, listingOut.c_str());
         return 5;
       }
       aout << "\n" << text;
@@ -1840,7 +2354,7 @@ int main(int argc, char **argv)
       if (!aout)
       {
         std::fprintf(stderr, "%s: cannot append profile to disassembly file '%s'\n",
-                     kAppName, asmOut.c_str());
+                     kAppName, listingOut.c_str());
         return 5;
       }
     }
