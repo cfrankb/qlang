@@ -1,3 +1,58 @@
+## Round 66 (2026-11-09)
+
+**Spec only — the module search path / external search callback contract is settled (C8, Q23).**
+No code, no opcode, no `.qlc` change: `docs/spec/07-api.md` `## module search paths` +
+`## external search callback` were re-worded, and the C8 open item in `docs/plans/missing-features-plan.md`
+now has a decided scope. Round 65 finished the module system's *use* side; C8 is its front end —
+*finding* a module nobody named on the command line — and its spec text had been the Round-52 first
+pass, which left two of the plan's open questions unanswered and named a type that does not exist.
+
+- **What the host's edit changed.** Default path list = the working directory at context construction;
+  a C++ API to query and change it; and, with no callback assigned, native modules are looked up first
+  and the search paths second. The callback prototype moved from
+  `string searchCallback(string modulename)` to `QLangModule* loadModuleCallback(string modulename, string &error)`.
+- **What this round wrote into the spec.**
+  - The three methods are named (`moduleSearchPaths()` / `setModuleSearchPaths()` /
+    `addModuleSearchPath(std::string)`), and the order is given in full: **native (C++) module →
+    already-loaded registry entry → search paths in order**. Within a directory `[modulename].qlc`
+    (taken in by `loadProgramFile`) is tried **before** `[modulename].ql`; a directory that does not
+    exist is skipped, the first match wins. Resolution happens **once per context**, cached under the
+    resolved module's own name; an import cycle is an error (**Q26**).
+  - `QLangModule` is not a type in the codebase — the only candidates were `QLangContext::Module`
+    (a name + a map of `NativeFunc`, which cannot represent a `.ql` module at all) and `LoadedModule`
+    (a compiled image plus provenance, what the registry already stores). The spec now names
+    `std::shared_ptr<LoadedModule>`: the callback hands over exactly the object
+    `QLangContext::loadProgram` produces, and *shared* rather than raw removes the ownership question
+    the raw pointer raised.
+  - The `error` out-parameter is given a three-row contract: module = resolved; `nullptr` + empty
+    `error` = not found, continue to the search paths; `nullptr` + non-empty `error` = found but
+    unusable, stop and report. The callback sits **between** the registry and the paths, so it can
+    supply or shadow a file module but not a C++ module the host registered deliberately, and it must
+    not throw (**Q24**, **Q25** — both now settled by the spec rather than by a plan default).
+- **Q23 decided: C8 owns compile-from-source.** The spec searches for `[modulename].ql` (source) while
+  the callback returns a *loaded* module, so the engine must turn source into an image somewhere; the
+  alternative is to contradict the spec and search only for `.qlc`. The nested compile is cheap because
+  every piece exists: `QLangContext::parse()` is public, `QLangCompiler` +
+  `setLibraryMode`/`setModuleName` produce a `CompiledProgram`, `writeQlc` takes exactly what
+  `nativeFuncIds()` returns, and `loadProgram(istream)` re-resolves native **names** and registers the
+  result — so a discovered `.ql` round-trips through the serializer into the existing registry with no
+  new type and no version bump. The cost is the three things around it: **reentrancy** (`compileImport`
+  drives a second compiler while the first is mid-`compile()`), **cycles** (`checkImportCycles` walks
+  *loaded* images, so an A→B→A nested cycle recurses before any table exists — an in-flight set is
+  needed), and **error provenance** (a compile error inside a discovered file must report that file,
+  `docs/spec/12-errors-trace.md`). Split accordingly: **C8a** = path list + callback + order, `.qlc`
+  only, no compiler change, and it retires `qlang_run --import`; **C8b** = `.ql` discovery + the nested
+  compile.
+- **New open questions Q36–Q38** (both gate C8b only): whether a discovered file's stem may disagree
+  with its `export const MODULE_NAME`; what a discovered file with no `MODULE_NAME` is named; whether
+  the callback sees only the requested name or also the path list.
+- **Scope note.** C8 is *discovery*. `QLangContext::run()` still does not call `QLangLinker` (the
+  driver does), so the **runtime module registry** stays its own open item.
+- **Docs:** `docs/spec/07-api.md` re-worded (hash re-recorded this round); `docs/compliance/status.md`
+  C8 Open Item rewritten for the new callback contract; `docs/plans/missing-features-plan.md` §C8,
+  Phase 3 item 5, the inventory row, the dependency graph and the open-questions index updated for
+  Q23/Q24/Q25/Q26 and Q36–Q38.
+
 ## Round 65 (2026-11-09)
 
 **External-modules plan Phase 3c — the import table becomes *addressable*: `GETIMPORT` +

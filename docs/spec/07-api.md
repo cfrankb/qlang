@@ -276,7 +276,27 @@ See [docs/spec/17-signals.md](17-signals.md)
 
 API C++ will provide a means to set the search paths to find modules.
 
-Since all modules in the POC are single file then it will simply search for `[modulename].ql` in all the directories listed in the search paths.
+```cpp
+const std::vector<std::string> &moduleSearchPaths() const;
+void setModuleSearchPaths(std::vector<std::string> paths);
+void addModuleSearchPath(std::string dir);  // append
+```
+
+default search paths includes `the current directory` (pwd) — the working
+directory at the moment the context is constructed.
+
+provide C++ API to query the search paths and change them.
+
+if no callback is specified, the default behavior is to look up native modules
+first then try to find the module in the search path. The full order is:
+
+1. a **native (C++) module** registered with `registerModule` / `importModule`;
+2. a module **already in the registry** (`loadProgram` / `loadProgramFile`);
+3. the **search paths**, in order.
+
+Since all modules in the POC are single file then it will simply search for `[modulename].ql` in all the directories listed in the search paths. Within a directory the engine tries `[modulename].qlc` — a compiled image, taken in by `loadProgramFile` — before `[modulename].ql`, which it compiles into an image and takes in by the same path. A directory that does not exist is skipped, not an error; the first match wins.
+
+A module is resolved **once per context**: the first successful resolution is cached under the resolved module's own name (`program.moduleName`) and a later request for that name reuses it. An import cycle is an error.
 
 ## external search callback
 
@@ -284,4 +304,16 @@ An external search function can be assigned to allow qlang to find modules embed
 
 callback prototype
 
-`string searchCallback(string modulename)`
+`std::shared_ptr<LoadedModule> loadModuleCallback(const std::string &modulename, std::string &error)`
+
+return the loaded module if successful. `LoadedModule` (`qlang/QLangBytecodeIO.h`) is a compiled module image plus its provenance — the same object `QLangContext::loadProgram` produces and the module registry keeps. The context holds the result **shared**: the callback may build it as a local and return it, and it stays alive as long as the context or a program built against it does. A raw pointer is not used because the registry already stores `shared_ptr<LoadedModule>`.
+
+return `nullptr` if module not found and loading. `error` contains the cause if any:
+
+| return | `error` | meaning |
+|---|---|---|
+| a module | (unused) | resolved; the registry keys it under `program.moduleName` |
+| `nullptr` | empty | not found — resolution continues with the search paths |
+| `nullptr` | non-empty | found but unusable — resolution stops and the message is reported |
+
+The callback is consulted **after** the native-module and registry lookups and **before** the search paths, so it can supply or shadow a file module but not a C++ module the host registered deliberately. It must not throw — a failure is reported through `error`. Assigning `nullptr` restores the default behaviour.

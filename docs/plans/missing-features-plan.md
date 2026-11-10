@@ -6,7 +6,7 @@ the whole of A4 `deepcopy`/value semantics; those items moved to §D, the phases
 were renumbered, and C8 (module search paths) was added. Overview/roadmap for
 every spec'd-but-unimplemented item tracked in `docs/compliance/status.md`
 (Open Items + Not Yet Implemented). Unresolved decisions are collected in
-[Open questions](#open-questions) (Q1–Q28), each with a default to adopt.
+[Open questions](#open-questions) (Q1–Q38), each with a default to adopt.
 This is an **overview**: each phase gets a detailed implementation plan before
 work starts (precedent: the movi/addi/subi plans in `docs/plans/archive/`).
 
@@ -105,7 +105,7 @@ warning toggle still exists is **Q27**.
 | C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | draft spec — C++ API "to be provided"; examples show runtime exceptions at call/return sites; **now also owns the duplicate-declaration diagnostic (B2) and warning emission (B1)** |
 | C5 | Inheritance (`ObjectOps::base`) | `10-classes.md` v1 restrictions, `EXTERNAL_TYPES.md` §10.3 | reserved, returns null; base-chain walk deferred to v2 |
 | C7 | Enum-name string form for enum-valued properties | `EXTERNAL_TYPES.md` §10.5 | no dispatch point sees both field value and type context |
-| C8 | Module search paths + external search callback | `07-api.md` `## module search paths`, `## external search callback` | **new in this audit** — spec text only, no C++ surface (`searchPath`/`searchCallback` appear nowhere in `include/` or `src/`); prerequisite/front end for `archive/external-modules-plan-v4.md` |
+| C8 | Module search paths + external search callback | `07-api.md` `## module search paths`, `## external search callback` | spec text only, no C++ surface (`moduleSearchPaths`/`loadModuleCallback` appear nowhere in `include/` or `src/`); **Q23 decided 2026-11-09** — C8 owns compile-from-source, split C8a (paths + callback, `.qlc`) / C8b (`.ql` nested compile); front end for `archive/external-modules-plan-v4.md` |
 
 C2 enum injection (Round 41), C3 `hasMethod`/`callMethod` (`c4ee131`,
 2026-11-06), C4 RTTI handoff validation (Phase 3) and C6 signals (Round 40) are
@@ -362,22 +362,53 @@ than deleted, since the landing cites them.
 
 ### C8 — module search paths
 
-- **Q23 does C8 include loading `.ql` source?** The engine has no source-file
-  loading at all: `examples/qlang_run.cpp:1074` (`std::ifstream`) is the only
-  `.ql` reader and the library reads only `.qlc` (`src/QLangBytecodeIO.cpp`).
-  The spec's "search for `[modulename].ql`" implies compile-from-file.
-  **Default:** C8 ships the path list, the callback and a resolver returning the
-  module's source text; the compile-from-source entry point is tracked with
-  `archive/external-modules-plan-v4.md`.
-- **Q24 precedence** — registered C++ modules (`ctx.registerModule()`), the
-  callback and the path list: which wins? **Default:** registered module →
-  callback → paths in order.
-- **Q25 callback failure and payload** — empty string or throw for "not found",
-  and is the returned string source text or `.qlc` bytes? **Default:** empty
-  string means not found; source text.
-- **Q26 caching and cycles** — is a resolved module compiled once per context or
-  per compile, and what happens on an import cycle? **Default:** cache per
-  context keyed by resolved name; a cycle is an error.
+**Decided 2026-11-09 (Q23), spec re-worded in `07-api.md` the same day.**
+
+- **Q23 does C8 include loading `.ql` source?** **DECIDED: yes — C8 owns
+  compile-from-source, landed in two rounds.** The spec's search finds
+  `[modulename].ql` (source) while the callback returns a *loaded* module, so
+  the engine must turn source into an image somewhere; the alternative is
+  contradicting the spec by searching only for `.qlc`. The nested compile is
+  cheap because the machinery exists: `QLangContext::parse()` is public,
+  `QLangCompiler` + `setLibraryMode`/`setModuleName` produce a `CompiledProgram`,
+  `writeQlc` takes exactly what `nativeFuncIds()` hands back, and
+  `loadProgram(istream)` re-resolves native **names** and registers the result —
+  so a discovered `.ql` round-trips through the serializer into the existing
+  registry with no new type and no `.qlc` version change. The cost is the three
+  things *around* it: reentrancy (`compileImport` drives a second compiler while
+  the first is mid-`compile()`), cycles (the existing `checkImportCycles` walks
+  *loaded* images, so an A→B→A nested cycle recurses before any table exists —
+  an in-flight set is needed), and error provenance (a compile error inside a
+  discovered `.ql` must report that file, `12-errors-trace.md`).
+  **C8a** = path list + callback + resolution order, resolving `.qlc` through
+  `loadProgramFile` — no compiler change, and it retires `qlang_run --import`.
+  **C8b** = `.ql` discovery + the nested compile.
+- **Q24 precedence** — **RESOLVED by the spec (2026-11-09):** native module →
+  already-loaded registry entry → search paths in order; the callback sits
+  between the registry and the paths, so it can supply or shadow a file module
+  but not a registered C++ module. Default path list = pwd at construction.
+- **Q25 callback failure and payload** — **RESOLVED by the spec:** the
+  prototype is `shared_ptr<LoadedModule> loadModuleCallback(const std::string
+  &modulename, std::string &error)` (the earlier `string searchCallback(string)`
+  is superseded); `nullptr` + empty `error` = not found (continue to the paths),
+  `nullptr` + non-empty `error` = found but unusable (stop and report). Shared,
+  not owned-raw, matching what the registry stores.
+- **Q26 caching and cycles** — **written into the spec:** resolved once per
+  context, cached under the resolved module's own name; an import cycle is an
+  error.
+- **Q36 filename vs declared identity** — `foo.ql` declaring
+  `export const MODULE_NAME = "bar"` resolves `import bar` to a module
+  registered as `bar`, not `foo`. Reject the mismatch, or accept and key on
+  `MODULE_NAME`? **Default:** accept, key on `MODULE_NAME`, warn on mismatch.
+- **Q37 a discovered `.ql` with no `MODULE_NAME`** — a library compile requires
+  it, a plain script has none. Mandatory for a discovered file, or fall back to
+  the filename stem? **Default:** fall back to the stem.
+- **Q38 what the callback sees** — the requested name only, or the search paths
+  too (so a Qt resource can mirror the directory list)? **Default:** name only.
+
+Scope note: C8 is *discovery*. `QLangContext::run()` still does not link —
+`QLangLinker` is driven by `qlang_run` — so the **runtime module registry** stays
+a separate open item in `status.md`.
 
 ## Phases
 
@@ -496,11 +527,13 @@ cross-references.
    table on the property binding vs a value tag) and must be settled before
    implementation. Effort: small–medium once designed.
 5. **C8 module search paths + external search callback** — **new in the
-   Round 52 re-audit.** Spec `07-api.md` `## module search paths` ("API C++ will
+   Round 52 re-audit; Q23 decided 2026-11-09, spec re-worded the same day.**
+   Spec `07-api.md` `## module search paths` ("API C++ will
    provide a means to set the search paths to find modules"; POC modules are
    single files, so resolution is `[modulename].ql` tried in each directory in
-   order) and `## external search callback` (a host-assigned
-   `string searchCallback(string modulename)` for non-standard filesystems such
+   order, `.qlc` first within a directory) and `## external search callback` (a host-assigned
+   `shared_ptr<LoadedModule> loadModuleCallback(const std::string &modulename,
+   std::string &error)` for non-standard filesystems such
    as Qt `:/...`). Today modules are C++-registered (`ctx.registerModule()`) and
    resolved at compile time only — no filesystem lookup, no path list, no
    callback hook (`searchPath`/`searchCallback` appear nowhere in `include/` or
@@ -508,10 +541,13 @@ cross-references.
    `setSearchCallback(...)`) plus the `import` resolution path; no lexer, parser
    or VM change is implied. Prerequisite/front end for
    `docs/plans/archive/external-modules-plan-v4.md` (import/export tables assume a module
-   can be *found* before it can be linked). Open questions: **Q23–Q26** — Q23
-   (does C8 also own compile-from-source?) decides the item's size, Q24–Q26 the
-   resolution contract. Tests: `test_module` (+ a `tests/scripts/` regression
-   once `.ql` file loading exists). Effort: small–medium.
+   can be *found* before it can be linked). **C8a** (paths + callback + order,
+   `.qlc` only) is small and touches no compiler; **C8b** (`.ql` discovery + the
+   nested compile, reentrancy, in-flight cycle set, error provenance) is
+   medium. Open questions: **Q36–Q38** (identity vs filename, a discovered file
+   with no `MODULE_NAME`, what the callback sees). Tests: `test_module`
+   (+ a `tests/scripts/` regression once `.ql` file loading exists). Effort:
+   small (C8a) / medium (C8b).
 
 C2 enum injection (Round 41), C6 signals (Round 40) and C3
 `hasMethod`/`callMethod` (`c4ee131`, 2026-11-06, pending the `BoundMethod`
@@ -704,6 +740,8 @@ design decision ──> C7 (enum-name string form)
 C8 (module search paths) ──> archive/external-modules-plan-v4.md (import/export tables)
                             ✅ done 2026-11-09 (Rounds 61–65) — the plan shipped and moved to
                             docs/plans/archive/; C8 (discovery) is still open
+C8a (paths + callback, .qlc) ──> C8b (.ql discovery + nested compile)
+                            Q36–Q38 gate C8b only; C8a is unblocked
 A3, A5, C8: otherwise independent of each other and of the above
 
 open questions gate the work (see §Open questions):
@@ -714,7 +752,9 @@ open questions gate the work (see §Open questions):
   Q27    ──> C1 toggle decision  Q28  ──> $$ spec wording (spec edit → re-hash)
   Q19–Q20 ──> C3 API shape (resolved 2026-11-06, adopted as defaulted)
   Q21 ──> C5 spec, Q22 ──> C7 design
-  Q23    ──> C8 scope            Q24–Q26 ──> C8 resolution contract
+  Q23    ──> C8 scope (DECIDED 2026-11-09: C8 owns compile-from-source)
+  Q24–Q26 ──> C8 resolution contract (RESOLVED by the 07-api.md spec edit)
+  Q36–Q38 ──> C8b (identity vs filename, missing MODULE_NAME, callback input)
 
 landed since this plan was written: A1 + A2 (Round 39) · C6 (Round 40) ·
 C2 (Round 41) · A4 Phases 1–4 (Rounds 42–45) · C4 (Phase 3 host-API hardening)
