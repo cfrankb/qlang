@@ -111,6 +111,8 @@ Conventions:
 | LTEF | left reg | right reg | — | | identity 69; `flags = (r[a] < right) ? LT : (r[a] == right) ? EQ : none` (one-hot) |
 | GTEF | left reg | right reg | — | | identity 70; `flags = (r[a] > right) ? GR : (r[a] == right) ? EQ : none` (one-hot) |
 | TST | test reg | — | — | | identity 71; `flags = truth(r[a]) ? EQ : none`; register operand only |
+| GETIMPORT | dest reg | import index | — | | identity 72; `r[a] = <imports[b].ref>`; 2-operand form — `b` names the import table, not a register |
+| CALLIMPORT | dest / arg base | import index | arg count | | identity 73; `r[a] = call imports[b](r[a+1 .. a+c])`; same shape as CALLFN, `b` names the import table |
 
 ## opcode: MOVI
 
@@ -411,6 +413,45 @@ with `.qlc` v7 (Phase 3 step 3): their identities, codec rows, mnemonics and VM 
 gone, so the `v5/v6` listing above is the historical record only and a v7 stream can contain
 only the `v7` pair.
 
+### OpCode getimport / callimport (cross-module access)
+
+Both name an entry of the program's **import table** (`## import table (lookup)`) instead of a
+register, a pool entry or a function, which is the whole point: an operand that names a table
+entry reaches another module's entity from any depth, while a register operand can only name a
+cell of the module that owns the frame.
+
+```
+getimport      06, 01        ; r6 = <imports[1]>                        # imported var/const cell
+callimport     06, 02, 02   ; r6 = call imports[2](r7, r8)              # dest a, import b, argCount c
+```
+
+- `GETIMPORT` is the 2-operand base form (dest, import index). Its `ref` is the **defining**
+  module's shared cell (`## technical specifications` 3), read out of the global table rather
+  than the executing frame. An entry naming a function is refused at run time — reading a
+  function is a compile error (`'x' is a function imported from module 'm': call it instead of
+  reading it`).
+- `CALLIMPORT` has `CALLFN`'s shape (dest `a`, index `b`, arg count `c`). A plain function is
+  called with the callee's own capture spec; an exported **generator** yields a generator value
+  built from the imported function, so no `makegen` constant is needed for the cross-module
+  case.
+- Operand `b` is register-class for addressing (the modifier byte only selects its width) but
+  its **role** is `ImportIndex`, which is what lets the reader range-check it against the
+  image's own import table and the linker remap it.
+
+**Status (Round 65):** both are **implemented and emitted** — identities 72/73
+(`kOpcodeUsedCount` 72 → 74, plan **Q31**), codec tables, mnemonics, VM handlers, and the
+load-time `import index out of range` check. What each means depends on whether the program was
+linked:
+
+| program | `getimport` | `callimport` |
+|-|-|-|
+| merged (linker output) | survives; `b` is the merged table's index and `ref` the merged cell | **never present** — the linker resolves it to `callfn`, or to `makegen` with a synthesized pool closure for an exported generator |
+| module image run as-is | reads the cell its own table names | calls the function its own table names — the form a runtime module registry executes |
+
+A merged program therefore contains no instruction that names the import table for a *call*,
+but it does keep the reads; a module image keeps both, which is why a library may import another
+module and still serialize.
+
 OpCode `jge` and `jle` work exactly like `jg` and `jl`; `jne` is the complement of `je`.
 
 
@@ -609,16 +650,19 @@ its identity, export table and import table are the three sections `## keyword e
 
 each module must be able to be compiled on it's own. when ingested by the `qlang` executor, it must be able to run (assuming they both share compatible bytecodes).
 
-**Implemented through Phase 3b (Round 64, 2026-11-09)** — plan
+**Implemented through Phase 3c (Round 65, 2026-11-09)** — plan
 [../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md): a `.ql` compiles
 standalone into a `.qlc` that carries its name and both tables (**v9**), a host loads one into a
 context (`QLangContext::loadProgram` / `loadProgramFile`), an `import` resolves against its export
 table at compile time, and `QLangLinker` merges the images with the entry program into one
 runnable program (one function table, one folded constant pool, one global register area split
-into per-module slices, module top levels run in dependency order). What is *not* implemented is
-the second link model of `## technical specifications` 1 — executing a module image without
-merging it — which needs `GETIMPORT`/`CALLIMPORT` (Phase 3c), and finding a module by name
-without a host loading it first (search paths, `07-api.md`).
+into per-module slices, **one import table**, module top levels run in dependency order).
+`GETIMPORT` / `CALLIMPORT` (`### OpCode getimport / callimport`) are the instructions that name
+the import table, so a module image is self-describing: it can import another module and still be
+written out and linked transitively. What is *not* implemented is the second link model of
+`## technical specifications` 1 as a *feature* — the two opcodes run, but nothing resolves a
+module by name and hands it over at run time (a runtime module registry), and nothing finds a
+module by name without a host loading it first (search paths, `07-api.md`).
 
 ## export table (lookup)
 
@@ -643,13 +687,14 @@ that `import`s from a loaded image has its names resolved against this table at
 compile time, and `QLangLinker` turns each resolved entry into a handle of the
 merged program. So the table is now *read* — by the compiler and the linker.
 
-*bytecode to reference the look up table* is still **not** implemented: reading an
-import is `GETIMPORT` and calling one is `CALLIMPORT` (identities 73/74, reserved
-by plan **Q31**), Phase 3c. A merged program therefore needs no instruction that
-names the table — the linker replaced every cross-module reference with a plain
-`callfn` / `mov` against the merged function table and register area — but a
-**module** image executed without merging (the future runtime registry's model)
-still cannot resolve one.
+*bytecode to reference the look up table* is **indirect**, and that is by design: an importer
+never names the defining module's export entry. The compiler resolves the name at compile time
+and emits `GETIMPORT` / `CALLIMPORT` naming an entry of the **importer's own** import table
+(`### OpCode getimport / callimport`), whose `ref` is the export's handle. A link then turns that
+entry into a merged handle and rewrites `callimport` away entirely, so a merged program contains
+no instruction naming either table for a call — only `getimport` reads survive. A module image
+executed without merging keeps both, which is what the runtime-registry model of
+`## technical specifications` 1 needs.
 
 ## import table (lookup)
 
@@ -673,17 +718,22 @@ write through an import or an import cycle. C++-registered modules
 ([09-modules.md](09-modules.md)) keep resolving the way they always did — compile-time
 natives in the negative-slot space of `CALL` — so they never appear here.
 
-`ref` is the **defining** module's handle (its function index, or its cell), because the
-importing program cannot name either yet. That is why an instruction cannot carry it
-directly at this phase: every operand that would is unsigned, so the reference is recorded
-as a `PendingLink` and `QLangLinker` rewrites it — and the operand holding it — into the
-merged program's space. After a link `ref` is a merged handle; before one it is a
-module-local handle, which is exactly what makes an image with pending links
-non-serializable (§4 of `docs/SERIALIZATION.md`).
+`ref` is the **defining** module's handle (its function index, or its cell in that
+module's own slice), because the importing image cannot name a merged one — it does not
+know what else will be linked in. That is also why the reader does **not** range-check an
+import entry's `ref` against the image carrying it ([../SERIALIZATION.md](../SERIALIZATION.md)
+§4.6): the tables it names are in another file. `QLangLinker` merges every module's table into
+one — deduped by (defining module, exported name), so two importers of one export share one cell
+(`## technical specifications` 3) — and rewrites each `ref` into the merged handle. After a link
+`ref` is merged; before one it is module-local.
 
-*bytecode to reference the look up table* is **not** implemented (`GETIMPORT` /
-`CALLIMPORT`, Phase 3c): a merged program needs none, and a module executed without
-merging still cannot read one.
+*bytecode to reference the look up table* **is** implemented (Round 65, 2026-11-09):
+`GETIMPORT` (identity 72) reads an entry's cell and `CALLIMPORT` (identity 73) calls the
+function one names — `### OpCode getimport / callimport`. Operand `b` is the table index, its
+role is `ImportIndex`, and the reader rejects one outside the image's own table
+(`import index out of range`). A link remaps the index in every surviving `getimport` and
+resolves every `callimport` into `callfn` / `makegen`, so the merged program's table describes
+the merged program.
 
 ## table for build in function (qlang base)
 
@@ -812,32 +862,37 @@ Guard: `tests/unit/export_test.cpp` (`export`, 88 checks) — both forms and the
 references, the ten scope rejections (five inside a `def`/closure/`class`, five inside a
 global-scope block), `already exported`, the exported-function rebind guard, `MODULE_NAME`
 resolution, library mode, and the table through the `.qlc` v9 round trip. The importer side
-(resolution against a loaded export table, the write-through-import guards, the merge and the run)
-is guarded by `tests/unit/linker_test.cpp` (`linker`, 75 checks).
+(resolution against a loaded export table, the write-through-import guards, the merge, the two
+opcodes and the run) is guarded by `tests/unit/linker_test.cpp` (`linker`, 126 checks).
 
 ## technical specifications
 
-Status of each item as of Round 64 (2026-11-09) — plan
-[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phases 1–3b:
+Status of each item as of Round 65 (2026-11-09) — plan
+[../plans/external-modules-plan-v4.md](../plans/external-modules-plan-v4.md) Phases 1–3c:
 
 1. **Link model** — both `link-time merge` and `runtime module registry`. should share a reusable solution
    — ◐ **merge implemented (Round 64, Phase 3b)**: `QLangLinker`
    (`include/qlang/QLangLinker.h`) merges the loaded images an entry imports into one program.
    The reusable units the registry needs are in place and are what the merge consumes — the
    tables (`CompiledProgram::exports`/`imports`), the registry (`QLangContext::loadProgram`,
-   `loadedModule`, `loadedModules`) and resolution against the export table (compile time). The
-   registry itself is **not** implemented: it needs the two opcodes of Phase 3c, because a
-   module executed on its own has no merged index to fall back on.
+   `loadedModule`, `loadedModules`) and resolution against the export table (compile time). Since
+   Round 65 the two opcodes a module needs to run unmerged exist and are implemented in the VM
+   (`### OpCode getimport / callimport`), so the registry's *execution* half is no longer missing
+   — what is missing is the feature around it: nothing resolves a module by name at run time and
+   hands its image over.
 2. **Entry point** — global scope script only at this point. no main function. single file qlang modules in this version only.
    — ✓ **implemented (Round 63/64)**: a library compiles its top level as `<init>`
    (`QLangCompiler::setLibraryMode`), and a merged program runs every module's `<init>` exactly
    once, dependencies first, before the entry's (item 3's order, `CompiledProgram::initSequence`).
    Single-file modules only, as specified.
 3. **Cross-module variable semantics** — shared cell (write-through, recommended)
-   — ✓ **implemented (Round 64)**: one global register area per merged program, sliced per
+   — ✓ **implemented (Round 64/65)**: one global register area per merged program, sliced per
    module, so an exported variable is one cell the defining module writes and importers read
    (`readonly` binds the importer — `## keyword export`). The defining module's writes are
-   visible to the importer; a write *through* an import is a compile error.
+   visible to the importer; a write *through* an import is a compile error. Since Round 65 the
+   read is `getimport`, which names the cell through the table rather than a register, so it
+   works at any depth — including inside a function of the importing module, whose registers are
+   private.
 4. **Export syntax** — see keyword export
    — ✓ **implemented (Round 63)**.
 5. **Import graph rules**
@@ -851,15 +906,16 @@ Status of each item as of Round 64 (2026-11-09) — plan
 
   aliases is already a requirment. (e.g. `from m import f as g`)
 
-  — ◐ **implemented except one direction (Round 64)**: the C++ API loads `.ql` images into a
-  context and a `.ql` entry imports from them (all five import forms, aliases included), a `.ql`
-  keeps importing C++ modules (compile-time natives, unchanged), C++ modules still cannot load
-  `.ql`, and the cycle check is a compile error (`QLangCompiler::checkImportCycles`) with a
-  second, loader-side half in the linker. *"`.ql` modules may import `.ql` modules"* is **not**
-  available to a *library* image yet: only the entry program can hold the unresolved references
-  that a merge resolves (`CompiledProgram::pendingLinks` is a link artifact, not an image
-  section), so a library that imports another `.ql` is rejected until Phase 3c gives it
-  `GETIMPORT`/`CALLIMPORT`. An entry importing two libraries, each importing nothing, works.
+  — ✓ **implemented (Round 64/65)**: the C++ API loads `.ql` images into a context and a `.ql`
+  imports from them (all five import forms, aliases included), a `.ql` keeps importing C++
+  modules (compile-time natives, unchanged), C++ modules still cannot load `.ql`, and the cycle
+  check is a compile error (`QLangCompiler::checkImportCycles`) with a second, loader-side half
+  in the linker. *"`.ql` modules may import `.ql` modules"* holds for a **library** image too
+  since Round 65: its cross-module references are `getimport`/`callimport` operands into its own
+  import table, both of which the image carries, so a chain (app → middle → leaf) links and runs
+  with one merged table. `import` is a module-level statement: inside a `def` body it is a
+  compile error (`import of module '…' must appear at module top level`) — it used to be dropped
+  silently, leaving the name unbound.
 6. **Compatibility rule** — at this early stage, compatible bytecode is `qlang` bytecodes generated with the exact same compiler version. 
    — ✓ **implemented**: the reader is single-version (`version != kQlcVersion` → rejected), the
    builtin name table is library-side rather than serialized, and native slots store **names**
@@ -967,6 +1023,9 @@ comparison conditions in `if`/`while` position lower to a flag compare + flag ju
 — except when both operands are statically `Int`, where the compiler keeps `cmp` + flag jump: the
 bytes are unchanged from pre-M3 and `cmp`'s total order keeps the flags reusable for a second
 jump). `tst` (identity 71) is implemented **and emitted** since Round 60 (`### OpCode tst`).
+`getimport`/`callimport` (identities 72/73, `kOpcodeUsedCount` 74) are implemented **and
+emitted** since Round 65 (`### OpCode getimport / callimport`) — the identity allocation is
+plan **Q31**, "append last, never renumber", so `DECL` takes 74 when **M4** lands.
 Still unimplemented: the `$$` declaration table, frame name map + bitset and `DECL` (**M4**).
 
 ## opCode scope
@@ -988,6 +1047,7 @@ they used to spell.
 | cmp, ~~cmpi~~ | comparison (numbers only) | `cmp` — `cmpi` was `cmp` with an immediate right operand, removed in v7 |
 | eq, lt, gt, lte, gte | comparison (general) | flag-setting `eqf`, `ltf`, `gtf`, `ltef`, `gtef` — emitted since Round 59 for comparison conditions in branch position, statically-`Int` operands excepted (`### extended OpCode eq, lt, gt, lte, gte`) |
 | tst | truthiness test | sets `eq` from `truth(r[a])`; emitted since Round 60 — it replaced `jmpfalse` / `jmptrue`, which were removed in v7 |
+| getimport, callimport | cross-module access | read an imported cell / call an imported function through the **import table**; emitted since Round 65 (`### OpCode getimport / callimport`) — a link resolves every `callimport` away and keeps the reads |
 
 ### bytecode encoding
 

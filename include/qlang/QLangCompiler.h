@@ -38,32 +38,6 @@ struct ModuleInit {
   std::string module;
 };
 
-// What a pending link patches. The provisional lowering of Phase 3b can only
-// express a cross-module reference two ways, and the linker has to know which
-// one it is looking at:
-//   OperandB     — instruction operand `b` holds a handle into the DEFINING
-//                  module (a function index for `CALLFN`, a cell for the `mov`
-//                  that reads an imported variable or closure).
-//   ClosureConst — a constant-pool Closure names the defining module's
-//                  function (an imported generator's MAKEGEN spec).
-enum class PendingLinkKind : uint8_t { OperandB = 0, ClosureConst = 1 };
-
-// One cross-module reference the compiler could not resolve on its own
-// (external-modules plan v4 Phase 3b). It cannot live in the instruction
-// itself: every operand that would carry it is unsigned (`writeIndexWidth`
-// rejects a negative index), so the reference is recorded here and the linker
-// resolves it against the merged program. Q32 — the linker patches the decoded
-// `RawInstr` (or the pool constant) and re-encodes; nothing byte-patches.
-// Link artifact, NOT part of the `.qlc` image: an image with pending links is
-// a module that still needs its dependencies, and `writeQlc` rejects it.
-struct PendingLink {
-  int funcIndex = 0;    // function holding the instruction (program index)
-  int instrIndex = 0;   // index into that function's raw instruction stream
-  int importIndex = 0;  // index into CompiledProgram::imports
-  PendingLinkKind kind = PendingLinkKind::OperandB;
-  int poolIndex = -1;   // ClosureConst: the pool slot holding the Closure
-};
-
 struct CompiledProgram {
   std::vector<Function> functions; // functions[0] == the implicit "main"
   // The program's single constant pool. Every `mov` kind-2 operand, every
@@ -91,11 +65,6 @@ struct CompiledProgram {
   // before functions[0], in dependency order. Empty for anything a compiler
   // produced; QLangLinker fills it for a merged program (Phase 3b, Q35).
   std::vector<ModuleInit> initSequence;
-  // Link artifact, NOT part of the `.qlc` image: the cross-module references
-  // the compiler lowered with defining-module-local handles (see PendingLink).
-  // The compiler fills it, QLangLinker consumes and clears it; a program with
-  // entries left is not a linkable image and `writeQlc` rejects it.
-  std::vector<PendingLink> pendingLinks;
 };
 
 // Per-register breakdown of the MAIN program's register-allocator state,
@@ -472,18 +441,19 @@ private:
   void guardNotImported(const std::string &name, const char *op) const;
   // Imported `.ql` names (plan Phase 3b). `qlModule` resolves an import source
   // name (honouring `import m as a` aliases) to a loaded image, or nullptr.
-  // `bindQlImport` records one ImportEntry and returns its index;
-  // `recordPendingLink` notes that the instruction just emitted carries a
-  // handle into the defining module the linker has to rebase.
+  // `bindQlImport` records one ImportEntry and returns its index, which is the
+  // operand `getimport`/`callimport` name (plan Phase 3c).
   const LoadedModule *qlModule(const std::string &name) const;
+  // True when `name` is an imported name whose definition yields, i.e. a call of
+  // it produces a generator value. The import entry names the DEFINING module's
+  // function record, which is where `isGenerator` lives, so this is the only way
+  // the importing module can know what the call returns (plan Phase 3c).
+  bool importedIsGenerator(const std::string &name) const;
   // The five import forms resolved against a loaded image's export table.
   void compileQlImport(const StmtPtr &s, const LoadedModule &mod);
   int bindQlImport(const LoadedModule &mod, const ExportEntry &exp,
                    const std::string &localName, const std::string &moduleAs,
                    const StmtPtr &s);
-  void recordPendingLink(int importIndex, int instrIndex,
-                         PendingLinkKind kind = PendingLinkKind::OperandB,
-                         int poolIndex = -1);
   // Rejects an import graph that reaches the entry module again (SPEC
   // §bytecodes "technical specifications": import cycles are an error). Walks
   // the loaded images' import tables, so it stays correct once a library can
@@ -756,18 +726,16 @@ private:
   // --- Imports from loaded `.ql` modules (external-modules plan v4 Phase 3b) ---
   // The import table in binding order (SPEC §bytecodes "import table
   // (lookup)"): `ref` is the DEFINING module's handle — its function index or
-  // its cell — because the entry program cannot name either yet.
+  // its cell — because the entry program cannot name either until the linker
+  // rewrites it into a merged one.
   std::vector<ImportEntry> m_imports;
-  // Local name -> index into m_imports. Kept across function bodies (like
-  // m_userFuncs): an imported function is callable from any depth.
+  // Local name -> index into m_imports, i.e. -> the `getimport`/`callimport`
+  // operand. Kept across function bodies (like m_userFuncs): an imported name
+  // is reachable from any depth, which is exactly what the two opcodes buy over
+  // a register operand.
   std::unordered_map<std::string, int> m_qlImports;
   // `import m as a`: alias -> the loaded module's own name.
   std::unordered_map<std::string, std::string> m_qlAliases;
-  // Pending links of the function currently being compiled; buildFunction
-  // stamps them with its index when it closes (the index is only known then),
-  // and compile() stamps the top level's with 0.
-  std::vector<PendingLink> m_curPendingLinks;
-  std::vector<PendingLink> m_pendingLinks;
 };
 
 } // namespace qlang

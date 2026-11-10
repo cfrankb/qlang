@@ -64,7 +64,12 @@ the default name.
 
 ### QLang import syntax
 
-Modules are resolved at compile time — no VM changes needed for flat import.
+Modules are resolved at compile time — nothing is looked up while a program runs. For a **C++**
+module that stays true of the machine as well: each imported function is a native slot of `CALL`,
+so flat import needed no VM change. A **`.ql`** module is the other half of the contract — its
+names are entries of the importing module's import table, reached by `getimport` / `callimport`
+([13-bytecodes.md](13-bytecodes.md) `### OpCode getimport / callimport`, implemented Round 65) —
+and a loaded `.qlc` is merged by `QLangLinker`; see [09-modules.md](09-modules.md).
 
 ```python
 import math                   # flat import: min, max, sum, rand usable by name
@@ -84,9 +89,10 @@ from math import min, max     # import `min` and `max` only
 
 The parser additionally accepts the legacy single-function form
 `import math.min` (flat import of that one function). Qualified access
-(`math.min(...)`) is a future extension — v1 supports flat import only. The
-module is resolved at compile time and each imported function is registered
-as an external (native) function in the current scope.
+(`math.min(...)`) is a future extension — v1 supports flat import only. For a C++
+module the name is resolved at compile time and each imported function is
+registered as an external (native) function in the current scope; for a loaded
+`.qlc` it is resolved at compile time against that image's export table.
 
 ## ctx.clear()
 

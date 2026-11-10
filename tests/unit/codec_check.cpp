@@ -1173,9 +1173,10 @@ static void testMalformed() {
 
   std::string badOp = fileWithOneInstr();
   // The single instruction's opcode byte is at byte 37 (header + function
-  // metadata + codeSize). Set it to 72: a valid 7-bit identity that is not a
-  // defined opcode (kOpcodeUsedCount == 72 after the Phase 3 S3 compaction).
-  // It decodes as a 4-byte 3-operand form, then fails isValidOpcode.
+  // metadata + codeSize). Set it to kOpcodeUsedCount: a valid 7-bit identity
+  // just past the last defined one (74 since Phase 3c added getimport and
+  // callimport). It decodes as a 4-byte 3-operand form, then fails
+  // isValidOpcode.
   badOp[37] = kOpcodeUsedCount;
   rejects("malformed: invalid opcode", badOp);
 
@@ -1432,7 +1433,7 @@ static void testMalformed() {
 // ---------------------------------------------------------------------------
 static void testIndexSubscript() {
   try {
-    check(kOpcodeUsedCount == 72, "index: kOpcodeUsedCount is 72");
+    check(kOpcodeUsedCount == 74, "index: kOpcodeUsedCount is 74");
     check(static_cast<uint8_t>(Opcode::INDEXGET) == 64,
           "indexget: identity 64 (after the S3 compaction)");
     check(static_cast<uint8_t>(Opcode::INDEXPUT) == 65,
@@ -1815,6 +1816,58 @@ static void testV6LoadValidation() {
     check(!readImage(callfnImage(5), bad3, e4) &&
               e4.find("function index out of range") != std::string::npos,
           "v6-load: callfn index beyond the function table rejected (" + e4 +
+              ")");
+  }
+
+  // `getimport`/`callimport` operands name an entry of the image's OWN import
+  // table (§4.6), so they are range-checked once the tail has been read
+  // (external-modules plan v4 Phase 3c). `getimport` is a 2-operand base form
+  // (op, a, b), so only `b` differs between the two images below.
+  auto getimportImage = [](uint8_t slot, uint32_t tableSize) {
+    CompiledProgram p = programWithCode(
+        {static_cast<uint8_t>(Opcode::GETIMPORT), 0x00, slot,
+         static_cast<uint8_t>(Opcode::RETURN), 0x00},
+        {0, 3});
+    for (uint32_t i = 0; i < tableSize; i++)
+      p.imports.push_back(ImportEntry{"m", "v", ExportKind::Var, 0, ""});
+    return writeImage(p);
+  };
+  {
+    CompiledProgram back4;
+    std::string e5;
+    check(readImage(getimportImage(0, 1), back4, e5),
+          "v6-load: getimport naming an entry of the image's table accepted (" +
+              e5 + ")");
+    CompiledProgram bad4;
+    std::string e6;
+    check(!readImage(getimportImage(5, 1), bad4, e6) &&
+              e6.find("import index out of range") != std::string::npos,
+          "v6-load: getimport index beyond the import table rejected (" + e6 +
+              ")");
+    // An empty table is the same refusal, so the check is the table's size and
+    // not a coincidence of the operand's value.
+    CompiledProgram bad5;
+    std::string e7;
+    check(!readImage(getimportImage(0, 0), bad5, e7) &&
+              e7.find("import index out of range") != std::string::npos,
+          "v6-load: getimport with no import table rejected (" + e7 + ")");
+  }
+
+  // An IMPORT entry's `ref`, unlike an EXPORT entry's, names the DEFINING
+  // module's tables (its function index or its own cell), which this image does
+  // not contain — so it is deliberately not range-checked here (Phase 3c): the
+  // linker remaps it into a merged handle and the VM re-checks it at each use.
+  // The export case above, refused for the same magnitude, is what makes this
+  // check mean something rather than merely pass.
+  {
+    CompiledProgram p = programWithCode(code, offs);
+    p.imports.push_back(
+        ImportEntry{"other", "f", ExportKind::Func, 999, ""});
+    CompiledProgram back5;
+    std::string e8;
+    check(readImage(writeImage(p), back5, e8) && back5.imports.size() == 1 &&
+              back5.imports[0].ref == 999,
+          "v6-load: an import ref is a handle into the defining module (" + e8 +
               ")");
   }
 

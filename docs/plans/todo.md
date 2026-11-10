@@ -30,11 +30,13 @@ implementation plan does not exist yet.
       plan's own convention: one detailed plan per item before coding) — close **Q7–Q11**, spell
       out the six-stage check pipeline and the test plan, and follow the milestone-plan structure
       of `archive/m3-flag-flow-plan.md`
-- [ ] `DECL siteId` opcode — identity **72** (appended after Phase 3's compaction; the parent
-      plan's "79 → 80" predates it), `kOpcodeUsedCount` 72 → 73
+- [ ] `DECL siteId` opcode — identity **74** (external-modules Phase 3c took **72/73** in Round 65,
+      its **Q31**, "append last, never renumber"; the parent plan's "79 → 80" and this row's earlier
+      "72" both predate that), `kOpcodeUsedCount` 74 → 75
 - [ ] Per-function declaration table (`site → {reg, name, kind}`) as an optional `.qlc`
-      section (M2 D4; `.qlc` is **v7** since Phase 3 — decide whether the table rides v7 or
-      forces v8) + frame name map + per-frame bitset
+      section (M2 D4; `.qlc` is **v9** since Phase 3a — decide whether the table rides v9 or
+      forces v10; **Q34**'s allocation note in `docs/SERIALIZATION.md` §4 is the place that is
+      recorded) + frame name map + per-frame bitset
 - [ ] Two-operand `INDGET`/`INDPUT` (reuse the placeholders, `QLangBytecode.h:123-124`;
       **Q10** decides the arity)
 - [ ] Six-stage `indirect variable error:` pipeline, resolution order (locals + `global`
@@ -119,7 +121,34 @@ closing the **Q#**s its item points at:
       marked **Implemented**. New `export` suite (88 checks), `codec_check` 337 → 352, corpus
       byte-identical, ctest **52/52**. Phase 3b (loader + linker) is next — gated on **Q32**,
       **Q33**, **Q35** and, for name-based resolution, on **C8**; Phase 3c (`GETIMPORT` /
-      `CALLIMPORT` at 73/74) on **Q31**
+      `CALLIMPORT`) on **Q31**
+- [x] **`external-modules-plan-v4.md` Phase 3b (loader + linker) ✓ implemented (Round 64,
+      2026-11-09)**: `QLangContext::loadProgram` / `loadProgramFile` + the module registry
+      (`loadedModule` / `loadedModules`, native-slot **names** re-resolved, all missing names in one
+      `Io` error), compile-time resolution of all five import forms against a loaded export table,
+      and the new `QLangLinker` unit — one function table, one `valueKey`-folded pool, one global
+      register area sliced per module, `CompiledProgram::initSequence` run by `QLangVM::run()`.
+      **No `.qlc` bump** (still v9): what 3b adds is link-time state, so `writeQlc` refuses a merged
+      program. **Q32 ratified *not as defaulted*** (the linker's input is an encoded image, so
+      decode → rewrite → `encodeRawStream()` is the only path), **Q33** / **Q35** as defaulted,
+      **Q31** untouched. New `linker` suite (75 checks), `codec_check` 352 → 354, corpus
+      byte-identical, ctest **53/53**
+- [x] **`external-modules-plan-v4.md` Phase 3c (`GETIMPORT` + `CALLIMPORT`) ✓ implemented (Round 65,
+      2026-11-09) — the plan is complete**: `GETIMPORT` / `CALLIMPORT` emitted for every imported
+      name and executed in `runFrames()`; **Q31 ratified *not as defaulted*** — identities **72/73**
+      (not 73/74: M4 has not landed, "append last, never renumber"), `kOpcodeUsedCount` **72 → 74**,
+      so **`DECL` takes 74 when M4 lands** (`encoding-v6-and-indirect-plan.md` §4/§9 corrected);
+      `OperandRole::ImportIndex` + the reader's `import index out of range` check; the 3b provisional
+      lowering and `CompiledProgram::pendingLinks` **deleted**; one merged, deduplicated import table
+      and `callimport` resolved away by the linker (`callfn`, or `makegen` with a synthesized closure
+      for an exported generator); a **library** may import another `.ql` (transitive chain);
+      `import` inside a `def` body is a compile error (was silently dropped). Also fixed:
+      `buildFunction` read `fn.captures` **after** `std::move(fn)`, so every generator's pool spec
+      had zero captures. `linker` 75 → 126, `codec_check` 354 → 358, `gen` 5 → 7, corpus
+      byte-identical, ctest **53/53**. Docs: `13-bytecodes.md` new opcode section + status flips,
+      `09-modules.md` rewritten as two module kinds, `07-api.md` quote scoped to C++ modules,
+      `SERIALIZATION.md` refreshed. *Remaining for `# external modules`:* a runtime module registry
+      and name-based discovery — **C8**
 - [ ] `missing-features-plan.md` itself drifted after Rounds 56/59/60: the A5 row still says
       "pipeline still emits v5", Phase 2 still says "`kOpcodeUsedCount` is 73 … A5 raises it to
       80", Conventions still say "`.qlc` v5 stays the only supported format", and Dependencies

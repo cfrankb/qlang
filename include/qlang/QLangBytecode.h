@@ -74,10 +74,11 @@ struct ExportEntry {
 // One entry of a module's import table (SPEC §bytecodes "import table
 // (lookup)"): a name bound from another module, `alias` being the name it is
 // bound under locally (empty when unaliased, SPEC §bytecodes "technical
-// specifications" 5). `ref` is the import-table slot GETIMPORT/CALLIMPORT
-// operand `b` indexes (plan Phase 3b); Phase 3a never populates the table,
-// because `import` still binds C++ module functions through the negative-slot
-// space of `CALL`.
+// specifications" 5). GETIMPORT/CALLIMPORT operand `b` indexes the table; `ref`
+// is the DEFINING module's handle for the name — its function index, or the cell
+// in its own register slice — because the importing image cannot name either
+// until the linker merges the tables and turns `ref` into a merged handle
+// (external-modules plan v4 Phases 3b/3c).
 struct ImportEntry {
   std::string module;
   std::string name;
@@ -328,12 +329,31 @@ enum class Opcode : uint8_t {
   // flags = truth(regs[a]) ? EQ : 0, so `tst` + `je`/`jne` is the flag form of
   // a bare truthiness test. One register operand; the kind field only selects
   // its addressing width, so `tst r, imm` is a load-time rejection.
-  TST // flags = truth(regs[a]) ? EQ : 0
+  TST, // flags = truth(regs[a]) ? EQ : 0
+
+  // Cross-module access (SPEC §bytecodes "import table (lookup)"; plan
+  // docs/plans/external-modules-plan-v4.md Phase 3c). Both name an entry of
+  // the program's import table rather than a register, a pool entry or a
+  // function, so `b` carries OperandRole::ImportIndex and the kind field only
+  // selects its addressing width (register class, like `callfn`'s function
+  // index).
+  //
+  // A linked program has no use for `callimport` — the linker resolves every
+  // import to a merged function and rewrites the instruction into `callfn`
+  // (or `makegen` for an exported generator), so only `getimport` survives a
+  // link, reading the shared cell SPEC §bytecodes "technical specifications"
+  // 3. In a *module* image both are the cross-module mechanism a future
+  // runtime registry executes directly, which is why the VM implements both.
+  GETIMPORT,  // r[a] = <import table[b]> (imported global var/const cell)
+  CALLIMPORT, // r[a] = call import[b](r[a+1 .. a+c]); same shape as CALLFN
 };
 
 inline constexpr uint8_t kOpcodeEscape = 0x80;
 inline constexpr uint8_t kOpcodeMax = 128; // identities 0..127
-inline constexpr uint8_t kOpcodeUsedCount = 72; // defined identities 0..71
+// Q31 (external-modules plan v4): `getimport`/`callimport` took 72/73 in
+// Round 65, so `DECL` (M4, encoding-v6-and-indirect-plan.md §6.1) appends at
+// 74 when it lands. The rule is "append last, never renumber".
+inline constexpr uint8_t kOpcodeUsedCount = 74; // defined identities 0..73
 
 // ---------------------------------------------------------------------------
 // `.qlc` v6 modifier byte (docs/plans/encoding-v6-and-indirect-plan.md §2,
@@ -487,6 +507,7 @@ enum class OperandRole : uint8_t {
   FunctionIndex, // index into CompiledProgram::functions
   NativeSlot,    // CALL's signed function id (negative: native slot -1 - id)
   CaptureIndex,  // REFLOAD/REFSTORE b: index into the frame's capture table
+  ImportIndex,   // GETIMPORT/CALLIMPORT b: index into CompiledProgram::imports
   JumpTarget     // jump offset (an instruction index before encoding)
 };
 

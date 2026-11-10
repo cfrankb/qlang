@@ -12,14 +12,13 @@ namespace qlang {
 
 // Merges the loaded `.qlc` module images one program imports into a single
 // runnable program (SPEC §bytecodes "technical specifications" 1–5, external
-// modules plan v4 Phase 3b).
+// modules plan v4 Phases 3b/3c).
 //
 // The linker is purely mechanical: everything that could be decided on meaning
 // was decided by the compiler (unknown export, duplicate import, a write
 // through an import, an import cycle are all compile errors), so a link can
 // only fail on an image that does not fit the program being built — a module
-// that was never loaded, or a library image that still carries unresolved
-// cross-module references.
+// that was never loaded, or a reference in one that names nothing in it.
 //
 // What it merges, and why each part needs it:
 //
@@ -30,8 +29,13 @@ namespace qlang {
 //     `registerCount` wide, at a cumulative offset). A module top level runs in
 //     a frame aliasing the context's global table at that offset, so a module's
 //     own register numbers stay valid and no register operand is rewritten —
-//     only the operands that name ANOTHER module's cell, which the compiler
-//     recorded as pending links.
+//     a cross-module reference never was one: `getimport`/`callimport` name the
+//     import table.
+//   * The import tables merge into one, deduped by (defining module, exported
+//     name), so two modules importing the same export read one shared cell
+//     (SPEC §bytecodes "technical specifications" 3). `callimport` resolves to
+//     `callfn`/`makegen` and disappears; `getimport` survives with the merged
+//     entry's index and the merged cell as its `ref` (plan Phase 3c).
 //   * The constant pools merge into one, folded through `valueKey` so a literal
 //     two modules share occupies one slot (SPEC §bytecodes "constant pool":
 //     unique values). Closure constants are rebased before they are added, so
@@ -61,10 +65,10 @@ public:
   //
   // Throws QLangError(Io) when an imported module is not loaded, when the
   // import graph is not acyclic among the loaded images, when a library image
-  // is not linkable (no functions, pending links of its own, or an import table
-  // of its own — a library that imports another `.ql` needs the opcodes of plan
-  // Phase 3c), or when a merged reference would fall outside the merged
-  // function table, constant pool or native-slot table.
+  // is not linkable (it has no functions), or when a merged reference would
+  // fall outside the merged function table, constant pool, native-slot table or
+  // import table — including a `callimport` whose import names a variable
+  // rather than a function.
   CompiledProgram link(const CompiledProgram &entry,
                        const std::map<std::string, int> &entryNativeIds = {}) const;
 

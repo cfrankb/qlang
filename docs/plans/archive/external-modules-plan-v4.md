@@ -1,8 +1,9 @@
 # Plan v4: external modules (builtin name table, unified constant pool, import/export tables)
 
-Status: **Phase 1 ✓ implemented (Round 61, 2026-11-09); Phase 2 ✓ implemented (Round 62,
-2026-11-09); Phase 3a ✓ implemented (Round 63, 2026-11-09); Phase 3b ✓ implemented (Round 64,
-2026-11-09); Phase 3c gated on Q31.**
+Status: **Phases 1, 2, 3a, 3b and 3c ✓ implemented (Rounds 61–65, 2026-11-09). The plan is
+complete; what is left of `## external modules` is not this plan's — a runtime module registry
+(`## technical specifications` 1, second model) and name-based module discovery, which belong to
+C8 (`missing-features-plan.md`).**
 Re-audited 2026-11-08 against `HEAD = ac97651` (Round 60); Phase 1 landed on top of that
 baseline (library builtin name table — `builtinCount`/`builtinName`/`findBuiltin`/`builtinId`
 in `QLangBytecode.h`, `builtin_table` suite, 151 checks; spec
@@ -24,8 +25,16 @@ and the provisional lowering of an imported name to `callfn` / `mov`; spec
 `## technical specifications` given a per-item status; compliance Round 64) — **Q32**, **Q33** and
 **Q35** were ratified in that round, **Q32** *not as defaulted* (the linker's input is an encoded
 image, so the plan's fallback became the only path) and **Q31** again deliberately untouched.
-What remains of Phase 3 is **3c** (`GETIMPORT`/`CALLIMPORT`), gated on **Q31** and landing with the
-`09-modules.md` / `07-api.md` rewrites; automatic name-based import resolution stays with **C8**
+Phase 3c landed on top of Phase 3b (**no version bump** — still **v9**: the two opcodes are
+instruction-stream content, and the v9 module tail already carries the table they name):
+`GETIMPORT` / `CALLIMPORT` are defined, emitted and executed, the 3b provisional lowering and
+`CompiledProgram::pendingLinks` are **deleted**, a **library** image may import another `.ql`, and
+`import` inside a function body became a compile error instead of a silent no-op; **Q31** was
+ratified *not as defaulted* (72/73, not 73/74 — see the question). Spec
+`docs/spec/13-bytecodes.md` `### OpCode getimport / callimport` added, `## import table (lookup)`
+and `## technical specifications` updated, `09-modules.md` rewritten as two module kinds, the
+`07-api.md` "no VM changes needed" quote corrected, `docs/SERIALIZATION.md` §4/§5/§9/§10 refreshed;
+compliance Round 65. Automatic name-based import resolution stays with **C8**
 (`missing-features-plan.md`).
 Supersedes: `docs/plans/archive/external-modules-plan-v3.md` (2026-11-03) and,
 through it, v2 (2026-11-02) and v1 (all three under `docs/plans/archive/`). The language requirements are unchanged
@@ -249,6 +258,14 @@ Numbering continues the global **Q#** series of `missing-features-plan.md`
   **Unchanged by Round 64:** 3b fills the import table but still emits no opcode — an imported
   name lowers to the instruction the *merged* program can execute (see the 3b **DONE** note), so
   `kOpcodeUsedCount` is still **72** and 73/74 stay reserved for 3c.
+  **Ratified — not as defaulted (Round 65, Phase 3c), with the user:** `GETIMPORT = 72`,
+  `CALLIMPORT = 73`, `kOpcodeUsedCount` **72 → 74**. The default reserved 72 for `DECL`, but M4
+  has not landed, so nothing owns 72 — and the plan's own rule is *"append last, never
+  renumber"*, which appends after `TST` (71) and gives 72/73. **`DECL` takes 74 when M4 lands**;
+  `encoding-v6-and-indirect-plan.md` §6.1 must be read with that in mind. The rejected
+  alternative — leaving 72 as a hole and taking 73/74 — would have made the enum's used range
+  non-contiguous, which `isValidOpcode` (`< kOpcodeUsedCount`) and the codec's
+  "identity `>= kOpcodeUsedCount` is rejected" probe both assume.
 - **Q32 Where does the linker rewrite operands?** — the v6 stream is
   variable-width, so a merged register/pool/function index may need a *wider*
   operand and byte-patching is impossible.
@@ -678,6 +695,71 @@ Consequences of the spec's decisions:
    "no VM changes needed for flat import" quote, `SERIALIZATION.md` v9,
    compliance hashes after the green run.
 
+> **DONE (Round 65, 2026-11-09).** All five steps landed in one round, with **no `.qlc` version
+> change** — still **v9**: the two opcodes are instruction-stream content, and the v9 module tail
+> already carries the table they name. The 23-script corpus is stdout byte-identical against a
+> `HEAD` build.
+> 1. **Opcodes — Q31 ratified, *not as defaulted*.** `GETIMPORT = 72`, `CALLIMPORT = 73`,
+>    `kOpcodeUsedCount` **72 → 74**. The default reserved 72 for `DECL`, but M4 has not landed and
+>    the plan's rule is "append last, never renumber", so they follow `TST` (71); **`DECL` takes 74
+>    when M4 lands** and `encoding-v6-and-indirect-plan.md` §4/§9 are corrected here. Both are
+>    register-class (`permittedKinds` = kind 1) with operand `b` carrying the new
+>    `OperandRole::ImportIndex`, so the reader range-checks it against the image's own table
+>    (`import index out of range`) and the linker knows to remap it — one source table, as **Q32**
+>    established. The check runs *after* the tail is read (the table does not exist before it), and
+>    an **import** entry's `ref` is deliberately **not** range-checked, because it names the
+>    defining module's tables (`SERIALIZATION.md` §4.6); the export case, refused for the same
+>    magnitude, is what makes that non-check mean something.
+> 2. **Compiler** — an imported var/const lowers to `getimport` and an imported function to
+>    `callimport`; the whole **3b provisional machinery is deleted** (`PendingLink`,
+>    `CompiledProgram::pendingLinks`, `recordPendingLink`, `m_curPendingLinks`, the `callfn`/`mov`
+>    lowering), so an image's cross-module references are now instructions the format carries.
+>    Three consequences the step did not anticipate: `importedIsGenerator` reads `isGenerator` out
+>    of the **defining** image so an imported generator's resume dispatches through `CALLCLOS`;
+>    `guardNotImported` had to move *before* `regOf` in `compileExprStmt`, because an imported name
+>    has no register and `use of undeclared variable` was firing first and saying the opposite of
+>    the truth; and `import` inside a `def` body is a compile error
+>    (`import of module '…' must appear at module top level`) — it had been **silently dropped**,
+>    leaving the name unbound.
+> 3. **Found and fixed (blocked the round).** `buildFunction` read `fn.captures` **after**
+>    `std::move(fn)` into the function table, so every generator's pool closure spec was emitted
+>    with **zero** captures: the VM's `MAKEGEN` `bindCaptures` fallback became a silent no-op, and
+>    the linker's synthesized `makegen` closure could not fold with the defining module's constant —
+>    which is exactly what **Q33**'s fold requires. Fixed by snapshotting the captures before the
+>    move; pinned by two new `gen` cases (a global capture, and a capture-free generator, so the
+>    test is not vacuous).
+> 4. **Linker** — one **merged import table**, deduped by (defining module, exported name), so two
+>    importers of one export share one cell (`## technical specifications` 3); every `getimport`
+>    operand is remapped through its module's import map, and every `callimport` is **resolved
+>    away** — into `callfn`, or into `makegen` with a closure synthesized from the merged function
+>    for an exported generator (the capture specs are rebased *before* the pool fold, which is what
+>    lets that closure fold with the defining module's own constant). A **library** may now import
+>    another `.ql`: the 3b refusal is gone, and a chain (app → middle → leaf) links and runs.
+> 5. **VM** — both handlers in the single `runFrames()` loop behind one `importEntry()` bounds
+>    helper. `getimport` reads `m_scope.globalTable().slots[ref]` rather than the frame — which is
+>    the point of naming a cell through a table: it works at any depth, including inside a function
+>    of the importing module whose registers are private — and refuses a `Func` entry. `callimport`
+>    pushes the call with the callee's own capture spec, or builds the generator value from the
+>    function the entry names.
+> 6. **Tests** — `linker` **75 → 126** (write-through visible via `getimport`, write through an
+>    import and rebind of an exported function name refused, a module-A closure capturing a global
+>    used from module B, no `callimport` in a merged program, the transitive chain, the merged
+>    table's dedup), `codec_check` **354 → 358** (the accept/reject pair for the import-index check
+>    plus the empty-table case, and the import-`ref` non-check), `gen` **5 → 7**; `flag_flow` 1324
+>    unchanged; `encoding_v6` **35 083 → 36 127** (+1 044, the two new identities entering the exhaustive
+>    sweep). ctest **53/53**; counted unit cases 37 898 → **38 999**.
+> 7. **Docs** — `13-bytecodes.md` gained `### OpCode getimport / callimport` plus operand-map rows
+>    and the status flips (`## import table (lookup)` and `## technical specifications` 1/3/5);
+>    `09-modules.md` is rewritten as **two module kinds** (C++ native / QLang `.ql`) with the
+>    duplicated `math` section removed; `07-api.md`'s "no VM changes needed for flat import" is now
+>    scoped to C++ modules; `SERIALIZATION.md` §4/§4.6/§5.1/§9/§10 refreshed and the dead
+>    `pendingLinks` references removed.
+> **Found, not fixed:** an exported `def` that calls a sibling `def` **with captures** is still
+> refused at compile time (`imported function '…' captures a local of its own module …`) — the
+> import table says *which* function, not which frame seeds its captures, and no operand carries
+> that. A runtime module registry now has both opcodes it needs but no name resolution
+> (**C8**/**Q23–Q26**), and `QLangContext::execute()` is still absent by choice.
+
 ---
 
 ## Spec cleanup (do in the round each phase lands)
@@ -704,6 +786,18 @@ Consequences of the spec's decisions:
 stale" were largely absorbed by the v6/v7 spec rewrites: the map is marked
 historical and `usesI32()` is documented as deleted — only the three row names
 survive as work.)
+
+**Status (Round 65, 2026-11-09): items 1, 3, 4 and 5 are done; item 2 is deliberately left.**
+1 (`MOV (kind 2)` / `DELETEx` / `INx` row names), 3 (`:646` now reads "`.qlang` source files
+(`.ql`) compiled into module images", with the compatibility rule cross-referenced) and 4 (every
+subsection of `# external modules` carries a `Implemented (Round N)` marker) landed as described.
+5 landed in this round: `09-modules.md` is rewritten (its "v1 uses flat import only" survives, but
+now scoped to *qualified access* and stated for both module kinds) and `07-api.md`'s "no VM changes
+needed for flat import" is scoped to C++ modules. 2 is **not** done: every remaining `movc` sample
+in `13-bytecodes.md` sits inside a block that is explicitly labelled `proposal`, `old encoding` or
+`DO NOT IMPLEMENT YET` (`## decompiler mnemonics`), i.e. it is the historical record of a retired
+encoding rather than a claim about v9 — refreshing it would destroy the comparison the block
+exists to make.
 
 ## Spec decisions (resolved in `13-bytecodes.md`:653–673)
 
@@ -794,13 +888,26 @@ landed in Rounds 63 and 64 and are listed here only to keep the numbering of the
    352 → 354, corpus byte-identical, ctest 53/53. Automatic name-based resolution still waits for
    **C8**/**Q23–Q26** — the driver loads libraries explicitly (`qlang_run app.ql lib.qlc`,
    `--import`). Deviations recorded in the 3b **DONE** note.
-5. **Phase 3c** (`GETIMPORT`/`CALLIMPORT` + docs rewrite) — needs **Q31**;
-   lands with the `09-modules.md` / `07-api.md` rewrites.
+5. **Phase 3c** (`GETIMPORT`/`CALLIMPORT` + docs rewrite) — **✓ done (Round 65,
+   2026-11-09):** `GETIMPORT` / `CALLIMPORT` at identities **72/73** (`kOpcodeUsedCount` 74),
+   emitted for every imported name, executed in `runFrames()`, and merged by the linker (one
+   deduplicated import table; `callimport` resolved into `callfn`/`makegen`); the 3b provisional
+   lowering and `CompiledProgram::pendingLinks` deleted; a library may import another `.ql`;
+   `import` inside a `def` body is a compile error. **Q31 was ratified *not as defaulted*** — 72/73
+   rather than 73/74, so **`DECL` takes 74 when M4 lands**. Also fixed here: `buildFunction` read
+   `fn.captures` after moving `fn`, so every generator's pool spec had no captures (it broke
+   **Q33**'s fold). New/updated guards: `linker` 75 → 126, `codec_check` 354 → 358, `gen` 5 → 7;
+   corpus byte-identical, ctest 53/53. Deviations recorded in the 3c **DONE** note.
 
-Cross-plan coordination: `DECL` (M4) and this plan's two opcodes both append to
-the enum (**Q31** — still open). The version counter (**Q34**) is settled and
+**The plan is complete.** What remains of `# external modules` is outside it: the runtime module
+registry (executing an image without merging — the two opcodes exist, the name resolution does not)
+and module search paths, both **C8** (`missing-features-plan.md`, **Q23–Q26**).
+
+Cross-plan coordination: the opcode tail is settled — `DECL` (M4) takes **74**
+(`kOpcodeUsedCount` → 75) now that this plan holds 72/73; `encoding-v6-and-indirect-plan.md` §4 and
+§9 are corrected in Round 65. The version counter (**Q34**) is settled and
 recorded in `docs/SERIALIZATION.md` §4 "Version allocation": v8 taken by Phase 2,
-v9 reserved for Phase 3, the offset-table plan takes the next free number.
+v9 by Phase 3, the offset-table plan takes the next free number.
 
 ## Verification (per phase, per AGENTS.md)
 

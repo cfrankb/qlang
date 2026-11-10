@@ -1890,6 +1890,15 @@ void QLangVM::bindCaptures(Frame *frame, const Function &fn,
   }
 }
 
+const ImportEntry &QLangVM::importEntry(int index, const char *mnemonic) const {
+  if (index < 0 || static_cast<size_t>(index) >= m_prog.imports.size())
+    vmThrow(QLangErrorKind::Runtime,
+            std::string(mnemonic) + ": import index " + std::to_string(index) +
+                " is outside the program's import table (" +
+                std::to_string(m_prog.imports.size()) + " entries)");
+  return m_prog.imports[static_cast<size_t>(index)];
+}
+
 QLangValue &QLangVM::cellAt(const CaptureRef &cr) {
   if (cr.env == nullptr) {
     // Global capture: the context's table slot (see bindCaptures).
@@ -2528,6 +2537,67 @@ RunResult QLangVM::runFrames() {
       // test form since Phase 3 S3 retired the truthiness jumps.
       frame.flags = isTrue(frame.regs[i.a]) ? CMP_EQ : 0;
       break;
+    case Opcode::GETIMPORT: {
+      // An imported global var/const (SPEC §bytecodes "import table (lookup)"):
+      // operand b names an import-table entry whose `ref` is the DEFINING
+      // module's shared cell (SPEC §bytecodes "technical specifications" 3).
+      // The cell is read out of the context's global table rather than this
+      // frame, which is what makes an imported name reachable at any depth — a
+      // register operand could only name a cell of the executing module's own
+      // slice. A linked program rewrites the entry's `ref` into the merged
+      // absolute slot, so the same instruction serves both.
+      const ImportEntry &im = importEntry(i.b, "getimport");
+      if (im.kind == ExportKind::Func)
+        vmThrow(QLangErrorKind::Runtime,
+                "imported name '" + im.name + "' is a function, not a value");
+      if (im.ref < 0 ||
+          static_cast<size_t>(im.ref) >= m_scope.globalTable().slots.size())
+        vmThrow(QLangErrorKind::Runtime,
+                "imported name '" + im.name + "' has no cell in the global table");
+      frame.regs[i.a] = m_scope.globalTable().slots[static_cast<size_t>(im.ref)];
+      break;
+    }
+    case Opcode::CALLIMPORT: {
+      // A call of a function exported by another module. A linked program has
+      // no `callimport` left (the linker resolves it into `callfn`/`makegen`),
+      // so this is the instruction a module image runs directly — the form a
+      // future runtime registry executes (plan Phase 3c).
+      const ImportEntry &im = importEntry(i.b, "callimport");
+      if (im.kind != ExportKind::Func)
+        vmThrow(QLangErrorKind::Runtime,
+                "imported name '" + im.name + "' is not a function");
+      if (im.ref < 0 ||
+          static_cast<size_t>(im.ref) >= m_prog.functions.size())
+        vmThrow(QLangErrorKind::Runtime,
+                "imported function '" + im.name + "' is not in the function table");
+      const int fi = im.ref;
+      const Function &calleeFn = m_prog.functions[static_cast<size_t>(fi)];
+      if (!calleeFn.isGenerator) {
+        pushCall(fi, frame.regs, i.a, i.a, i.c);
+        bindCaptures(&m_frames[static_cast<size_t>(m_cur)], calleeFn,
+                     calleeFn.captures,
+                     m_frames[static_cast<size_t>(m_cur)].captures);
+        continue;
+      }
+      // An exported generator: the generator value is built here rather than
+      // from a pool Closure spec, because the import table names the function
+      // itself (same instance-per-value rule as MAKEGEN).
+      auto gen = std::make_shared<GeneratorState>();
+      gen->funcIndex = fi;
+      auto pit = m_funcClosures.find(fi);
+      if (pit != m_funcClosures.end() && !pit->second->captures.empty())
+        gen->captures = pit->second->captures;
+      else
+        bindCaptures(&frame, calleeFn, calleeFn.captures, gen->captures);
+      gen->regs.assign(static_cast<size_t>(i.c), QLangValue());
+      for (int k = 0; k < i.c; k++)
+        gen->regs[static_cast<size_t>(k)] =
+            frame.regs[static_cast<size_t>(i.a + 1 + k)];
+      gen->pc = 0;
+      gen->exhausted = false;
+      frame.regs[i.a] = QLangValue::Generator(gen);
+      break;
+    }
     case Opcode::JE:
     case Opcode::JNE:
     case Opcode::JG:

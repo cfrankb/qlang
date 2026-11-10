@@ -1,17 +1,22 @@
 // The loader and the linker (SPEC §bytecodes "external modules", "technical
-// specifications" 1–5; plan docs/plans/external-modules-plan-v4.md Phase 3b).
+// specifications" 1–5; plan docs/plans/external-modules-plan-v4.md Phases
+// 3b/3c).
 //
 // A library is a `.qlc` image with an export table. `QLangContext::loadProgram`
 // reads one into the context's module registry (keyed by the name `import`
-// binds it under), the compiler resolves `import` against that table, and
-// `QLangLinker` merges the images with the entry program into one runnable
-// program. This suite pins the parts Phase 3b owns —
+// binds it under), the compiler resolves `import` against that table into
+// `getimport`/`callimport` operands, and `QLangLinker` merges the images with
+// the entry program into one runnable program. This suite pins —
 //
 //   * the registry: load by stream and by file, lookup by name, load order,
 //     a duplicate module name, an unresolvable native slot, `clear()`;
 //   * the merge: one function table (concatenated), one constant pool folded
 //     through `valueKey` (Q33), one native-slot table deduped by name, one
 //     global-register area split into disjoint per-module slices;
+//   * the import table (Phase 3c): one merged table deduped by (module, name),
+//     so a library may itself import a library and two importers of one export
+//     read one cell; `callimport` is resolved into `callfn`/`makegen` and
+//     leaves no trace, while `getimport` survives reading the merged cell;
 //   * the rewrites (Q32): every operand is rewritten on the decoded
 //     `RawInstr` and re-encoded, so a merged index that needs a wider operand
 //     is re-widened rather than byte-patched — the 300-def entry below exists
@@ -19,8 +24,11 @@
 //   * the run (Q35): each imported module's `<init>` executes exactly once,
 //     dependencies first, before the entry module's, and an exported variable
 //     is one shared cell the defining module writes and importers read (Q30);
+//   * the unlinked form: a program whose `getimport`/`callimport` the linker
+//     never resolved still runs on the VM, which is what a future runtime
+//     registry will hand over (plan Phase 3c);
 //   * the boundaries: a program that is already linked, a module that is not
-//     loaded, a library that is not linkable, and a linked program handed to
+//     loaded, a reference that names nothing, and a linked program handed to
 //     `writeQlc` each fail with a `QLangError` instead of producing a program
 //     that runs against the wrong functions or cells.
 //
@@ -224,14 +232,14 @@ int operandB(const Function &f, size_t i) {
   return k.b;
 }
 
-// The first function index a CALLFN in `f` names, or -1.
-int firstCallFnTarget(const Function &f) {
-  for (size_t i = 0; i < f.instrOffsets.size(); i++) {
-    DecodedInstruction k;
-    decodeInstruction(f.code.data(), f.instrOffsets[i], f.code.size(), k);
-    if (k.op == Opcode::CALLFN) return k.b;
-  }
-  return -1;
+// The error text compiling `source` as the entry module produced ("" when it
+// compiled). The importer's rules are compile-time ones, so no link is
+// attempted here.
+std::string entryError(QLangContext &ctx, const std::string &source) {
+  CompiledProgram prog;
+  std::map<std::string, int> ids;
+  std::string err;
+  return compile(ctx, source, prog, ids, err, "app") ? "" : err;
 }
 
 } // namespace
@@ -263,7 +271,7 @@ static void testRegistry() {
   check(lib->program.exports.size() == 5,
         "registry: the export table survived the image");
   check(lib->program.imports.empty(),
-        "registry: a library imports nothing (Phase 3b)");
+        "registry: a library that imports nothing has an empty table");
 
   // A second image under the same name is a duplicate, not an override: two
   // images behind one name would make `import greeter` ambiguous.
@@ -431,18 +439,27 @@ static const ExportEntry *findExport(const CompiledProgram &prog,
   return nullptr;
 }
 
-// The instruction index of the first CALLFN in `f` (and its operand), or -1.
-static int firstCallFn(const Function &f, int *operand) {
+// The instruction index of the first instruction of opcode `op` in `f` (and its
+// operand `b`), or -1.
+static int firstInstr(const Function &f, Opcode op, int *operand) {
   for (size_t i = 0; i < f.instrOffsets.size(); i++) {
     DecodedInstruction k;
     decodeInstruction(f.code.data(), f.instrOffsets[i], f.code.size(), k);
-    if (k.op == Opcode::CALLFN) {
+    if (k.op == op) {
       if (operand)
         *operand = k.b;
       return static_cast<int>(i);
     }
   }
   return -1;
+}
+
+// True when any function of `prog` holds an instruction of opcode `op`.
+static bool programHasOpcode(const CompiledProgram &prog, Opcode op) {
+  for (const Function &f : prog.functions)
+    if (firstInstr(f, op, nullptr) >= 0)
+      return true;
+  return false;
 }
 
 // Encoded size of instruction `i` of `f`.
@@ -494,14 +511,26 @@ static void testMerge() {
           "merge: the init records the module it belongs to");
   }
 
-  // The compiler could not name any of this on its own: three references were
-  // pending, and the link consumed them all.
+  // The compiler could not name any of this on its own: it emitted real
+  // instructions against its OWN import table, and the link renumbered them.
   check(entry.imports.size() == 4,
         "merge: the app bound four names (MODULE_NAME, TAG, counter, bump)");
-  check(entry.pendingLinks.size() == 3,
-        "merge: three cross-module references were left pending");
-  check(merged.pendingLinks.empty(),
-        "merge: the link leaves no unresolved reference behind");
+  check(programHasOpcode(entry, Opcode::CALLIMPORT) &&
+            programHasOpcode(entry, Opcode::GETIMPORT),
+        "merge: the app's cross-module reads are getimport/callimport");
+
+  // A call cannot survive: the merged program holds the function, so the call
+  // names it directly. A cell read does survive — the importer may not address
+  // another module's register directly (spec 3), so it keeps reading the cell
+  // through the merged table.
+  check(!programHasOpcode(merged, Opcode::CALLIMPORT),
+        "merge: no callimport survives the link (Phase 3c)");
+  check(programHasOpcode(merged, Opcode::GETIMPORT),
+        "merge: getimport survives, reading the merged import table");
+  check(firstInstr(merged.functions[0], Opcode::CALLFN, nullptr) >= 0,
+        "merge: the cross-module call became a callfn");
+  check(merged.imports.size() == entry.imports.size(),
+        "merge: one merged import table, one entry per bound name");
 
   // The merged import table describes the merged program: every ref is a merged
   // handle, a function index or an absolute cell.
@@ -617,18 +646,24 @@ end
              "rewiden: the app links (" + err + ")"))
     return;
 
-  // Before the link the operand is the library's own index for `answer` (its
-  // top level is 0, so 1) — small enough for a 1-byte operand.
+  // Before the link the call is a `callimport` naming the app's OWN import slot
+  // for `answer` — a small number, so a 1-byte operand.
   int beforeOperand = -1;
-  const int at = firstCallFn(entry.functions[0], &beforeOperand);
-  if (!check(at >= 0 && beforeOperand == 1,
-             "rewiden: the call names the defining module's index"))
+  const int at =
+      firstInstr(entry.functions[0], Opcode::CALLIMPORT, &beforeOperand);
+  const bool ownSlot =
+      at >= 0 && beforeOperand >= 0 &&
+      static_cast<size_t>(beforeOperand) < entry.imports.size() &&
+      entry.imports[static_cast<size_t>(beforeOperand)].name == "answer";
+  if (!check(ownSlot, "rewiden: the call names the app's own import slot"))
     return;
   const size_t before = instrSize(entry.functions[0], at);
 
-  // After it is the merged index, past 255, in an instruction that grew.
+  // After it is a `callfn` naming the merged index, past 255, in an instruction
+  // that grew.
   int afterOperand = -1;
-  const int atMerged = firstCallFn(merged.functions[0], &afterOperand);
+  const int atMerged =
+      firstInstr(merged.functions[0], Opcode::CALLFN, &afterOperand);
   const int want = static_cast<int>(entry.functions.size()) + 1;
   check(atMerged == at, "rewiden: the rewrite keeps the instruction count");
   check(afterOperand == want,
@@ -745,6 +780,432 @@ static void testSharedCell() {
 }
 
 // ---------------------------------------------------------------------------
+// A library that imports a library (plan Phase 3c): an image carries
+// `getimport`/`callimport` operands into its OWN import table, and the merged
+// program has one table for everyone
+// ---------------------------------------------------------------------------
+
+// The leaf: one variable and the only function allowed to write it.
+static const char *kLeaf = R"(
+export const MODULE_NAME = "leaf"
+export counter = 41
+export def bump()
+  global counter
+  counter = counter + 1
+  return counter
+end
+println("leaf init")
+)";
+
+// The middle: imports the leaf and calls through it, so its image is the first
+// one this suite writes that carries an import table of its own.
+static const char *kMiddle = R"(
+import leaf
+export const MODULE_NAME = "middle"
+export def tick()
+  return bump() + 100
+end
+export def peek()
+  return counter
+end
+println("middle init")
+)";
+
+static void testLibraryChain() {
+  QLangContext ctx;
+  std::string err;
+  if (!addLibrary(ctx, kLeaf, err)) {
+    check(false, "chain: the leaf loads (" + err + ")");
+    return;
+  }
+  auto middle = addLibrary(ctx, kMiddle, err);
+  if (!check(middle != nullptr,
+             "chain: a library that imports one loads (" + err + ")"))
+    return;
+  check(middle->program.imports.size() == 3,
+        "chain: the image carries its own import table (Phase 3c)");
+
+  // The app imports the middle selectively and the leaf's cell directly, so
+  // `counter` is bound by two images and has to land on one merged cell. (A
+  // flat `import` of both would collide on MODULE_NAME, which is a compile
+  // error by design.)
+  CompiledProgram merged, entry;
+  const bool linked =
+      buildLinked(ctx,
+                  "from middle import tick, peek\nfrom leaf import counter\n"
+                  "println(tick())\nprintln(peek())\nprintln(counter)\n",
+                  merged, err, "app", &entry);
+  if (!check(linked, "chain: the app links against both (" + err + ")"))
+    return;
+
+  // Dependencies first: the leaf's top level runs before the middle's (Q35).
+  check(merged.initSequence.size() == 2 &&
+            merged.initSequence[0].module == "leaf" &&
+            merged.initSequence[1].module == "middle",
+        "chain: a transitive dependency inits first");
+  check(runText(merged, ctx) == "leaf init\nmiddle init\n142\n42\n42\n",
+        "chain: a library calls through its own import table");
+
+  // One merged table deduped by (module, name): the app bound three names and
+  // the middle three, but leaf's counter/bump/MODULE_NAME are the same three
+  // entities, so five entries describe all six bindings.
+  check(entry.imports.size() == 3, "chain: the app bound three names");
+  check(merged.imports.size() == 5,
+        "chain: two importers of one export share one entry");
+  int counterEntries = 0;
+  for (const ImportEntry &im : merged.imports)
+    if (im.name == "counter")
+      counterEntries++;
+  check(counterEntries == 1, "chain: the shared cell is one table entry");
+
+  // The middle's own cross-module references resolved too: its `callimport`
+  // became a call of the merged table's function.
+  check(!programHasOpcode(merged, Opcode::CALLIMPORT) &&
+            programHasOpcode(merged, Opcode::GETIMPORT),
+        "chain: the library's own references resolved as well");
+  const ImportEntry *cell = nullptr;
+  for (const ImportEntry &im : merged.imports)
+    if (im.name == "counter")
+      cell = &im;
+  check(cell && cell->ref >= 0 &&
+            cell->ref < static_cast<int>(merged.registerCount),
+        "chain: the shared entry names a merged cell");
+}
+
+// ---------------------------------------------------------------------------
+// The unlinked form (plan Phase 3c): both opcodes are VM instructions, so a
+// program whose import table already holds merged handles runs with no link —
+// the shape a future runtime registry hands over
+// ---------------------------------------------------------------------------
+
+static void testUnlinkedOpcodes() {
+  QLangContext ctx;
+  std::string err;
+  if (!addLibrary(ctx, kTally, err)) {
+    check(false, "unlinked: the library loads (" + err + ")");
+    return;
+  }
+  CompiledProgram merged, entry;
+  const bool linked = buildLinked(ctx, kTallyApp, merged, err, "app", &entry);
+  if (!check(linked, "unlinked: the app links (" + err + ")"))
+    return;
+
+  // Splice a `callimport` back over the `callfn` the link produced, naming an
+  // import entry whose `ref` is already a merged function index — what a module
+  // image's table looks like once its dependency is in the same program.
+  CompiledProgram prog = merged;
+  const ImportEntry *bump = nullptr;
+  for (const ImportEntry &im : prog.imports)
+    if (im.name == "bump")
+      bump = &im;
+  if (!check(bump != nullptr, "unlinked: the merged table names the callee"))
+    return;
+  const ImportEntry direct = *bump;
+  const int calleeSlot = static_cast<int>(prog.imports.size());
+  prog.imports.push_back(direct);
+
+  Function &top = prog.functions[0];
+  std::vector<RawInstr> raw;
+  decodeRawStream(top, raw);
+  int callAt = -1, getAt = -1;
+  for (size_t i = 0; i < raw.size(); i++) {
+    if (raw[i].op == Opcode::CALLFN && callAt < 0)
+      callAt = static_cast<int>(i);
+    if (raw[i].op == Opcode::GETIMPORT && getAt < 0)
+      getAt = static_cast<int>(i);
+  }
+  if (!check(callAt >= 0 && getAt >= 0,
+             "unlinked: the top level calls and reads across"))
+    return;
+  raw[static_cast<size_t>(callAt)].op = Opcode::CALLIMPORT;
+  raw[static_cast<size_t>(callAt)].b = calleeSlot;
+  encodeRawStream(top, raw);
+  check(runText(prog, ctx) ==
+            "tally init\nshared literal\nshared literal\n42\n42\n",
+        "unlinked: the VM resolves the call through the import table");
+
+  // Rewriting the surviving `getimport` into a `callimport` of the same cell
+  // proves the two really do read the same table.
+  CompiledProgram readCall = prog;
+  {
+    std::vector<RawInstr> r;
+    decodeRawStream(readCall.functions[0], r);
+    r[static_cast<size_t>(getAt)].op = Opcode::CALLIMPORT;
+    encodeRawStream(readCall.functions[0], r);
+  }
+  check(runError(readCall, ctx).find("is not a function") != std::string::npos,
+        "unlinked: callimport of a variable says so");
+
+  // And the guards are the VM's own, because nothing checked them earlier: an
+  // operand outside the table, and a read of a function entry.
+  CompiledProgram badIndex = prog;
+  {
+    std::vector<RawInstr> r;
+    decodeRawStream(badIndex.functions[0], r);
+    r[static_cast<size_t>(callAt)].b =
+        static_cast<int>(badIndex.imports.size()) + 5;
+    encodeRawStream(badIndex.functions[0], r);
+  }
+  check(runError(badIndex, ctx).find("outside the program's import table") !=
+            std::string::npos,
+        "unlinked: an operand outside the import table is caught");
+
+  CompiledProgram badRead = prog;
+  {
+    std::vector<RawInstr> r;
+    decodeRawStream(badRead.functions[0], r);
+    r[static_cast<size_t>(getAt)].b = calleeSlot;
+    encodeRawStream(badRead.functions[0], r);
+  }
+  check(runError(badRead, ctx).find("is a function, not a value") !=
+            std::string::npos,
+        "unlinked: getimport of a function says so");
+}
+
+// ---------------------------------------------------------------------------
+// The importer's rules (plan Phase 3c): an imported name is read-only where it
+// is used, and since Phase 3c it is reachable from any depth, so the guards have
+// to fire where the reads now are
+// ---------------------------------------------------------------------------
+
+static void testImportGuards() {
+  QLangContext ctx;
+  std::string err;
+  if (!addLibrary(ctx, kTally, err) || !addLibrary(ctx, kGreeter, err)) {
+    check(false, "guards: both libraries load (" + err + ")");
+    return;
+  }
+
+  // The defining module owns its names: an importer reads and calls them, it
+  // never writes them (SPEC §bytecodes "technical specifications" 3, Q30).
+  check(entryError(ctx, "import tally\ncounter = 1\n")
+                .find("cannot assign to imported name 'counter'") !=
+            std::string::npos,
+        "guards: assigning to an imported variable is refused");
+  check(entryError(ctx, "import tally\ncounter += 1\n")
+                .find("cannot assign to imported name 'counter'") !=
+            std::string::npos,
+        "guards: compound assignment is refused the same way");
+  check(entryError(ctx, "import tally\ncounter++\n")
+                .find("cannot increment/decrement imported name 'counter'") !=
+            std::string::npos,
+        "guards: incrementing an imported variable is refused");
+  check(entryError(ctx, "import tally\ndelete counter\n")
+                .find("cannot delete imported name 'counter'") !=
+            std::string::npos,
+        "guards: deleting an imported name is refused");
+
+  // A function export is owned the same way: the table holds its index, so a
+  // rebind would leave the table naming one function while the name gave
+  // another (SPEC §bytecodes "keyword export": exported functions are not
+  // modifiable).
+  check(entryError(ctx, "import tally\nbump = 1\n")
+                .find("cannot assign to imported name 'bump'") !=
+            std::string::npos,
+        "guards: rebinding an imported function name is refused");
+  // A function is not a value, so reading it by name reads a cell that is not
+  // there; the error says what to do instead.
+  check(entryError(ctx, "import tally\nprintln(bump)\n")
+                .find("call it instead of reading it") != std::string::npos,
+        "guards: reading an imported function as a value is refused");
+
+  // None of this was top-level-only before: Phase 3c made an imported name
+  // reachable from a function body, which is where the guards now have to fire
+  // (and where the read has to be allowed).
+  check(entryError(ctx, "import tally\ndef f()\n  counter = 1\nend\nf()\n")
+                .find("cannot assign to imported name") != std::string::npos,
+        "guards: a write inside a function body is refused too");
+  check(entryError(ctx,
+                   "import tally\ndef f()\n  return counter\nend\nprintln(f())\n")
+                .empty(),
+        "guards: reading an imported variable inside a body is legal (3c)");
+
+  // What the table cannot answer is refused while compiling rather than at the
+  // first call.
+  check(entryError(ctx, "from tally import nope\n")
+                .find("does not export 'nope'") != std::string::npos,
+        "guards: an export the module does not have is refused");
+  check(entryError(ctx,
+                   "from tally import counter\nfrom greeter import counter\n")
+                .find("is already imported from module 'tally'") !=
+            std::string::npos,
+        "guards: two modules claiming one name is refused");
+  // `import` binds names into the module's scope, so it has no meaning inside a
+  // function body; dropping it there silently left the name unbound and the
+  // call failed at run time instead.
+  check(entryError(ctx, "def f()\n  import tally\n  return 1\nend\n")
+                .find("must appear at module top level") != std::string::npos,
+        "guards: an import inside a function body is refused");
+}
+
+// ---------------------------------------------------------------------------
+// A closure across the boundary (plan Phase 3c): the value is created in module
+// A, reads module A's live cell, and module B calls it from inside one of its
+// own functions
+// ---------------------------------------------------------------------------
+
+// `adder` is a closure value, not a `def`, so it is exported as a variable: the
+// importer reads the cell and calls what it holds.
+static const char *kFactory = R"(
+export const MODULE_NAME = "factory"
+export counter = 5
+export adder = (k)[counter] { return counter + k }
+counter = 40
+)";
+
+static void testClosureAcrossBoundary() {
+  QLangContext ctx;
+  std::string err;
+  if (!addLibrary(ctx, kFactory, err)) {
+    check(false, "closure: the library loads (" + err + ")");
+    return;
+  }
+  CompiledProgram merged, entry;
+  const std::string app =
+      "from factory import adder\n"
+      "def useIt(k)\n  return adder(k)\nend\n"
+      "println(adder(1))\nprintln(useIt(2))\n";
+  const bool linked = buildLinked(ctx, app, merged, err, "app", &entry);
+  if (!check(linked, "closure: the app links (" + err + ")")) return;
+
+  // 41 and 42: the closure reads the cell as the defining module left it, from
+  // a frame that is not the one that created it and, in the second case, from
+  // the importing module's own function.
+  check(runText(merged, ctx) == "41\n42\n",
+        "closure: a module's closure keeps its own cell across the boundary");
+  // The read is a table read rather than a register the link copied: the app
+  // reads the cell and calls what it holds, at both depths.
+  check(programHasOpcode(entry, Opcode::GETIMPORT) &&
+            programHasOpcode(entry, Opcode::CALLCLOS),
+        "closure: the app reads the cell and calls what it holds");
+  check(!programHasOpcode(merged, Opcode::CALLIMPORT),
+        "closure: the link leaves no unresolved call behind");
+}
+
+// ---------------------------------------------------------------------------
+// A generator across the boundary (plan Phase 3c): the linker resolves the
+// `callimport` into a `makegen` whose closure names the MERGED function, and the
+// VM's own `callimport` builds the same value with no link at all
+// ---------------------------------------------------------------------------
+
+// The generator reads its own module's exported variable, so its capture is an
+// absolute table slot — the only kind a cross-module call can seed (a capture
+// named by a register belongs to the defining module's frame, which the importer
+// has no access to).
+static const char *kSeries = R"(
+export const MODULE_NAME = "series"
+export base = 10
+export def steps(n)
+  global base
+  for i = 1 to n { yield base + i }
+end
+)";
+
+static void testGeneratorAcrossBoundary() {
+  QLangContext ctx;
+  std::string err;
+  if (!addLibrary(ctx, kSeries, err)) {
+    check(false, "gen: the library loads (" + err + ")");
+    return;
+  }
+  const std::string app =
+      "from series import steps\n"
+      "local g = steps(2)\n"
+      "local a = g()\nlocal b = g()\nlocal c = g()\n"
+      "println(a + b)\n"
+      "if c == nil { println(\"exhausted\") } else { println(c) }\n";
+  CompiledProgram merged, entry;
+  const bool linked = buildLinked(ctx, app, merged, err, "app", &entry);
+  if (!check(linked, "gen: the app links (" + err + ")"))
+    return;
+
+  // The index the library's generator has in the merged function table.
+  int want = -1;
+  for (size_t i = 0; i < merged.functions.size(); i++)
+    if (merged.functions[i].name == "steps")
+      want = static_cast<int>(i);
+  if (!check(want > 0, "gen: the merged function table holds the generator"))
+    return;
+
+  // The app called an import; the merged program builds the generator the way
+  // the defining module does, from a pool closure naming the merged function.
+  check(programHasOpcode(entry, Opcode::CALLIMPORT),
+        "gen: the app calls the imported generator");
+  int spec = -1;
+  const int at = firstInstr(merged.functions[0], Opcode::MAKEGEN, &spec);
+  if (!check(!programHasOpcode(merged, Opcode::CALLIMPORT) && at >= 0,
+             "gen: the link resolved the call into a makegen"))
+    return;
+  if (!check(spec >= 0 &&
+             static_cast<size_t>(spec) < merged.constants.size(),
+             "gen: the makegen names a pool entry"))
+    return;
+  const QLangValue &cv = merged.constants[static_cast<size_t>(spec)];
+  check(cv.type() == QLangValue::Type::Function &&
+            cv.asFunction().funcIndex == want,
+        "gen: the closure names the merged function, not the library's index");
+
+  // The fold (Q33): the defining module's own generator constant is the SAME
+  // value the link synthesized, because the captures were rebased before the
+  // pool merged — so exactly one slot holds the function's own capture spec.
+  // The module's def-time `makefunc` spec is a second, genuinely different
+  // value (it names the frame register the defining module's top level seeds),
+  // so it correctly stays a slot of its own.
+  const Function &genFn = merged.functions[static_cast<size_t>(want)];
+  auto sameSpec = [&genFn](const Closure &cl) {
+    if (cl.captures.size() != genFn.captures.size())
+      return false;
+    for (size_t i = 0; i < cl.captures.size(); i++)
+      if (cl.captures[i].reg != genFn.captures[i].reg)
+        return false;
+    return true;
+  };
+  int folded = 0, specs = 0;
+  for (const QLangValue &v : merged.constants) {
+    if (v.type() != QLangValue::Type::Function ||
+        v.asFunction().funcIndex != want)
+      continue;
+    specs++;
+    if (sameSpec(v.asFunction()))
+      folded++;
+  }
+  check(folded == 1, "gen: the synthesized closure folds with the module's");
+  check(specs == 2, "gen: the def-time capture spec stays a distinct value");
+
+  // 11 + 12 and then nil: the generator ran against the defining module's cell
+  // and terminated on its own.
+  check(runText(merged, ctx) == "23\nexhausted\n",
+        "gen: the merged program yields the defining module's values");
+
+  // The unlinked form: the same program with the `makegen` spliced back into the
+  // `callimport` the compiler emitted, naming an import entry whose `ref` is
+  // already a merged function index — what a registry hands the VM directly.
+  CompiledProgram prog = merged;
+  const ImportEntry *steps = nullptr;
+  for (const ImportEntry &im : prog.imports)
+    if (im.name == "steps")
+      steps = &im;
+  if (!check(steps != nullptr && steps->kind == ExportKind::Func &&
+                 steps->ref == want,
+             "gen: the merged table names the generator"))
+    return;
+  const int slot = static_cast<int>(prog.imports.size());
+  prog.imports.push_back(*steps);
+  {
+    std::vector<RawInstr> raw;
+    decodeRawStream(prog.functions[0], raw);
+    // The operand changes meaning with the opcode: a pool index becomes an
+    // import-table index, which the modifier byte has to announce.
+    raw[static_cast<size_t>(at)].op = Opcode::CALLIMPORT;
+    raw[static_cast<size_t>(at)].kind = RightKind::Register;
+    raw[static_cast<size_t>(at)].b = slot;
+    encodeRawStream(prog.functions[0], raw);
+  }
+  check(runText(prog, ctx) == "23\nexhausted\n",
+        "gen: the VM builds the generator from the import table");
+}
+
+// ---------------------------------------------------------------------------
 // The boundaries: what the linker itself rejects
 // ---------------------------------------------------------------------------
 
@@ -809,32 +1270,80 @@ static void testBoundaries() {
             std::string("boundary: an empty module says so (") + e.what() + ")");
     }
   }
-  {
-    auto m = stubModule("tally");
-    m->program.pendingLinks.push_back(PendingLink{});
-    try {
-      QLangLinker l({m});
-      l.link(entry);
-      check(false, "boundary: a half-linked module must be rejected");
-    } catch (const QLangError &e) {
-      check(std::string(e.what()).find("unresolved") != std::string::npos,
-            std::string("boundary: a half-linked module says so (") +
-                e.what() + ")");
-    }
-  }
+  // A library whose OWN import names a module nobody loaded. Since Phase 3c an
+  // import table in an image is legal, so what fails is the graph, not the
+  // table.
   {
     auto m = stubModule("tally");
     m->program.imports.push_back(
         ImportEntry{"other", "x", ExportKind::Func, 0, ""});
     try {
-      // `other` is loaded, so the graph resolves and the image itself is what
-      // the linker refuses.
-      QLangLinker l({m, stubModule("other")});
+      QLangLinker l({m});
       l.link(entry);
-      check(false, "boundary: a library with imports must be rejected");
+      check(false,
+            "boundary: a library importing an unloaded module must be rejected");
     } catch (const QLangError &e) {
-      check(std::string(e.what()).find("GETIMPORT") != std::string::npos,
-            std::string("boundary: a library with imports says why (") +
+      check(std::string(e.what()).find("other") != std::string::npos &&
+                std::string(e.what()).find("not loaded") != std::string::npos,
+            std::string("boundary: it names the missing dependency (") +
+                e.what() + ")");
+    }
+  }
+
+  // A `callimport` whose entry names a variable. The compiler cannot produce
+  // one, so the linker's own check is the last line of defence.
+  {
+    CompiledProgram bad = entry;
+    for (ImportEntry &im : bad.imports)
+      if (im.name == "bump")
+        im.kind = ExportKind::Var;
+    try {
+      QLangLinker l(ctx.loadedModules());
+      l.link(bad);
+      check(false, "boundary: a callimport of a variable must be rejected");
+    } catch (const QLangError &e) {
+      check(std::string(e.what()).find("not a function") != std::string::npos,
+            std::string("boundary: a callimport of a variable says so (") +
+                e.what() + ")");
+    }
+  }
+
+  // An import `ref` naming something the defining module does not have. The
+  // reader refuses an out-of-range EXPORT ref and the compiler copies refs out
+  // of that table, so an image cannot carry this — but rebasing it blindly
+  // would land the cell in the next module's slice, which is the one failure
+  // mode that would run silently instead of failing.
+  {
+    CompiledProgram bad = entry;
+    for (ImportEntry &im : bad.imports)
+      if (im.name == "counter")
+        im.ref = 999;
+    try {
+      QLangLinker l(ctx.loadedModules());
+      l.link(bad);
+      check(false,
+            "boundary: an import ref outside its module must be rejected");
+    } catch (const QLangError &e) {
+      check(std::string(e.what()).find("outside the module") !=
+                std::string::npos,
+            std::string("boundary: an import ref outside its module says so (") +
+                e.what() + ")");
+    }
+  }
+
+  // An import operand naming a slot the module's own table does not have.
+  {
+    CompiledProgram bad = entry;
+    bad.imports.clear();
+    try {
+      QLangLinker l(ctx.loadedModules());
+      l.link(bad);
+      check(false,
+            "boundary: an import operand outside the table must be rejected");
+    } catch (const QLangError &e) {
+      check(std::string(e.what()).find("outside the module's import table") !=
+                std::string::npos,
+            std::string("boundary: an out-of-range import operand says so (") +
                 e.what() + ")");
     }
   }
@@ -858,15 +1367,34 @@ static void testBoundaries() {
     }
   }
 
-  // Neither link artifact belongs in an image: a merged program would lose the
-  // init sequence, an unlinked one would run against the wrong cells.
+  // A merged program is not an image: v9 has no section for the init sequence,
+  // and writing one out would silently drop every module's top level.
   {
     std::ostringstream os(std::ios::binary);
     check(!writeQlc(os, merged, {}),
           "boundary: a merged program is not serializable");
-    std::ostringstream os2(std::ios::binary);
-    check(!writeQlc(os2, entry, {}),
-          "boundary: a program with pending links is not serializable");
+  }
+
+  // An UNLINKED program with imports is an image (plan Phase 3c): its import
+  // table plus `getimport`/`callimport` are exactly what v9 carries for a
+  // dependency, so both survive the round trip.
+  {
+    std::ostringstream os(std::ios::binary);
+    if (!check(writeQlc(os, entry, {}),
+               "boundary: a program with imports is serializable"))
+      return;
+    std::istringstream is(os.str(), std::ios::binary);
+    CompiledProgram back;
+    std::vector<std::pair<int, std::string>> slots;
+    std::string rerr;
+    if (!check(readQlc(is, back, slots, rerr),
+               "boundary: the image with imports reads back (" + rerr + ")"))
+      return;
+    check(back.imports.size() == entry.imports.size(),
+          "boundary: the import table survived the image");
+    check(programHasOpcode(back, Opcode::CALLIMPORT) &&
+              programHasOpcode(back, Opcode::GETIMPORT),
+          "boundary: both opcodes survived the image");
   }
 }
 
@@ -878,6 +1406,11 @@ int main() {
   testOperandRewidening();
   testInitOrder();
   testSharedCell();
+  testLibraryChain();
+  testUnlinkedOpcodes();
+  testImportGuards();
+  testClosureAcrossBoundary();
+  testGeneratorAcrossBoundary();
   testBoundaries();
 
   std::cout << (fails == 0 ? "ALL PASS" : "FAILURES") << ": " << passes

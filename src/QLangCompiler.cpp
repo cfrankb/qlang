@@ -1279,14 +1279,6 @@ CompiledProgram QLangCompiler::compile() {
   // and are not table entries.
   checkImportCycles();
   out.imports = std::move(m_imports);
-  // The top level's cross-module references sit in functions[0]; a function's
-  // were stamped when it closed (buildFunction).
-  for (PendingLink &pl : m_curPendingLinks) {
-    pl.funcIndex = 0;
-    m_pendingLinks.push_back(pl);
-  }
-  m_curPendingLinks.clear();
-  out.pendingLinks = std::move(m_pendingLinks);
   finishExports(out); // reads m_userFuncs / m_regs, so before they move out
   buildRegisterReport(); // before m_regs moves out (names are read from it)
   out.vars = std::move(m_regs);
@@ -1645,10 +1637,6 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_freeNamedRegs.clear();
   int savedNamedReg = m_nextNamedReg;
   bool savedInFunction = m_inFunction;
-  // Cross-module references recorded while the body compiles belong to THIS
-  // function; they are stamped and handed over when its index is known.
-  auto savedPendingLinks = std::move(m_curPendingLinks);
-  m_curPendingLinks.clear();
 
   // Fresh function context: params occupy registers 0..paramCount-1 and must
   // reserve those registers so temporaries never collide with a parameter.
@@ -1813,14 +1801,6 @@ int QLangCompiler::buildFunction(const std::string &name,
   }
 
   int funcIndex = static_cast<int>(m_functions.size()) + 1; // +1 for prepended mainFn
-  // Hand this function's cross-module references to the program now that its
-  // index is known: the linker addresses a pending link by (function,
-  // instruction) (external-modules plan v4 Phase 3b).
-  for (PendingLink &pl : m_curPendingLinks) {
-    pl.funcIndex = funcIndex;
-    m_pendingLinks.push_back(pl);
-  }
-  m_curPendingLinks.clear();
   m_emitter.finish(fn);
   // Detect generator: any `yield` statement (at any nesting depth) makes this
   // a generator function.
@@ -1830,8 +1810,18 @@ int QLangCompiler::buildFunction(const std::string &name,
       break;
     }
   }
-  if (fn.isGenerator) {
+  // The generator's closure spec is read HERE, before `fn` moves into the
+  // function table. The constant itself cannot be emitted until the enclosing
+  // function's emitter state is restored (below), and reading `fn.captures`
+  // after the move yields a moved-from vector: the spec lands in the pool with
+  // NO captures, which turns the VM's MAKEGEN capture-binding fallback into a
+  // silent no-op and stops a linked program's synthesized `makegen` closure
+  // from folding with this one (external-modules plan v4 Q33).
+  const bool isGenerator = fn.isGenerator;
+  std::vector<CaptureRef> genCaptures;
+  if (isGenerator) {
     m_generatorFuncIndices.insert(funcIndex);
+    genCaptures = fn.captures;
   }
   m_functions.push_back(std::move(fn));
 
@@ -1861,15 +1851,14 @@ int QLangCompiler::buildFunction(const std::string &name,
   m_deferred = std::move(savedDeferred);
   m_protectStack = std::move(savedProtectStack);
   m_inFunction = savedInFunction;
-  m_curPendingLinks = std::move(savedPendingLinks);
 
   // Emit generator closure constant into the MAIN bytecode (not the temporary
   // function bytecode that was just moved into fn). MAKEGEN in compileExpr
   // references constants in the current emitter.
-  if (fn.isGenerator) {
+  if (isGenerator) {
     auto closure = std::make_shared<Closure>();
     closure->funcIndex = funcIndex;
-    closure->captures = fn.captures;
+    closure->captures = std::move(genCaptures);
     int genConstIdx = emitConst(QLangValue::Function(closure));
     m_generatorConstIndices[funcIndex] = genConstIdx;
   }
@@ -1966,7 +1955,12 @@ void QLangCompiler::compileDeclaration(const StmtPtr &s) {
     trace(TRACE_FULL, "[DBG-GENVAR] Tracking gen var '%s' from call to '%s': userFuncs=%d genVars=%d\n",
           s->name.c_str(), e->callee.c_str(),
           (int)m_userFuncs.count(e->callee), (int)m_generatorVars.count(e->callee));
-    if (m_userFuncs.count(e->callee) && m_generatorVars.count(e->callee))
+    // An imported generator counts too: the call yields a generator value, so
+    // resuming the variable has to dispatch through CALLCLOS like a local one
+    // (plan Phase 3c — without this the name is unbound as a callee and the
+    // resume is refused as `unknown function`).
+    if ((m_userFuncs.count(e->callee) && m_generatorVars.count(e->callee)) ||
+        importedIsGenerator(e->callee))
       m_generatorVars.insert(s->name);
     trace(TRACE_FULL, "[DBG-GENVAR] m_generatorVars after insert: {");
     for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
@@ -2643,13 +2637,17 @@ void QLangCompiler::compileExprStmt(const StmtPtr &s) {
       (s->value->uop.text == "++" || s->value->uop.text == "--")) {
     const ExprPtr &opnd = s->value->operand;
     if (opnd && opnd->kind == ExprKind::Variable) {
+      // An imported name has no register (it is read through the import table),
+      // so this guard has to come before the register lookup: otherwise the
+      // undeclared-variable error fires first and says the opposite of the
+      // truth about a name the module did bind.
+      guardNotImported(opnd->name, "increment/decrement");
       int r = regOf(opnd->name);
       if (r < 0)
         throw QLangError(QLangErrorKind::Parse, 0, 0,
                          "use of undeclared variable '" + opnd->name + "'");
       guardNotConst(opnd->name, "increment/decrement");
       guardNotExportedFunc(opnd->name, "increment/decrement");
-      guardNotImported(opnd->name, "increment/decrement");
       emit(s->value->uop.text == "++" ? Opcode::INC : Opcode::DEC, r, r);
       return;
     }
@@ -2898,10 +2896,25 @@ const LoadedModule *QLangCompiler::qlModule(const std::string &name) const {
   return m_scope->loadedModule(ait == m_qlAliases.end() ? name : ait->second);
 }
 
-void QLangCompiler::recordPendingLink(int importIndex, int instrIndex,
-                                      PendingLinkKind kind, int poolIndex) {
-  m_curPendingLinks.push_back(
-      PendingLink{0, instrIndex, importIndex, kind, poolIndex});
+// Whether a call of the imported name yields a generator (plan Phase 3c). The
+// importing module has no function record of its own for the name — the import
+// entry points at the DEFINING image's — so `isGenerator` has to be read out of
+// that image. Anything the table cannot answer (no such import, a value export,
+// a module that is not loaded, a ref outside the function table) is answered
+// "not a generator": the paths that have to REFUSE such a name check the table
+// themselves and say why.
+bool QLangCompiler::importedIsGenerator(const std::string &name) const {
+  auto it = m_qlImports.find(name);
+  if (it == m_qlImports.end())
+    return false;
+  const ImportEntry &im = m_imports[static_cast<size_t>(it->second)];
+  if (im.kind != ExportKind::Func)
+    return false;
+  const LoadedModule *dm = m_scope ? m_scope->loadedModule(im.module) : nullptr;
+  if (!dm || im.ref < 0 ||
+      im.ref >= static_cast<int>(dm->program.functions.size()))
+    return false;
+  return dm->program.functions[static_cast<size_t>(im.ref)].isGenerator;
 }
 
 void QLangCompiler::guardNotImported(const std::string &name,
@@ -2972,20 +2985,13 @@ int QLangCompiler::bindQlImport(const LoadedModule &mod, const ExportEntry &exp,
   return idx;
 }
 
-// `import` resolved against a loaded image's export table (plan Phase 3b). The
-// five forms are the C++ resolver's; only the source of the names differs.
+// `import` resolved against a loaded image's export table (plan Phases 3b/3c).
+// The five forms are the C++ resolver's; only the source of the names differs.
 void QLangCompiler::compileQlImport(const StmtPtr &s, const LoadedModule &mod) {
-  // A library cannot import a `.ql` module yet: the pending links Phase 3b
-  // lowers them to are a link artifact, not an image section, so they could not
-  // survive into this module's `.qlc`. Rejecting here beats emitting a module
-  // that cannot be linked; Phase 3c's GETIMPORT/CALLIMPORT make the references
-  // serializable.
-  if (m_libraryMode)
-    throw QLangError(
-        QLangErrorKind::Parse, s->line, s->col,
-        "a library module cannot import the .ql module '" + s->importModule +
-            "' yet: cross-module references inside a library need "
-            "GETIMPORT/CALLIMPORT (external-modules plan Phase 3c)");
+  // A library may import another module: since Phase 3c the references become
+  // `getimport`/`callimport` operands into the module's own import table, both
+  // of which `.qlc` v9 carries, so the image stays serializable and the linker
+  // resolves the chain transitively.
   // `import m as a`: the alias names the module for a later `import a.f`.
   if (!s->importAlias.empty())
     m_qlAliases[s->importAlias] = mod.program.moduleName;
@@ -3026,7 +3032,8 @@ void QLangCompiler::compileImport(const StmtPtr &s) {
   //   from math import min, max            — flat import specific funcs
   // The same five forms resolve against a loaded `.ql` module's export table
   // when the name is one (external-modules plan v4 Phase 3b); being both is an
-  // error, never a precedence.
+  // error, never a precedence. A class body compiles with `m_inFunction` clear,
+  // so a class may import; a `def` body may not (see the `else` below).
   if (!m_inFunction) {
     // Find the module.
     const QLangContext::Module *mod = nullptr;
@@ -3111,6 +3118,16 @@ void QLangCompiler::compileImport(const StmtPtr &s) {
       if (!seen)
         m_importedModuleFuncs.push_back(std::move(imp));
     }
+  } else {
+    // `import` is a module-level statement: it binds names into the module's
+    // scope, and a function body has private registers and no module scope to
+    // bind into. Dropping it silently left the name unbound, so the call that
+    // should have resolved at compile time failed at run time instead
+    // (`unknown native function`).
+    throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                     "import of module '" + s->importModule +
+                         "' must appear at module top level, not inside a "
+                         "function body");
   }
 }
 
@@ -3722,12 +3739,12 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         emit(Opcode::MOV, dest, r);
       break;
     }
-    // Imported from a loaded `.ql` module (external-modules plan v4 Phase 3b,
-    // provisional lowering): the value lives in the DEFINING module's cell, so
-    // it is read with a register move whose operand the linker rebases into the
-    // merged global area. A function body has private registers, so a
-    // cross-module cell read only exists at module top level until GETIMPORT
-    // (Phase 3c) reads the import table from anywhere.
+    // Imported from a loaded `.ql` module (external-modules plan v4 Phase 3c):
+    // the value lives in the DEFINING module's shared cell, so it is read
+    // through the import table. An operand that names a table entry instead of
+    // a register is what makes the cell reachable from any depth — Phase 3b
+    // could only express it as a register move, which a function's private
+    // registers cannot name.
     auto iit = m_qlImports.find(e->name);
     if (iit != m_qlImports.end()) {
       const ImportEntry &im = m_imports[static_cast<size_t>(iit->second)];
@@ -3736,15 +3753,10 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
             QLangErrorKind::Parse, 0, 0,
             "'" + e->name + "' is a function imported from module '" +
                 im.module + "': call it instead of reading it");
-      if (m_inFunction)
-        throw QLangError(
-            QLangErrorKind::Parse, 0, 0,
-            "imported name '" + e->name +
-                "' cannot be read inside a function body yet: a function's "
-                "registers are private, so a cross-module cell read needs "
-                "GETIMPORT (external-modules plan Phase 3c)");
-      emit(Opcode::MOV, dest, im.ref);
-      recordPendingLink(iit->second, static_cast<int>(m_emitter.size()) - 1);
+      // An exported `const` is not folded to a literal here: its value exists
+      // only once the defining module's top level has run, which the compiler
+      // cannot know from an image.
+      emit(Opcode::GETIMPORT, dest, iit->second);
       break;
     }
     // Host-injected external variable (seeded via QLangContext::set, e.g.
@@ -4205,44 +4217,53 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       }
       break;
     }
-    // Called from a loaded `.ql` module (external-modules plan v4 Phase 3b,
-    // provisional lowering): the callee is the defining module's function, so
-    // the call names it with a module-local index the linker rewrites to the
-    // merged one. A call needs no register of the defining module, which is why
-    // an imported function is callable from any depth, unlike an imported
-    // variable.
+    // Called from a loaded `.ql` module (external-modules plan v4 Phase 3c):
+    // the callee is named through the import table, so the instruction carries
+    // no handle into the defining module — the linker resolves the entry when
+    // the images merge, which is why a `callimport` never survives a link.
     auto iit = m_qlImports.find(e->callee);
     if (iit != m_qlImports.end()) {
       const int importIdx = iit->second;
       const ImportEntry &im = m_imports[static_cast<size_t>(importIdx)];
       const LoadedModule *dm =
           m_scope ? m_scope->loadedModule(im.module) : nullptr;
-      if (!dm || im.ref < 0 ||
-          im.ref >= static_cast<int>(dm->program.functions.size()))
+      if (!dm || im.ref < 0)
         throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
                          "imported function '" + e->callee +
                              "' is not available: module '" + im.module +
                              "' is not loaded");
+      // `ref` is a function index for a function export and a cell for a value
+      // export (SPEC §bytecodes "import table (lookup)"), so each kind is
+      // checked against the table it names — the same split the reader makes
+      // for an export entry. Checking a cell against the function table would
+      // refuse an exported closure whose register happens to sit past the last
+      // function.
+      if (im.kind == ExportKind::Func &&
+          im.ref >= static_cast<int>(dm->program.functions.size()))
+        throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
+                         "imported function '" + e->callee +
+                             "' names a function index outside module '" +
+                             im.module + "'");
+      if (im.kind != ExportKind::Func &&
+          im.ref >= dm->program.registerCount)
+        throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
+                         "imported name '" + e->callee +
+                             "' names a cell outside module '" + im.module +
+                             "'");
       if (im.kind != ExportKind::Func) {
         // The name holds a closure value (an exported arrow or closure-typed
-        // variable): call what the cell holds. Reading the cell is top-level
-        // only until GETIMPORT, so the call is too.
-        if (m_inFunction)
-          throw QLangError(
-              QLangErrorKind::Parse, e->callLine, e->callCol,
-              "imported name '" + e->callee +
-                  "' cannot be called inside a function body yet: the closure "
-                  "lives in the defining module's cell, and reading it needs "
-                  "GETIMPORT (external-modules plan Phase 3c)");
-        emit(Opcode::MOV, dest, im.ref);
-        recordPendingLink(importIdx, static_cast<int>(m_emitter.size()) - 1);
+        // variable): read the defining module's cell, then call what it holds.
+        // `getimport` names a table entry rather than a register, so this works
+        // at any depth (the Phase 3b fallback was top-level only).
+        emit(Opcode::GETIMPORT, dest, importIdx);
         emit(Opcode::CALLCLOS, dest, dest, argCount);
         break;
       }
       const Function &df = dm->program.functions[static_cast<size_t>(im.ref)];
       // A capture named by a register is seeded from the CALLER's frame, so a
-      // function with one cannot be called across a module boundary yet. A
-      // module-level `def`'s captures of its own module's consts and `global`s
+      // function with one still cannot be called across a module boundary: the
+      // import table says WHICH function, not which frame seeds its captures.
+      // A module-level `def`'s captures of its own module's consts and `global`s
       // are absolute table slots (see the capture lowering in compileFunction),
       // so this fires on the one case that is not: a def that calls a sibling
       // def which itself has captures — that callee is materialized as a closure
@@ -4254,25 +4275,15 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
               QLangErrorKind::Parse, e->callLine, e->callCol,
               "imported function '" + e->callee +
                   "' captures a local of its own module and cannot be called "
-                  "across a module boundary yet (external-modules plan "
-                  "Phase 3c)");
+                  "across a module boundary: its captures are seeded from the "
+                  "defining module's frame");
+      emit(Opcode::CALLIMPORT, dest, importIdx, argCount);
       if (df.isGenerator) {
-        // MAKEGEN builds the generator from a pool Closure naming the defining
-        // function; the linker rebases the constant's funcIndex (a plain
-        // operand rewrite would point it at the entry module's function).
-        auto closure = std::make_shared<Closure>();
-        closure->funcIndex = im.ref;
-        closure->captures = df.captures;
-        int constIdx = emitConst(QLangValue::Function(closure));
-        emit(Opcode::MAKEGEN, dest, constIdx, argCount);
-        recordPendingLink(importIdx, static_cast<int>(m_emitter.size()) - 1,
-                          PendingLinkKind::ClosureConst, constIdx);
-        // Clear arg regs so they don't leak into the next instruction.
+        // The VM builds the generator from the imported function (the local
+        // MAKEGEN path's arg-register clearing applies for the same reason:
+        // the args must not leak into the next instruction).
         for (int j = 0; j < argCount; j++)
           emitImmNil(Opcode::MOV, argBase + j);
-      } else {
-        emit(Opcode::CALLFN, dest, im.ref, argCount);
-        recordPendingLink(importIdx, static_cast<int>(m_emitter.size()) - 1);
       }
       break;
     }

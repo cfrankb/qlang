@@ -894,8 +894,9 @@ int main() {
   // CMP_LT are private, and every check below observes the VM only through a
   // register (taken -> 1, not taken -> 0), so the suite cannot agree with a
   // wrong flag encoding by sharing constants with it.
-  check(kOpcodeUsedCount == 72,
-        "kOpcodeUsedCount is 72 (after the Phase 3 S3 identity compaction)");
+  check(kOpcodeUsedCount == 74,
+        "kOpcodeUsedCount is 74 (72 after the Phase 3 S3 compaction, +2 for "
+        "getimport/callimport in Phase 3c)");
 
   testMatrix();
   testNoneSetState();

@@ -1,4 +1,4 @@
-// The linker (external-modules plan v4 Phase 3b): merges the loaded `.qlc`
+// The linker (external-modules plan v4 Phases 3b/3c): merges the loaded `.qlc`
 // images a program imports with the program itself into one runnable
 // `CompiledProgram`.
 //
@@ -8,20 +8,24 @@
 // module top levels that run once, in dependency order, before the entry's (Q35
 // in the plan). Everything about *meaning* is the compiler's job — an unknown
 // export, a duplicate import, a write through an import or an import cycle is a
-// compile error — so this file only moves numbers, and only three kinds of
+// compile error — so this file only moves numbers, and only four kinds of
 // number need moving:
 //
 //   * a function index naming another module's function,
 //   * a constant-pool index naming another module's literal (or a closure
 //     spec whose function index / global cell is module-local),
-//   * a native slot, which is per-module by construction.
+//   * a native slot, which is per-module by construction,
+//   * an import-table index (`getimport`/`callimport` operand `b`), because the
+//     merged program carries one merged import table instead of one per module.
 //
 // Register operands are NOT rewritten. A module top level runs in a frame that
 // aliases the context's global table at the module's own offset, so each module
 // keeps the register numbers its compiler assigned while occupying a disjoint
-// slice of the table. The one exception is an operand the compiler recorded as
-// a pending link: it names ANOTHER module's cell, which the entry program could
-// not name on its own.
+// slice of the table. A cross-module reference needs no exception either:
+// `getimport`/`callimport` name the import table rather than a register, so the
+// only rewriting a cross-module reference needs is the entry's own index — and
+// `callimport`, which can only ever name a function the merged program already
+// has, is resolved into `callfn`/`makegen` and disappears (plan Phase 3c).
 #include "qlang/QLangLinker.h"
 
 #include <algorithm>
@@ -47,6 +51,33 @@ struct ModuleLink {
   int width = 0;    // registers the module's top level addresses
   std::vector<int> poolMap;   // module pool index -> merged pool index
   std::vector<int> nativeMap; // module native slot -> merged native slot
+  // Module import index -> merged import index. Two modules importing the same
+  // export share one merged entry, so the map is not the identity even when the
+  // module is the only importer of its own dependency.
+  std::vector<int> importMap;
+};
+
+// The merged import table. Keyed by (defining module, exported name) — the pair
+// that decides what an entry resolves to — so a name two modules import from
+// the same library becomes one cell, exactly like the shared cell SPEC
+// §bytecodes "technical specifications" 3 describes.
+class ImportTable {
+public:
+  int add(const ImportEntry &im) {
+    const std::string key = im.module + '\0' + im.name;
+    auto it = m_byKey.find(key);
+    if (it != m_byKey.end())
+      return it->second;
+    const int idx = static_cast<int>(m_entries.size());
+    m_entries.push_back(im);
+    m_byKey[key] = idx;
+    return idx;
+  }
+  std::vector<ImportEntry> take() { return std::move(m_entries); }
+
+private:
+  std::vector<ImportEntry> m_entries;
+  std::unordered_map<std::string, int> m_byKey;
 };
 
 // Depth-first, dependencies first: a module is emitted after everything it
@@ -153,22 +184,13 @@ CompiledProgram QLangLinker::link(const CompiledProgram &entry,
       collectOrder(im.module, m_available, order, done, onPath);
   }
 
-  // A library image is a module, not a half-linked program: its own cross-module
-  // references would need pending links, and those are a link artifact the
-  // `.qlc` format does not carry (writeQlc rejects them). The compiler refuses
-  // to produce such an image; this is the loader-side guard for a hand-built or
-  // future one.
-  for (const LoadedModule *m : order) {
+  // A library image is a module, and since Phase 3c a module may itself import
+  // another: its cross-module references are `getimport`/`callimport` operands
+  // into its own import table, which collectOrder() has already followed
+  // transitively. Nothing else needs unwinding here.
+  for (const LoadedModule *m : order)
     if (m->program.functions.empty())
       linkErr("module '" + m->program.moduleName + "' has no functions");
-    if (!m->program.pendingLinks.empty())
-      linkErr("module '" + m->program.moduleName +
-              "' has unresolved cross-module references and cannot be linked");
-    if (!m->program.imports.empty())
-      linkErr("module '" + m->program.moduleName + "' imports another .ql module, "
-              "which a library cannot do until GETIMPORT/CALLIMPORT (plan "
-              "Phase 3c)");
-  }
 
   // --- 2. Function table and global-register slices -------------------------
   CompiledProgram out;
@@ -177,7 +199,6 @@ CompiledProgram QLangLinker::link(const CompiledProgram &entry,
   out.vars = entry.vars;
   out.constVars = entry.constVars;
   out.exports = entry.exports;
-  out.imports = entry.imports;
 
   const int entryWidth = std::max(entry.registerCount, 1);
   int regTotal = entryWidth;
@@ -197,6 +218,23 @@ CompiledProgram QLangLinker::link(const CompiledProgram &entry,
     links.push_back(std::move(ml));
   }
   out.registerCount = regTotal;
+
+  // One merged import table (plan Phase 3c): the entry's entries are added
+  // first and in order, so the indices its `getimport` operands already carry
+  // stay valid, and every module's own table is folded into the same structure
+  // so two modules importing the same export read one shared cell. The `ref`s
+  // are still defining-module handles here; step 6 turns them into merged ones.
+  ImportTable imports;
+  std::vector<int> entryImportMap(entry.imports.size());
+  for (size_t i = 0; i < entry.imports.size(); i++)
+    entryImportMap[i] = imports.add(entry.imports[i]);
+  for (ModuleLink &ml : links) {
+    const std::vector<ImportEntry> &mine = ml.mod->program.imports;
+    ml.importMap.resize(mine.size());
+    for (size_t i = 0; i < mine.size(); i++)
+      ml.importMap[i] = imports.add(mine[i]);
+  }
+  out.imports = imports.take();
 
   auto linkFor = [&links](const std::string &name) -> const ModuleLink & {
     for (const ModuleLink &ml : links)
@@ -251,35 +289,26 @@ CompiledProgram QLangLinker::link(const CompiledProgram &entry,
   }
   out.nativeFuncs = natives.take();
 
-  // --- 4. One merged constant pool, folded (SPEC §bytecodes "constant pool") --
-  // An entry closure constant that a pending link says names a LIBRARY function
-  // (the imported-generator path) has to be rebased with that library's bases
-  // while the entry's own closures stay put.
-  std::unordered_map<int, int> closureConsts; // entry pool index -> link index
-  for (const PendingLink &pl : entry.pendingLinks) {
-    if (pl.kind != PendingLinkKind::ClosureConst)
-      continue;
-    if (pl.importIndex < 0 ||
-        pl.importIndex >= static_cast<int>(entry.imports.size()))
-      linkErr("pending link names import " + std::to_string(pl.importIndex) +
-              ", the program has " + std::to_string(entry.imports.size()));
-    const std::string &mod = entry.imports[pl.importIndex].module;
-    for (size_t i = 0; i < links.size(); i++)
-      if (links[i].name == mod)
-        closureConsts[pl.poolIndex] = static_cast<int>(i);
-  }
+  // --- 4. Capture specs, then one merged constant pool (SPEC §bytecodes
+  // "constant pool") ---------------------------------------------------------
+  // A global capture names an absolute table slot through the compiler's
+  // `-1 - slot` sentinel, so it moves with the module exactly like a cell.
+  // Rebasing the functions' capture specs BEFORE the pool merges is what lets
+  // step 5 build an imported generator's MAKEGEN closure straight from the
+  // merged function and still have it fold with the defining module's own
+  // constant (Q33).
+  for (ModuleLink &ml : links)
+    for (size_t i = 0; i < ml.mod->program.functions.size(); i++) {
+      Function &fn = out.functions[ml.funcBase + i];
+      for (CaptureRef &cr : fn.captures)
+        if (cr.reg < 0)
+          cr.reg -= ml.regBase;
+    }
 
   ConstantPool pool;
   std::vector<int> entryPoolMap(entry.constants.size());
-  for (size_t i = 0; i < entry.constants.size(); i++) {
-    auto it = closureConsts.find(static_cast<int>(i));
-    if (it == closureConsts.end())
-      entryPoolMap[i] = pool.add(entry.constants[i]);
-    else
-      entryPoolMap[i] = pool.add(rebaseConstant(entry.constants[i],
-                                                links[it->second].funcBase,
-                                                links[it->second].regBase));
-  }
+  for (size_t i = 0; i < entry.constants.size(); i++)
+    entryPoolMap[i] = pool.add(entry.constants[i]);
   for (ModuleLink &ml : links) {
     ml.poolMap.resize(ml.mod->program.constants.size());
     for (size_t i = 0; i < ml.mod->program.constants.size(); i++)
@@ -287,15 +316,8 @@ CompiledProgram QLangLinker::link(const CompiledProgram &entry,
           pool.add(rebaseConstant(ml.mod->program.constants[i], ml.funcBase,
                                   ml.regBase));
   }
-  out.constants = pool.take();
 
   // --- 5. Operand rewriting (plan Q32: on RawInstr, never on bytes) ---------
-  // Pending links are addressed by (function, instruction); the entry module is
-  // the only one that can have them.
-  std::unordered_map<int, std::vector<const PendingLink *>> pendingByFunc;
-  for (const PendingLink &pl : entry.pendingLinks)
-    pendingByFunc[pl.funcIndex].push_back(&pl);
-
   auto mapPool = [](const std::vector<int> &map, int idx,
                     const std::string &who) {
     if (idx < 0 || idx >= static_cast<int>(map.size()))
@@ -326,49 +348,6 @@ CompiledProgram QLangLinker::link(const CompiledProgram &entry,
     for (size_t i = 0; i < raw.size(); i++) {
       RawInstr &r = raw[i];
 
-      // A cross-module reference the compiler left for the linker. Its operand
-      // is a handle into the DEFINING module, so it is resolved directly to the
-      // merged number and the role-based pass below must not touch it again.
-      auto pit = pendingByFunc.find(f);
-      if (pit != pendingByFunc.end()) {
-        bool handled = false;
-        for (const PendingLink *pl : pit->second) {
-          if (pl->instrIndex != static_cast<int>(i))
-            continue;
-          if (pl->importIndex < 0 ||
-              pl->importIndex >= static_cast<int>(out.imports.size()))
-            linkErr("pending link names import " +
-                    std::to_string(pl->importIndex) + ", the program has " +
-                    std::to_string(out.imports.size()));
-          const ImportEntry &im = out.imports[pl->importIndex];
-          const ModuleLink &ml = linkFor(im.module);
-          if (pl->kind == PendingLinkKind::ClosureConst) {
-            // MAKEGEN's operand is a pool index; the closure it names was
-            // already rebased while the pool merged.
-            if (pl->poolIndex != r.b)
-              linkErr("pending link points at constant " +
-                      std::to_string(pl->poolIndex) + " but the instruction "
-                      "names " + std::to_string(r.b));
-            r.b = mapPool(entryPoolMap, pl->poolIndex, who);
-          } else if (im.kind == ExportKind::Func) {
-            r.b = ml.funcBase + im.ref;
-            if (r.b < 0 || r.b >= static_cast<int>(out.functions.size()))
-              linkErr("imported function '" + im.name + "' of module '" +
-                      im.module + "' resolves outside the merged function table");
-          } else {
-            r.b = ml.regBase + im.ref;
-            if (r.b < 0 || r.b >= out.registerCount)
-              linkErr("imported variable '" + im.name + "' of module '" +
-                      im.module + "' resolves outside the merged register area");
-          }
-          handled = true;
-          changed = true;
-          break;
-        }
-        if (handled)
-          continue;
-      }
-
       switch (operandRole(r.op, 1, r.kind)) {
       case OperandRole::PoolIndex:
         r.b = mapPool(poolMap, r.b, who);
@@ -382,6 +361,55 @@ CompiledProgram QLangLinker::link(const CompiledProgram &entry,
         if (merged != r.b)
           changed = true;
         r.b = merged;
+        break;
+      }
+      case OperandRole::ImportIndex: {
+        const std::vector<int> &importMap =
+            owner ? owner->importMap : entryImportMap;
+        if (r.b < 0 || r.b >= static_cast<int>(importMap.size()))
+          linkErr(who + ": import index " + std::to_string(r.b) +
+                  " is outside the module's import table");
+        const int mergedImport = importMap[r.b];
+        if (r.op != Opcode::CALLIMPORT) {
+          // `getimport` survives the link (plan Phase 3c): the merged table
+          // describes the merged program, so only the index moves. Step 6 turns
+          // the entry's `ref` into the merged cell it will read.
+          if (mergedImport != r.b)
+            changed = true;
+          r.b = mergedImport;
+          break;
+        }
+        // A call names a function the merged program already has, so the import
+        // is resolved away: no `callimport` survives a link.
+        const ImportEntry &im = out.imports[static_cast<size_t>(mergedImport)];
+        if (im.kind != ExportKind::Func)
+          linkErr("callimport names '" + im.name + "' of module '" + im.module +
+                  "', which is not a function");
+        const int fi = linkFor(im.module).funcBase + im.ref;
+        if (fi < 0 || fi >= static_cast<int>(out.functions.size()))
+          linkErr("imported function '" + im.name + "' of module '" + im.module +
+                  "' resolves outside the merged function table");
+        if (out.functions[static_cast<size_t>(fi)].isGenerator) {
+          // MAKEGEN's operand is a pool Closure, so one is synthesized from the
+          // merged function. Its captures were rebased in step 4, which is what
+          // lets it fold with the defining module's own generator constant.
+          auto closure = std::make_shared<Closure>();
+          closure->funcIndex = fi;
+          closure->captures = out.functions[static_cast<size_t>(fi)].captures;
+          // Changing the opcode also changes what operand `b` MEANS: `callimport`
+          // named a table entry through a register-class operand, `makegen` names
+          // a pool entry, and the modifier byte has to say so (the codec rejects
+          // a register kind on `makegen`). `callfn` keeps the register class, so
+          // only this branch moves the kind.
+          r.op = Opcode::MAKEGEN;
+          r.kind = RightKind::ConstPool;
+          r.b = pool.add(QLangValue::Function(closure));
+        } else {
+          r.op = Opcode::CALLFN;
+          r.kind = RightKind::Register;
+          r.b = fi;
+        }
+        changed = true;
         break;
       }
       case OperandRole::NativeSlot:
@@ -403,23 +431,27 @@ CompiledProgram QLangLinker::link(const CompiledProgram &entry,
       encodeRawStream(out.functions[f], raw);
   }
 
-  // --- 6. Capture specs, import table, init sequence ------------------------
-  // A global capture names an absolute table slot through the compiler's
-  // `-1 - slot` sentinel, so it moves with the module exactly like a cell.
-  for (ModuleLink &ml : links)
-    for (size_t i = 0; i < ml.mod->program.functions.size(); i++) {
-      Function &fn = out.functions[ml.funcBase + i];
-      for (CaptureRef &cr : fn.captures)
-        if (cr.reg < 0)
-          cr.reg -= ml.regBase;
-    }
+  // --- 6. Constant pool, import table, init sequence ------------------------
+  // Taken only now, because step 5 can add a closure constant for an imported
+  // generator.
+  out.constants = pool.take();
 
   // The merged program's import table describes the merged program: every `ref`
-  // becomes the merged handle (a function index or an absolute cell).
+  // becomes the merged handle (a function index or an absolute cell), which is
+  // what a surviving `getimport` operand reads. A `ref` outside the module it
+  // comes from would land in another module's slice or past the last function,
+  // so it is refused rather than rebased into a cell that belongs to someone
+  // else.
   for (ImportEntry &im : out.imports) {
     const ModuleLink &ml = linkFor(im.module);
-    im.ref = (im.kind == ExportKind::Func) ? ml.funcBase + im.ref
-                                           : ml.regBase + im.ref;
+    const bool func = im.kind == ExportKind::Func;
+    const int limit = func ? static_cast<int>(ml.mod->program.functions.size())
+                           : ml.mod->program.registerCount;
+    if (im.ref < 0 || im.ref >= limit)
+      linkErr("module '" + im.module + "' export '" + im.name + "' names a " +
+              (func ? "function index" : "cell") + " outside the module (" +
+              std::to_string(im.ref) + " of " + std::to_string(limit) + ")");
+    im.ref = func ? ml.funcBase + im.ref : ml.regBase + im.ref;
   }
 
   // Q35: each imported module's top level runs exactly once, dependencies
@@ -428,8 +460,6 @@ CompiledProgram QLangLinker::link(const CompiledProgram &entry,
     out.initSequence.push_back(
         ModuleInit{ml.funcBase, ml.regBase, ml.width, ml.name});
 
-  // The link consumed them; a program with pending links left is not runnable.
-  out.pendingLinks.clear();
   return out;
 }
 

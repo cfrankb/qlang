@@ -119,6 +119,7 @@ OperandRole operandRole(Opcode op, int slot, RightKind kind) {
     case Opcode::CALL:
     case Opcode::CALLFN:
     case Opcode::CALLCLOS:
+    case Opcode::CALLIMPORT:
     case Opcode::MAKEGEN:
     case Opcode::EMIT:
     case Opcode::CAST:
@@ -127,14 +128,17 @@ OperandRole operandRole(Opcode op, int slot, RightKind kind) {
       return OperandRole::Register;
     }
   }
-  // slot == 1: the right operand. Four opcodes give it a meaning the modifier
-  // byte does not express; `emit` is the one whose b indexes the pool although
-  // its kind stays register.
+  // slot == 1: the right operand. A handful of opcodes give it a meaning the
+  // modifier byte does not express; `emit` is the one whose b indexes the pool
+  // although its kind stays register.
   switch (op) {
   case Opcode::CALL:
     return OperandRole::NativeSlot;
   case Opcode::CALLFN:
     return OperandRole::FunctionIndex;
+  case Opcode::GETIMPORT:
+  case Opcode::CALLIMPORT:
+    return OperandRole::ImportIndex;
   case Opcode::MAKEFUNC:
   case Opcode::MAKEGEN:
   case Opcode::EMIT:
@@ -181,9 +185,10 @@ size_t baseOperandCount(Opcode op) {
   // 2-operand (NEG/NOT/EVALKEY are r[a] = op(r[b]): the compiler emits them
   // with a=dest, b=src, so both operands must be stored). The flag-setting
   // compares are r[a] <op> right -> flags: no destination, but the right
-  // operand must be stored (and `c` stays unused, as for CMP). MAKEGEN and
-  // SEQGET are 3-operand (MAKEGEN: c=argCount; SEQGET: c=index) and fall
-  // through to the default below.
+  // operand must be stored (and `c` stays unused, as for CMP). GETIMPORT is
+  // dest + import index. MAKEGEN, SEQGET and CALLIMPORT are 3-operand
+  // (MAKEGEN/CALLIMPORT: c=argCount; SEQGET: c=index) and fall through to the
+  // default below.
   switch (op) {
   case Opcode::MOV:
   case Opcode::MAKEFUNC:
@@ -203,11 +208,12 @@ size_t baseOperandCount(Opcode op) {
   case Opcode::NOT:
   case Opcode::EVALKEY:
   case Opcode::DEEPCOPY:
+  case Opcode::GETIMPORT:
     return 2;
   }
   // 3-operand (default): ADD..INx, CONV, CAST, ARRGET/ARRPUT, TABGET/TABPUT,
-  // INDGET/INDPUT, INDEXGET/INDEXPUT, CALL/CALLFN/CALLCLOS, MAKEGEN
-  // (c=argCount), SEQGET (c=index).
+  // INDGET/INDPUT, INDEXGET/INDEXPUT, CALL/CALLFN/CALLCLOS/CALLIMPORT
+  // (c=argCount), MAKEGEN (c=argCount), SEQGET (c=index).
   return 3;
 }
 
@@ -1300,6 +1306,8 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::LTEF: return "ltef";
   case Opcode::GTEF: return "gtef";
   case Opcode::TST: return "tst";
+  case Opcode::GETIMPORT: return "getimport";
+  case Opcode::CALLIMPORT: return "callimport";
   default:
     return "???";
   }

@@ -45,7 +45,11 @@ QLangValue deserializeValue(std::istream &is);
 
 // Write a full program as QLC1 v9. `nativeIds` maps native function name ->
 // slot index (from QLangCompiler::nativeFuncIds). Returns false on stream
-// failure or when the constant pool holds a non-durable value (F1).
+// failure, when the constant pool holds a non-durable value (F1), or when the
+// program is a LINKED one (`initSequence` is link-time information the format
+// has no section for). A program that merely has imports is a module image and
+// is written: its import table plus `getimport`/`callimport` are what the
+// format carries for a dependency (plan Phase 3c).
 bool writeQlc(std::ostream &os, const CompiledProgram &prog,
               const std::map<std::string, int> &nativeIds);
 
@@ -54,9 +58,11 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
 // Returns false (with `err` set) on bad magic, unsupported version (v1-v8
 // and v10+ are rejected), truncation, invalid opcode or modifier byte, a
 // pool operand outside the constant pool, a non-durable value tag, an
-// export/import table entry with an empty name, an unknown kind or a
-// reference outside the function table or the register range, or trailing
-// bytes.
+// export/import table entry with an empty name or an unknown kind, an export
+// reference outside the function table or the register range, a
+// `getimport`/`callimport` operand outside the import table, or trailing
+// bytes. An IMPORT entry's `ref` names the DEFINING module's tables, so it is
+// not range-checked here — the linker remaps it and the VM re-checks it at use.
 bool readQlc(std::istream &is, CompiledProgram &prog,
              std::vector<std::pair<int, std::string>> &nativeSlots,
              std::string &err);

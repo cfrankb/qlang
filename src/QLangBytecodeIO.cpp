@@ -381,10 +381,9 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
   // A linked program is not an image: its module-init sequence (Phase 3b) is
   // link-time information the v9 format has no section for, and writing such a
   // program out would silently drop the top levels of every imported module.
-  // Unresolved cross-module references are the same kind of artifact: the
-  // handles in them name the DEFINING module, so the image would run against
-  // the wrong functions and cells.
-  if (!prog.initSequence.empty() || !prog.pendingLinks.empty())
+  // A *module* image is fine — its import table plus `getimport`/`callimport`
+  // (Phase 3c) are exactly what the format carries for a dependency.
+  if (!prog.initSequence.empty())
     return false;
   // Header.
   putBytes(os, "QLC1", 4);
@@ -519,6 +518,9 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
     // Same for `callfn` operands: they name a function record, so they can
     // only be checked once every record has been read.
     std::vector<int32_t> funcRefs;
+    // And the same for `getimport`/`callimport`: the import table is the last
+    // section of a v9 image (§4.6), so those operands wait for it too.
+    std::vector<int32_t> importRefs;
     for (uint32_t i = 0; i < funcCount; i++) {
       Function fn;
       fn.name = r.str();
@@ -589,6 +591,9 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
         case OperandRole::FunctionIndex:
           funcRefs.push_back(di.b);
           break;
+        case OperandRole::ImportIndex:
+          importRefs.push_back(di.b);
+          break;
         default:
           break;
         }
@@ -653,9 +658,10 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       r.fail("negative register count");
 
     // 6. Module identity and the export/import tables (§4.6, v9; SPEC
-    // §bytecodes "export table (lookup)", "import table (lookup)"). A table
-    // entry is a handle into this image, so every reference is range-checked
-    // here rather than at the first use.
+    // §bytecodes "keyword export", "export table (lookup)", "import table
+    // (lookup)"). An EXPORT entry is a handle into this image, so its reference
+    // is range-checked here; an IMPORT entry names another module's tables and
+    // cannot be (see below).
     out.moduleName = r.str();
     if (out.moduleName.empty())
       r.fail("empty module name");
@@ -703,8 +709,18 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
         r.fail("empty import name");
       if (im.ref < 0)
         r.fail("negative import reference");
+      // `ref` is deliberately NOT range-checked against this image: it is a
+      // handle into the DEFINING module's tables (its function index or its own
+      // cell), which this image does not contain. The linker turns it into a
+      // merged handle (SPEC §bytecodes "technical specifications" 2, 3) and the
+      // VM re-checks it at each use.
       out.imports.push_back(std::move(im));
     }
+    // The import operands collected while decoding the instruction streams can
+    // only be range-checked now that the table exists.
+    for (int32_t idx : importRefs)
+      if (idx < 0 || static_cast<size_t>(idx) >= out.imports.size())
+        r.fail("import index out of range");
 
     // 7. Closure funcIndex must reference a known function. The closures live
     // in the module pool (v8), so the scan walks the pool rather than the

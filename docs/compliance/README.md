@@ -16,12 +16,12 @@ below (spec hashes tracked in [../spec/README.md](../spec/README.md)); the
 
 | Module | Content | Validates spec module(s) | SHA256 (self) |
 |--------|---------|--------------------------|---------------|
-| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `dbcc429bd35338d617655525078d9b9335733457d1458ccf3f3b53efed9fc493` |
+| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `e6d7428bb4d13b3f23866f0490af2ee871dbc6f280206af9f88460c559407ef3` |
 | [coverage.md](coverage.md) | reserved-word coverage, value-type coverage | 02-lexical, 01-types | `789a0b58112961a6f32e98426923c17c88be737f0cfbc3a809ad771b11c898eb` |
-| [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `b15c603d20cff620cb982342ffbf3c7983c26022f3fc8a6cd978b302d795f66d` |
-| [history.md](history.md) | audit rounds 7–64 (append-only) | mixed (per round) | `59c39cb5f4e14ccaf233ccc59eb40b167db06fc04defb9487949ec3434852ac1` |
+| [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `f2642988492b4a70314eb1f107019b610cfed6b2f567cfee9ff7493ab66f2aac` |
+| [history.md](history.md) | audit rounds 7–64 (append-only) | mixed (per round) | `260611d866e3e797772b5d472bc9bee4d9dd3f7d790f2b9039a18dc41127a1dd` |
 | [classes.md](classes.md) | class implementation details, class spec conformance | 10-classes | `c95a835ae11f6e25c87facb30dd7210a18e928b56ab9b3592e25acf805e99b40` |
-| [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `8cb14a4064de4823e9febc62d90f8cb7d2204da9fecf4ce1a96882051a3cea38` |
+| [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `1657000b8ef63cda96cc5a6d35316055727c0bd7be850ebb1e127b2349ff10da` |
 | [migration-value-semantics.md](migration-value-semantics.md) | copy→share migration note for `array`/`set`/`blob` (Round 43) | 01-types | `3b38a16ad6e8f04386092ee2f588adb27d5f1bdfcada749135c7168066547e7d` |
 
 **New spec modules:** every new module in `docs/spec/` must get, at creation,

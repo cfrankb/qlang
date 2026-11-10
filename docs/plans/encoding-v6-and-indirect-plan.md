@@ -225,8 +225,10 @@ unnecessary. `JMPIFFALSE`/`JMPIFTRUE` went with them (§5.4).
 
 Opcode budget: 73 today + 7 new (§4) = **80** of 128; **75** after the five suffix identities
 are removed; **73** after `JMPIFFALSE`/`JMPIFTRUE` are removed (§5.4). *Actual outcome: M4 has
-not landed, so `DECL` was never appended — 79 + 7 removed = **72**, with `DECL` still to be
-appended at identity 72 (→ 73) when M4 lands.*
+not landed, so `DECL` was never appended — 79 + 7 removed = **72** at Round 60. External-modules
+plan v4 Phase 3c then appended `GETIMPORT`/`CALLIMPORT` as **72/73** (Round 65, its **Q31**,
+"append last, never renumber"), so `kOpcodeUsedCount` is **74** and **`DECL` takes 74 (→ 75) when
+M4 lands** — 72 is no longer available to it.*
 
 
 ---
@@ -384,7 +386,7 @@ milestones; each keeps `ctest --test-dir build` green.
 | **M2** | Switch the pipeline | Compiler emits unified `mov`/`add`/`sub`/`cmp` kinds with immediate selection, VM decodes v6, `.qlc` v5 → v6, disassembler (`examples/qlang_run.cpp`) | **DONE 2026-11-07** |
 | **M3** | Flag flow | `eqf`/`ltf`/`gtf`/`ltef`/`gtef` + `tst`, flag jumps, `ja`/`jae`/`jb`/`jbe` aliases (§4) | **DONE 2026-11-07** (Round 59; `4ead571`…`56998cf`, docs `51f9d33`) — plan [archive/m3-flag-flow-plan.md](archive/m3-flag-flow-plan.md) |
 | **P3** | §6 phase 3 — removal | The seven deprecated identities deleted, identities compacted, `tst` emitted for bare truthiness, `.qlc` v6 → v7 | **DONE 2026-11-08** (Round 60; `b86460b` S1 / `801498c` S3 / `a6737b9` S4) — plan [archive/phase3-opcode-retirement-plan.md](archive/phase3-opcode-retirement-plan.md) |
-| **M4** | `$$` (A3) | Declaration table, frame name map + bitset, `DECL`, two-operand `INDGET`/`INDPUT`, `$$"literal"` fast path (§7) | pending — `DECL` now takes identity **72** (`kOpcodeUsedCount` → 73); the declaration table still ships inside the v6 layout, now carried by a v7 file (§8) |
+| **M4** | `$$` (A3) | Declaration table, frame name map + bitset, `DECL`, two-operand `INDGET`/`INDPUT`, `$$"literal"` fast path (§7) | pending — `DECL` now takes identity **74** (`kOpcodeUsedCount` → 75): external-modules plan v4 Phase 3c took 72/73 in Round 65, so the 72 this row assumed is gone; the declaration table still ships inside the v6 layout, now carried by a v9 file (§8) |
 
 P3 deviation from the phase table: the plan budgeted **73** remaining identities on the
 assumption that M4 appended `DECL` first (80 − 7). M4 has not landed, so the count is **72** and

@@ -120,11 +120,13 @@ offset  field            type   notes
 **A linked program is not an image.** `QLangLinker`
 ([plans/external-modules-plan-v4.md](plans/external-modules-plan-v4.md) Phase 3b) merges the
 module images one program imports into a single runnable `CompiledProgram`, and that program
-carries two link-time fields the layout above has no section for: `initSequence` (the module
-top levels to run before `functions[0]`, each with the slice of the shared global register area
-it owns) and `pendingLinks` (cross-module references whose handles still name the *defining*
-module). `writeQlc` rejects a program with either populated instead of writing an image that
-would run against the wrong functions and cells.
+carries a link-time field the layout above has no section for: `initSequence` (the module top
+levels to run before `functions[0]`, each with the slice of the shared global register area it
+owns). `writeQlc` rejects a program with it populated instead of writing an image that would drop
+every imported module's top level. A **module** image is unaffected: since Round 65 its
+cross-module references are `getimport` / `callimport` operands into its own import table (§4.6),
+both of which the format carries, so a library that imports another library serializes and links
+transitively.
 
 **Version allocation** (the counter is shared across plans, so each bump is recorded here when it
 is decided): **v8** = the module constant pool (§4.2, Round 62,
@@ -330,7 +332,9 @@ Phase 3a).
   importer will read (SPEC `## technical specifications` 3).
 - `ImportEntry::ref` is the *defining* module's `ref`, resolved at compile time
   and rewritten by Phase 3b's linker; `alias` is the local name when the import
-  is aliased (`from m import f as g`) and empty when it is not.
+  is aliased (`from m import f as g`) and empty when it is not. It is
+  deliberately **not** range-checked against the image carrying it: the tables
+  it names live in another file (§5.1 step 3).
 - `moduleName` MUST be non-empty. The compiler takes it from the module's own
   `export const MODULE_NAME = "<name>"` when present, else from the driver
   (`QLangCompiler::setModuleName` — `qlang_run` passes the source file stem),
@@ -342,11 +346,15 @@ Phase 3a).
 - Order within both sections is the compiler's emission order and is **not**
   specified — readers MUST look names up, never index by position.
 
-**Phase 3a is the write side.** The VM reads neither table and the opcodes that
-would (`GETIMPORT` / `CALLIMPORT`, identities 73/74) are not defined yet, so the
-compiler always emits an **empty** import table. The reader still decodes and
-validates the section — a v9 image is a complete module description even while
-nothing consumes its imports (Phase 3b's linker is the first consumer).
+**v9 is the module format; Round 65 gave it consumers.** `GETIMPORT` /
+`CALLIMPORT` (identities 72 / 73, `kOpcodeUsedCount` 74 — plan **Q31**) are
+defined, emitted and executed, so the compiler emits a **non-empty** import
+table whenever a module imports, and both the VM and `QLangLinker` read it. An
+operand `b` of either opcode carries `OperandRole::ImportIndex` and the reader
+rejects one outside the image's own table (`import index out of range`, §5.1
+step 3). A link resolves every `callimport` away and remaps the index of every
+surviving `getimport`, so a merged program's table describes the merged program
+(SPEC §bytecodes `### OpCode getimport / callimport`).
 
 ## 5. Load contract (deserializer)
 
@@ -366,19 +374,23 @@ nothing consumes its imports (Phase 3b's linker is the first consumer).
    every instruction decodes and its opcode identity is `< kOpcodeUsedCount`,
    offsets strictly increasing with the last instruction ending exactly at
    `codeSize`, `locCount == offCount`, every const-pool operand in
-   `[0, poolCount)` (§4.2), every `callfn` operand in `[0, funcCount)`, all
+   `[0, poolCount)` (§4.2), every `callfn` operand in `[0, funcCount)`, every
+   `getimport`/`callimport` operand in `[0, importCount)` (§4.6), all
    closure `funcIndex` in `[0, funcCount)`, native slots unique and `>= 0`, all
-   `registerCount >= 0`, all `paramCount >= 0`. Both table-reference checks come
-   from one source, the `operandRole()` table in `QLangBytecode.h` — the same
-   table the linker consults to know which operands a merge must rewrite
+   `registerCount >= 0`, all `paramCount >= 0`. All three table-reference checks
+   come from one source, the `operandRole()` table in `QLangBytecode.h` — the
+   same table the linker consults to know which operands a merge must rewrite
    (plan v4 Phase 3b). Decoding is what enforces the modifier rules of
    §4.5: reserved left width (3), reserved right kind (3), reserved immediate
    forms (12–15), a kind the opcode does not permit, and an unescaped `CALL`.
    The module tail (§4.6) is validated as it is read: a non-empty `moduleName`,
-   `kind <= Func`, a non-empty entry name, a non-negative `ref`, a `Func` ref
-   inside `[0, funcCount)` and a `Var`/`Const` ref inside
-   `[0, registerCount)`, no duplicate export name, and neither count above the
-   §8 instruction cap.
+   `kind <= Func`, a non-empty entry name, a non-negative `ref`, no duplicate
+   export name, and neither count above the §8 instruction cap; the **export**
+   `ref`s are additionally range-checked (`Func` inside `[0, funcCount)`,
+   `Var`/`Const` inside `[0, registerCount)`) because they name this image,
+   while the **import** `ref`s are not (§4.6). The import *operands* are
+   checked after the tail is read, since the table they index is only complete
+   then.
 4. Value decoding enforces §8 limits (depth, sizes).
 
 Any violation produces one structured error; the reader never partially
@@ -526,7 +538,8 @@ A codec is not "done" until all of these pass:
    `>= kOpcodeUsedCount`, reserved modifier fields (left width 3, kind 3,
    immediate forms 12–15, unpermitted kind, unescaped `CALL`), truncated
    instruction, const-pool operand `>= poolCount` (§4.2), `callfn` operand
-   `>= funcCount`, dangling closure index, duplicate native slot, negative count,
+   `>= funcCount`, `getimport`/`callimport` operand `>= importCount` (§4.6),
+   dangling closure index, duplicate native slot, negative count,
    100-deep nested array, 70 Mi value count, and every §4.6 tail violation
    (empty module name, invalid kind, empty entry name, negative ref, an export
    ref past the function table or the register range, duplicate export name, a
@@ -543,8 +556,8 @@ A codec is not "done" until all of these pass:
 | Value codec (`serializeValue`/`deserializeValue`) | done — matches §3 |
 | Program writer (`writeQlc`, §4 incl. module pool + native-slot table + module tail) | done — v9, explicit little-endian, escape-byte code stream + offset table, loc side table, program-level constant pool, module name + export/import tables (§4.6) |
 | `QLangErrorKind::Io` | done |
-| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v9 only, pool-index and `callfn`-index range checks (both from `operandRole()`), §4.6 tail validation |
-| Writer refuses a linked program (§4, "A linked program is not an image") | done — `initSequence` or `pendingLinks` present → `writeQlc` returns false |
+| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v9 only, pool-index, `callfn`-index and import-index range checks (all three from `operandRole()`), §4.6 tail validation |
+| Writer refuses a linked program (§4, "A linked program is not an image") | done — `initSequence` present → `writeQlc` returns false |
 | App writer (POC `QlcWriter` in `qlang_run.cpp`) | deleted — replaced by `writeQlc` |
 | Tests (`codec_check`: §9 items 1, 3) | done |
 | `QLangContext::loadProgram` (§5.2, §9 item 4) | done — plan v4 Phase 3b: reads an image, re-resolves every native-slot name against the context's natives **and** its registered C++ modules, reports all missing names in one `Io` error, and registers the module by name (`loadedModule`/`loadedModules`) |

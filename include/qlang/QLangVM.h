@@ -267,6 +267,13 @@ public:
                     const std::vector<CaptureRef> &spec,
                     std::vector<CaptureRef> &out);
 
+  // One entry of the program's import table (SPEC §bytecodes "import table
+  // (lookup)"), bounds-checked at the instruction rather than at load: the
+  // reader already rejects an operand outside the table, so reaching the throw
+  // means a program was built in memory rather than loaded. `mnemonic` names
+  // the instruction in the message.
+  const ImportEntry &importEntry(int index, const char *mnemonic) const;
+
   // Live cell access: a global capture (env==null) aliases the context's
   // table slot; a local capture aliases the owning frame's register while
   // it is alive, and is the stored value after the frame pops.
