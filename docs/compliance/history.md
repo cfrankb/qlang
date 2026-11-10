@@ -1,3 +1,63 @@
+## Round 68 (2026-11-10)
+
+**`import` binds the module — module-level access is enforced and implicit flat loading is
+gone** (spec `docs/spec/09-modules.md` `## import statement`, `docs/spec/07-api.md`
+`### QLang import syntax`; code `src/QLangCompiler.cpp/.h`, `src/QLangContext.cpp/.h`).
+No opcode, no `.qlc` change, no new error kind. The spec text that described this ("`import
+math` should import the module into the namespace … `min` itself should not be visible unless
+imported directly … we have moved beyond version 1") had been written as an intention next to a
+banner saying the opposite; the banner is deleted and the behaviour is the spec.
+
+- **What each form binds now.** `import m` binds `m`; `import m as a` binds `a` (and not `m`);
+  `from m import *`, `from m import a, b` and the legacy `import m.f` bind **flat** names and do
+  **not** bind `m`. After `import math`, `math.min(…)` resolves and `min(…)` is
+  `unknown function 'min'` — the leak that made every export of every imported module visible by
+  bare name is closed for both kinds of module.
+- **Native slots are keyed by the spelling the importer used.** `addModules` no longer
+  pre-registers a C++ module's function names as native ids (that pre-registration *was* the
+  flat leak, and it also left stale ids when a module was registered later); a slot is created
+  lazily by the new `bindNative(spelling, fn)`, which takes the id and resolves the pointer in
+  one step. A qualified call stores `math.min` in `m_nativeFuncIds` and in the image's
+  native-slot table, a flat import stores `min`. `QLangContext::nativeNamed` re-resolves both
+  spellings at load — a dotted name answers only from the module that owns it, a native
+  registered literally under a dotted name still wins.
+- **The qualifier is a compile-time path, not a table.** `moduleQualified` accepts a
+  `Variable` base only while nothing else claims the name (a local, parameter, capture, class,
+  enum or user function shadows it; `math::min` still says `'math' is not a class`). A call of
+  `m.f` lowers to the native `CALL` slot or `CALLIMPORT` through the module's import entry, a
+  read of a value export lowers to `GETIMPORT`, and a read of a *function* as a value is refused
+  with the call spelling to use instead. `m.x = 1` / `m.x += 1` are refused by
+  `guardNotModuleMember` (`cannot assign to module member 'm.x'`); a *flat* import keeps the
+  guard it always had.
+- **`import` is a pre-pass.** `resolveImport` (was `compileImport`) runs over the top level
+  before the body compiles and emits no code, so an `import` may sit below its first use and a
+  nested one is rejected where it stands (`import of module '…' must appear at module top
+  level` — the message now names the module, it printed `''` for one frame of this round). A
+  module import binds its `.ql` exports eagerly under the qualified keys, which is what keeps the
+  linker pulling the module in and running its `<init>` when the program uses none of its
+  exports; `ImportEntry.name` stays the bare exported name, so merged-table dedup is unchanged.
+- **Tests.** `linker` 126 → **130** (the guard group is rewritten around the qualifier: bare
+  names after a module import are the importer's own, writes through a qualifier and through a
+  flat import are both refused, a function read as a value names the call form); `test_module`
+  pins the refusal (`unknown function 'min'`) and the alias form binding only the alias;
+  `module_search` 81 unchanged
+  but re-spelled (`g.who()`); `codec_check` re-resolves dotted slots through the new rule.
+  Flat call sites in `tests/scripts/hello.ql`, `examples/hello.cpp`,
+  `cmake/check_qlang_run_cli.cmake` and `examples/module_search.cpp` qualified. ctest **55/55**
+  green (`doc_hashes` skipped by default).
+- **Tallies.** `linker` is **130** in every row that names it: `tests.md`'s counted sum
+  **38999 → 39003**, `harness.md`'s current tally re-verified (55 ctest entries), `13-bytecodes.md`
+  and `docs/plans/m4-indirect-plan.md`. Hash rows re-recorded with `bash update-doc-hashes.sh`
+  (22 modules verified across 2 indexes).
+- **Recorded, not fixed:** statement-form `m.x++` does not reach a guard because the parser binds
+  postfix `++`/`--` to a bare variable only (`parsePostfixChain`) — `t.n++` has been a silent
+  no-op for tables since before this round, and fixing it means both the postfix rule and a
+  member write-back path. A per-name alias (`from m import f as g`), which
+  `13-bytecodes.md` `## technical specifications` 5 calls a requirement, has never parsed —
+  `ImportEntry.alias` is dead until the parser grows a per-name alias list. `.ql` functions still
+  receive their arguments by value across a module boundary; cross-module mutation of imported
+  state was not attempted.
+
 ## Round 67 (2026-11-10)
 
 **C8a lands — the engine can now *find* a module nobody loaded: search paths, the external

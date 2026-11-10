@@ -377,6 +377,41 @@ namespace {
     }
   }
 
+  // The host function an image's native-slot name asks for
+  // (docs/SERIALIZATION.md §5). A bare name is a `registerFunc` native or any
+  // registered module's function of that name, which is the spelling a flat
+  // `from m import f` stores. A `module.func` name is what `import m` stores
+  // (SPEC §modules "import statement"): the module that owns the qualifier
+  // answers it, so a same-named function of another module cannot take the
+  // slot.
+  QLangContext::NativeFunc
+  QLangContext::nativeNamed(const std::string &name) const {
+    const size_t dot = name.find('.');
+    if (dot != std::string::npos) {
+      // A native literally registered under the dotted name wins; otherwise the
+      // prefix is a module qualifier and only that module's function answers
+      // it.
+      const auto nit = m_nativeFuncs.find(name);
+      if (nit != m_nativeFuncs.end())
+        return nit->second;
+      for (const auto &m : m_modules)
+        if (m.name == name.substr(0, dot)) {
+          const auto fit = m.funcs.find(name.substr(dot + 1));
+          return fit == m.funcs.end() ? NativeFunc() : fit->second;
+        }
+      return NativeFunc();
+    }
+    const auto it = m_nativeFuncs.find(name);
+    if (it != m_nativeFuncs.end())
+      return it->second;
+    for (const auto &m : m_modules) {
+      const auto mit = m.funcs.find(name);
+      if (mit != m.funcs.end())
+        return mit->second;
+    }
+    return NativeFunc();
+  }
+
   // Load a `.qlc` image into the context's module registry
   // (SPEC §bytecodes "external modules"; plan v4 Phase 3b). The image stores
   // native function NAMES only (docs/SERIALIZATION.md §4.3), so every slot is
@@ -401,18 +436,7 @@ namespace {
     std::vector<std::string> missing;
     resolved.reserve(mod->nativeSlots.size());
     for (const auto &[slot, name] : mod->nativeSlots) {
-      NativeFunc fn;
-      const auto it = m_nativeFuncs.find(name);
-      if (it != m_nativeFuncs.end())
-        fn = it->second;
-      else
-        for (const auto &m : m_modules) {
-          const auto mit = m.funcs.find(name);
-          if (mit != m.funcs.end()) {
-            fn = mit->second;
-            break;
-          }
-        }
+      const NativeFunc fn = nativeNamed(name);
       if (!fn) {
         missing.push_back(name);
         continue;

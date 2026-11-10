@@ -707,7 +707,9 @@ bytecode to reference the look up table.
 section) + Phase 3b (what fills it).
 `CompiledProgram::imports` holds one `ImportEntry {module, name, kind, ref, alias}`
 per entity this module needs from another; `alias` is the local name when the import is
-aliased (`from m import f as g`), empty otherwise. `.qlc` v9 serializes and validates the
+aliased — reserved, since the parser accepts the alias only on a module import
+(`import m as a`, which binds the qualifier and stores no entry here), so an entry's `alias` is
+always empty today and `from m import f as g` does not parse. `.qlc` v9 serializes and validates the
 section (§4.6), so a module image states what it needs.
 
 The compiler fills it when an `import` names a **loaded** `.ql` module
@@ -717,6 +719,13 @@ and a `.ql` module is a compile error, and so is an unknown module, an unknown e
 write through an import or an import cycle. C++-registered modules
 ([09-modules.md](09-modules.md)) keep resolving the way they always did — compile-time
 natives in the negative-slot space of `CALL` — so they never appear here.
+
+`import m` (a module import, [09-modules.md](09-modules.md) `## import statement`) fills the
+table the same way as `from m import *`: one entry per export the module offers, keyed by the
+**exported name**, so the linker dedups it against every other importer of the same cell. Only
+the *local binding* differs — the compiler binds the entry under the qualified key `m.name` and
+resolves a call of `m.name` through it, which is why a module import still runs the module's
+`<init>` even when the program uses none of its exports.
 
 `ref` is the **defining** module's handle (its function index, or its cell in that
 module's own slice), because the importing image cannot name a merged one — it does not
@@ -863,7 +872,7 @@ references, the ten scope rejections (five inside a `def`/closure/`class`, five 
 global-scope block), `already exported`, the exported-function rebind guard, `MODULE_NAME`
 resolution, library mode, and the table through the `.qlc` v9 round trip. The importer side
 (resolution against a loaded export table, the write-through-import guards, the merge, the two
-opcodes and the run) is guarded by `tests/unit/linker_test.cpp` (`linker`, 126 checks).
+opcodes and the run) is guarded by `tests/unit/linker_test.cpp` (`linker`, 130 checks).
 
 ## technical specifications
 

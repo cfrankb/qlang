@@ -14,47 +14,66 @@ two kinds need from the machine differs: a native call is one instruction with a
 while a `.ql` import is a table entry, because the entity lives in another module's function
 table and register area.
 
-`FLAT IMPORT ONLY UNTIL THE MODULE SUPPORT IS COMPLETED`
-```
-# future extension
-import math # math.min, math.max, math.sum
-```
-
-Qualified access (`math.min(...)`) is a future extension for **both** kinds; v1 supports flat
-import only.
-
 ## import statement
 
+Every form keeps its shape; what it *binds* is the whole rule.
+
+| Form | Binds | Reached as |
+|---|---|---|
+| `import m` | `m` — **the module** | `m.name` |
+| `import m as a` | `a` — the module under an alias (`m` itself is not bound) | `a.name` |
+| `from m import *` | every public name `m` exposes, flat | `name` |
+| `from m import a, b` | the listed names, flat (`m` is not bound) | `a`, `b` |
+| `import m.f` | the one name `f`, flat — the legacy single-entity form (`m` is not bound) | `f` |
+
+`import math` puts **math** in the namespace, so `math.min(...)` resolves and `min(...)` does
+not: implicit flat loading is gone. A bare name is visible only because a form above bound it
+flat — `from math import min`, `from math import *`, or `import math.min`.
+
 ```python
-import math                   # flat import: min, max, sum, rand usable by name
-
-import math as m              # m.min, m.max
-
-from math import *            # import all public names from the math
-from math import min, max     # import `min` and `max`
-
+import math
+c = math.min(4, 1)            # c = 1 — the qualifier
+from math import min
+d = min(4, 1)                 # d = 1 — this line bound `min` itself
+e = max(1, 2)                 # compile error: unknown function 'max'
 ```
 
-| Form | Behaviour |
-|---|---|
-| `import m` | flat import of everything `m` exposes |
-| `import m as a` | the same, and `a` names the module for a later `import a.f` |
-| `from m import *` | flat import of everything `m` exposes |
-| `from m import a, b` | flat import of the listed names only |
-| `import m.f` | legacy single-function form (flat import of that one name) |
+The same holds for both kinds of module: `math.max(...)` (native) and `vec.scale(...)` (a
+`.qlc`) are read the same way, and `from vec import scale` is what makes a bare `scale(...)`
+legal.
+
+- **A qualifier resolves wherever a name does** — inside a `def` body, at any nesting depth, in
+  any expression. It is resolved at compile time like any other call target.
+- **A module's entities are not values.** Reading one as a value (`println(vec.scale)`) is a
+  compile error that names the call spelling to use instead.
+- **Nothing writes through a qualifier.** `m.x = 1`, `m.x += 1` and `m.x++` are compile errors
+  (`cannot assign to module member 'm.x'`): the module owns its entities. A *flat* import is
+  read-only for the same reason (`cannot assign to imported name 'x'`).
+- **A local wins.** A variable, parameter, class or function named `m` shadows the qualifier in
+  its scope, exactly as it shadows any other name.
+
+- **Only a module import takes an alias.** `import m as a` renames the qualifier; a per-name
+  alias (`from m import a as b`) is not parsed.
+
+### Where an import may appear
+
+`import` is a **module-level statement** and is resolved before the rest of the module
+compiles, so it may sit below its first use. Inside a `def` body or a nested block it is a
+compile error (`import of module '…' must appear at module top level`): a function body has
+private registers and no module scope to bind into.
 
 `m` is the same name for both kinds: a C++ module registered under it, or a loaded `.qlc` whose
 `MODULE_NAME` is it. A name claimed by **both** is a compile error, never a precedence.
 
-`import` is a **module-level statement**. Inside a `def` body it is a compile error
-(`import of module '…' must appear at module top level`): a function body has private
-registers and no module scope to bind into.
 
 ## C++ (native) modules
 
 Modules are registered from C++ via `ctx.registerModule(name, module)`. The `import` statement
-is resolved at compile time: each function in the module is registered as an external (native)
-function in the current scope. See [07-api.md](07-api.md) for `registerModule` /
+is resolved at compile time: the entity it binds becomes an external (native) function of the
+importing module, keyed by the **spelling the importer uses** — `import math` makes `math.min`
+a slot, `from math import min` makes `min` one. An image carries that spelling in its native-slot
+table and the context re-resolves it at load ([13-bytecodes.md](13-bytecodes.md)
+`## native function table`). See [07-api.md](07-api.md) for `registerModule` /
 `importModule` / `clear`.
 
 Module can be written in C++ or Qlang. System modules (C++) are part of the qlang library.
@@ -82,21 +101,24 @@ ctx.registerModule("math", {
 
 ```
 import math
-c = min(4, 1)  # c = 1
-c = min(2, 0, 4, 3)  # c = 0
-c = min([2.5,4,1]) # c = 1
-c = min([3,5,6,1], [2,5,1,2]) # errror: only 1 array allowed
+c = math.min(4, 1)  # c = 1
+c = math.min(2, 0, 4, 3)  # c = 0
+c = math.min([2.5,4,1]) # c = 1
+c = math.min([3,5,6,1], [2,5,1,2]) # errror: only 1 array allowed
 #import min and max accept: numbers (int, char, float) or an array ONLY
 #min and max refuse data if types are mixed (int and float)
 #min and max refuse data if types have mixed signed and unsigned types (char and byte)
 #max used the same rules as min
 
-d = sum(1,10,20) # d = 31
-d = sum([1,4,20]) # d = 25
-d = sum([1,4,20], [50,2]) # d = 77
+d = math.sum(1,10,20) # d = 31
+d = math.sum([1,4,20]) # d = 25
+d = math.sum([1,4,20], [50,2]) # d = 77
 # sum accepts: numbers (int, char, float etc) or arrays ONLY
 # sum return float if a type float is present. coerce non-float to float
 # sum return int   if data is mixed signed and unsigned types (char and byte) and no float are present
+
+from math import rand  # the flat spelling is a choice the importer makes, per name
+e = rand()
 ```
 
 ## QLang (`.ql`) modules

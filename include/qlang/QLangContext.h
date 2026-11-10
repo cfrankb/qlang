@@ -436,6 +436,9 @@ namespace qlang
     // any thread, by design).
     mutable std::thread::id m_thread;
     void bindThread() const;
+    // The host function a native-slot name asks for: bare, or `module.func`
+    // (docs/SERIALIZATION.md §5, SPEC §modules "import statement").
+    NativeFunc nativeNamed(const std::string &name) const;
     std::vector<Module> m_modules;
     // Module search paths + the external search callback (SPEC §api "module
     // search paths", "external search callback"; plan C8a). Host configuration:

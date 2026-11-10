@@ -66,33 +66,36 @@ the default name.
 
 Modules are resolved at compile time — nothing is looked up while a program runs. For a **C++**
 module that stays true of the machine as well: each imported function is a native slot of `CALL`,
-so flat import needed no VM change. A **`.ql`** module is the other half of the contract — its
+keyed by the spelling the importer used (`math.min` for `import math`, `min` for
+`from math import min`). A **`.ql`** module is the other half of the contract — its
 names are entries of the importing module's import table, reached by `getimport` / `callimport`
 ([13-bytecodes.md](13-bytecodes.md) `### OpCode getimport / callimport`, implemented Round 65) —
 and a loaded `.qlc` is merged by `QLangLinker`; see [09-modules.md](09-modules.md).
 
 ```python
-import math                   # flat import: min, max, sum, rand usable by name
+import math                   # binds the module: math.min, math.max, math.sum, math.rand
 
-import math as m              # register under alias m; flat import all
+import math as m              # binds the alias only: m.min, m.max
 
-from math import *            # import all public names from the math module
-from math import min, max     # import `min` and `max` only
+from math import *            # every public name of math, by bare name
+from math import min, max     # `min` and `max` only, by bare name
 ```
 
-| Form | Behaviour |
+| Form | Binds |
 |---|---|
-| `import math` | Flat import: copy all public names into the current scope (call as `min(...)`) |
-| `import math as m` | Register the module under alias `m`; flat import all (call as `min(...)`) |
-| `from math import *` | Flat import: copy all public names into the current scope |
-| `from math import min, max` | Flat import: copy only the listed names into the current scope |
+| `import math` | `math` — the module; its entities are reached as `math.min(...)` |
+| `import math as m` | `m` — the module under an alias; `math` itself is not bound |
+| `from math import *` | every public name, flat (`math` is not bound) |
+| `from math import min, max` | the listed names, flat (`math` is not bound) |
 
 The parser additionally accepts the legacy single-function form
-`import math.min` (flat import of that one function). Qualified access
-(`math.min(...)`) is a future extension — v1 supports flat import only. For a C++
-module the name is resolved at compile time and each imported function is
-registered as an external (native) function in the current scope; for a loaded
-`.qlc` it is resolved at compile time against that image's export table.
+`import math.min`, which binds that one function flat as `min` (the module is not bound).
+A bare name is visible only through a form that binds it flat: after `import math`,
+`min(...)` is `unknown function 'min'`. For a C++ module the name is resolved at compile time
+and the imported function is registered as an external (native) function of the importing
+module; for a loaded `.qlc` it is resolved against that image's export table. The full rules
+(what a qualifier may and may not do, where an `import` may appear) are in
+[09-modules.md](09-modules.md) `## import statement`.
 
 ## ctx.clear()
 

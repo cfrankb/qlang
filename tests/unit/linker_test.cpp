@@ -426,9 +426,9 @@ println("tally init")
 static const char *kTallyApp = R"(
 import tally
 println("shared literal")
-println(TAG)
-println(bump())
-println(counter)
+println(tally.TAG)
+println(tally.bump())
+println(tally.counter)
 )";
 
 static const ExportEntry *findExport(const CompiledProgram &prog,
@@ -604,7 +604,7 @@ static void testMerge() {
   if (check(doubler != nullptr, "merge: the native library loads (" + err + ")")) {
     CompiledProgram nativeMerged, nativeEntry;
     if (check(buildLinked(both,
-                          "import doubler\nprintln(dbl(3))\nprintln(twice(4))\n",
+                          "import doubler\nprintln(dbl(3))\nprintln(doubler.twice(4))\n",
                           nativeMerged, err, "app", &nativeEntry),
               "merge: the native app links (" + err + ")"))
       check(runText(nativeMerged, both) == "6\n8\n",
@@ -640,7 +640,7 @@ end
     check(false, "rewiden: the library loads (" + err + ")");
     return;
   }
-  const std::string app = manyDefs(300) + "\nimport wide\nprintln(answer())\n";
+  const std::string app = manyDefs(300) + "\nimport wide\nprintln(wide.answer())\n";
   CompiledProgram merged, entry;
   if (!check(buildLinked(ctx, app, merged, err, "wideapp", &entry),
              "rewiden: the app links (" + err + ")"))
@@ -770,8 +770,8 @@ static void testSharedCell() {
   }
   CompiledProgram more, entryMore;
   if (!check(buildLinked(again,
-                         "import tally\nprintln(counter)\nbump()\nbump()\n"
-                         "println(counter)\n",
+                         "import tally\nprintln(tally.counter)\n"
+                         "tally.bump()\ntally.bump()\nprintln(tally.counter)\n",
                          more, err, "app", &entryMore),
              "cell: the second app links (" + err + ")"))
     return;
@@ -803,10 +803,10 @@ static const char *kMiddle = R"(
 import leaf
 export const MODULE_NAME = "middle"
 export def tick()
-  return bump() + 100
+  return leaf.bump() + 100
 end
 export def peek()
-  return counter
+  return leaf.counter
 end
 println("middle init")
 )";
@@ -976,49 +976,66 @@ static void testImportGuards() {
     return;
   }
 
-  // The defining module owns its names: an importer reads and calls them, it
-  // never writes them (SPEC §bytecodes "technical specifications" 3, Q30).
-  check(entryError(ctx, "import tally\ncounter = 1\n")
-                .find("cannot assign to imported name 'counter'") !=
+  // `import tally` binds `tally` and nothing else, so the bare names are not in
+  // scope at all: the module's entities are reachable only through the
+  // qualifier (SPEC §modules "import statement").
+  check(entryError(ctx, "import tally\nbump()\n")
+                .find("unknown function 'bump'") != std::string::npos,
+        "guards: a module import leaves the bare function name unbound");
+  check(entryError(ctx, "import tally\nprintln(counter)\n")
+                .find("undeclared variable 'counter'") != std::string::npos,
+        "guards: a module import leaves the bare variable name unbound");
+  check(entryError(ctx, "import tally\ncounter = 1\nprintln(counter)\n")
+                .empty(),
+        "guards: a bare name a module also has is the importer's own variable");
+
+  // The defining module owns what the qualifier reaches: an importer reads and
+  // calls it, it never writes it (SPEC §bytecodes "technical specifications" 3,
+  // Q30).
+  check(entryError(ctx, "import tally\ntally.counter = 1\n")
+                .find("cannot assign to module member 'tally.counter'") !=
             std::string::npos,
-        "guards: assigning to an imported variable is refused");
-  check(entryError(ctx, "import tally\ncounter += 1\n")
-                .find("cannot assign to imported name 'counter'") !=
+        "guards: assigning through a module qualifier is refused");
+  check(entryError(ctx, "import tally\ntally.counter += 1\n")
+                .find("cannot assign to module member 'tally.counter'") !=
             std::string::npos,
-        "guards: compound assignment is refused the same way");
-  check(entryError(ctx, "import tally\ncounter++\n")
+        "guards: compound assignment through a qualifier is refused the same way");
+  check(entryError(ctx, "from tally import counter\ncounter++\n")
                 .find("cannot increment/decrement imported name 'counter'") !=
             std::string::npos,
-        "guards: incrementing an imported variable is refused");
-  check(entryError(ctx, "import tally\ndelete counter\n")
+        "guards: incrementing a flat import is refused");
+  // A flat import keeps the guard it always had: the name is read-only.
+  check(entryError(ctx, "from tally import counter\ncounter = 1\n")
+                .find("cannot assign to imported name 'counter'") !=
+            std::string::npos,
+        "guards: a flat import is read-only too");
+  check(entryError(ctx, "from tally import counter\ndelete counter\n")
                 .find("cannot delete imported name 'counter'") !=
             std::string::npos,
-        "guards: deleting an imported name is refused");
+        "guards: deleting a flat import is refused");
 
   // A function export is owned the same way: the table holds its index, so a
   // rebind would leave the table naming one function while the name gave
   // another (SPEC §bytecodes "keyword export": exported functions are not
   // modifiable).
-  check(entryError(ctx, "import tally\nbump = 1\n")
-                .find("cannot assign to imported name 'bump'") !=
+  check(entryError(ctx, "import tally\ntally.bump = 1\n")
+                .find("cannot assign to module member 'tally.bump'") !=
             std::string::npos,
-        "guards: rebinding an imported function name is refused");
-  // A function is not a value, so reading it by name reads a cell that is not
-  // there; the error says what to do instead.
-  check(entryError(ctx, "import tally\nprintln(bump)\n")
-                .find("call it instead of reading it") != std::string::npos,
-        "guards: reading an imported function as a value is refused");
+        "guards: rebinding a module's function is refused");
+  // A function is not a value, so reading it as one says what to do instead.
+  check(entryError(ctx, "import tally\nprintln(tally.bump)\n")
+                .find("not a first-class function value") != std::string::npos,
+        "guards: reading a module's function as a value is refused");
 
-  // None of this was top-level-only before: Phase 3c made an imported name
-  // reachable from a function body, which is where the guards now have to fire
-  // (and where the read has to be allowed).
-  check(entryError(ctx, "import tally\ndef f()\n  counter = 1\nend\nf()\n")
-                .find("cannot assign to imported name") != std::string::npos,
+  // None of this was top-level-only: a qualifier resolves from a function body,
+  // which is where the guards have to fire (and where the read has to work).
+  check(entryError(ctx, "import tally\ndef f()\n  tally.counter = 1\nend\nf()\n")
+                .find("cannot assign to module member") != std::string::npos,
         "guards: a write inside a function body is refused too");
   check(entryError(ctx,
-                   "import tally\ndef f()\n  return counter\nend\nprintln(f())\n")
+                   "import tally\ndef f()\n  return tally.counter\nend\nprintln(f())\n")
                 .empty(),
-        "guards: reading an imported variable inside a body is legal (3c)");
+        "guards: reading a module member inside a body is legal (3c)");
 
   // What the table cannot answer is refused while compiling rather than at the
   // first call.

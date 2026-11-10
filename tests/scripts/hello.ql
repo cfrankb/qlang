@@ -99,7 +99,7 @@ println("this is the END")
 
 import math
 
-local mx = max(3, 7, -1)
-local mn = min(3, 7, -9)
-local sm = sum(1, 2, 3)
+local mx = math.max(3, 7, -1)
+local mn = math.min(3, 7, -9)
+local sm = math.sum(1, 2, 3)
 println(sprintf("max= %d, min=%d, sum=%d", mx, mn, sm))

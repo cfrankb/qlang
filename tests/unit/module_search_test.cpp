@@ -243,9 +243,9 @@ template <class F> std::string errorOf(F &&f) {
 }
 
 // Whether the import table binds `name` from `module`, and whether it binds
-// nothing else. A flat `import m` binds every export — MODULE_NAME included —
-// so "imported one module" is a set of entries sharing one module name, not
-// one entry.
+// nothing else. An `import m` binds every export of `m` under its qualifier —
+// MODULE_NAME included — so "imported one module" is a set of entries sharing
+// one module name, not one entry.
 bool hasImport(const CompiledProgram &prog, const std::string &module,
                const std::string &name) {
   for (const ImportEntry &e : prog.imports)
@@ -576,7 +576,7 @@ void testDependencies() {
         "export const MODULE_NAME = \"use\"\n"
         "import dep\n"
         "export def value()\n"
-        "  return dep()\n"
+        "  return dep.dep()\n"
         "end\n",
         err);
   }
@@ -651,7 +651,7 @@ void testCycleTerminates() {
         "export const MODULE_NAME = \"a\"\n"
         "import b\n"
         "export def af()\n"
-        "  return noop()\n"
+        "  return b.noop()\n"
         "end\n",
         err);
   }
@@ -666,7 +666,7 @@ void testCycleTerminates() {
         "export const MODULE_NAME = \"b\"\n"
         "import a\n"
         "export def bf()\n"
-        "  return af()\n"
+        "  return a.af()\n"
         "end\n",
         err);
   }
@@ -690,7 +690,7 @@ void testCycleTerminates() {
   guarded.setModuleSearchPaths({libs});
   CompiledProgram merged;
   const bool ok =
-      buildLinked(guarded, "import b\nlocal x = bf()\n", merged, err, nullptr, "a");
+      buildLinked(guarded, "import b\nlocal x = b.bf()\n", merged, err, nullptr, "a");
   check(!ok && err.find("import cycle") != std::string::npos,
         "cycle: the compiler still rejects the graph: " + err);
 }
@@ -722,7 +722,7 @@ void testDeclaredName() {
 
   // `import foo` binds the module named bar, and the program runs.
   CompiledProgram merged;
-  if (!check(buildLinked(ctx, "import foo\nprintln(who())\n", merged, err),
+  if (!check(buildLinked(ctx, "import foo\nprintln(foo.who())\n", merged, err),
              "identity: `import foo` compiles against bar (" + err + ")"))
     return;
   check(importsOnlyFrom(merged, "bar") && hasImport(merged, "bar", "who"),
@@ -742,7 +742,7 @@ void testCompileDiscovers() {
   QLangContext ctx;
   ctx.setModuleSearchPaths({libs});
   CompiledProgram entry, merged;
-  if (!check(buildLinked(ctx, "import greeter\nprintln(who())\n", merged, err, &entry),
+  if (!check(buildLinked(ctx, "import greeter\nprintln(greeter.who())\n", merged, err, &entry),
              "e2e: an entry with nothing pre-loaded compiles (" + err + ")"))
     return;
   check(importsOnlyFrom(entry, "greeter") && hasImport(entry, "greeter", "who"),
@@ -756,7 +756,7 @@ void testCompileDiscovers() {
   QLangContext aliased;
   aliased.setModuleSearchPaths({libs});
   CompiledProgram amerged;
-  check(buildLinked(aliased, "import greeter as g\nprintln(who())\n", amerged, err),
+  check(buildLinked(aliased, "import greeter as g\nprintln(g.who())\n", amerged, err),
         "e2e: `import greeter as g` discovers the module (" + err + ")");
   check(runText(amerged, aliased) == "found\n",
         "e2e: the aliased import runs too");
@@ -781,7 +781,7 @@ void testNativeBeatsFile() {
 
   CompiledProgram prog;
   std::map<std::string, int> ids;
-  if (!check(compile(ctx, "import greeter\nprintln(who())\n", prog, ids, err, "app"),
+  if (!check(compile(ctx, "import greeter\nprintln(greeter.who())\n", prog, ids, err, "app"),
              "native: the C++ module is not an ambiguity (" + err + ")"))
     return;
   check(prog.imports.empty(), "native: no .ql import was created");

@@ -51,7 +51,8 @@ std::string librarySource(const std::string &answer) {
 
 // The entry program: nothing tells it where `greeter` came from — that is the
 // whole point of C8a.
-const char *kEntrySource = "import greeter\nprintln(greet(\"world\"))\n";
+const char *kEntrySource =
+    "import greeter\nprintln(greeter.greet(\"world\"))\n";
 
 // Compiles `source` as a library and returns the `.qlc` bytes. No natives and
 // no C++ modules are offered to the compiler, so the image's native-slot

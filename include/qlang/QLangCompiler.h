@@ -261,10 +261,15 @@ public:
   // negative indices so the VM can dispatch them at runtime.
   void addExternalFuncs(const std::unordered_set<std::string> &names);
 
-  // Register module functions. Each function in each module is registered as
-  // an external func with the same name (module qualification is compile-time
-  // only for flat import; qualified access math.min() is a future extension).
+  // Register module functions. Modules are NOT pre-bound: `import m` brings the
+  // MODULE into scope and its entities are reached as `m.name` (SPEC §modules
+  // "import statement"). This only records the names a registered module
+  // exports, so a `.ql` export that collides with one is reported at import.
   void addModules(const std::vector<QLangContext::Module> &modules);
+  // Name -> negative id, the map the `.qlc` native-slot table is written from
+  // (docs/SERIALIZATION.md §4.3). A C++ module function reached through its
+  // qualifier is keyed `module.func`, so the image names the module it wants;
+  // QLangContext::loadProgram re-resolves both spellings.
   const std::unordered_map<std::string, int> &nativeFuncIds() const { return m_nativeFuncIds; }
   const std::vector<QLangContext::NativeFunc> &nativeFuncsResolved() const { return m_nativeFuncsResolved; }
 
@@ -418,7 +423,7 @@ private:
   void compileBreak(const StmtPtr &s);
   void compileLabel(const StmtPtr &s);
   void compileGoto(const StmtPtr &s);
-  void compileImport(const StmtPtr &s);
+  void resolveImport(const StmtPtr &s);
   void compileClass(const StmtPtr &s);
   void compileEnum(const StmtPtr &s);
   void compileGlobal(const StmtPtr &s, std::vector<std::string> *captures);
@@ -439,6 +444,10 @@ private:
   // lost or silently detach the import (SPEC §bytecodes "technical
   // specifications" 4, plan Phase 3b "write through an import").
   void guardNotImported(const std::string &name, const char *op) const;
+  // Rejects writing through a module qualifier (`m.x = 1`): the module owns
+  // what it exports and the qualifier is not a value (SPEC §modules "import
+  // statement").
+  void guardNotModuleMember(const ExprPtr &target, const char *op) const;
   // Imported `.ql` names (plan Phase 3b). `qlModule` resolves an import source
   // name (honouring `import m as a` aliases) to a loaded image, or nullptr.
   // `bindQlImport` records one ImportEntry and returns its index, which is the
@@ -454,6 +463,36 @@ private:
   int bindQlImport(const LoadedModule &mod, const ExportEntry &exp,
                    const std::string &localName, const std::string &moduleAs,
                    const StmtPtr &s);
+  // --- Module namespaces (SPEC §modules "import statement") ---
+  // `import m` / `import m as a` binds the MODULE under the name the source
+  // spells (the alias when there is one) -> the module's own name. Nothing a
+  // module exports becomes visible by its bare name: only `from m import a` /
+  // `from m import *` / `import m.a` bind flat names.
+  std::unordered_map<std::string, std::string> m_moduleNs;
+  // The registered C++ module named `name`, or nullptr.
+  const QLangContext::Module *cppModule(const std::string &name) const;
+  // True when `base` is a module qualifier rather than a value: a bare name an
+  // `import` bound as a namespace, unread as a variable and not a class/enum.
+  bool moduleQualified(const ExprPtr &base) const;
+  // Resolves `q.name` on a module qualifier: a loaded `.ql` entity is the
+  // import-table entry bound under that key, a C++ module function gets its
+  // native slot. Returns the import index (>= 0) or the native slot id (< 0,
+  // the `CALL` operand `b`); a name the module does not offer is a compile
+  // error.
+  int moduleMember(const std::string &q, const std::string &name, int line,
+                   int col);
+  // The name a call or a name reference resolves through: `q.name` when the
+  // callee's base is a module qualifier, the bare name otherwise.
+  std::string callKey(const ExprPtr &e) const;
+  // Binds one native slot under `spelling` (the name the image stores and the
+  // host re-resolves) and returns its negative id.
+  int bindNative(const std::string &spelling,
+                 const QLangContext::NativeFunc &fn);
+  // `callimport` for one import-table entry, the args already staged at
+  // `argBase`. Shared by a flat imported name and its qualified spelling
+  // (plan Phase 3c).
+  void emitImportCall(int importIdx, const std::string &name, int argBase,
+                      int dest, int argCount, int line, int col);
   // Rejects an import graph that reaches the entry module again (SPEC
   // §bytecodes "technical specifications": import cycles are an error). Walks
   // the loaded images' import tables, so it stays correct once a library can

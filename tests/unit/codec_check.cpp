@@ -2169,17 +2169,29 @@ static void testScriptQlcRoundTrip() {
     std::string missing;
     for (const auto &[slot, n] : slots) {
       QLangContext::NativeFunc fn;
-      auto it = loadCtx.nativeFuncs().find(n);
-      if (it != loadCtx.nativeFuncs().end())
-        fn = it->second;
-      else
-        for (const auto &mod : loadCtx.modules()) {
-          auto mit = mod.funcs.find(n);
-          if (mit != mod.funcs.end()) {
-            fn = mit->second;
+      const size_t dot = n.find('.');
+      if (dot != std::string::npos) {
+        // A `module.func` slot is what `import m` stores (SPEC §modules
+        // "import statement"): only that module's function answers for it.
+        for (const auto &mod : loadCtx.modules())
+          if (mod.name == n.substr(0, dot)) {
+            auto fit = mod.funcs.find(n.substr(dot + 1));
+            if (fit != mod.funcs.end()) fn = fit->second;
             break;
           }
-        }
+      } else {
+        auto it = loadCtx.nativeFuncs().find(n);
+        if (it != loadCtx.nativeFuncs().end())
+          fn = it->second;
+        else
+          for (const auto &mod : loadCtx.modules()) {
+            auto mit = mod.funcs.find(n);
+            if (mit != mod.funcs.end()) {
+              fn = mit->second;
+              break;
+            }
+          }
+      }
       if (!fn) {
         natives = false;
         missing = n;

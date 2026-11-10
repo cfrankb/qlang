@@ -133,7 +133,7 @@ not change; M4 only adds messages behind the `indirect variable error:` prefix.
 | `qlang_run --profile` instructions (hello / money / cast / perf_stress) | **215 / 151 / 163 / 565** — exactly the `codegen_size` ceilings |
 | `encoding_v6` | **36127** checks (parity sweep: 30392 rejected / 2376 accepted / 15135 truncations) |
 | `codec_check` | **358** checks |
-| `flag_flow` / `linker` / `export` / `builtin_table` / `spec_check2` / `gen` | 1324 / 126 / 88 / 151 / 529 / 7 |
+| `flag_flow` / `linker` / `export` / `builtin_table` / `spec_check2` / `gen` | 1324 / 130 / 88 / 151 / 529 / 7 |
 | `tests/scripts/*.ql` | **23** script regressions |
 | `ctest -N` | **53** entries, 53/53 green |
 | `$$` today | `local a = "b"` / `local b` / `$$a = 1` → `parse error at line 3,1: unexpected token '$$' at start of statement`, exit **3** |

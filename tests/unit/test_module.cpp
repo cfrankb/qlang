@@ -51,20 +51,38 @@ int main() {
   };
   ctx.registerModule("math", mathMod);
 
-  // Test 1: import all
-  ctx.run(R"(
-    import math
-    local a = min(3, 1, 4, 1, 5)
-    local b = max(3, 1, 4, 1, 5)
-    local c = sum(1, 2, 3)
-  )");
-  std::cout << "Test 1 (import all): ";
+  // Test 1: `import math` binds the MODULE — every entity is reached through
+  // the qualifier and the bare names stay invisible (SPEC §modules "import
+  // statement"; the flat forms of tests 2, 5 and 6 are what make a bare name
+  // visible).
+  std::cout << "Test 1 (import binds the module): ";
   try {
-    std::cout << "OK\n";
-  } catch (...) {
-    std::cout << "FAIL\n";
+    ctx.run(R"(
+      import math
+      local a = math.min(3, 1, 4, 1, 5)
+      local b = math.max(3, 1, 4, 1, 5)
+      local c = math.sum(1, 2, 3)
+    )");
+    if (ctx.get("a").asInt() != 1 || ctx.get("b").asInt() != 5 ||
+        ctx.get("c").asInt() != 6) {
+      std::cout << "FAIL (wrong values)\n";
+      return 1;
+    }
+  } catch (const QLangError& e) {
+    std::cout << "FAIL: " << e.what() << "\n";
     return 1;
   }
+  try {
+    ctx.run("import math\nlocal a = min(3, 1, 4)");
+    std::cout << "FAIL (bare 'min' is visible)\n";
+    return 1;
+  } catch (const QLangError& e) {
+    if (std::string(e.what()).find("unknown function 'min'") == std::string::npos) {
+      std::cout << "FAIL (wrong error: " << e.what() << ")\n";
+      return 1;
+    }
+  }
+  std::cout << "OK\n";
 
   // Test 2: import single function
   ctx.clear();
@@ -231,9 +249,35 @@ int main() {
   try {
     ctx.run(R"(
       import math as m
-      local a = min(7, 3, 9)
-      local b = max(7, 3, 9)
+      local a = m.min(7, 3, 9)
+      local b = m.max(7, 3, 9)
     )");
+    if (ctx.get("a").asInt() != 3 || ctx.get("b").asInt() != 9) {
+      std::cout << "FAIL (wrong values)\n";
+      return 1;
+    }
+    // The alias REPLACES the module name: neither `math.f` nor a bare `f` is a
+    // way in (SPEC §modules "import statement").
+    bool refused = false;
+    try {
+      ctx.run("import math as m\nlocal a = min(7, 3, 9)");
+    } catch (const QLangError&) {
+      refused = true;
+    }
+    if (!refused) {
+      std::cout << "FAIL (bare 'min' is visible)\n";
+      return 1;
+    }
+    refused = false;
+    try {
+      ctx.run("import math as m\nlocal a = math.min(7, 3, 9)");
+    } catch (const QLangError&) {
+      refused = true;
+    }
+    if (!refused) {
+      std::cout << "FAIL (the alias did not replace the module name)\n";
+      return 1;
+    }
     std::cout << "OK\n";
   } catch (const QLangError& e) {
     std::cout << "FAIL: " << e.what() << "\n";

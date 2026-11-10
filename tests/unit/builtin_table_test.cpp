@@ -274,7 +274,8 @@ static void testNativeFunctionStillResolves() {
 
   std::vector<CallSite> calls;
   std::string err;
-  check(compileCalls(ctx, "import math\nlocal a = min(3, 1, 4)\n", calls, err),
+  check(compileCalls(ctx, "import math\nlocal a = math.min(3, 1, 4)\n",
+                   calls, err),
         "a module function call compiles (" + err + ")");
   check(calls.size() == 1, "the module call compiles to exactly one CALL");
   check(!calls.empty() && calls[0].b < 0,
@@ -286,7 +287,7 @@ static void testNativeFunctionStillResolves() {
   QLangContext run;
   run.registerModule("math", mathMod);
   try {
-    run.run("import math\nlocal a = min(3, 1, 4)\n");
+    run.run("import math\nlocal a = math.min(3, 1, 4)\n");
     check(run.get("a").asInt() == 1, "min(3, 1, 4) is still 1");
   } catch (const QLangError &e) {
     check(false, std::string("the module call runs (") + e.what() + ")");

@@ -383,14 +383,13 @@ void QLangCompiler::addExternalFuncs(const std::unordered_set<std::string> &name
 }
 
 void QLangCompiler::addModules(const std::vector<QLangContext::Module> &modules) {
-  std::unordered_set<std::string> allNames;
-  for (const auto &mod : modules) {
-    for (const auto &[name, _] : mod.funcs) {
-      allNames.insert(name);
+  // Records the exported names and the modules themselves: no native slot is
+  // assigned here, because a module's functions are reachable only through the
+  // module (or an import form that binds the name flatly), so an unused module
+  // contributes nothing to the program's native-slot table.
+  for (const auto &mod : modules)
+    for (const auto &[name, _] : mod.funcs)
       m_moduleFuncNames.insert(name);
-    }
-  }
-  addExternalFuncs(allNames);
   m_moduleFuncs = modules;
 }
 
@@ -1223,6 +1222,18 @@ CompiledProgram QLangCompiler::compile() {
   if (m_libraryMode && m_moduleNameFromSource.empty())
     throw QLangError(QLangErrorKind::Parse, 0, 0,
                      "library module requires export const MODULE_NAME = \"<name>\"");
+  // Every top-level `import` resolves here, BEFORE the program body compiles,
+  // and the statements themselves emit no code (SPEC §modules "Where an import
+  // may appear"): the names an import binds are module-wide no matter where the
+  // statement sits, so a program that ends before reaching one must still see
+  // them, and a loaded `.ql` module the program never reaches still takes its
+  // place in the merged <init> order. collectExports(), above, has already
+  // refused an import nested in a block or a function body.
+  for (const StmtPtr &s : m_program) {
+    if (s->kind == StmtKind::Import)
+      resolveImport(s);
+  }
+
   // Compile the top-level program into the main (scratch) function context.
   if (m_scope) {
     // Phase 2: the main program's non-global register space (locals, temps)
@@ -1275,7 +1286,7 @@ CompiledProgram QLangCompiler::compile() {
   // The import table (SPEC §bytecodes "import table (lookup)"): one entry per
   // name bound from a loaded `.ql` module, `ref` still the DEFINING module's
   // handle until the linker rewrites it. C++ module imports stay compile-time
-  // natives in the negative-slot space of `CALL` operand `b` (compileImport)
+  // natives in the negative-slot space of `CALL` operand `b` (resolveImport)
   // and are not table entries.
   checkImportCycles();
   out.imports = std::move(m_imports);
@@ -1346,6 +1357,13 @@ static void rejectNestedExportsIn(const std::vector<StmtPtr> &stmts) {
     if (s->kind == StmtKind::ExportRef || s->isExported)
       throw QLangError(QLangErrorKind::Parse, s->line, s->col,
                        "export is only valid at global scope");
+    // An `import` binds module-wide names, and the import pre-pass walks only
+    // the top level, so nested in a block or a def body it would bind names the
+    // block looks like it scopes (SPEC §modules "Where an import may appear").
+    if (s->kind == StmtKind::Import)
+      throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                       "import of module '" + s->importModule +
+                           "' must appear at module top level");
     rejectNestedExports(s);
   }
 }
@@ -1918,7 +1936,9 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
   case StmtKind::Break: compileBreak(s); break;
   case StmtKind::Label: compileLabel(s); break;
   case StmtKind::Goto: compileGoto(s); break;
-  case StmtKind::Import: compileImport(s); break;
+  // Bound by the pre-pass at top level; resolved here only for a class body,
+  // which that pass does not walk (SPEC §modules "Where an import may appear").
+  case StmtKind::Import: resolveImport(s); break;
   // `export NAME;` emits no code: the export table is built by the passes
   // around compile() (SPEC §bytecodes "keyword export").
   case StmtKind::ExportRef: break;
@@ -1960,7 +1980,7 @@ void QLangCompiler::compileDeclaration(const StmtPtr &s) {
     // (plan Phase 3c — without this the name is unbound as a callee and the
     // resume is refused as `unknown function`).
     if ((m_userFuncs.count(e->callee) && m_generatorVars.count(e->callee)) ||
-        importedIsGenerator(e->callee))
+        importedIsGenerator(callKey(s->value)))
       m_generatorVars.insert(s->name);
     trace(TRACE_FULL, "[DBG-GENVAR] m_generatorVars after insert: {");
     for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
@@ -2886,7 +2906,7 @@ void QLangCompiler::checkImportCycles() const {
 
 // The loaded `.ql` module an `import` names, honouring an `import m as a`
 // alias; nullptr when the name is not a loaded image (external-modules plan v4
-// Phase 3b). A name that is not loaded is not yet a failure: compileImport
+// Phase 3b). A name that is not loaded is not yet a failure: resolveImport
 // hands it to QLangContext::findModule, which resolves it through the search
 // callback and the search paths (SPEC §api "module search paths"; plan C8a) —
 // and a module discovered that way is registered under its own declared name,
@@ -2929,6 +2949,192 @@ void QLangCompiler::guardNotImported(const std::string &name,
                    std::string("cannot ") + op + " imported name '" + name +
                        "' (from module '" + im.module +
                        "'): the defining module owns it");
+}
+
+// The registered C++ module named `name`, or nullptr.
+const QLangContext::Module *
+QLangCompiler::cppModule(const std::string &name) const {
+  for (const auto &m : m_moduleFuncs)
+    if (m.name == name)
+      return &m;
+  return nullptr;
+}
+
+// Whether `base` names a MODULE the program imported rather than a value (SPEC
+// §modules "import statement"). A variable, class or enum of the same name
+// wins: the qualifier is what the source spelled (`import m as a` binds `a`),
+// and nothing here can shadow it before it is declared.
+bool QLangCompiler::moduleQualified(const ExprPtr &base) const {
+  if (!base || base->kind != ExprKind::Variable || base->scopeStatic)
+    return false;
+  const std::string &q = base->name;
+  if (!m_moduleNs.count(q))
+    return false;
+  return regOf(q) < 0 && m_captureRegs.count(q) == 0 &&
+         m_classes.count(q) == 0 && m_enums.count(q) == 0 &&
+         m_userFuncs.count(q) == 0;
+}
+
+// The name a call resolves through: the qualified key when the callee's base is
+// a module qualifier, the callee itself otherwise (SPEC §modules "import
+// statement" — `import m` binds the module, `from m import a` the name). A
+// method call on a real table keeps the bare name: its member is read at
+// runtime.
+std::string QLangCompiler::callKey(const ExprPtr &e) const {
+  const ExprPtr &base = e->calleeMember ? e->calleeMember->memberBase
+                                        : nullptr;
+  return moduleQualified(base) ? base->name + "." + e->callee : e->callee;
+}
+
+// Binds `spelling` to a native slot (the negative `CALL` operand `b`) and
+// records the function for it. Assigning the id and resolving the pointer in
+// one step is what keeps a module registered after the compile started from
+// leaving a slot that never resolves: the ids taken at the start of a compile
+// are only a starting point, not the last word on which modules exist.
+int QLangCompiler::bindNative(const std::string &spelling,
+                              const QLangContext::NativeFunc &fn) {
+  if (!m_nativeFuncIds.count(spelling))
+    addExternalFuncs({spelling});
+  const int id = m_nativeFuncIds[spelling];
+  const size_t slot = static_cast<size_t>(-1 - id);
+  if (m_nativeFuncsResolved.size() <= slot)
+    m_nativeFuncsResolved.resize(slot + 1);
+  m_nativeFuncsResolved[slot] = fn;
+  return id;
+}
+
+// `q.name` where `q` is a module qualifier (SPEC §modules "import statement").
+// A loaded `.ql` module's entities are already bound under the qualified key by
+// resolveQlImport, so a miss there means the module does not export the name; a
+// C++ module binds nothing at import time, so its lookup happens here.
+int QLangCompiler::moduleMember(const std::string &q, const std::string &name,
+                                int line, int col) {
+  auto it = m_qlImports.find(q + "." + name);
+  if (it != m_qlImports.end())
+    return it->second;
+  auto nit = m_moduleNs.find(q);
+  const QLangContext::Module *mod =
+      nit == m_moduleNs.end() ? nullptr : cppModule(nit->second);
+  if (!mod)
+    throw QLangError(QLangErrorKind::Parse, line, col,
+                     "module '" + q + "' does not export '" + name + "'");
+  auto fit = mod->funcs.find(name);
+  if (fit == mod->funcs.end())
+    throw QLangError(QLangErrorKind::Parse, line, col,
+                     "module '" + q + "' has no function '" + name + "'");
+  // The slot is named by the qualified spelling, so the image says which
+  // module's function it wants and a same-named function of another module
+  // cannot take the slot.
+  return bindNative(q + "." + name, fit->second);
+}
+
+// Runs one call of an import-table entry (external-modules plan v4 Phase 3c):
+// the callee is named through the table, so the instruction carries no handle
+// into the defining module — the linker resolves the entry when the images
+// merge, which is why a `callimport` never survives a link. Shared by a flat
+// imported name and the qualified spelling of a module import (`m.f`), whose
+// args are staged the same way.
+void QLangCompiler::emitImportCall(int importIdx, const std::string &name,
+                                   int argBase, int dest, int argCount,
+                                   int line, int col) {
+  const ImportEntry &im = m_imports[static_cast<size_t>(importIdx)];
+  const LoadedModule *dm =
+      m_scope ? m_scope->loadedModule(im.module) : nullptr;
+  if (!dm || im.ref < 0)
+    throw QLangError(QLangErrorKind::Parse, line, col,
+                     "imported function '" + name +
+                         "' is not available: module '" + im.module +
+                         "' is not loaded");
+  // `ref` is a function index for a function export and a cell for a value
+  // export (SPEC §bytecodes "import table (lookup)"), so each kind is
+  // checked against the table it names — the same split the reader makes
+  // for an export entry. Checking a cell against the function table would
+  // refuse an exported closure whose register happens to sit past the last
+  // function.
+  if (im.kind == ExportKind::Func &&
+      im.ref >= static_cast<int>(dm->program.functions.size()))
+    throw QLangError(QLangErrorKind::Parse, line, col,
+                     "imported function '" + name +
+                         "' names a function index outside module '" +
+                         im.module + "'");
+  if (im.kind != ExportKind::Func &&
+      im.ref >= dm->program.registerCount)
+    throw QLangError(QLangErrorKind::Parse, line, col,
+                     "imported name '" + name +
+                         "' names a cell outside module '" + im.module +
+                         "'");
+  if (im.kind != ExportKind::Func) {
+    // The name holds a closure value (an exported arrow or closure-typed
+    // variable): read the defining module's cell, then call what it holds.
+    // `getimport` names a table entry rather than a register, so this works
+    // at any depth (the Phase 3b fallback was top-level only).
+    emit(Opcode::GETIMPORT, dest, importIdx);
+    emit(Opcode::CALLCLOS, dest, dest, argCount);
+    return;
+  }
+  const Function &df = dm->program.functions[static_cast<size_t>(im.ref)];
+  // A capture named by a register is seeded from the CALLER's frame, so a
+  // function with one still cannot be called across a module boundary: the
+  // import table says WHICH function, not which frame seeds its captures.
+  // A module-level `def`'s captures of its own module's consts and `global`s
+  // are absolute table slots (see the capture lowering in compileFunction),
+  // so this fires on the one case that is not: a def that calls a sibling
+  // def which itself has captures — that callee is materialized as a closure
+  // value in a top-level register, and the caller captures the register
+  // (frame-relative), which only the defining module's frame can seed.
+  for (const CaptureRef &cr : df.captures)
+    if (cr.reg >= 0)
+      throw QLangError(
+          QLangErrorKind::Parse, line, col,
+          "imported function '" + name +
+              "' captures a local of its own module and cannot be called "
+              "across a module boundary: its captures are seeded from the "
+              "defining module's frame");
+  emit(Opcode::CALLIMPORT, dest, importIdx, argCount);
+  if (df.isGenerator) {
+    // The VM builds the generator from the imported function (the local
+    // MAKEGEN path's arg-register clearing applies for the same reason:
+    // the args must not leak into the next instruction).
+    for (int j = 0; j < argCount; j++)
+      emitImmNil(Opcode::MOV, argBase + j);
+  }
+}
+
+// The export names to bind for one `import` form, and whether they are bound
+// under the module's qualifier (`import m`) or flat (`from m import …`,
+// `import m.f`). SPEC §modules "import statement".
+static std::vector<std::string> importNames(
+    const StmtPtr &s, const std::vector<ExportEntry> &exports,
+    bool &qualified) {
+  qualified = false;
+  if (!s->importFunc.empty())
+    return {s->importFunc}; // `import m.f` — one explicitly named entity
+  if (s->importAll) {
+    std::vector<std::string> names; // `from m import *`
+    for (const auto &e : exports)
+      names.push_back(e.name);
+    return names;
+  }
+  if (!s->importFuncs.empty())
+    return s->importFuncs; // `from m import a, b`
+  qualified = true; // `import m`, `import m as a` — the module, not its names
+  std::vector<std::string> names;
+  for (const auto &e : exports)
+    names.push_back(e.name);
+  return names;
+}
+
+// Rejects a write through a module qualifier: the module owns its entities, and
+// `m.x = 1` on a C++ module would otherwise create a variable named `m` and
+// write into nil (SPEC §modules "import statement").
+void QLangCompiler::guardNotModuleMember(const ExprPtr &target,
+                                         const char *op) const {
+  if (!moduleQualified(target->memberBase))
+    return;
+  throw QLangError(QLangErrorKind::Parse, m_curLine, m_curCol,
+                   std::string("cannot ") + op + " module member '" +
+                       target->memberBase->name + "." + target->memberName +
+                       "'");
 }
 
 // Records one entity bound from a loaded module and returns its import index
@@ -2994,22 +3200,17 @@ void QLangCompiler::compileQlImport(const StmtPtr &s, const LoadedModule &mod) {
   // `getimport`/`callimport` operands into the module's own import table, both
   // of which `.qlc` v9 carries, so the image stays serializable and the linker
   // resolves the chain transitively.
-  // `import m as a`: the alias names the module for a later `import a.f`.
+  // `import m as a`: the alias names the module for a later `a.f`.
   if (!s->importAlias.empty())
     m_qlAliases[s->importAlias] = mod.program.moduleName;
+  const std::string qualifier =
+      s->importAlias.empty() ? s->importModule : s->importAlias;
 
-  // The export names to bind, per the form used.
-  std::vector<std::string> names;
-  if (!s->importFunc.empty())
-    names.push_back(s->importFunc); // `import m.f`
-  else if (s->importAll)            // `from m import *`
-    for (const auto &e : mod.program.exports)
-      names.push_back(e.name);
-  else if (!s->importFuncs.empty()) // `from m import a, b`
-    names = s->importFuncs;
-  else // `import m` — flat import all
-    for (const auto &e : mod.program.exports)
-      names.push_back(e.name);
+  bool qualified = false;
+  const std::vector<std::string> names =
+      importNames(s, mod.program.exports, qualified);
+  if (qualified)
+    m_moduleNs[qualifier] = mod.program.moduleName;
 
   for (const std::string &fname : names) {
     const ExportEntry *exp = nullptr;
@@ -3020,28 +3221,40 @@ void QLangCompiler::compileQlImport(const StmtPtr &s, const LoadedModule &mod) {
           QLangErrorKind::Parse, s->line, s->col,
           "module '" + mod.program.moduleName + "' does not export '" + fname +
               "'");
-    bindQlImport(mod, *exp, fname, s->importAlias, s);
+    // Bound by this very form already (a repeated `import m`, or the statement
+    // resolving again where it sits): the second binding would collide with the
+    // first, so it is a no-op.
+    if (auto it = m_qlImports.find(qualified ? qualifier + "." + fname : fname);
+        it != m_qlImports.end()) {
+      const ImportEntry &old = m_imports[static_cast<size_t>(it->second)];
+      if (old.module == mod.program.moduleName && old.name == fname)
+        continue;
+    }
+    // A `import m` entity is bound under the qualifier (`m.f`), so the bare
+    // name stays invisible and two modules can each contribute their own `f`.
+    const std::string key = qualified ? qualifier + "." + fname : fname;
+    bindQlImport(mod, *exp, key, s->importAlias, s);
   }
 }
 
-void QLangCompiler::compileImport(const StmtPtr &s) {
-  // Resolve module functions at compile time and register them as external
-  // funcs in the current scope. Supports:
-  //   import math                          — flat import all
-  //   import math.min                      — flat import single func (legacy)
-  //   import math as m                     — register under alias, flat import all
-  //   from math import *                   — flat import all
-  //   from math import min, max            — flat import specific funcs
+// Resolves one `import` statement and binds what its form says it binds; the
+// statement itself emits no code. Called from the pre-pass for the top level
+// and from compileStmt for the class bodies the pre-pass does not walk.
+void QLangCompiler::resolveImport(const StmtPtr &s) {
+  // Resolves the module and binds what the form says it binds (SPEC §modules
+  // "import statement"):
+  //   import math                          — binds the MODULE: math.min, math.max
+  //   import math as m                     — the same under the alias: m.min
+  //   import math.min                      — binds the one name flatly
+  //   from math import *                   — binds every name flatly
+  //   from math import min, max            — binds those names flatly
   // The same five forms resolve against a loaded `.ql` module's export table
   // when the name is one (external-modules plan v4 Phase 3b); being both is an
   // error, never a precedence. A class body compiles with `m_inFunction` clear,
   // so a class may import; a `def` body may not (see the `else` below).
   if (!m_inFunction) {
     // Find the module.
-    const QLangContext::Module *mod = nullptr;
-    for (const auto &m : m_moduleFuncs) {
-      if (m.name == s->importModule) { mod = &m; break; }
-    }
+    const QLangContext::Module *mod = cppModule(s->importModule);
     const LoadedModule *ql = qlModule(s->importModule);
     if (ql && mod)
       throw QLangError(
@@ -3094,45 +3307,34 @@ void QLangCompiler::compileImport(const StmtPtr &s) {
       throw QLangError(QLangErrorKind::Parse, 0, 0, msg);
     }
 
-    // If alias specified, register the module under the alias name.
-    if (!s->importAlias.empty()) {
-      QLangContext::Module aliased;
-      aliased.name = s->importAlias;
-      aliased.funcs = mod->funcs;
-      m_moduleFuncs.push_back(aliased);
-      // Now import from the alias.
-      mod = &m_moduleFuncs.back();
+    // The five forms, C++ modules (SPEC §modules "import statement"): the flat
+    // ones bind a name into THIS module; `import m` / `import m as a` binds the
+    // MODULE, whose functions are then reached as `m.name` and never by the
+    // bare name. Nothing is pre-bound: a module the program never reaches
+    // contributes no native slot.
+    if (s->importFunc.empty() && !s->importAll && s->importFuncs.empty()) {
+      m_moduleNs[s->importAlias.empty() ? s->importModule : s->importAlias] =
+          mod->name;
+      return;
     }
 
     // Collect function names to import.
     std::vector<std::string> names;
-    if (!s->importFunc.empty()) {
-      // Legacy single-function import.
-      auto fit = mod->funcs.find(s->importFunc);
-      if (fit == mod->funcs.end())
-        throw QLangError(QLangErrorKind::Parse, 0, 0,
-                         "undefined function '" + s->importFunc + "' in module '" + s->importModule + "'");
-      names.push_back(s->importFunc);
-    } else if (s->importAll) {
-      // `from math import *` — import all.
+    if (!s->importFunc.empty())
+      names.push_back(s->importFunc); // `import m.f` — one explicit name
+    else if (s->importAll)            // `from m import *`
       for (const auto &[fname, func] : mod->funcs)
         names.push_back(fname);
-    } else if (!s->importFuncs.empty()) {
-      // `from math import min, max` — import specific functions.
-      for (const auto &fname : s->importFuncs) {
-        if (mod->funcs.find(fname) == mod->funcs.end())
-          throw QLangError(QLangErrorKind::Parse, 0, 0,
-                           "undefined function '" + fname + "' in module '" + s->importModule + "'");
-        names.push_back(fname);
-      }
-    } else {
-      // `import math` — flat import all (v1).
-      for (const auto &[fname, func] : mod->funcs)
-        names.push_back(fname);
-    }
+    else // `from m import min, max`
+      names = s->importFuncs;
 
-    // Register each function as an external func in the current scope.
+    // Bind each function to its native slot under the flat name.
     for (const auto &fname : names) {
+      auto it = mod->funcs.find(fname);
+      if (it == mod->funcs.end())
+        throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                         "undefined function '" + fname + "' in module '" +
+                             mod->name + "'");
       // The other direction of the collision check in bindQlImport: a name a
       // loaded `.ql` module already bound cannot also arrive from a C++ module.
       auto qit = m_qlImports.find(fname);
@@ -3142,12 +3344,7 @@ void QLangCompiler::compileImport(const StmtPtr &s) {
             "'" + fname + "' is imported from module '" +
                 m_imports[static_cast<size_t>(qit->second)].module +
                 "' and is also exported by C++ module '" + mod->name + "'");
-      int idx = -1 - m_nativeFuncIds[fname];
-      while (m_nativeFuncsResolved.size() <= static_cast<size_t>(idx))
-        m_nativeFuncsResolved.push_back(nullptr);
-      auto it = mod->funcs.find(fname);
-      if (it != mod->funcs.end())
-        m_nativeFuncsResolved[static_cast<size_t>(idx)] = it->second;
+      bindNative(fname, it->second);
       // Record the provenance (module -> func) once per name; the first
       // binding wins, mirroring the slot above (a re-import of the same name
       // resolves to the same native slot).
@@ -3827,6 +4024,15 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       emit(Opcode::MOV, dest, r);
       break;
     }
+    // A MODULE, imported or not: the qualifier reaches the entities, the name
+    // on its own is no value (SPEC §modules "import statement").
+    if (cppModule(e->name) || qlModule(e->name))
+      throw QLangError(
+          QLangErrorKind::Parse, 0, 0,
+          "'" + e->name +
+              "' is a module, not a value: reach what it offers as '" +
+                  e->name + ".<name>' (or bind a name into this module"
+                  " with 'from " + e->name + " import <name>')");
     throw QLangError(QLangErrorKind::Parse, 0, 0,
                      "use of undeclared variable '" + e->name + "'");
     break;
@@ -3995,6 +4201,23 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     // guidelines — universal scratch pad).
     compileArgsToSlots(e->args, argBase);
 
+    // `m.f(...)` where `m` is a module imported as a module (SPEC §modules
+    // "import statement"): the entity is named by its qualified spelling, so a
+    // same-named entity of another module cannot answer instead, and the table
+    // member path below does not apply — `m` is not a value.
+    if (e->calleeMember && moduleQualified(e->calleeMember->memberBase)) {
+      const std::string &q = e->calleeMember->memberBase->name;
+      const int mb = moduleMember(q, e->callee, e->callLine, e->callCol);
+      if (mb < 0) {
+        emit(Opcode::CALL, dest, mb, argCount);  // C++ module: negative slot
+        m_emitter.setLastLoc(static_cast<uint16_t>(e->callLine),
+                             static_cast<uint16_t>(e->callCol));
+      } else {
+        emitImportCall(mb, q + "." + e->callee, argBase, dest, argCount,
+                       e->callLine, e->callCol);
+      }
+      break;
+    }
     // Method call: obj.method(args) -> load the member (closure) first.
     if (e->calleeMember) {
       // Static method call: C::name(args). The closure lives in the class-level
@@ -4258,73 +4481,13 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       break;
     }
     // Called from a loaded `.ql` module (external-modules plan v4 Phase 3c):
-    // the callee is named through the import table, so the instruction carries
-    // no handle into the defining module — the linker resolves the entry when
-    // the images merge, which is why a `callimport` never survives a link.
-    auto iit = m_qlImports.find(e->callee);
+    // the key is the flat name a `from` form bound or the qualified name a
+    // module import bound (SPEC §modules "import statement").
+    const std::string key = callKey(e);
+    auto iit = m_qlImports.find(key);
     if (iit != m_qlImports.end()) {
-      const int importIdx = iit->second;
-      const ImportEntry &im = m_imports[static_cast<size_t>(importIdx)];
-      const LoadedModule *dm =
-          m_scope ? m_scope->loadedModule(im.module) : nullptr;
-      if (!dm || im.ref < 0)
-        throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
-                         "imported function '" + e->callee +
-                             "' is not available: module '" + im.module +
-                             "' is not loaded");
-      // `ref` is a function index for a function export and a cell for a value
-      // export (SPEC §bytecodes "import table (lookup)"), so each kind is
-      // checked against the table it names — the same split the reader makes
-      // for an export entry. Checking a cell against the function table would
-      // refuse an exported closure whose register happens to sit past the last
-      // function.
-      if (im.kind == ExportKind::Func &&
-          im.ref >= static_cast<int>(dm->program.functions.size()))
-        throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
-                         "imported function '" + e->callee +
-                             "' names a function index outside module '" +
-                             im.module + "'");
-      if (im.kind != ExportKind::Func &&
-          im.ref >= dm->program.registerCount)
-        throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
-                         "imported name '" + e->callee +
-                             "' names a cell outside module '" + im.module +
-                             "'");
-      if (im.kind != ExportKind::Func) {
-        // The name holds a closure value (an exported arrow or closure-typed
-        // variable): read the defining module's cell, then call what it holds.
-        // `getimport` names a table entry rather than a register, so this works
-        // at any depth (the Phase 3b fallback was top-level only).
-        emit(Opcode::GETIMPORT, dest, importIdx);
-        emit(Opcode::CALLCLOS, dest, dest, argCount);
-        break;
-      }
-      const Function &df = dm->program.functions[static_cast<size_t>(im.ref)];
-      // A capture named by a register is seeded from the CALLER's frame, so a
-      // function with one still cannot be called across a module boundary: the
-      // import table says WHICH function, not which frame seeds its captures.
-      // A module-level `def`'s captures of its own module's consts and `global`s
-      // are absolute table slots (see the capture lowering in compileFunction),
-      // so this fires on the one case that is not: a def that calls a sibling
-      // def which itself has captures — that callee is materialized as a closure
-      // value in a top-level register, and the caller captures the register
-      // (frame-relative), which only the defining module's frame can seed.
-      for (const CaptureRef &cr : df.captures)
-        if (cr.reg >= 0)
-          throw QLangError(
-              QLangErrorKind::Parse, e->callLine, e->callCol,
-              "imported function '" + e->callee +
-                  "' captures a local of its own module and cannot be called "
-                  "across a module boundary: its captures are seeded from the "
-                  "defining module's frame");
-      emit(Opcode::CALLIMPORT, dest, importIdx, argCount);
-      if (df.isGenerator) {
-        // The VM builds the generator from the imported function (the local
-        // MAKEGEN path's arg-register clearing applies for the same reason:
-        // the args must not leak into the next instruction).
-        for (int j = 0; j < argCount; j++)
-          emitImmNil(Opcode::MOV, argBase + j);
-      }
+      emitImportCall(iit->second, key, argBase, dest, argCount, e->callLine,
+                     e->callCol);
       break;
     }
     // User `def` function: funcIndex known at compile time.
@@ -4576,6 +4739,26 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
                            "' has no member '" + e->memberName + "'");
         break; // value folded — skip class/table member paths
       }
+    }
+    // A module qualifier on the left (`math.min`, SPEC §modules "import
+    // statement"): an exported VALUE of a `.ql` module lives in an import-table
+    // cell; a function has no value under this form, only a call (`m.f(...)`).
+    if (moduleQualified(e->memberBase)) {
+      const std::string &q = e->memberBase->name;
+      const int mb = moduleMember(q, e->memberName, m_curLine, m_curCol);
+      if (mb >= 0 &&
+          m_imports[static_cast<size_t>(mb)].kind != ExportKind::Func) {
+        emit(Opcode::GETIMPORT, dest, mb);
+        break;
+      }
+      throw QLangError(
+          QLangErrorKind::Parse, m_curLine, m_curCol,
+          mb < 0 ? "module function '" + q + "." + e->memberName +
+                       "' is not a value: call it as '" + q + "." +
+                       e->memberName + "(...)'"
+                 : "imported function '" + q + "." + e->memberName +
+                       "' is not a first-class function value: call it as '" +
+                       q + "." + e->memberName + "(...)'");
     }
     if (e->scopeStatic) {
       // C::name -> TABGET staticsR, C, "__statics__"; TABGET dest, staticsR,
@@ -4969,6 +5152,7 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
       emit(Opcode::ARRAPP, baseR, valR, 0);
     }
   } else if (target->kind == ExprKind::Member) {
+    guardNotModuleMember(target, "assign to");
     const std::string &baseName = target->memberBase->name;
     int baseR;
     auto cit = m_captureRegs.find(baseName);

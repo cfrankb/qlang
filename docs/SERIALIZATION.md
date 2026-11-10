@@ -218,6 +218,10 @@ table is what makes the image loadable: bytecode references natives by slot
 - Slots are written in ascending order; duplicates are a format error.
 - Unbound (null) slots are omitted; the loader pads `nativeFuncs` with null.
 - `name` MUST be non-empty.
+- `name` is the spelling the *importer wrote*: `min` for `from math import min`, `math.min`
+  for `import math` ([spec/09-modules.md](spec/09-modules.md) `## import statement`). A dotted
+  name is a module qualifier, not a path: it re-resolves to that module's function (§5.2), and
+  a native registered under a dotted name by `setFunc` is matched by the same rule.
 
 ### 4.4 VarEntry / constVars
 

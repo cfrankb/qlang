@@ -818,9 +818,10 @@ int main() {
 
   // -- Phase 1: fetch reserved, math rand (dup-decl warning deferred) --
   expectThrow("fetch is a reserved word", "local fetch = 1");
-  expectRun("math rand()", "import math\nlocal r = rand()");
+  expectRun("math rand()", "import math\nlocal r = math.rand()");
   expectVal("math rand() in range",
-            "import math\nlocal r = rand()\nlocal ok = (r >= 0) || (r < 0);", "ok", 1);
+            "import math\nlocal r = math.rand()\nlocal ok = (r >= 0) || (r < 0);",
+            "ok", 1);
 
   // -- Phase 2: set type (SPEC §sets) --
   expectVal("set ctor count", "local s = set(1,5,7,9); local n = len(s);", "n", 4);

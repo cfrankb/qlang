@@ -55,7 +55,7 @@ println(n * 7)
 ]])
 file(WRITE "${W}/app.ql" [[
 import greeter
-println(hello("world"))
+println(greeter.hello("world"))
 ]])
 file(WRITE "${W}/nest/bb.ql" [[
 export const MODULE_NAME = "bb"
@@ -67,12 +67,12 @@ file(WRITE "${W}/nest/aa.ql" [[
 export const MODULE_NAME = "aa"
 import bb
 export def quad(x)
-  return twice(twice(x))
+  return bb.twice(bb.twice(x))
 end
 ]])
 file(WRITE "${W}/nest/main.ql" [[
 import aa
-println(quad(21))
+println(aa.quad(21))
 ]])
 
 # --- harness ----------------------------------------------------------------
