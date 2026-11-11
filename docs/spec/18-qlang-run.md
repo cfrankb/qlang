@@ -19,6 +19,15 @@ ADD
 --output-path       folder to save qlc and qla
 ```
 
+flags can be combined
+```
+-ca                 -c and -a 
+-car                -c, -a  and -r
+-ar                 -a and -r
+
+```
+
+
 ```
 UNCHANGED
 --rotate            still rotates the filename (same as before) 

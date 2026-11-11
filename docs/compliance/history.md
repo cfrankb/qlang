@@ -1,3 +1,52 @@
+## Round 78 — 2026-11-11 — P4: compile-time external-type validation from a `QLM1` manifest (plan `portable-module-plan.md` P4; impl `QLangCompiler.h` / `QLangCompiler.cpp` / `qlang_run.cpp`, docs `EXTERNAL_TYPES.md` §13)
+
+- **One API, no engine.** `QLangCompiler::addExternalTypes(
+  std::vector<ManifestType>)` — manifest enums enter the existing folding
+  machinery (`m_enums`; a value drifting from a host-injected enum of the
+  same name is a hard `enum 'E' member 'M' disagrees with external type
+  'T'`, so a stale manifest cannot silently fold), type names enter
+  `m_externalVars` so a bare `T` resolves through the existing
+  host-injected branch, and `hasCtor` types register their constructor
+  native through `addExternalFuncs` **after** the host's natives (existing
+  ids win) under negative ids — the named native slot is re-resolved when
+  a `.qlc` loads, which is what makes a manifest-only compile portable.
+  The store is a `std::deque` because `push_back` must not invalidate the
+  pointers `m_extTypes` keeps (a `vector` did exactly that — caught by the
+  first test run, fixed before any doc was written).
+- **Strict where sure, lenient everywhere else.**
+  `collectKnownReceivers()` pre-scans the whole module AST: a variable is
+  a known receiver iff exactly one plain-name write exists and it
+  initializes with `T(...)` on a manifest `hasCtor` type; a second write
+  anywhere — even inside a `def` — makes it dynamic again. Receiver
+  checks apply at top level only (`m_inFnBody` saved/restored in
+  `buildFunction`, where a local or parameter could shadow the name);
+  type-name uses are checked everywhere — `T.field` reads/writes
+  (read-only included), `T(...)` with the ctor arity/tag matrix (presence
+  only on a context-taking `QL_CTOR`), `T.m(...)` membership, enum folds
+  through `T.M` and `T::M` (the `scopeStatic` branches are bypassed for
+  type-name bases so both spellings reach the checked path), and
+  `connect`/`disconnect` signal names on plain known receivers.
+  Non-literal arguments and `Unknown`/`Void`/`External` tags stay silent —
+  tags describe, the runtime decides; every message mirrors the runtime
+  wording.
+- **CLI.** `qlang_run --qlmeta <file.qlm>` / `--qlmeta=<file>` — loaded on
+  the main `.ql` compile path only (the imported-module compile path and
+  `.qlc` inputs intentionally ignore it), refuses to combine with
+  `--qlmeta-dump`, wired as `compiler.addExternalTypes(extTypes)` after
+  module injection. Usage + `--help` updated.
+- **Docs.** `EXTERNAL_TYPES.md` §13: the host-facing contract — known
+  receiver rule, portability of the named slots, and the standing
+  loose-files decision (no integrity link until the P5 handshake).
+- **Verify:** new ctest entries `manifest_compile` (38 checks, hand-built
+  fixtures driving `QLangCompiler` with **no `QLangContext` anywhere** —
+  positive full script, the full negative matrix, receiver liveness,
+  enum-fold executed through `QLangVM`, duplicate-type refusal,
+  no-manifest leniency) and `qlmeta_compile_cli` (+4 CLI smoke checks —
+  the green fixture is a pure enum fold because `-c` also *runs*). Both
+  harnesses now count their checks (the counter is the number tests.md
+  records; `manifest_check` measured 35/39 the same way). Corpus
+  regression: no manifest → today's exact path; `ctest` 62/62.
+
 ## Round 77 — 2026-11-11 — P3: self-registering meta registry + `--qlmeta-dump` (plan `portable-module-plan.md` P3; impl `QLangMeta.h` / `QLangManifest.cpp` / `qlang_run.cpp`, docs `EXTERNAL_TYPES.md` §12)
 
 - **No MOC, no list.** `QL_OBJECT` gained one registrar line beside

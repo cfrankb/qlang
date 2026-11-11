@@ -45,9 +45,9 @@ tests/
 `examples/` retains only real demos: `hello.cpp` (smoke app) and `qlang_run.cpp`
 (script runner / smoke-test app).
 
-### ctest matrix — 55 entries (55/55 green, 2026-11-10)
+### ctest matrix — 62 entries (62/62 green, 2026-11-11)
 
-Unit (28 harnesses + `smoke`):
+Unit (30 harnesses + `smoke`):
 
 | ctest | binary | source | result |
 |---|---|---|---|
@@ -80,8 +80,10 @@ Unit (28 harnesses + `smoke`):
 | `phase5_api` | `phase5_api` | `tests/unit/phase5_api.cpp` | 17 checks (step budget, threading contract) |
 | `value_semantics` | `value_semantics` | `tests/unit/value_semantics.cpp` | 40 checks (Round 43 share-by-default array/set/blob: aliasing on assign/call, literal freshness, `deepcopy` independence + array cycles, `+`/`cast` freshness, `a += a`, `string` still a value type) |
 | `codegen_size` | `codegen_size_check` | `tests/unit/codegen_size_check.cpp` | 4 checks (added Round 58; SPEC §bytecodes "encoding guidelines") — every budgeted script is compiled exactly as `qlang_run` compiles it and the **entry function's instruction count** (the number `--profile` prints) must stay within its ceiling: `hello.ql` 215, `money.ql` 151, `cast.ql` 163, `perf_stress.ql` 565 (the `perf` corpus, so a codegen change trips both gates; `hello`/`perf_stress` came down in M3 S5 — a flag compare + flag jump is one byte shorter than the boolean-temp path in branch position — and went **up** in Round 60 S1 by exactly one instruction per bare-truthiness test site, because `tst` + `je`/`jne` replaces the single `jmpfalse`/`jmptrue`: +4 in `hello.ql`, +44 in `perf_stress.ql`, `money`/`cast` unchanged — the reason is recorded in the file header and in `docs/plans/archive/phase3-opcode-retirement-plan.md` §5 S1). A ceiling is not a target: it comes down when the stream legitimately shrinks, and going up needs a reason recorded in `docs/compliance/`. This is the mechanical form of the hand comparison of the root `test-hello-*.qla` dumps that caught the 229 → 243 growth |
+| `manifest_check` | `manifest_check` | `tests/unit/manifest_check.cpp` | **35 checks passed** (added Round 76; count re-measured with the harness counter Round 78): the `QLM1` type-manifest codec — section round-trips (all member kinds, negative and >2^32 enum values, empty lists, `Unknown`/`Void` tags, context-form ctor), full-file and per-entry round-trips, truncation matrix, magic/version rejection, fingerprint stability and single-byte sensitivity, `manifestTypeFrom` host path, `metaRegistry()` self-registration + `writeTypeManifest` duplicate refusal (Round 77 §12–14). +4 more when driven by the `qlmeta_dump` entry (§12 CLI smoke) |
+| `manifest_compile` | `manifest_compile` | `tests/unit/manifest_compile.cpp` | **38 checks passed** (added Round 78, plan P4): compile-time external-type validation from hand-built `ManifestType` fixtures driving `QLangCompiler` with **no `QLangContext` anywhere** — positive full script; unknown field/method; read-only write (plain + compound); arity and literal-tag acceptance matrices; ctor matrix (typed vs context-form `QL_CTOR` presence-only); signal matrix incl. `connect`/`disconnect`; `T::M`/`T.M` fold + drift + method-not-value; receiver liveness (single init strict, any second write lenient, top-level-only receiver checks); enum fold **executed** through `QLangVM`; duplicate-type refusal; no-manifest leniency. +4 more when driven by the `qlmeta_compile_cli` entry |
 
-Counted unit cases: **39132** (529+33+20+7+7+22+13+17+18+49+8+358+36127+1324+151+88+142+117+8+3+7+23+17+40+4), plus
+Counted unit cases: **39205** (529+33+20+7+7+22+13+17+18+49+8+358+36127+1324+151+88+142+117+8+3+7+23+17+40+4+35+38), plus
 the three `ALL PASS` gate suites (`test_native`, `test_call`, `test_inject`). (The written sum had
 omitted `module_search` since its Round 67 addition; its checks are included from Round 72.)
 
@@ -98,6 +100,15 @@ not an entity, so the stars no longer collide (fixtures `ql_star_a.ql`, `ql_star
 its sibling `ql_module_dep.ql` is a source-module fixture (Round 69, plan C8b), so it is
 not an entry of its own, and the run's working directory is the build tree — what answers
 is the `.ql` beside the entry.
+
+Manifest CLI smoke (2): `qlmeta_dump` — `manifest_check` with `argv[1] =
+qlang_run` (Round 77): `--qlmeta-dump` exits 0 and the file parses, and
+combining it with script mode exits 1. `qlmeta_compile_cli` —
+`manifest_compile` with `argv[1] = qlang_run` (Round 78): `--qlmeta
+<file.qlm> -c` green script → exit 0 (the script is a pure enum fold — `-c`
+also *runs*, so it must need no host natives), red script → exit 3 naming
+`has no field`, and the same red script **without** `--qlmeta` produces no
+manifest message (the lenient path).
 
 Perf (1): `perf` — `perf_bench` compared against `baseline.json` (below).
 

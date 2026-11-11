@@ -255,6 +255,14 @@ add_test(NAME manifest_check COMMAND manifest_check)
 # parses the file — exit 0 required, plus the refuse-to-combine check.
 add_test(NAME qlmeta_dump COMMAND manifest_check $<TARGET_FILE:qlang_run>)
 
+# Compile-time external-type validation from a QLM1 manifest (portable-module-
+# plan P4): the negative matrix, receiver liveness, enum folding/drift.
+add_executable(manifest_compile tests/unit/manifest_compile.cpp)
+target_link_libraries(manifest_compile PRIVATE qlang)
+add_test(NAME manifest_compile COMMAND manifest_compile)
+# CLI smoke: manifest_compile runs `qlang_run --qlmeta ... -c ...` green/red.
+add_test(NAME qlmeta_compile_cli COMMAND manifest_compile $<TARGET_FILE:qlang_run>)
+
 # Native/variable injection: ctx.set (incl. const) + ctx.setFunc + ctx.call.
 add_executable(test_inject tests/unit/test_inject.cpp)
 target_link_libraries(test_inject PRIVATE qlang)

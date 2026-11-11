@@ -22,8 +22,10 @@
 using namespace qlang;
 
 static int failures = 0;
+static int checks = 0;
 #define CHECK(cond)                                                     \
   do {                                                                  \
+    ++checks;                                                           \
     if (!(cond)) {                                                      \
       ++failures;                                                       \
       printf("FAIL %d: %s\n", __LINE__, #cond);                         \
@@ -313,6 +315,6 @@ int main(int argc, char **argv) {
     printf("manifest_check: %d FAILURES\n", failures);
     return 1;
   }
-  printf("manifest_check: all checks passed\n");
+  printf("manifest_check: all %d checks passed\n", checks);
   return 0;
 }

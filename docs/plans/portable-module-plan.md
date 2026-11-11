@@ -244,7 +244,7 @@ parses. Full `ctest` green; corpus scripts byte-identical (no codegen change).
 **Commit:** `QL_OBJECT static meta self-registration + qlang_run --qlmeta-dump (QLM1 extraction)`
 
 ## Phase 4 — compile-time external-type validation from a manifest
-(`include/qlang/QLangCompiler.h`, `src/QLangCompiler.cpp`, `examples/qlang_run.cpp`)
+(`include/qlang/QLangCompiler.h`, `src/QLangCompiler.cpp`, `examples/qlang_run.cpp`) ✓ DONE (Round 78, 2026-11-11)
 
 `qlang_run --qlmeta <file.qlm>` loads a manifest and feeds the compiler
 `addExternalTypes(const std::vector<ManifestType>&)` (the `addExternalEnums`

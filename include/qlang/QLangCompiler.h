@@ -1,5 +1,6 @@
 #pragma once
 
+#include <deque>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -11,6 +12,7 @@
 
 #include "QLangBytecode.h"
 #include "QLangContext.h"
+#include "QLangManifest.h"
 #include "QLangParser.h"
 
 namespace qlang {
@@ -256,6 +258,14 @@ public:
   // name itself is passed in addExternalConsts). Injected enums are global.
   void addExternalEnums(const std::unordered_map<std::string,
                                                     std::vector<std::pair<std::string, QLangValue>>> &enums);
+
+  // Register the external types of a QLM1 manifest (portable-module-plan P4,
+  // qlc `--qlmeta`). Validation input only — codegen is unchanged: type names
+  // resolve through the host-injected-external-var path (the VM seeds the
+  // TypeRef from ctx when the module runs on a host with the bindings), enum
+  // members fold like injected enums, and member/method/ctor/signal uses are
+  // checked against the manifest shape at compile time.
+  void addExternalTypes(const std::vector<ManifestType> &types);
 
   // Register names of C++ native functions. The compiler assigns them
   // negative indices so the VM can dispatch them at runtime.
@@ -530,6 +540,17 @@ private:
   QLangValue evalConstExpr(const ExprPtr &e);
   // Infer the runtime type of an expression (Array/Table/... or Unknown).
   QLangValue::Type inferType(const ExprPtr &e) const;
+  // Recompute m_knownReceivers from the module AST (plan P4 check 2): a name
+  // is a known external receiver when its only write anywhere in the module
+  // is `let p = T(...)` / `const p = T(...)` / `p = T(...)` with T a manifest
+  // type that has a constructor.
+  void collectKnownReceivers();
+  // P4 argument-tag check shared by the method and constructor sites: an
+  // mismatch is reported only when inferType answers (literals); dynamic
+  // arguments stay silent for the runtime binding. `what` names the entry.
+  void checkExtArgTags(const std::vector<QTypeTag> &tags,
+                       const std::vector<ExprPtr> &args,
+                       const std::string &what) const;
   // Update the tracked type of a variable from an assigned RHS.
   void updateVarType(const std::string &name, const ExprPtr &e);
   // Compile an index/member assignment target (a[i]=v, t.name=v).
@@ -571,6 +592,17 @@ private:
   std::vector<std::unordered_map<std::string, int>> m_blockScopes;
   std::unordered_set<std::string> m_constVars; // names declared with `const`
   std::unordered_set<std::string> m_externalVars; // injected writable host vars
+  // External types from a QLM1 manifest (addExternalTypes, plan P4). The
+  // store owns the entries; m_extTypes maps name -> entry (deque: push_back
+  // must not invalidate the stored pointers). m_knownReceivers is recomputed
+  // per compile() by collectKnownReceivers(); the receiver checks apply at
+  // top level only (m_inFnBody guards function/closure bodies, where a
+  // same-named local or parameter could shadow), keeping the lenient
+  // semantics everywhere else.
+  std::deque<ManifestType> m_extTypeStore;
+  std::unordered_map<std::string, const ManifestType *> m_extTypes;
+  std::unordered_map<std::string, const ManifestType *> m_knownReceivers;
+  bool m_inFnBody = false;
   // External C++ native functions: name -> negative opcode index.
   // Negative indices (-1, -2, ...) signal the VM to dispatch via the
   // context's native function registry.

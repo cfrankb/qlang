@@ -368,6 +368,219 @@ void QLangCompiler::addExternalEnums(const std::unordered_map<std::string,
   }
 }
 
+namespace {
+
+// Manifest lookups for the P4 compile-time checks (plan
+// docs/plans/portable-module-plan.md Phase 4). Message style follows the
+// runtime wording so compile-time and runtime report alike.
+const ManifestMember *manifestMember(const ManifestType &t,
+                                     const std::string &name, int kind) {
+  for (const ManifestMember &m : t.members)
+    if (m.name == name && (kind < 0 || m.kind == kind))
+      return &m;
+  return nullptr;
+}
+
+const ManifestSignal *manifestSignal(const ManifestType &t,
+                                     const std::string &name) {
+  for (const ManifestSignal &s : t.signals)
+    if (s.name == name)
+      return &s;
+  return nullptr;
+}
+
+const char *qTagName(QTypeTag t) {
+  switch (t) {
+  case QTypeTag::Bool: return "Bool";
+  case QTypeTag::Char: return "Char";
+  case QTypeTag::Short: return "Short";
+  case QTypeTag::Int: return "Int";
+  case QTypeTag::Long: return "Long";
+  case QTypeTag::Byte: return "Byte";
+  case QTypeTag::Word: return "Word";
+  case QTypeTag::Dword: return "Dword";
+  case QTypeTag::Qword: return "Qword";
+  case QTypeTag::Float: return "Float";
+  case QTypeTag::Str: return "Str";
+  default: return "?";
+  }
+}
+
+// The inferred-literal side of the as<T>() acceptance matrix (QLangValue):
+// only these four types ever come out of inferType on a literal.
+std::optional<QTypeTag> qTagOfInferred(QLangValue::Type t) {
+  switch (t) {
+  case QLangValue::Type::Int: return QTypeTag::Int;
+  case QLangValue::Type::Float: return QTypeTag::Float;
+  case QLangValue::Type::String: return QTypeTag::Str;
+  case QLangValue::Type::Bool: return QTypeTag::Bool;
+  default: return std::nullopt;
+  }
+}
+
+bool qTagAccepted(QTypeTag exp, QTypeTag got) {
+  if (exp == got)
+    return true;
+  switch (exp) {
+  case QTypeTag::Bool: // as<bool>: Bool/Char/Int
+    return got == QTypeTag::Int;
+  case QTypeTag::Char:
+  case QTypeTag::Short:
+  case QTypeTag::Int: // as<int32_t>: Int/Bool/Char storage
+    return got == QTypeTag::Bool;
+  case QTypeTag::Long: // as<int64_t>: any numeric
+    return got == QTypeTag::Bool || got == QTypeTag::Int ||
+           got == QTypeTag::Float;
+  case QTypeTag::Float: // as<double>: any numeric
+    return got == QTypeTag::Int || got == QTypeTag::Bool;
+  default: // Str exact; Unknown/Void/External never reach here
+    return false;
+  }
+}
+
+// Single-write scan (plan P4 check 2): counts every plain-variable write in
+// the module AST — declaration, plain assignment, delete, loop var — walking
+// INTO def/arrow/class bodies, because a def may write a global through
+// `global`. A name with exactly one write, whose initializer is a manifest
+// constructor call, is a statically known receiver; anything else stays
+// lenient.
+struct ExtWriteScan {
+  std::unordered_map<std::string, const Stmt *> single;
+  std::unordered_set<std::string> poisoned;
+  void write(const std::string &name, const Stmt *s) {
+    if (name.empty() || poisoned.count(name))
+      return;
+    if (!single.emplace(name, s).second) {
+      poisoned.insert(name);
+      single.erase(name);
+    }
+  }
+  void walk(const std::vector<StmtPtr> &stmts) {
+    for (const StmtPtr &s : stmts) {
+      if (!s)
+        continue;
+      switch (s->kind) {
+      case StmtKind::Declaration:
+      case StmtKind::Const:
+      case StmtKind::Arrow:
+      case StmtKind::Def:
+        write(s->name, s.get());
+        break;
+      case StmtKind::Assignment:
+        if (!s->target) // member/index targets write the base, not the name
+          write(s->name, s.get());
+        break;
+      case StmtKind::Delete:
+        write(s->delName, nullptr);
+        break;
+      case StmtKind::For:
+      case StmtKind::ForIn:
+        write(s->loopVar, nullptr);
+        break;
+      default:
+        break;
+      }
+      walk(s->body);
+      walk(s->whileBody);
+      walk(s->ifBody);
+      walk(s->elseBody);
+      walk(s->classBody);
+      walk(s->defaultBody);
+      for (const auto &c : s->cases)
+        walk(c.body);
+    }
+  }
+};
+
+} // namespace
+
+void QLangCompiler::addExternalTypes(const std::vector<ManifestType> &types) {
+  for (const ManifestType &t : types) {
+    if (m_extTypes.count(t.name))
+      throw QLangError(QLangErrorKind::Parse, 0, 0,
+                       "duplicate external type '" + t.name + "' in manifest");
+    m_extTypeStore.push_back(t);
+    const ManifestType *rec = &m_extTypeStore.back();
+    m_extTypes[t.name] = rec;
+    // Bare `T` resolves through the host-injected-external-var path (declare
+    // on first use); the VM seeds the TypeRef from ctx when the module runs
+    // on a host with the bindings — codegen is unchanged.
+    m_externalVars.insert(t.name);
+    // `T(args)` compiles as the constructor native: a host compile already
+    // supplied the id via addExternalFuncs (existing ids win), an
+    // engine-agnostic compile reserves the negative slot by name — the .qlc
+    // native-slot table re-resolves it in the loading context.
+    if (t.hasCtor)
+      addExternalFuncs({t.name});
+    // Enum tables fold exactly like registerEnum-injected ones (Round 41).
+    // A name present in both sources must agree value-for-value, or the
+    // host and its dump have drifted: compile fails (plan P4 check 4).
+    for (const EnumMeta &em : t.enums) {
+      std::vector<std::pair<std::string, QLangValue>> members;
+      for (const EnumEntry &entry : em.entries)
+        members.emplace_back(entry.name,
+                             QLangValue::Int(static_cast<int32_t>(entry.value)));
+      auto it = m_enums.find(em.typeName);
+      if (it != m_enums.end()) {
+        for (const auto &m : members) {
+          bool agreed = false;
+          for (const auto &h : it->second)
+            if (h.first == m.first &&
+                h.second.type() == QLangValue::Type::Int &&
+                h.second.asInt() == m.second.asInt())
+              agreed = true;
+          if (!agreed)
+            throw QLangError(
+                QLangErrorKind::Parse, 0, 0,
+                "enum '" + em.typeName + "' member '" + m.first +
+                    "' disagrees with external type '" + t.name + "'");
+        }
+        continue;
+      }
+      m_enums[em.typeName] = std::move(members);
+      m_globalEnums.insert(em.typeName);
+      m_injectedEnumNames.insert(em.typeName);
+    }
+  }
+}
+
+void QLangCompiler::collectKnownReceivers() {
+  m_knownReceivers.clear();
+  if (m_extTypes.empty())
+    return;
+  ExtWriteScan scan;
+  scan.walk(m_program);
+  for (const auto &[name, s] : scan.single) {
+    if (!s || s->kind == StmtKind::Arrow || s->kind == StmtKind::Def)
+      continue;
+    const ExprPtr &init =
+        s->kind == StmtKind::Assignment ? s->assignValue : s->value;
+    if (!init || init->kind != ExprKind::Call || init->calleeMember)
+      continue;
+    auto it = m_extTypes.find(init->callee);
+    if (it == m_extTypes.end() || !it->second->hasCtor)
+      continue;
+    m_knownReceivers[name] = it->second;
+  }
+}
+
+void QLangCompiler::checkExtArgTags(const std::vector<QTypeTag> &tags,
+                                    const std::vector<ExprPtr> &args,
+                                    const std::string &what) const {
+  for (size_t i = 0; i < tags.size(); i++) {
+    if (tags[i] == QTypeTag::Unknown || tags[i] == QTypeTag::Void ||
+        tags[i] == QTypeTag::External)
+      continue; // the binding accepts anything here — stay silent
+    auto got = qTagOfInferred(inferType(args[i]));
+    if (!got || qTagAccepted(tags[i], *got))
+      continue; // dynamic argument: the runtime check remains authoritative
+    throw QLangError(QLangErrorKind::Parse, m_curLine, m_curCol,
+                     "type mismatch: " + what + " argument " +
+                         std::to_string(i + 1) + " expects " +
+                         qTagName(tags[i]) + ", got " + qTagName(*got));
+  }
+}
+
 void QLangCompiler::addExternalFuncs(const std::unordered_set<std::string> &names) {
   // Ids are negative and unique across all calls: the .qlc native-slot table
   // (slot = -1 - id) requires unique ids, and a second call must not reuse
@@ -1219,6 +1432,11 @@ CompiledProgram QLangCompiler::compile() {
   // exist before the body compiles, so an exported name is known (and, for a
   // function, un-rebindable) from the first statement on.
   collectExports();
+  // Statically known external receivers for the manifest checks (plan P4
+  // check 2): computed once from the full module AST, so a second write to
+  // `p` anywhere — even in a def body — poisons the name for the whole
+  // compile and the lenient path answers everywhere.
+  collectKnownReceivers();
   // A library must be NAMABLE (SPEC §bytecodes "keyword export"): the name other
   // modules import by comes either from its own `export const MODULE_NAME` or
   // from the driver that named the file (plan Q37 — a discovered source with no
@@ -1613,6 +1831,11 @@ int QLangCompiler::buildFunction(const std::string &name,
                                  const std::vector<std::string> &params,
                                  std::vector<std::string> captures,
                                  const std::vector<StmtPtr> &body) {
+  // Receiver checks from a manifest apply at top level only (plan P4 v1):
+  // inside a function/closure body a parameter or local could shadow a known
+  // receiver name, so the body stays fully lenient.
+  const bool savedInFnBody = m_inFnBody;
+  m_inFnBody = true;
   // Auto-detect free variables: variables referenced in the body that are
   // not parameters and not yet declared in this function's scope.
   std::unordered_set<std::string> allIds;
@@ -1886,6 +2109,7 @@ int QLangCompiler::buildFunction(const std::string &name,
     m_generatorConstIndices[funcIndex] = genConstIdx;
   }
 
+  m_inFnBody = savedInFnBody;
   return funcIndex;
 }
 
@@ -2813,6 +3037,26 @@ void QLangCompiler::compileYield(const StmtPtr &s) {
 }
 
 void QLangCompiler::compileEmit(const StmtPtr &s) {
+  // Signal check against a known receiver (plan P4 check 3): `emit p.sig(...)`
+  // where `let p = T(...)` gave p a manifest type. Existence and arity use
+  // the VM's wording; argument tags stay with the runtime signal check.
+  if (!m_inFnBody && s->emitTarget->kind == ExprKind::Variable) {
+    auto rit = m_knownReceivers.find(s->emitTarget->name);
+    if (rit != m_knownReceivers.end()) {
+      const ManifestSignal *ms = manifestSignal(*rit->second, s->name);
+      if (!ms)
+        throw QLangError(QLangErrorKind::Parse, m_curLine, m_curCol,
+                         "unknown signal '" + s->name + "' on type '" +
+                             rit->second->name + "'");
+      if (static_cast<int>(ms->argTags.size()) !=
+          static_cast<int>(s->emitArgs.size()))
+        throw QLangError(
+            QLangErrorKind::Parse, m_curLine, m_curCol,
+            "signal '" + s->name + "' on type '" + rit->second->name +
+                "' expects " + std::to_string(ms->argTags.size()) +
+                " argument(s), got " + std::to_string(s->emitArgs.size()));
+    }
+  }
   // emit obj.signal(args): the sender object lands in a temp, the signal
   // name is a string constant, and the args occupy the consecutive slots
   // sender+1..sender+argCount (the same layout CALL uses for its args).
@@ -4268,10 +4512,51 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     }
     // Method call: obj.method(args) -> load the member (closure) first.
     if (e->calleeMember) {
+      // Manifest method check (plan P4 check 1/2): `T.m(...)` / `T::m(...)`
+      // on a manifest type name checks membership only (a static call has no
+      // self — the runtime stays authoritative); `p.m(...)` on a known
+      // receiver also checks arity and inferable argument tags, with the
+      // runtime binding's wording.
+      if (e->calleeMember->memberBase->kind == ExprKind::Variable) {
+        const std::string &mbn = e->calleeMember->memberBase->name;
+        auto eit = m_extTypes.find(mbn);
+        const ManifestType *smt =
+            eit != m_extTypes.end() ? eit->second : nullptr;
+        bool smtIsTypeName = smt != nullptr;
+        if (!smt && !m_inFnBody) {
+          auto rit = m_knownReceivers.find(mbn);
+          if (rit != m_knownReceivers.end())
+            smt = rit->second;
+        }
+        if (smt) {
+          const ManifestMember *mm = manifestMember(*smt, e->callee, 2);
+          if (!mm)
+            throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
+                             "type '" + smt->name + "' has no method '" +
+                                 e->callee + "'");
+          if (!smtIsTypeName) {
+            if (static_cast<int>(mm->argTags.size()) != argCount)
+              throw QLangError(
+                  QLangErrorKind::Parse, e->callLine, e->callCol,
+                  "method expects " + std::to_string(mm->argTags.size()) +
+                      " argument(s), got " + std::to_string(argCount));
+            checkExtArgTags(mm->argTags, e->args,
+                            "method '" + e->callee + "' on type '" +
+                                smt->name + "'");
+          }
+        }
+      }
+      // A manifest type name on the left of '::' is not a script class: the
+      // membership check above has run, and the call falls through to the
+      // dynamic path (same codegen as T.m(...)).
+      const bool extCallStatic =
+          e->calleeMember->scopeStatic &&
+          e->calleeMember->memberBase->kind == ExprKind::Variable &&
+          m_extTypes.count(e->calleeMember->memberBase->name);
       // Static method call: C::name(args). The closure lives in the class-level
       // `__statics__` table and is called with that table as a hidden first
       // argument (the anchor) — no self.
-      if (e->calleeMember->scopeStatic) {
+      if (e->calleeMember->scopeStatic && !extCallStatic) {
         if (e->calleeMember->memberBase->kind != ExprKind::Variable)
           throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
                            "'::' requires a class name on the left");
@@ -4614,6 +4899,29 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       }
       break;
     }
+    // External type construction from a manifest (plan P4 check 1): `T(args)`
+    // where T names a manifest type. No constructor -> refused; a typed
+    // QL_CTOR gets the full arity + inferable tag checks (runtime wording);
+    // the context-taking form is presence-only — its lambda owns validation.
+    // Codegen continues below: addExternalTypes ensured a native id (host's
+    // or a reserved negative slot re-resolved by the .qlc native table).
+    auto extct = m_extTypes.find(e->callee);
+    if (extct != m_extTypes.end()) {
+      const ManifestType &ext = *extct->second;
+      if (!ext.hasCtor)
+        throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
+                         "type '" + ext.name + "' has no constructor");
+      if (!ext.ctorArgTags.empty()) {
+        if (static_cast<int>(ext.ctorArgTags.size()) != argCount)
+          throw QLangError(
+              QLangErrorKind::Parse, e->callLine, e->callCol,
+              "constructor expects " +
+                  std::to_string(ext.ctorArgTags.size()) +
+                  " argument(s), got " + std::to_string(argCount));
+        checkExtArgTags(ext.ctorArgTags, e->args,
+                        "constructor of type '" + ext.name + "'");
+      }
+    }
     // Built-in function. The classification API (`findBuiltin`), not the
     // throwing `builtinId`: a name that is not a builtin is a normal answer on
     // this path — a native (C++) function takes the negative-slot branch below
@@ -4621,6 +4929,22 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     int funcId = findBuiltin(e->callee);
     // Native (C++) function — use negative index.
     if (funcId < 0) {
+      // `connect(o, "sig", ...)` / `disconnect(o, "sig")` with a statically
+      // known signal name on a known receiver: the signal must exist (plan
+      // P4 check 3). A dynamic name or receiver stays runtime-checked.
+      if ((e->callee == "connect" || e->callee == "disconnect") &&
+          !m_inFnBody && e->args.size() >= 2 &&
+          e->args[0]->kind == ExprKind::Variable &&
+          e->args[1]->kind == ExprKind::Literal &&
+          e->args[1]->literal.type() == QLangValue::Type::String) {
+        auto rit = m_knownReceivers.find(e->args[0]->name);
+        if (rit != m_knownReceivers.end() &&
+            !manifestSignal(*rit->second, e->args[1]->literal.asString()))
+          throw QLangError(
+              QLangErrorKind::Parse, e->callLine, e->callCol,
+              "unknown signal '" + e->args[1]->literal.asString() +
+                  "' on type '" + rit->second->name + "'");
+      }
       auto nit = m_nativeFuncIds.find(e->callee);
       if (nit != m_nativeFuncIds.end()) {
         emit(Opcode::CALL, dest, nit->second, argCount);
@@ -4808,7 +5132,14 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
                        "' is not a first-class function value: call it as '" +
                        q + "." + e->memberName + "(...)'");
     }
-    if (e->scopeStatic) {
+    // Static access on a manifest type name (`T::M`) falls through to the
+    // dynamic path below, where the manifest check runs — enum members have
+    // already folded above, and with bindings T and T:: reach the same
+    // TypeRef value at runtime.
+    const bool extStaticBase =
+        e->memberBase->kind == ExprKind::Variable &&
+        m_extTypes.count(e->memberBase->name);
+    if (e->scopeStatic && !extStaticBase) {
       // C::name -> TABGET staticsR, C, "__statics__"; TABGET dest, staticsR,
       // name. The base must be a known class and the name one of its static
       // members (compile-time check).
@@ -4836,6 +5167,54 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(e->memberName)));
       emit(Opcode::TABGET, dest, staticsR, keyR);
       break;
+    }
+    // Manifest shape check (plan P4 check 1/2): the base names a manifest
+    // type, or a statically known receiver `let p = T(...)` at top level.
+    // Unknown name -> has no field; a method read bare off a TYPE name is
+    // refused (mirrors the module-entity rule — TypeRef carries no methods);
+    // an instance's method reads as a BoundMethod and stays legal.
+    if (e->memberBase->kind == ExprKind::Variable) {
+      const std::string &mbn = e->memberBase->name;
+      auto eit = m_extTypes.find(mbn);
+      const ManifestType *smt = eit != m_extTypes.end() ? eit->second : nullptr;
+      bool smtIsTypeName = smt != nullptr;
+      if (!smt && !m_inFnBody) {
+        auto rit = m_knownReceivers.find(mbn);
+        if (rit != m_knownReceivers.end())
+          smt = rit->second;
+      }
+      bool extFolded = false;
+      if (smt) {
+        if (smtIsTypeName)
+        {
+          // `T.M` / `T::M` for an enum entry declared on the type: fold to
+          // the Int value from the manifest (mirrors the runtime TypeRef
+          // constant lookup; plan P4 check 1).
+          for (const EnumMeta &em : smt->enums)
+            for (const EnumEntry &en : em.entries)
+              if (en.name == e->memberName)
+              {
+                emitPool(Opcode::MOV, dest,
+                         emitConst(QLangValue::Int(
+                             static_cast<int32_t>(en.value))));
+                extFolded = true;
+                break;
+              }
+        }
+        if (extFolded)
+          break;
+        const ManifestMember *mm = manifestMember(*smt, e->memberName, -1);
+        if (!mm)
+          throw QLangError(QLangErrorKind::Parse, 0, 0,
+                           "type '" + smt->name + "' has no field '" +
+                               e->memberName + "'");
+        if (mm->kind == 2 && smtIsTypeName)
+          throw QLangError(
+              QLangErrorKind::Parse, 0, 0,
+              "'" + mbn + "." + e->memberName +
+                  "' is a method, not a value: call it as '" + mbn + "." +
+                  e->memberName + "(...)'");
+      }
     }
     // base.name read -> TABGET dest, baseR, keyR. A plain-variable base is
     // read in place (its named register is stable for the statement); only
@@ -5202,6 +5581,34 @@ void QLangCompiler::compileAssignTarget(const ExprPtr &target, const Token &op,
   } else if (target->kind == ExprKind::Member) {
     guardNotModuleMember(target, "assign to");
     const std::string &baseName = target->memberBase->name;
+    // Manifest write check (plan P4): the field must exist and be writable;
+    // the read-only rejection mirrors the VM wording.
+    if (!m_inFnBody) {
+      auto eit = m_extTypes.find(baseName);
+      const ManifestType *smt =
+          eit != m_extTypes.end() ? eit->second : nullptr;
+      if (!smt) {
+        auto rit = m_knownReceivers.find(baseName);
+        if (rit != m_knownReceivers.end())
+          smt = rit->second;
+      }
+      if (smt) {
+        const ManifestMember *mm = manifestMember(*smt, target->memberName, -1);
+        if (!mm)
+          throw QLangError(QLangErrorKind::Parse, m_curLine, m_curCol,
+                           "type '" + smt->name + "' has no field '" +
+                               target->memberName + "'");
+        if (mm->kind == 1)
+          throw QLangError(
+              QLangErrorKind::Parse, m_curLine, m_curCol,
+              "cannot assign to const field '" + target->memberName + "'");
+        if (mm->kind == 2)
+          throw QLangError(
+              QLangErrorKind::Parse, m_curLine, m_curCol,
+              "field '" + target->memberName + "' on type '" + smt->name +
+                  "' is a method");
+      }
+    }
     int baseR;
     auto cit = m_captureRegs.find(baseName);
     if (cit != m_captureRegs.end()) {

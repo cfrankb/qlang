@@ -331,3 +331,40 @@ with it).
   innermost name (e.g. `ns1::Thing` and `ns2::Thing`) collide, and the
   dump refuses until the host resolves the clash — by design, since the
   manifest vocabulary (and scripts) address types by that name.
+
+## 13. Compile-time validation from a manifest (portable-module-plan P4)
+
+`qlang_run --qlmeta <file.qlm>` loads a `QLM1` manifest (SERIALIZATION.md
+§11) and feeds it to `QLangCompiler::addExternalTypes(...)` — shape checks
+on `.ql` sources with **no engine linked**: type names resolve, `T(...)`
+constructor arity/tags, field reads and writes (read-only included),
+method and signal membership, arity and literal argument tags, and
+manifest-enum folding through the type name (`Point.Right`), all with
+messages mirroring the runtime wording. Without `--qlmeta` the compiler
+behaves exactly as before, byte for byte.
+
+The checks are strict where the compiler is *sure* and silent everywhere
+else, mirroring the lenient runtime:
+
+- A variable is a **known receiver** of `T` only if the module contains
+  exactly one write to its plain name and that write initializes it with
+  `T(...)`; any second write anywhere in the module — even inside a `def`
+  — makes it dynamic again, and receiver checks run at top level only
+  (a function body could shadow the name). Type-name uses (`T.field`,
+  `T.method(...)`, `T.CONST`) cannot be shadowed and are checked
+  everywhere.
+- Arguments whose value is not a literal, and any position whose manifest
+  tag is `Unknown`/`Void`/`External`, stay silent — tags describe, the
+  runtime still decides.
+- `connect`/`disconnect` validate the signal name when the first argument
+  is a plain known receiver; `T::M` and `T.M` are the same checked path.
+- If the host *also* injects an enum the manifest carries (via
+  `registerEnum`/`addExternalEnums`), a value mismatch is a hard error
+  (`enum 'E' member 'M' disagrees with external type 'T'`), so a stale
+  manifest is caught instead of silently folded.
+
+Constructor and method calls on manifest types compile to **named**
+negative native slots, re-resolved when a `.qlc` loads: the image is
+portable, and running it on a host without the bindings fails at that
+call only — loose files carry no integrity link by design (§12; the
+packaged handshake is P5).
