@@ -1,3 +1,37 @@
+## Round 76 — 2026-11-11 — P2: the `QLM1` type-manifest codec (plan `portable-module-plan.md` P2; impl `QLangManifest.h` / `.cpp`, spec `SERIALIZATION.md` §11)
+
+- **One serializer, one code path.** `include/qlang/QLangManifest.h` +
+  `src/QLangManifest.cpp`: the dumper (P3), the compiler `--qlmeta` input
+  (P4) and the package writer (P5) all share `writeManifest` /
+  `serializeTypeEntry`, so host↔manifest fingerprint equality is equality by
+  construction. `ManifestType` is the closure-free mirror of `TypeMeta`
+  (`manifestTypeFrom` accepts a `TypeMeta` or a `TypeDescriptor` — the P1
+  fields flow straight through).
+- **Format (docs/SERIALIZATION.md §11).** Magic `QLM1`,
+  `kQlmetaVersion = 1` accepted strictly; little-endian, byte-by-byte, same
+  writer/`Reader` discipline as `QLangBytecodeIO`. Entry = fingerprint u64 +
+  canonical self-delimiting body (name, flags bit0 hasStr/bit1 hasCtor,
+  members by kind, enums with full-i64 values, signals, `ctorArgs` only
+  when `hasCtor`). `fingerprint = fnv1a64(body)` — FNV-1a 64 computed by the
+  serializer, recomputed and verified by the reader; tags, never mangled
+  names, are the portable vocabulary.
+- **Untrusted input.** Every read bounds-checked with
+  `QLangError(Io, "qlm: … (byte offset N)")`; counts capped at the §8 64 Mi
+  limit; bad magic / version 0/2 / invalid flags, kind or tag byte /
+  fingerprint mismatch / duplicate type name / trailing bytes all clean
+  errors, no partial state.
+- **Docs.** `SERIALIZATION.md` gains `## 11 type manifest (QLM1)` (layout,
+  fingerprint rule, load contract, tags-not-mangled-names rationale); the
+  §4 **version allocation** paragraph records that this plan allocates **no**
+  `.qlc` version — `QLM1` (and later `QPM1`) carry their own magic+version.
+- **Verify:** new ctest `manifest_check` (31 checks in 11 sections): section round-trips
+  (all member kinds, negative + >2^32 enum values, empty lists, `Unknown`/
+  `Void` tags, context-form ctor), full-file and per-entry round-trips,
+  truncation matrix (every prefix rejected), version/magic rejection,
+  fingerprint stability across serialize→parse→reserialize and single-byte
+  sensitivity, host path `manifestTypeFrom` (TypeMeta vs TypeDescriptor
+  serialize identically — equality-by-construction). `ctest` 59/59.
+
 ## Round 75 — 2026-11-11 — P1: the meta becomes describable (plan `portable-module-plan.md` P1; impl `QLangMeta.h` / `QLangTypes.h` / `QLangContext.cpp`)
 
 - **Portable type tags.** `enum class QTypeTag : uint8_t` + `constexpr

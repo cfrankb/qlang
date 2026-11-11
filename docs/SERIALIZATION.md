@@ -131,7 +131,7 @@ transitively.
 **Version allocation** (the counter is shared across plans, so each bump is recorded here when it
 is decided): **v8** = the module constant pool (§4.2, Round 62,
 [plans/archive/external-modules-plan-v4.md](plans/archive/external-modules-plan-v4.md) Phase 2) · **v9** = module
-identity + export/import tables (§4.6, Round 63, same plan Phase 3a) · the next free number belongs
+identity + export/import tables (§4.6, Round 63, same plan Phase 3a) · the portable-module plan allocates **no** `.qlc` version — `QLM1` (§11) and `QPM1` (P5) carry their own magic+version · the next free number belongs
 to whoever lands next ([plans/offset-table-elimination-plan.md](plans/offset-table-elimination-plan.md)
 is the candidate).
 
@@ -574,3 +574,52 @@ A codec is not "done" until all of these pass:
 §9 item 2 (execute-from-image parity) is discharged by the `codec_check`
 `qlc-exec` gate: compile → `writeQlc` → `readQlc` → `QLangVM` run, stdout
 byte-compared against the direct run, for all 23 corpus scripts.
+
+## 11. Type manifest (magic `QLM1`, version 1)
+
+The serializable mirror of the host's `QL_OBJECT` types (`QLangManifest.h`,
+portable-module-plan P2): interface **shape** only — names, portable
+`QTypeTag`s, enum tables, clause presence — with every closure erased. The
+dumper (P3), the compiler's `--qlmeta` input (P4) and the package writer
+(P5) all share `writeManifest`/`serializeTypeEntry`, so host and manifest
+agree on the fingerprint **by construction**.
+
+```
+magic            4s     "QLM1"
+version          u32    = 1 (kQlmetaVersion; readers accept 1 only)
+typeCount        u32
+types            typeCount × entry
+entry            fingerprint u64 + body
+body             name String · flags u8 (bit0 hasStr, bit1 hasCtor)
+                 memberCount u32 · members: kind u8 (0 rw, 1 ro, 2 method)
+                   + name String + (prop: getTag u8, setTag u8
+                   | method: retTag u8, argCount u8, argTags u8×)
+                 enumCount u32 · enums: typeName String + entryCount u32
+                   + entries (name String + value i64 — the full `long`)
+                 signalCount u32 · signals: name String + argCount u8
+                   + argTags u8×
+                 when flags bit1: ctorArgs argCount u8 + argTags u8×
+```
+
+**Fingerprint rule.** `fingerprint = fnv1a64(body)` — FNV-1a 64 over the
+canonical body bytes, computed by the serializer itself; the reader
+recomputes and verifies before accepting the entry. The byte form is
+canonical and self-delimiting (fields append at the end for a future v2),
+which makes the fingerprint a stable identity for the P5 host handshake.
+An empty `ctorArgs` list with `hasCtor` means the context-taking
+`QL_CTOR` (and an argless typed one): presence-only checks, same P1
+convention.
+
+**Tags, not mangled names.** `typeid` strings are compiler-private (and
+`QL_OBJECT` behavior is erased into `std::function` anyway), so the
+manifest carries `QTypeTag` numbers — the shared vocabulary mirroring the
+`qval_of()`/`as<T>()` accepted set — never mangled identifiers.
+
+**Load contract** (extends §8): every read bounds-checked; counts capped at
+the 64 Mi §8 limit; `bad magic`, `unsupported version`, `invalid flags
+byte`, `invalid member kind`, `invalid type tag`, `fingerprint mismatch`,
+`count too large`, `duplicate type name`, `trailing bytes` →
+`QLangError(Io, "qlm: … (byte offset N)")`, no partial state. Tests: the
+`manifest_check` suite (round-trip of every section, truncation matrix,
+version/magic rejection, fingerprint stability + single-byte sensitivity,
+host `manifestTypeFrom` equality-by-construction).

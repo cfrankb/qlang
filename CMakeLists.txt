@@ -32,6 +32,7 @@ add_library(qlang
   src/QLangVM.cpp
   src/QLangContext.cpp
   src/QLangLinker.cpp
+  src/QLangManifest.cpp
   src/QLangModules.cpp
   src/QLangObjects.cpp
 )
@@ -244,6 +245,12 @@ add_test(NAME module_search COMMAND module_search_test)
 add_executable(test_external tests/unit/test_external.cpp)
 target_link_libraries(test_external PRIVATE qlang)
 add_test(NAME external COMMAND test_external)
+
+# QLM1 type-manifest codec (portable-module-plan P2, docs/SERIALIZATION.md
+# §11): round-trip, truncation matrix, fingerprint stability/sensitivity.
+add_executable(manifest_check tests/unit/manifest_check.cpp)
+target_link_libraries(manifest_check PRIVATE qlang)
+add_test(NAME manifest_check COMMAND manifest_check)
 
 # Native/variable injection: ctx.set (incl. const) + ctx.setFunc + ctx.call.
 add_executable(test_inject tests/unit/test_inject.cpp)

@@ -146,7 +146,7 @@ got 1` (was UB); the context-taking form still compiles and runs unchanged.
 Member/SignalMeta fields, typed QL_CTOR with arity guard)`
 
 ## Phase 2 — `QLM1` type-manifest codec (`include/qlang/QLangManifest.h`,
-`src/QLangManifest.cpp`, docs)
+`src/QLangManifest.cpp`, docs) ✓ DONE (Round 76, 2026-11-11)
 
 One serializer, one code path, used by the dumper (P3), the compiler input
 (P4) and the package writer (P5) — fingerprint equality between host and
