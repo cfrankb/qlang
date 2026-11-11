@@ -594,8 +594,32 @@ template <class... Ts> TypeMeta assemble(std::string name, Ts... es) {
   ((add(m, es), ...));
   return m;
 }
+}  // namespace meta_detail
 
-} // namespace meta_detail
+// --- Process-wide meta registry (portable-module-plan P3) ------------------
+// QL_OBJECT self-registers, Qt-style: no MOC, no list to maintain. The
+// registry stores only the *accessor pointers*, never built TypeMetas, so
+// nothing a host registers runs at static-init time (the inline-static
+// registrar inside QL_OBJECT passes just a function address; qlang_meta()
+// assembles lazily on first call, always after main starts).
+using MetaAccessor = const TypeMeta& (*)();
+
+// Construct-on-first-use function-local static: no static-init order can be
+// observed, and one instance per process (inline function). Observers walk
+// it; duplicate names are kept here and refused by writeTypeManifest (P3)
+// and readManifest (P2) — never silently dropped, never thrown at init time.
+inline std::vector<MetaAccessor>& metaRegistry() {
+  static std::vector<MetaAccessor> reg;
+  return reg;
+}
+
+namespace meta_detail {
+inline bool registry_add(MetaAccessor a) {
+  metaRegistry().push_back(a);
+  return true;
+}
+}  // namespace meta_detail
+
 } // namespace qlang
 
 // === Entry macros — pure token transformers, one declarative line each ===
@@ -697,4 +721,12 @@ template <class... Ts> TypeMeta assemble(std::string name, Ts... es) {
             qlang::meta_detail::className(QL_PRETTY_FUNCTION), \
             __VA_ARGS__)};                                    \
     return m_;                                               \
-  }
+  }                                                          \
+  /* Self-registration (portable-module-plan P3): the C++17 inline static    \
+     member has exactly one instance per program, and its initializer runs    \
+     at dynamic init — it stores only the accessor pointer, so no TypeMeta    \
+     is assembled and nothing can throw at static-init time. The registrar    \
+     is emitted in every translation unit that references the class's meta;   \
+     the inline guarantees a single dynamic initializer. */                   \
+  inline static const bool qlang_meta_registered_ =                           \
+      ::qlang::meta_detail::registry_add(&qlang_meta)

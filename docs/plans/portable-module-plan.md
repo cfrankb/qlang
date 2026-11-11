@@ -210,7 +210,7 @@ in the §4 *version allocation* paragraph that this plan allocates **no**
 **Commit:** `QLM1 type-manifest codec (QLangManifest, fingerprint, manifest_check suite)`
 
 ## Phase 3 — extraction: static meta registry + `qlmeta_dump`
-(`include/qlang/QLangMeta.h`, `src/QLangManifest.cpp`, `examples/qlang_run.cpp`)
+(`include/qlang/QLangMeta.h`, `src/QLangManifest.cpp`, `examples/qlang_run.cpp`) ✓ DONE (Round 77, 2026-11-11)
 
 No MOC, no list to maintain: `QL_OBJECT` self-registers, Qt-style.
 

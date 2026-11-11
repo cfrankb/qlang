@@ -84,6 +84,17 @@ struct Spot : qlang::QLObject<Spot> {
             }));
 };
 
+// File scope (not local to the validation test): a local class cannot hold
+// QL_OBJECT's inline-static meta registrar. Meta assembly still throws for
+// the duplicate member name — at import time, as before.
+struct Dup : qlang::QLObject<Dup> {
+  int a = 0, b = 0;
+  int getB() const { return b; }
+  void setB(int v) { b = v; }
+  QL_OBJECT(QL_PROPERTY(a),
+            QL_PROPERTY(a, READ(getB), WRITE(setB)));  // name "a" twice
+};
+
 static int failures = 0;
 #define CHECK(cond)                                                     \
   do {                                                                  \
@@ -149,14 +160,8 @@ int main() {
   e.reset();
   CHECK(runThrows(ctx, "e.x"));
 
-  // 9. Validation: duplicate member name rejected.
-  struct Dup : qlang::QLObject<Dup> {
-    int a = 0, b = 0;
-    int getB() const { return b; }
-    void setB(int v) { b = v; }
-    QL_OBJECT(QL_PROPERTY(a),
-              QL_PROPERTY(a, READ(getB), WRITE(setB)));  // name "a" twice
-  };
+  // 9. Validation: duplicate member name rejected. (Dup lives at file
+  // scope: a local class cannot hold the QL_OBJECT inline-static registrar.)
   bool rejected = false;
   try {
     QLangContext c2;

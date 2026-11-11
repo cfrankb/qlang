@@ -288,3 +288,46 @@ Deviations from the draft:
   `qval_external_*<T>` helpers, §3/§10.2) — it is not used for `type(x)` or
   for binding identity/layout (those remain the `QL_OBJECT` member-pointer
   list, (a)).
+
+## 12. Self-registration and manifest dumping (portable-module-plan P3)
+
+`QL_OBJECT` now also declares one line of bookkeeping beside
+`qlang_meta()`:
+
+```cpp
+inline static const bool qlang_meta_registered_ =
+    ::qlang::meta_detail::registry_add(&qlang_meta);
+```
+
+The C++17 `inline static` member has exactly one instance per program and
+its initializer runs at dynamic init, storing only the *accessor pointer*
+(`const TypeMeta& (*)()`) into `qlang::metaRegistry()` — a
+construct-on-first-use function-local static, so no static-init order can
+be observed and nothing a host registers can throw at static-init time
+(`qlang_meta()` assembles lazily on first call). `metaRegistry()` is
+public: observers (the dumper, P4's checks) walk it; two entries sharing a
+type **name** are kept, and `qlang::writeTypeManifest(std::ostream&)`
+refuses such a dump with a `QLangError` naming the duplicate rather than
+silently dropping one.
+
+`writeTypeManifest` is the host one-liner for extracting the process's
+type interface as a `QLM1` manifest (SERIALIZATION.md §11); `qlang_run
+--qlmeta-dump <file.qlm>` is the same call as a standalone mode for
+binaries shaped like it (report on stdout, exit 0; no script mode combines
+with it).
+
+**Caveats:**
+
+- The registrar is *emitted in a translation unit only when that TU
+  references the class* (inline static members get their dynamic
+  initializer where the class is used). A type declared in a header but
+  never referenced by the dumping binary is not in its registry — same
+  reach rule as the meta accessor itself.
+- A **local class** (declared at function or block scope) cannot hold the
+  registrar: local classes may not have such static data members. Declare
+  `QL_OBJECT` types at namespace scope (test fixtures that used local
+  declarations moved accordingly).
+- Registration is by *declared name*: two classes that extract the same
+  innermost name (e.g. `ns1::Thing` and `ns2::Thing`) collide, and the
+  dump refuses until the host resolves the clash — by design, since the
+  manifest vocabulary (and scripts) address types by that name.

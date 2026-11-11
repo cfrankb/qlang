@@ -1,3 +1,35 @@
+## Round 77 — 2026-11-11 — P3: self-registering meta registry + `--qlmeta-dump` (plan `portable-module-plan.md` P3; impl `QLangMeta.h` / `QLangManifest.cpp` / `qlang_run.cpp`, docs `EXTERNAL_TYPES.md` §12)
+
+- **No MOC, no list.** `QL_OBJECT` gained one registrar line beside
+  `qlang_meta()`: `inline static const bool qlang_meta_registered_ =
+  ::qlang::meta_detail::registry_add(&qlang_meta);` — one instance per
+  program (C++17 inline static), initializer runs at dynamic init storing
+  only the *accessor pointer* into `qlang::metaRegistry()`
+  (construct-on-first-use function-local static → no SIOF, nothing throws
+  at static-init time; `qlang_meta()` still assembles lazily). Duplicate
+  names are kept in the registry, never silently dropped.
+- **Host one-liner.** `qlang::writeTypeManifest(std::ostream&)`
+  (`QLangManifest.cpp`) walks the registry → `manifestTypeFrom` →
+  `writeManifest`, and refuses a registry with two same-named types with
+  `QLangError(Io, "qlm: duplicate type name '<n>' in meta registry")`.
+- **CLI.** `qlang_run --qlmeta-dump <file.qlm>` — standalone mode: writes
+  the binary's own registry, reports `wrote N type(s) to <file>` on stdout,
+  exits 0; no script is read, refuses to combine with script/compile modes
+  (usage exit 1); unwritable file → 4, registry duplicate → 3. Usage +
+  `--help` updated.
+- **Local-class caveat** (`EXTERNAL_TYPES.md` §12): a local (block-scope)
+  class cannot hold the registrar, so `test_external`'s `Dup` fixture moved
+  to file scope — same validation behavior, `external` suite unchanged.
+- **Verify:** `manifest_check` gained §12–14 (registry walk finds the
+  self-registered fixture, registry dump round-trips to bytes identical to
+  the hand conversion, `writeTypeManifest` duplicate refusal via a fake
+  second accessor — registry keeps both, dump refuses; with
+  `argv[1] = qlang_run` the CLI smoke: exit 0 + file parses + refuse-to-
+  combine → 1). New ctest entry `qlmeta_dump`; `ctest` 60/60 — every
+  existing `QL_OBJECT` binary (external, signal, class_str…) rebuilt with
+  the registrar and stayed green, and the corpus `.qlc` round-trip gates
+  confirm the byte-identical-codegen requirement.
+
 ## Round 76 — 2026-11-11 — P2: the `QLM1` type-manifest codec (plan `portable-module-plan.md` P2; impl `QLangManifest.h` / `.cpp`, spec `SERIALIZATION.md` §11)
 
 - **One serializer, one code path.** `include/qlang/QLangManifest.h` +

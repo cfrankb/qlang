@@ -229,6 +229,20 @@ ManifestType manifestTypeFrom(const TypeDescriptor &d) {
   return manifestTypeFromImpl(d);
 }
 
+void writeTypeManifest(std::ostream &os) {
+  std::vector<ManifestType> types;
+  std::unordered_set<std::string> names;
+  for (const auto &acc : metaRegistry()) {
+    ManifestType t = manifestTypeFrom(acc());
+    if (!names.insert(t.name).second)
+      throw QLangError(QLangErrorKind::Io, 0, 0,
+                       "qlm: duplicate type name '" + t.name +
+                           "' in meta registry");
+    types.push_back(std::move(t));
+  }
+  writeManifest(os, types);
+}
+
 std::string serializeTypeEntry(const ManifestType &t) {
   std::string body = typeEntryBody(t);
   std::string out;

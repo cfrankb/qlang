@@ -100,6 +100,13 @@ struct ManifestType {
 ManifestType manifestTypeFrom(const TypeMeta &m);
 ManifestType manifestTypeFrom(const TypeDescriptor &d);
 
+// Dump the process's meta registry (every QL_OBJECT type whose meta has
+// been referenced, P3) — the host one-liner for binaries that are not
+// qlang_run. Two registry entries sharing a type name refuse the dump with
+// QLangError(Io) naming it: the registry keeps duplicates, the manifest
+// refuses them (never silently dropped).
+void writeTypeManifest(std::ostream &os);
+
 // Canonical byte form of one entry: fingerprint u64 + body. The fingerprint
 // is computed by this serializer alone — host and reader can never disagree
 // by construction.

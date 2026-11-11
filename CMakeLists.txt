@@ -251,6 +251,9 @@ add_test(NAME external COMMAND test_external)
 add_executable(manifest_check tests/unit/manifest_check.cpp)
 target_link_libraries(manifest_check PRIVATE qlang)
 add_test(NAME manifest_check COMMAND manifest_check)
+# CLI smoke: manifest_check runs `qlang_run --qlmeta-dump <tmp>` (P3) and
+# parses the file — exit 0 required, plus the refuse-to-combine check.
+add_test(NAME qlmeta_dump COMMAND manifest_check $<TARGET_FILE:qlang_run>)
 
 # Native/variable injection: ctx.set (incl. const) + ctx.setFunc + ctx.call.
 add_executable(test_inject tests/unit/test_inject.cpp)
