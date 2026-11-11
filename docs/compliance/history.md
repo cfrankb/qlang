@@ -1,3 +1,23 @@
+## Round 71 — 2026-11-10 — `from *` binds every public name except the identity (spec `09-modules.md` §import statement; impl `QLangCompiler.cpp`)
+
+- **Fixed (audit F2, plan P1): two `from … import *` statements can coexist.**
+  Both modules export `MODULE_NAME` as an ordinary const, so the second
+  star-import always died on `'MODULE_NAME' is already imported from module 'a'`.
+  **Q40 resolved as adopted: `MODULE_NAME` is identity, not an entity** — the
+  compiler skips it when expanding `*` (one filter in `importNames`). Everything
+  else is untouched: an explicit `from m import MODULE_NAME` / `import m.MODULE_NAME`
+  still binds, `m.MODULE_NAME` still reads through the qualifier (qualified
+  imports key on `m.<name>`, so they never collided), the export table and the
+  linker/discovery identity checks are unchanged. The spec's
+  "every public name `m` exposes" sentence gained the exception — the compiler
+  had been literal-correct; the spec was the bug's other half.
+- Tests: `linker_test` 138→142 checks (`testStarImportIdentity` — two
+  star-imported modules sharing nothing else link and run, explicit + qualified
+  `MODULE_NAME` still reach); new `ql_star_import` script with two fixture
+  modules (`ql_star_a.ql`, `ql_star_b.ql`) → 26 scripts, 58 ctest entries green.
+- **Recorded, not fixed:** P2 (per-name alias `from m import f as g`, F3/Q41) and
+  P3's remaining diagnostic (F5's not-imported-module message).
+
 ## Round 70 — 2026-11-10 — Module-level const: one cell identity (spec `09-modules.md` §1; impl `QLangCompiler.cpp`)
 
 - **Fixed (audit F1, plan P0): a module-level `const` read by a `def` of the same

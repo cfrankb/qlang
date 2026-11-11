@@ -206,13 +206,15 @@ closing the **Q#**s its item points at:
       error. Guards: `testModuleConstOneIdentity` (`linker`) + the `ql_module_const` script.
       Audit closed: [../bugs/module-export-import-audit.md](../bugs/module-export-import-audit.md) F1.
       The same family (f-string const, script mode) remains open one row above.
-- [ ] **module defect (found 2026-11-10)**: `from a import *` + `from b import *` always collides on
-      `MODULE_NAME` (`'MODULE_NAME' is already imported from module 'a'`), so two star-imports cannot
-      coexist — audit **F2**, plan **P1**/**Q40**
+- [x] **module defect (found 2026-11-10): FIXED Round 71 (plan P1)** — `from a import *` +
+      `from b import *` always collided on `MODULE_NAME`; the star-expansion now skips it
+      (identity, not an entity — **Q40** resolved), explicit and qualified reads unchanged,
+      spec `09-modules.md` names the exception. Guards: `testStarImportIdentity` (`linker`) +
+      the `ql_star_import` script — audit **F2** closed
 - [ ] `docs/plans/module-export-import-plan.md` (2026-11-10) — **P0 landed Round 70** (F1 + the
-      silent-nil half of F5); **P1–P3 open**; owns **Q39–Q43** (Q39/Q43 resolved) and the F1–F3
-      fixes; F4 (class export) and the runtime module registry are recorded as deferred there with
-      their promotion triggers
+      silent-nil half of F5), **P1 landed Round 71** (F2); **P2–P3 open**; owns **Q39–Q43**
+      (Q39/Q40/Q43 resolved) and the F1–F3 fixes; F4 (class export) and the runtime module
+      registry are recorded as deferred there with their promotion triggers
 
 ## 7. Codegen follow-ups recorded by M3 / Phase 3 (no plan yet)
 

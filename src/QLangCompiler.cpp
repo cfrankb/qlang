@@ -3140,7 +3140,11 @@ static std::vector<std::string> importNames(
   if (s->importAll) {
     std::vector<std::string> names; // `from m import *`
     for (const auto &e : exports)
-      names.push_back(e.name);
+      // MODULE_NAME is identity, not an entity: every module exports it, so
+      // binding it flat would make two star-imports collide. It stays
+      // reachable as `m.MODULE_NAME` and by explicit `from m import
+      // MODULE_NAME`. SPEC §modules "import statement".
+      if (e.name != "MODULE_NAME") names.push_back(e.name);
     return names;
   }
   if (!s->importFuncs.empty())

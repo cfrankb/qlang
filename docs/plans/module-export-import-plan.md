@@ -1,9 +1,9 @@
 # Plan: module export/import gaps (post-C8b audit)
 
-Status: **P0 landed 2026-11-10 (Round 70); P1–P3 open**.
+Status: **P0 landed 2026-11-10 (Round 70); P1 landed 2026-11-10 (Round 71); P2–P3 open**.
 Baseline `HEAD = 87356aa` ("C8b: compile a discovered .ql into a module image");
 `cmake -B build` clean, `ctest --test-dir build` **56/56** green including `doc_hashes` at that
-baseline (P0 landed on top of it: **57/57**, Round 70).
+baseline (P0 + P1 landed on top of it: **58/58**, Round 71).
 Findings this plan executes: [../bugs/module-export-import-audit.md](../bugs/module-export-import-audit.md)
 (F1–F6, probed 2026-11-10). Parent plans:
 [archive/external-modules-plan-v4.md](archive/external-modules-plan-v4.md) (Phases 1–3c, done,
@@ -56,17 +56,18 @@ same-module `def`, a duplicate `init`, and a live importer after the init frame 
 `qlc_compile` capture-folding assertion flipped (`specs == 2 → 1`): the second spec named a frame
 register and was never a second module cell — it had encoded the defect.
 
-## P1 — `from *` must not collide on identity (F2)
+## P1 — `from *` must not collide on identity (F2) — **landed Round 71**
 
-`from a import *` + `from b import *` is a guaranteed error today, because both modules export
+`from a import *` + `from b import *` was a guaranteed error, because both modules export
 `MODULE_NAME` as an ordinary const (`'MODULE_NAME' is already imported from module 'a'`).
-**Q40** default: `MODULE_NAME` is **identity, not an entity** — the compiler skips it when expanding
-`*`; it stays reachable as `m.MODULE_NAME` and in the export table (the linker and `--asm-level 5`
-keep seeing it, `--import`/discovery identity checks are untouched). Then a spec sentence in
-`09-modules.md` says so, since "every public name `m` exposes" currently means the opposite.
-One filter in the star-expansion, one `09-modules.md` sentence, one `linker_test` case (two
-star-imported modules sharing nothing else bind cleanly; an explicit
-`from a import MODULE_NAME` still binds), and a script regression that star-imports two modules.
+**Q40 resolved as adopted: `MODULE_NAME` is identity, not an entity** — `importNames` skips it when
+expanding `*`; it stays reachable as `m.MODULE_NAME` and by explicit import, and stays in the export
+table (the linker and `--asm-level 5` keep seeing it, `--import`/discovery identity checks are
+untouched). The `09-modules.md` §import statement sentence now names the exception — "every public
+name `m` exposes" had meant the opposite, and the compiler had been literal-correct.
+Landed as planned: one filter in the star-expansion, one spec sentence, one `linker_test` case
+(`testStarImportIdentity`, 138→142), and one script regression (`ql_star_import` + two fixture
+modules).
 
 ## P2 — per-name alias `from m import f as g` (F3)
 
@@ -108,8 +109,8 @@ not fixed in `history.md` Round 68; `ImportEntry::alias` is dead). Scope, delibe
 - **Q39** (P0) which layer owns the fix — compiler identity, VM init frame, or linker? **Resolved
   Round 70: the compiler**, as the default predicted — the def's capture spec now reuses the
   sentinel cell; the linker and `GETIMPORT` needed no change.
-- **Q40** (P1) is `MODULE_NAME` a public export? **Default: no for `import *`, yes for `m.MODULE_NAME`
-  and the export table.**
+- **Q40** (P1) is `MODULE_NAME` a public export? **Resolved Round 71: no for `import *`, yes for
+  `m.MODULE_NAME` and the export table** — as the default adopted.
 - **Q41** (P2) does an aliased import need image/format support? **Default: no** — compile-time
   binding, `.qlc` stays v9, `ImportEntry::alias` gets deleted.
 - **Q42** (deferred) may a `.ql` module export a class? **Default: no, unanswered — needs a spec
@@ -120,11 +121,11 @@ not fixed in `history.md` Round 68; `ImportEntry::alias` is dead). Scope, delibe
 ## Verification (AGENTS.md, every phase)
 
 - `cmake -B build && cmake --build build`, then `ctest --test-dir build` — 56/56 at the baseline,
-  **57/57 green since P0** added `script_ql_module_const`.
+  **58/58 green since P0 + P1** added `script_ql_module_const` and `script_ql_star_import`.
 - Single suites while iterating: `build/linker_test`, `build/module_search_test`.
 - F1's own reproduction is the acceptance test: the F1 pair must print `[tagged] / [two] / [three]`
-  and `fn:tagged` — **passes since Round 70**; P1's pair must print both star-imported names;
-  P2's must print through `g`.
+  and `fn:tagged` — **passes since Round 70**; P1's pair must print both star-imported names —
+  **passes since Round 71**; P2's must print through `g`.
 - Docs that need a row/hash refresh after a verified change: `docs/spec/09-modules.md` (P1, P2),
   `docs/spec/13-bytecodes.md` (P2 — `## technical specifications` 5 flips to implemented),
   `docs/compliance/{status,tests,harness}.md`, `docs/compliance/history.md` (a new round entry),

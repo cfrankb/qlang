@@ -1,7 +1,8 @@
 # Module export/import audit (2026-11-10)
 
-Status: **F1 fixed 2026-11-10 (Round 70, plan P0); F5's silent-nil bullet closed with
-P0.3** — findings record otherwise unchanged. Found while auditing what is still missing
+Status: **F1 fixed 2026-11-10 (Round 70, plan P0); F2 fixed 2026-11-10 (Round 71, plan P1);
+F5's silent-nil bullet closed with P0.3** — findings record otherwise unchanged. Found while
+auditing what is still missing
 for `export`/`import` after **C8b** (Round 69, `.ql` discovery + nested compile). Everything here
 reproduced on `HEAD` after C8b; none of it was a C8b regression (the const defect reproduced on the
 `.qlc` path, which predates C8b, and on `--import`, which predates it too).
@@ -125,7 +126,7 @@ Hypothesis 1 was the shape of it, hypothesis 3 was right, and the excluded table
    top-level `let` keeps the frame-relative copy — spec §1's copy rule. Guards:
    `linker_test`'s `testModuleConstOneIdentity` and the `ql_module_const` script.
 
-## F2 — two `from … import *` can never coexist  **(defect, needs a decision)**
+## F2 — two `from … import *` can never coexist  **(fixed, Round 71)**
 
 `MODULE_NAME` is an ordinary exported const, so it is a public name, so two star-imports collide:
 
@@ -135,8 +136,11 @@ from b import *      # -> 'MODULE_NAME' is already imported from module 'a'
 ```
 
 `from m import *` is specified to bind "every public name `m` exposes"
-([../spec/09-modules.md](../spec/09-modules.md)), so the compiler is literal-correct and the idiom
-unusable. Identity or entity is an open decision — plan **Q40**.
+([../spec/09-modules.md](../spec/09-modules.md)), so the compiler was literal-correct and the idiom
+unusable. **Resolved Round 71 (plan **Q40** as adopted): `MODULE_NAME` is identity, not an entity** —
+the star-expansion skips it, and `09-modules.md` §import statement now names the exception
+explicitly. Explicit import and qualified reads are unchanged. Guards: `linker_test`'s
+`testStarImportIdentity` and the `ql_star_import` script.
 
 ## F3 — per-name import alias has never parsed  **(spec requirement, unimplemented)**
 
@@ -177,6 +181,7 @@ two `.ql` modules with different names in one run; a `.qlc` as the entry file.
 ## Follow-ups
 
 - Plan: [../plans/module-export-import-plan.md](../plans/module-export-import-plan.md) — P0 (F1 +
-  the silent-nil half of F5) landed Round 70; P1 (F2) and P2 (F3) open.
+  the silent-nil half of F5) landed Round 70, P1 (F2) landed Round 71; P2 (F3) and the rest of P3
+  open.
 - `docs/plans/todo.md` §6 carried F1 as a defect line with a pointer here; closed Round 70.
 - Probe sources: F1 above; the rest of the matrix is small enough to re-type from the shape column.

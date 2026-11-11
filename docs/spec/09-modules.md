@@ -22,13 +22,17 @@ Every form keeps its shape; what it *binds* is the whole rule.
 |---|---|---|
 | `import m` | `m` — **the module** | `m.name` |
 | `import m as a` | `a` — the module under an alias (`m` itself is not bound) | `a.name` |
-| `from m import *` | every public name `m` exposes, flat | `name` |
+| `from m import *` | every public name `m` exposes, flat — except `MODULE_NAME` (see below) | `name` |
 | `from m import a, b` | the listed names, flat (`m` is not bound) | `a`, `b` |
 | `import m.f` | the one name `f`, flat — the legacy single-entity form (`m` is not bound) | `f` |
 
 `import math` puts **math** in the namespace, so `math.min(...)` resolves and `min(...)` does
 not: implicit flat loading is gone. A bare name is visible only because a form above bound it
-flat — `from math import min`, `from math import *`, or `import math.min`.
+flat — `from math import min`, `from math import *`, or `import math.min`. `MODULE_NAME` is the
+one exception: it is the module's **identity, not an entity it offers**, so `from m import *`
+never binds it and two star-imports coexist. It stays reachable through the qualifier
+(`m.MODULE_NAME`), through an explicit `from m import MODULE_NAME` / `import m.MODULE_NAME`, and
+in the export table.
 
 ```python
 import math

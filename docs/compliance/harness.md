@@ -78,8 +78,8 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-**Current tally (re-verified Round 70, 2026-11-10): 39011 counted unit cases + 25
-script regressions + `smoke` + the perf gate + `doc_hashes` = 57 ctest entries, all
+**Current tally (re-verified Round 71, 2026-11-10): 39015 counted unit cases + 26
+script regressions + `smoke` + the perf gate + `doc_hashes` = 58 ctest entries, all
 green** — the authoritative,
 per-suite breakdown lives in `docs/compliance/tests.md` (ctest matrix) and
 `docs/compliance/status.md` (`## Current Status`); this module deliberately no

@@ -1492,6 +1492,46 @@ static void testModuleConstOneIdentity() {
         "const: the def's capture names the same merged cell");
 }
 
+// ---------------------------------------------------------------------------
+// F2 (module-export/import plan P1): MODULE_NAME is identity, not an entity —
+// the compiler skips it when expanding `from m import *`, so two star-imports
+// coexist. It stays reachable explicitly and through the qualifier, and stays
+// in the export table (the linker's identity checks are untouched).
+// ---------------------------------------------------------------------------
+
+static const char *kStarA = R"(
+export const MODULE_NAME = "sa"
+export const A = "from-sa"
+)";
+
+static const char *kStarB = R"(
+export const MODULE_NAME = "sb"
+export const B = "from-sb"
+)";
+
+static void testStarImportIdentity() {
+  QLangContext ctx;
+  std::string err;
+  if (!check(addLibrary(ctx, kStarA, err) != nullptr,
+             "star: library sa loads (" + err + ")"))
+    return;
+  if (!check(addLibrary(ctx, kStarB, err) != nullptr,
+             "star: library sb loads (" + err + ")"))
+    return;
+  const std::string app =
+      "from sa import *\nfrom sb import *\n"
+      "println(A)\nprintln(B)\n"
+      "from sa import MODULE_NAME\nprintln(MODULE_NAME)\n"
+      "import sb\nprintln(sb.MODULE_NAME)\n";
+  CompiledProgram merged;
+  if (!check(buildLinked(ctx, app, merged, err, "app"),
+             "star: two star-imported modules link (" + err + ")"))
+    return;
+  check(
+      runText(merged, ctx) == "from-sa\nfrom-sb\nsa\nsb\n",
+      "star: both stars bind, MODULE_NAME explicit and qualified still reach");
+}
+
 int main() {
   testRegistry();
   testLoadProgramFile();
@@ -1506,6 +1546,7 @@ int main() {
   testClosureAcrossBoundary();
   testGeneratorAcrossBoundary();
   testModuleConstOneIdentity();
+  testStarImportIdentity();
   testBoundaries();
 
   std::cout << (fails == 0 ? "ALL PASS" : "FAILURES") << ": " << passes
