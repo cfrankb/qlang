@@ -1,9 +1,10 @@
 # Plan: module export/import gaps (post-C8b audit)
 
-Status: **P0 landed 2026-11-10 (Round 70); P1 landed 2026-11-10 (Round 71); P2–P3 open**.
+Status: **P0 landed 2026-11-10 (Round 70); P1 landed 2026-11-10 (Round 71); P2 landed 2026-11-10
+(Round 72); P3 remainder open**.
 Baseline `HEAD = 87356aa` ("C8b: compile a discovered .ql into a module image");
 `cmake -B build` clean, `ctest --test-dir build` **56/56** green including `doc_hashes` at that
-baseline (P0 + P1 landed on top of it: **58/58**, Round 71).
+baseline (P0 + P1 + P2 landed on top of it: **58/58**, Round 72).
 Findings this plan executes: [../bugs/module-export-import-audit.md](../bugs/module-export-import-audit.md)
 (F1–F6, probed 2026-11-10). Parent plans:
 [archive/external-modules-plan-v4.md](archive/external-modules-plan-v4.md) (Phases 1–3c, done,
@@ -69,21 +70,30 @@ Landed as planned: one filter in the star-expansion, one spec sentence, one `lin
 (`testStarImportIdentity`, 138→142), and one script regression (`ql_star_import` + two fixture
 modules).
 
-## P2 — per-name alias `from m import f as g` (F3)
+## P2 — per-name alias `from m import f as g` (F3) — **landed Round 72**
 
-Spec requirement that has never parsed (`13-bytecodes.md` `## technical specifications` 5; recorded
-not fixed in `history.md` Round 68; `ImportEntry::alias` is dead). Scope, deliberately small:
+Spec requirement that had never parsed (`13-bytecodes.md` `## technical specifications` 5;
+recorded not fixed in `history.md` Round 68; `ImportEntry::alias` was dead). Landed as scoped:
 
-- parser: `from m import a, b as c, d` — `as` binds to the **one** name it follows; the module name
-  `m` is not bound by a `from` form (unchanged rule).
-- compiler: the alias is the importing module's binding name only. Duplicate/unknown-name
-  diagnostics report the alias and collide on it. Qualified access keeps the original name.
-- **no image change** (**Q41**): a table entry keeps naming *(defining module, exported name)*;
-  the alias is a compile-time binding, so `.qlc` stays **v9** and `ImportEntry::alias` stays unused
-  — delete the field rather than feed it (findings F3). `09-modules.md`'s "is not parsed" sentence
-  is replaced by the form + its row in the `## import statement` table.
-- guard: `tests/unit/module_search_test.cpp` (ctest `module_search`, 103 checks) — the C8 import-form
-  guards live there; `--asm-level 5` listing keeps showing the defining module + exported name.
+- parser: each `from`-list name may carry `as NAME`; `as` binds to the **one** name it follows;
+  the module name `m` is still not bound by a `from` form. `Stmt::importFuncs` carries
+  `(exported name, alias)` pairs.
+- compiler: the alias is the importing module's binding name only — it is the `localName`
+  `bindQlImport` checks, so collisions and their diagnostics speak the alias automatically; an
+  unknown export still names the missing exported name. Qualified access keeps the original name.
+  Works for C++ modules too (`from math import min as lo`).
+- **no image change** (**Q41 resolved as adopted**): a table entry keeps naming *(defining
+  module, exported name)*; `.qlc` stayed **v9** — the byte stream keeps the reserved,
+  always-empty alias slot after `ref` (writer writes `""`, reader reads past), and
+  `ImportEntry::alias` was deleted from the struct rather than fed. `09-modules.md`'s
+  "is not parsed" sentence was replaced by the form + its table row; `13-bytecodes.md`'s import
+  table section and `SERIALIZATION.md` §4.6 describe the reserved slot; `## technical
+  specifications` 5 is honestly dated (aliases Round 72).
+- guard: `module_search` 103→**112** checks (`testPerNameAlias`); `--asm-level 5` keeps showing
+  the defining module + exported name (the driver lists `module.name` — the image cannot carry
+  the alias).
+- Recorded, not fixed: `import m.f as g` — the legacy form with an alias, unspecified — still
+  silently ignores it.
 
 ## P3 — two diagnostics (F5)
 
@@ -111,8 +121,9 @@ not fixed in `history.md` Round 68; `ImportEntry::alias` is dead). Scope, delibe
   sentinel cell; the linker and `GETIMPORT` needed no change.
 - **Q40** (P1) is `MODULE_NAME` a public export? **Resolved Round 71: no for `import *`, yes for
   `m.MODULE_NAME` and the export table** — as the default adopted.
-- **Q41** (P2) does an aliased import need image/format support? **Default: no** — compile-time
-  binding, `.qlc` stays v9, `ImportEntry::alias` gets deleted.
+- **Q41** (P2) does an aliased import need image/format support? **Resolved Round 72: no** —
+  compile-time binding, `.qlc` stayed v9 (reserved, always-empty alias slot), and
+  `ImportEntry::alias` was deleted, as the default adopted.
 - **Q42** (deferred) may a `.ql` module export a class? **Default: no, unanswered — needs a spec
   sentence first.**
 - **Q43** (P3) should the F1 shape ever compile? **Resolved Round 70: no** — in library mode an
@@ -121,11 +132,12 @@ not fixed in `history.md` Round 68; `ImportEntry::alias` is dead). Scope, delibe
 ## Verification (AGENTS.md, every phase)
 
 - `cmake -B build && cmake --build build`, then `ctest --test-dir build` — 56/56 at the baseline,
-  **58/58 green since P0 + P1** added `script_ql_module_const` and `script_ql_star_import`.
+  **58/58 green since P0 + P1** added `script_ql_module_const` and `script_ql_star_import`
+  (P2 grew an existing entry, not the count).
 - Single suites while iterating: `build/linker_test`, `build/module_search_test`.
 - F1's own reproduction is the acceptance test: the F1 pair must print `[tagged] / [two] / [three]`
   and `fn:tagged` — **passes since Round 70**; P1's pair must print both star-imported names —
-  **passes since Round 71**; P2's must print through `g`.
+  **passes since Round 71**; P2's must print through `g` — **passes since Round 72**.
 - Docs that need a row/hash refresh after a verified change: `docs/spec/09-modules.md` (P1, P2),
   `docs/spec/13-bytecodes.md` (P2 — `## technical specifications` 5 flips to implemented),
   `docs/compliance/{status,tests,harness}.md`, `docs/compliance/history.md` (a new round entry),

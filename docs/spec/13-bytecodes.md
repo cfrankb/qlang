@@ -705,12 +705,13 @@ bytecode to reference the look up table.
 **Implemented (Round 64, 2026-11-09)** — plan
 [../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phase 3a (the
 section) + Phase 3b (what fills it).
-`CompiledProgram::imports` holds one `ImportEntry {module, name, kind, ref, alias}`
-per entity this module needs from another; `alias` is the local name when the import is
-aliased — reserved, since the parser accepts the alias only on a module import
-(`import m as a`, which binds the qualifier and stores no entry here), so an entry's `alias` is
-always empty today and `from m import f as g` does not parse. `.qlc` v9 serializes and validates the
-section (§4.6), so a module image states what it needs.
+`CompiledProgram::imports` holds one `ImportEntry {module, name, kind, ref}`
+per entity this module needs from another. The entry always names
+*(defining module, exported name)*: the alias of `from m import f as g`
+(Round 72) is a compile-time binding in the importer, so no entry carries it —
+the struct has no `alias` member, and the `.qlc` v9 byte stream keeps only the
+reserved, always-empty slot after `ref` ([../SERIALIZATION.md](../SERIALIZATION.md)
+§4.6), so a module image states what it needs.
 
 The compiler fills it when an `import` names a **loaded** `.ql` module
 (`QLangContext::loadProgram` / `loadProgramFile`, `docs/SERIALIZATION.md` §5.2): the five
@@ -916,11 +917,14 @@ Status of each item as of Round 65 (2026-11-09) — plan
 
   aliases is already a requirment. (e.g. `from m import f as g`)
 
-  — ✓ **implemented (Round 64/65)**: the C++ API loads `.ql` images into a context and a `.ql`
-  imports from them (all five import forms, aliases included), a `.ql` keeps importing C++
+  — ✓ **implemented (Round 64/65, aliases Round 72)**: the C++ API loads `.ql` images into a
+  context and a `.ql` imports from them, a `.ql` keeps importing C++
   modules (compile-time natives, unchanged), C++ modules still cannot load `.ql`, and the cycle
   check is a compile error (`QLangCompiler::checkImportCycles`) with a second, loader-side half
-  in the linker. *"`.ql` modules may import `.ql` modules"* holds for a **library** image too
+  in the linker. The per-name alias `from m import f as g` — claimed here since Round 64 but
+  never parsed (audit F3) — parses and binds since Round 72, on the `.ql` and C++ module paths
+  alike; the alias is the importer's binding name only and never image data.
+  *"`.ql` modules may import `.ql` modules"* holds for a **library** image too
   since Round 65: its cross-module references are `getimport`/`callimport` operands into its own
   import table, both of which the image carries, so a chain (app → middle → leaf) links and runs
   with one merged table. `import` is a module-level statement: inside a `def` body it is a

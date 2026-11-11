@@ -902,9 +902,15 @@ StmtPtr QLangParser::parseImport() {
       stmt->importAll = true;
       m_pos++;
     } else {
-      // `from math import min, max`
+      // `from math import min, max` — each name may carry its own alias,
+      // `from math import min as smaller, max`; `as` binds to the one name it
+      // follows (SPEC §modules "import statement").
       do {
-        stmt->importFuncs.push_back(consume(TokenType::Ident, "function name").value);
+        std::string name = consume(TokenType::Ident, "function name").value;
+        std::string alias;
+        if (match(TokenType::As))
+          alias = consume(TokenType::Ident, "alias name after 'as'").value;
+        stmt->importFuncs.push_back({name, alias});
       } while (match(TokenType::Comma));
     }
   } else {

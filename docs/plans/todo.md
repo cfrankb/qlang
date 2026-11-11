@@ -212,8 +212,9 @@ closing the **Q#**s its item points at:
       spec `09-modules.md` names the exception. Guards: `testStarImportIdentity` (`linker`) +
       the `ql_star_import` script — audit **F2** closed
 - [ ] `docs/plans/module-export-import-plan.md` (2026-11-10) — **P0 landed Round 70** (F1 + the
-      silent-nil half of F5), **P1 landed Round 71** (F2); **P2–P3 open**; owns **Q39–Q43**
-      (Q39/Q40/Q43 resolved) and the F1–F3 fixes; F4 (class export) and the runtime module
+      silent-nil half of F5), **P1 landed Round 71** (F2), **P2 landed Round 72** (F3, per-name
+      alias, `.qlc` stays v9 — **Q41** resolved); **P3 remainder open**; owns **Q39–Q43**
+      (all resolved except Q42) and the F1–F3 fixes; F4 (class export) and the runtime module
       registry are recorded as deferred there with their promotion triggers
 
 ## 7. Codegen follow-ups recorded by M3 / Phase 3 (no plan yet)

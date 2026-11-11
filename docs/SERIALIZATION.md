@@ -335,9 +335,11 @@ Phase 3a).
   array (§4.1), for `Var`/`Const` the global register — the "shared cell" an
   importer will read (SPEC `## technical specifications` 3).
 - `ImportEntry::ref` is the *defining* module's `ref`, resolved at compile time
-  and rewritten by Phase 3b's linker; `alias` is the local name when the import
-  is aliased (`from m import f as g`) and empty when it is not. It is
-  deliberately **not** range-checked against the image carrying it: the tables
+  and rewritten by Phase 3b's linker. The trailing `String` is a **reserved
+  alias slot: always empty** (Round 72) — the alias of `from m import f as g`
+  is a compile-time binding in the importer, so the entry always names
+  *(module, exported name)*. `ref` is deliberately **not** range-checked
+  against the image carrying it: the tables
   it names live in another file (§5.1 step 3).
 - `moduleName` MUST be non-empty. The compiler takes it from the module's own
   `export const MODULE_NAME = "<name>"` when present, else from the driver

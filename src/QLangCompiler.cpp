@@ -3130,29 +3130,31 @@ void QLangCompiler::emitImportCall(int importIdx, const std::string &name,
 
 // The export names to bind for one `import` form, and whether they are bound
 // under the module's qualifier (`import m`) or flat (`from m import …`,
-// `import m.f`). SPEC §modules "import statement".
-static std::vector<std::string> importNames(
+// `import m.f`). The pair's second member is the per-name alias of
+// `from m import a as b` — a compile-time binding name, empty otherwise.
+// SPEC §modules "import statement".
+static std::vector<std::pair<std::string, std::string>> importNames(
     const StmtPtr &s, const std::vector<ExportEntry> &exports,
     bool &qualified) {
   qualified = false;
+  using Binding = std::pair<std::string, std::string>;
   if (!s->importFunc.empty())
-    return {s->importFunc}; // `import m.f` — one explicitly named entity
+    return {{s->importFunc, ""}}; // `import m.f` — one explicitly named entity
   if (s->importAll) {
-    std::vector<std::string> names; // `from m import *`
+    std::vector<Binding> names; // `from m import *`
     for (const auto &e : exports)
       // MODULE_NAME is identity, not an entity: every module exports it, so
       // binding it flat would make two star-imports collide. It stays
       // reachable as `m.MODULE_NAME` and by explicit `from m import
       // MODULE_NAME`. SPEC §modules "import statement".
-      if (e.name != "MODULE_NAME") names.push_back(e.name);
+      if (e.name != "MODULE_NAME") names.push_back({e.name, ""});
     return names;
   }
   if (!s->importFuncs.empty())
-    return s->importFuncs; // `from m import a, b`
+    return s->importFuncs; // `from m import a, b as c`
   qualified = true; // `import m`, `import m as a` — the module, not its names
-  std::vector<std::string> names;
-  for (const auto &e : exports)
-    names.push_back(e.name);
+  std::vector<Binding> names;
+  for (const auto &e : exports) names.push_back({e.name, ""});
   return names;
 }
 
@@ -3208,7 +3210,7 @@ int QLangCompiler::bindQlImport(const LoadedModule &mod, const ExportEntry &exp,
                      "'" + localName + "' is already imported from module '" +
                          old.module + "'");
   }
-  m_imports.push_back(ImportEntry{modName, exp.name, exp.kind, exp.ref, ""});
+  m_imports.push_back(ImportEntry{modName, exp.name, exp.kind, exp.ref});
   int idx = static_cast<int>(m_imports.size()) - 1;
   m_qlImports[localName] = idx;
   // Provenance for diagnostics and the disassembler, same shape a C++ module
@@ -3239,12 +3241,12 @@ void QLangCompiler::compileQlImport(const StmtPtr &s, const LoadedModule &mod) {
       s->importAlias.empty() ? s->importModule : s->importAlias;
 
   bool qualified = false;
-  const std::vector<std::string> names =
+  const std::vector<std::pair<std::string, std::string>> names =
       importNames(s, mod.program.exports, qualified);
   if (qualified)
     m_moduleNs[qualifier] = mod.program.moduleName;
 
-  for (const std::string &fname : names) {
+  for (const auto &[fname, alias] : names) {
     const ExportEntry *exp = nullptr;
     for (const auto &e : mod.program.exports)
       if (e.name == fname) { exp = &e; break; }
@@ -3256,15 +3258,17 @@ void QLangCompiler::compileQlImport(const StmtPtr &s, const LoadedModule &mod) {
     // Bound by this very form already (a repeated `import m`, or the statement
     // resolving again where it sits): the second binding would collide with the
     // first, so it is a no-op.
-    if (auto it = m_qlImports.find(qualified ? qualifier + "." + fname : fname);
-        it != m_qlImports.end()) {
+    // A `import m` entity is bound under the qualifier (`m.f`), so the bare
+    // name stays invisible and two modules can each contribute their own `f`;
+    // a per-name alias is bound under the alias — collisions and their
+    // diagnostics speak the alias, the table keeps the exported name.
+    const std::string key =
+        qualified ? qualifier + "." + fname : (alias.empty() ? fname : alias);
+    if (auto it = m_qlImports.find(key); it != m_qlImports.end()) {
       const ImportEntry &old = m_imports[static_cast<size_t>(it->second)];
       if (old.module == mod.program.moduleName && old.name == fname)
         continue;
     }
-    // A `import m` entity is bound under the qualifier (`m.f`), so the bare
-    // name stays invisible and two modules can each contribute their own `f`.
-    const std::string key = qualified ? qualifier + "." + fname : fname;
     bindQlImport(mod, *exp, key, s->importAlias, s);
   }
 }
@@ -3350,33 +3354,35 @@ void QLangCompiler::resolveImport(const StmtPtr &s) {
       return;
     }
 
-    // Collect function names to import.
-    std::vector<std::string> names;
+    // Collect function names to import, with any per-name alias.
+    std::vector<std::pair<std::string, std::string>> names;
     if (!s->importFunc.empty())
-      names.push_back(s->importFunc); // `import m.f` — one explicit name
-    else if (s->importAll)            // `from m import *`
-      for (const auto &[fname, func] : mod->funcs)
-        names.push_back(fname);
-    else // `from m import min, max`
+      names.push_back({s->importFunc, ""}); // `import m.f` — one explicit name
+    else if (s->importAll) // `from m import *`
+      for (const auto &[fname, func] : mod->funcs) names.push_back({fname, ""});
+    else // `from m import min, max as mm`
       names = s->importFuncs;
 
-    // Bind each function to its native slot under the flat name.
-    for (const auto &fname : names) {
+    // Bind each function to its native slot under the flat name — under the
+    // alias when one was given; the provenance keeps the exported name, so
+    // the listing still says `module.name`.
+    for (const auto &[fname, alias] : names) {
       auto it = mod->funcs.find(fname);
       if (it == mod->funcs.end())
         throw QLangError(QLangErrorKind::Parse, s->line, s->col,
                          "undefined function '" + fname + "' in module '" +
                              mod->name + "'");
+      const std::string localName = alias.empty() ? fname : alias;
       // The other direction of the collision check in bindQlImport: a name a
       // loaded `.ql` module already bound cannot also arrive from a C++ module.
-      auto qit = m_qlImports.find(fname);
+      auto qit = m_qlImports.find(localName);
       if (qit != m_qlImports.end())
         throw QLangError(
             QLangErrorKind::Parse, s->line, s->col,
-            "'" + fname + "' is imported from module '" +
+            "'" + localName + "' is imported from module '" +
                 m_imports[static_cast<size_t>(qit->second)].module +
                 "' and is also exported by C++ module '" + mod->name + "'");
-      bindNative(fname, it->second);
+      bindNative(localName, it->second);
       // Record the provenance (module -> func) once per name; the first
       // binding wins, mirroring the slot above (a re-import of the same name
       // resolves to the same native slot).

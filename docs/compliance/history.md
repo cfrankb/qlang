@@ -1,3 +1,29 @@
+## Round 72 — 2026-11-10 — `from m import f as g` parses and binds (spec `09-modules.md` §import statement; impl `QLangParser.cpp` / `QLangCompiler.cpp`)
+
+- **Fixed (audit F3, plan P2): the per-name alias parses.** SPEC §bytecodes
+  "technical specifications" 5 had claimed "all five import forms, aliases
+  included" since Round 64, but `from m import a as b` never parsed — the
+  parser stopped after the name and died on `as`. Now each name in a `from`
+  list may carry its own alias (`as` binds to the one name it follows), on the
+  `.ql` and C++ module paths alike; `Stmt::importFuncs` became
+  `(exported name, alias)` pairs to carry it.
+- **Q41 resolved as adopted: the alias is compile-time only, the image stays
+  `.qlc` v9.** A collision or a diagnostic speaks the alias (it is the
+  `localName` `bindQlImport` already checks); an unknown export still names
+  the missing exported name; qualified access keeps the original name; the
+  import table entry still names *(defining module, exported name)*.
+  `ImportEntry::alias` — never fed, but serialized — was deleted from the
+  struct, not fed: the v9 byte stream keeps the reserved, always-empty slot
+  after `ref` (writer writes `""`, reader reads past), so old and new images
+  stay byte-compatible. `--asm-level 5` lists the exported name, as the spec
+  says. Recorded, not fixed: `import m.f as g` — an unspecified form — still
+  silently ignores its alias.
+- Tests: `module_search` 103→112 checks (`testPerNameAlias` — `.ql` alias
+  runs, table names the exported name not the alias, same-alias re-import is
+  a no-op, collisions report the alias, unknown names the missing export,
+  native functions alias too); the `codec_check` v9 case now proves the
+  reserved slot survives read-past. **58/58 ctest green.**
+
 ## Round 71 — 2026-11-10 — `from *` binds every public name except the identity (spec `09-modules.md` §import statement; impl `QLangCompiler.cpp`)
 
 - **Fixed (audit F2, plan P1): two `from … import *` statements can coexist.**

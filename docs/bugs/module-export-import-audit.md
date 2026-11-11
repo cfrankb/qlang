@@ -1,6 +1,7 @@
 # Module export/import audit (2026-11-10)
 
 Status: **F1 fixed 2026-11-10 (Round 70, plan P0); F2 fixed 2026-11-10 (Round 71, plan P1);
+F3 fixed 2026-11-10 (Round 72, plan P2);
 F5's silent-nil bullet closed with P0.3** — findings record otherwise unchanged. Found while
 auditing what is still missing
 for `export`/`import` after **C8b** (Round 69, `.ql` discovery + nested compile). Everything here
@@ -142,12 +143,20 @@ the star-expansion skips it, and `09-modules.md` §import statement now names th
 explicitly. Explicit import and qualified reads are unchanged. Guards: `linker_test`'s
 `testStarImportIdentity` and the `ql_star_import` script.
 
-## F3 — per-name import alias has never parsed  **(spec requirement, unimplemented)**
+## F3 — per-name import alias has never parsed  **(fixed, Round 72)**
 
 `from m import f as g` → `parse error … unexpected token 'as'`. `13-bytecodes.md`
 `## technical specifications` 5 states "aliases is already a requirment. (e.g.
 `from m import f as g`)", `09-modules.md` states it is *not* parsed, and `ImportEntry::alias` exists
-and is permanently empty. Recorded as "recorded, not fixed" in `history.md` (Round 68). Plan P2.
+and is permanently empty. Recorded as "recorded, not fixed" in `history.md` (Round 68).
+
+**Resolved Round 72 (plan P2, Q41 as adopted).** Each `from`-list name may carry its own alias,
+`.ql` and C++ modules alike; collisions and diagnostics speak the alias, unknown names still name
+the exported name, qualified access keeps the original name. The alias is a compile-time binding:
+the import table entry keeps naming *(defining module, exported name)*, `.qlc` stays **v9** with
+its reserved, always-empty alias slot, and `ImportEntry::alias` was **deleted** rather than fed.
+Guards: `module_search`'s `testPerNameAlias`. Still open beside it: `import m.f as g` — an
+unspecified form — silently ignores its alias (recorded, Round 72).
 
 ## F4 — classes cannot be exported  **(unspecified)**
 
@@ -181,7 +190,7 @@ two `.ql` modules with different names in one run; a `.qlc` as the entry file.
 ## Follow-ups
 
 - Plan: [../plans/module-export-import-plan.md](../plans/module-export-import-plan.md) — P0 (F1 +
-  the silent-nil half of F5) landed Round 70, P1 (F2) landed Round 71; P2 (F3) and the rest of P3
-  open.
+  the silent-nil half of F5) landed Round 70, P1 (F2) landed Round 71, P2 (F3) landed Round 72;
+  the rest of P3 (the not-imported-module message) open.
 - `docs/plans/todo.md` §6 carried F1 as a defect line with a pointer here; closed Round 70.
 - Probe sources: F1 above; the rest of the matrix is small enough to re-type from the shape column.

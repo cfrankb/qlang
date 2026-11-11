@@ -1397,7 +1397,7 @@ static void testMalformed() {
     t.str("min");
     t.u8(static_cast<uint8_t>(ExportKind::Func));
     t.i32(0);
-    t.str("minimum");
+    t.str("minimum"); // reserved alias slot — a non-empty one must read past
     CompiledProgram prog;
     std::string why;
     bool ok = readTail(minimalFileTailless() + t.b, prog, why);
@@ -1406,8 +1406,10 @@ static void testMalformed() {
               prog.exports[0].name == "greeter" && prog.exports[0].ref == 0 &&
               prog.exports[1].kind == ExportKind::Const &&
               prog.imports.size() == 1 && prog.imports[0].module == "math" &&
-              prog.imports[0].alias == "minimum",
-          "v9: module name and the tables survive (" + why + ")");
+              prog.imports[0].name == "min",
+          "v9: module name and the tables survive, reserved alias slot read "
+          "past (" +
+              why + ")");
   }
 
   // A library image: functions[0] is `<init>`, not `main`.
@@ -1829,7 +1831,7 @@ static void testV6LoadValidation() {
          static_cast<uint8_t>(Opcode::RETURN), 0x00},
         {0, 3});
     for (uint32_t i = 0; i < tableSize; i++)
-      p.imports.push_back(ImportEntry{"m", "v", ExportKind::Var, 0, ""});
+      p.imports.push_back(ImportEntry{"m", "v", ExportKind::Var, 0});
     return writeImage(p);
   };
   {
@@ -1861,8 +1863,7 @@ static void testV6LoadValidation() {
   // check mean something rather than merely pass.
   {
     CompiledProgram p = programWithCode(code, offs);
-    p.imports.push_back(
-        ImportEntry{"other", "f", ExportKind::Func, 999, ""});
+    p.imports.push_back(ImportEntry{"other", "f", ExportKind::Func, 999});
     CompiledProgram back5;
     std::string e8;
     check(readImage(writeImage(p), back5, e8) && back5.imports.size() == 1 &&

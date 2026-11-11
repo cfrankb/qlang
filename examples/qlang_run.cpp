@@ -1294,7 +1294,7 @@ namespace
       // does (after a link its `ref` is the merged function index or cell).
       std::map<std::string, const ImportEntry *> qlNames;
       for (const auto &ie : prog.imports)
-        qlNames[ie.alias.empty() ? ie.name : ie.alias] = &ie;
+        qlNames[ie.name] = &ie;
       std::vector<std::string> importLines;
       std::unordered_set<std::string> listed, listedSlots;
       for (const auto &im : imports)
@@ -1426,9 +1426,8 @@ namespace
           const char *kind = im.kind == ExportKind::Func
                                  ? "fn"
                                  : (im.kind == ExportKind::Const ? "const" : "var");
-          ss << "    " << std::left << std::setw(19)
-             << (im.alias.empty() ? im.name : im.alias) << std::setw(6) << kind
-             << im.module << "." << im.name << " -> ";
+          ss << "    " << std::left << std::setw(19) << im.name << std::setw(6)
+             << kind << im.module << "." << im.name << " -> ";
           if (im.kind == ExportKind::Func)
           {
             const bool ok = im.ref >= 0 &&

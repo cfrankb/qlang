@@ -780,6 +780,92 @@ void testCompileDiscovers() {
         "e2e: the aliased import runs too");
 }
 
+// ---------------------------------------------------------------------------
+// F3 (module-export/import plan P2): per-name alias `from m import f as g`.
+// The alias is the importing module's binding name only — the import table and
+// the listing keep naming (defining module, exported name), collisions speak
+// the alias, and a native module's functions alias the same way.
+// ---------------------------------------------------------------------------
+
+void testPerNameAlias() {
+  TempTree tree("alias");
+  const std::string libs = tree.dir("libs");
+  std::string err;
+  tree.write("libs/greeter.qlc", whoLibrary("greeter", "found", err));
+
+  QLangContext ctx;
+  ctx.setModuleSearchPaths({libs});
+  CompiledProgram entry, merged;
+  if (!check(buildLinked(ctx,
+                         "from greeter import who as greet\nprintln(greet())\n",
+                         merged, err, &entry),
+             "alias: `from m import f as g` compiles (" + err + ")"))
+    return;
+  check(runText(merged, ctx) == "found\n", "alias: the aliased name runs");
+  check(hasImport(entry, "greeter", "who") &&
+            !hasImport(entry, "greeter", "greet"),
+        "alias: the import table names the exported name, not the alias");
+
+  // Re-importing the same entity under the same alias is a no-op, not a
+  // collision — the same rule the flat forms already had.
+  QLangContext again;
+  again.setModuleSearchPaths({libs});
+  CompiledProgram amerged;
+  if (!check(buildLinked(again,
+                         "from greeter import who as g\n"
+                         "from greeter import who as g\nprintln(g())\n",
+                         amerged, err),
+             "alias: the same aliased re-import is a no-op (" + err + ")"))
+    return;
+  check(runText(amerged, again) == "found\n",
+        "alias: the no-op re-import still runs");
+
+  // Two names claiming one alias collide, and the error speaks the alias.
+  QLangContext collide;
+  collide.setModuleSearchPaths({libs});
+  CompiledProgram cm;
+  const std::string msg = [&] {
+    std::string m;
+    buildLinked(collide,
+                "from greeter import who as x\n"
+                "from greeter import MODULE_NAME as x\n",
+                cm, m);
+    return m;
+  }();
+  check(msg.find("'x' is already imported") != std::string::npos,
+        "alias: the collision reports the alias (" + msg + ")");
+
+  // An unknown export keeps reporting the name that is actually missing.
+  QLangContext unknown;
+  unknown.setModuleSearchPaths({libs});
+  CompiledProgram um;
+  const std::string umsg = [&] {
+    std::string m;
+    buildLinked(unknown, "from greeter import nope as g\n", um, m);
+    return m;
+  }();
+  check(
+      umsg.find("does not export 'nope'") != std::string::npos,
+      "alias: the unknown-name error reports the exported name (" + umsg + ")");
+
+  // The C++ module path aliases the same way.
+  QLangContext native;
+  QLangContext::Module mod;
+  mod.name = "greeter";
+  mod.funcs["who"] = [](QLangContext &, const std::vector<QLangValue> &) {
+    return QLangValue::String("native");
+  };
+  native.registerModule("greeter", mod);
+  CompiledProgram nprog;
+  std::map<std::string, int> ids;
+  if (!check(compile(native,
+                     "from greeter import who as greet\nprintln(greet())\n",
+                     nprog, ids, err, "app"),
+             "alias: a native function aliases too (" + err + ")"))
+    return;
+  check(runText(nprog, native) == "native\n", "alias: the aliased native runs");
+}
+
 // A C++ module of the same name as a file on the path is not an ambiguity: the
 // native wins and the file is never opened (SPEC order, step 1).
 void testNativeBeatsFile() {
@@ -940,6 +1026,7 @@ int main() {
   testCycleTerminates();
   testDeclaredName();
   testCompileDiscovers();
+  testPerNameAlias();
   testNativeBeatsFile();
   testCompiledSource();
 

@@ -78,7 +78,7 @@ All items previously listed as "Broken / missing vs spec" have been resolved:
 
 ## Current Round Summary
 
-**Current tally (re-verified Round 71, 2026-11-10): 39015 counted unit cases + 26
+**Current tally (re-verified Round 72, 2026-11-10): 39127 counted unit cases + 26
 script regressions + `smoke` + the perf gate + `doc_hashes` = 58 ctest entries, all
 green** — the authoritative,
 per-suite breakdown lives in `docs/compliance/tests.md` (ctest matrix) and

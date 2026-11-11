@@ -72,19 +72,20 @@ struct ExportEntry {
 };
 
 // One entry of a module's import table (SPEC §bytecodes "import table
-// (lookup)"): a name bound from another module, `alias` being the name it is
-// bound under locally (empty when unaliased, SPEC §bytecodes "technical
-// specifications" 5). GETIMPORT/CALLIMPORT operand `b` indexes the table; `ref`
-// is the DEFINING module's handle for the name — its function index, or the cell
-// in its own register slice — because the importing image cannot name either
-// until the linker merges the tables and turns `ref` into a merged handle
-// (external-modules plan v4 Phases 3b/3c).
+// (lookup)"): a name bound from another module. GETIMPORT/CALLIMPORT operand
+// `b` indexes the table; `ref` is the DEFINING module's handle for the name —
+// its function index, or the cell in its own register slice — because the
+// importing image cannot name either until the linker merges the tables and
+// turns `ref` into a merged handle (external-modules plan v4 Phases 3b/3c).
+// The entry always names (defining module, exported name): the alias of
+// `from m import f as g` is a compile-time binding in the importer, never
+// image data (the v9 byte stream still carries the reserved, always-empty
+// alias slot after `ref`).
 struct ImportEntry {
   std::string module;
   std::string name;
   ExportKind kind = ExportKind::Func;
   int32_t ref = -1;
-  std::string alias;
 };
 
 // Built-in function ids shared by the compiler (emits CALL with one of these)

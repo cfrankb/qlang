@@ -471,7 +471,7 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
     putStr(os, im.name);
     putU8(os, static_cast<uint8_t>(im.kind));
     putI32(os, im.ref);
-    putStr(os, im.alias);
+    putStr(os, ""); // reserved alias slot — always empty (see ImportEntry)
   }
   return static_cast<bool>(os);
 }
@@ -704,7 +704,7 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
         r.fail("invalid import kind");
       im.kind = static_cast<ExportKind>(kind);
       im.ref = r.i32();
-      im.alias = r.str();
+      (void)r.str(); // reserved alias slot — read past, never fed (ImportEntry)
       if (im.module.empty() || im.name.empty())
         r.fail("empty import name");
       if (im.ref < 0)

@@ -233,7 +233,11 @@ struct Stmt {
   // Import: import math / import math as m / from math import * / from math import min, max
   std::string importModule;
   std::string importFunc;  // empty = import all; non-empty = import single func (legacy dot syntax)
-  std::vector<std::string> importFuncs;  // function names for `from math import min, max`
+  // `from math import min, max as mm`: (exported name, per-name alias). The
+  // alias is empty when unaliased; it is the binding name in the importing
+  // module only — the import table keeps naming the exported name
+  // (SPEC §modules "import statement").
+  std::vector<std::pair<std::string, std::string>> importFuncs;
   std::string importAlias;   // alias for `import math as m`
   bool importAll = false;    // true for `from math import *`
 

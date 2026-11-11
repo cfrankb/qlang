@@ -23,7 +23,7 @@ Every form keeps its shape; what it *binds* is the whole rule.
 | `import m` | `m` — **the module** | `m.name` |
 | `import m as a` | `a` — the module under an alias (`m` itself is not bound) | `a.name` |
 | `from m import *` | every public name `m` exposes, flat — except `MODULE_NAME` (see below) | `name` |
-| `from m import a, b` | the listed names, flat (`m` is not bound) | `a`, `b` |
+| `from m import a, b` | the listed names, flat (`m` is not bound); an `as` binds to the one name it follows — `a as x` renames just `a` | `a`, `b` |
 | `import m.f` | the one name `f`, flat — the legacy single-entity form (`m` is not bound) | `f` |
 
 `import math` puts **math** in the namespace, so `math.min(...)` resolves and `min(...)` does
@@ -56,8 +56,12 @@ legal.
 - **A local wins.** A variable, parameter, class or function named `m` shadows the qualifier in
   its scope, exactly as it shadows any other name.
 
-- **Only a module import takes an alias.** `import m as a` renames the qualifier; a per-name
-  alias (`from m import a as b`) is not parsed.
+- **An alias attaches to a module import or to a single name.** `import m as a` renames the
+  qualifier; in a `from` list each name may carry its own alias — `from m import a as b` binds
+  `b` to `m`'s `a` (works for `.ql` and C++ modules alike). The alias is only the importing
+  module's binding name: collisions and their diagnostics speak the alias, and the import table
+  and qualified access keep naming *(defining module, exported name)* — the alias is never
+  image data.
 
 ### Where an import may appear
 

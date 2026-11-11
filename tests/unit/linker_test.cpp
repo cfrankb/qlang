@@ -1295,7 +1295,7 @@ static void testBoundaries() {
   {
     auto m = stubModule("tally");
     m->program.imports.push_back(
-        ImportEntry{"other", "x", ExportKind::Func, 0, ""});
+        ImportEntry{"other", "x", ExportKind::Func, 0});
     try {
       QLangLinker l({m});
       l.link(entry);
@@ -1372,10 +1372,10 @@ static void testBoundaries() {
   {
     auto a = stubModule("tally");
     a->program.imports.push_back(
-        ImportEntry{"other", "x", ExportKind::Func, 0, ""});
+        ImportEntry{"other", "x", ExportKind::Func, 0});
     auto b = stubModule("other");
     b->program.imports.push_back(
-        ImportEntry{"tally", "y", ExportKind::Func, 0, ""});
+        ImportEntry{"tally", "y", ExportKind::Func, 0});
     try {
       QLangLinker l({a, b});
       l.link(entry);
