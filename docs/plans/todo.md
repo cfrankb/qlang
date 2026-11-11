@@ -84,8 +84,9 @@ closing the **Q#**s its item points at:
 - [ ] **C7** enum-name string form — design decision first (**Q22**); plan
 - [x] **C8** module search paths + `searchCallback` — **Q23–Q26**; ✓ **C8a** Round 67, **C8b**
       Round 69 (2026-11-10); front end for `archive/external-modules-plan-v4.md`. What
-      `export`/`import` still cannot do is planned in
-      [module-export-import-plan.md](module-export-import-plan.md) (P0 = the F1 const defect)
+      `export`/`import` still cannot do was planned in
+      [archive/module-export-import-plan.md](archive/module-export-import-plan.md) (all phases
+      landed Rounds 70–73, archived)
 - [x] **`external-modules-plan-v3.md` re-audited → `docs/plans/archive/external-modules-plan-v4.md`**
       (2026-11-08): v4 adds the `Status:` header, the **Q29–Q35** open-question set and an
       implementation order, and re-bases the machine on the tree — `.qlc` **v7 → v8** (unified
@@ -211,11 +212,13 @@ closing the **Q#**s its item points at:
       (identity, not an entity — **Q40** resolved), explicit and qualified reads unchanged,
       spec `09-modules.md` names the exception. Guards: `testStarImportIdentity` (`linker`) +
       the `ql_star_import` script — audit **F2** closed
-- [ ] `docs/plans/module-export-import-plan.md` (2026-11-10) — **P0 landed Round 70** (F1 + the
-      silent-nil half of F5), **P1 landed Round 71** (F2), **P2 landed Round 72** (F3, per-name
-      alias, `.qlc` stays v9 — **Q41** resolved); **P3 remainder open**; owns **Q39–Q43**
-      (all resolved except Q42) and the F1–F3 fixes; F4 (class export) and the runtime module
-      registry are recorded as deferred there with their promotion triggers
+- [x] `docs/plans/module-export-import-plan.md` (2026-11-10) — **all phases landed, archived**:
+      **P0** Round 70 (F1 + the silent-nil half of F5), **P1** Round 71 (F2), **P2** Round 72
+      (F3, per-name alias, `.qlc` stays v9 — **Q41** resolved), **P3** Round 73 (F5 closed: the
+      not-imported-module message); owned **Q39–Q43** (all resolved except Q42); F4 (class
+      export), the runtime module registry and the rest moved with the plan's deferred table to
+      [missing-features-plan.md](missing-features-plan.md) §"Deferred from the module
+      export/import plan" — audit **F1–F3, F5** closed
 
 ## 7. Codegen follow-ups recorded by M3 / Phase 3 (no plan yet)
 

@@ -866,6 +866,76 @@ void testPerNameAlias() {
   check(runText(nprog, native) == "native\n", "alias: the aliased native runs");
 }
 
+// ---------------------------------------------------------------------------
+// Reading through a module that is loaded but never imported here says exactly
+// that (audit F5): the old advice, "reach what it offers as m.<name>", was the
+// thing the code was already doing.
+// ---------------------------------------------------------------------------
+
+void testNotImportedModule() {
+  TempTree tree("notimp");
+  const std::string libs = tree.dir("libs");
+  std::string err;
+  tree.write("libs/leaf.ql",
+             "export const MODULE_NAME = \"leaf\"\n"
+             "export const L = \"leaf-value\"\n"
+             "export def lfun()\n"
+             "  return \"lfun\"\n"
+             "end\n");
+  tree.write("libs/mid.ql",
+             "export const MODULE_NAME = \"mid\"\n"
+             "import leaf\n"
+             "export def mf()\n"
+             "  return leaf.lfun()\n"
+             "end\n");
+
+  // leaf arrives through mid, but this entry never imported it.
+  const std::string notread = [&] {
+    QLangContext ctx;
+    ctx.setModuleSearchPaths({libs});
+    CompiledProgram merged;
+    std::string m;
+    buildLinked(ctx, "import mid\nprintln(leaf.L)\n", merged, m);
+    return m;
+  }();
+  check(notread.find("module 'leaf' is not imported in this module") !=
+            std::string::npos,
+        "not imported: a qualified read says so (" + notread + ")");
+
+  const std::string notcalled = [&] {
+    QLangContext ctx;
+    ctx.setModuleSearchPaths({libs});
+    CompiledProgram merged;
+    std::string m;
+    buildLinked(ctx, "import mid\nprintln(leaf.lfun())\n", merged, m);
+    return m;
+  }();
+  check(notcalled.find("module 'leaf' is not imported in this module") !=
+            std::string::npos,
+        "not imported: a qualified call says so (" + notcalled + ")");
+
+  // Importing it binds the qualifier and the read works.
+  QLangContext fixed;
+  fixed.setModuleSearchPaths({libs});
+  CompiledProgram merged;
+  if (!check(buildLinked(fixed, "import mid\nimport leaf\nprintln(leaf.L)\n",
+                         merged, err),
+             "not imported: importing the module fixes the read (" + err + ")"))
+    return;
+  check(runText(merged, fixed) == "leaf-value\n",
+        "not imported: the imported read runs");
+
+  // An imported module read as a plain value keeps the old, correct advice.
+  QLangContext bare;
+  bare.setModuleSearchPaths({libs});
+  CompiledProgram bm;
+  std::string berr;
+  buildLinked(bare, "import leaf\nprintln(leaf)\n", bm, berr);
+  check(berr.find("'leaf' is a module, not a value") != std::string::npos,
+        "not imported: an imported module still says it is not a value (" +
+            berr + ")");
+}
+
 // A C++ module of the same name as a file on the path is not an ambiguity: the
 // native wins and the file is never opened (SPEC order, step 1).
 void testNativeBeatsFile() {
@@ -1027,6 +1097,7 @@ int main() {
   testDeclaredName();
   testCompileDiscovers();
   testPerNameAlias();
+  testNotImportedModule();
   testNativeBeatsFile();
   testCompiledSource();
 

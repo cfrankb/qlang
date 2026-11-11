@@ -4063,14 +4063,24 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       break;
     }
     // A MODULE, imported or not: the qualifier reaches the entities, the name
-    // on its own is no value (SPEC §modules "import statement").
-    if (cppModule(e->name) || qlModule(e->name))
+    // on its own is no value (SPEC §modules "import statement"). A module
+    // that is only loaded — pulled in transitively, never bound here — gets
+    // its own report: the caller is often already reading `m.<name>`, and
+    // advising exactly that was the audit F5 complaint.
+    if (cppModule(e->name) || qlModule(e->name)) {
+      if (!m_moduleNs.count(e->name))
+        throw QLangError(
+            QLangErrorKind::Parse, 0, 0,
+            "module '" + e->name +
+                "' is not imported in this module: bind it with 'import " +
+                e->name + "' or 'from " + e->name + " import <name>'");
       throw QLangError(
           QLangErrorKind::Parse, 0, 0,
           "'" + e->name +
               "' is a module, not a value: reach what it offers as '" +
                   e->name + ".<name>' (or bind a name into this module"
                   " with 'from " + e->name + " import <name>')");
+    }
     throw QLangError(QLangErrorKind::Parse, 0, 0,
                      "use of undeclared variable '" + e->name + "'");
     break;

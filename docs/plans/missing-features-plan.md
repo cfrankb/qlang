@@ -790,6 +790,23 @@ C2 (Round 41) · A4 Phases 1–4 (Rounds 42–45) · C4 (Phase 3 host-API harden
 · C3 (`c4ee131`, 2026-11-06, pending the hasMethod/callMethod guard fix)
 ```
 
+## Deferred from the module export/import plan (archived Round 73)
+
+From [archive/module-export-import-plan.md](archive/module-export-import-plan.md) (audit
+F1–F6, Rounds 70–73) — its P0–P3 all landed; these items were explicitly deferred there with
+their promotion triggers and are tracked here so nothing is lost. **Q42** (may a `.ql` module
+export a class?) stays open until the spec answers it.
+
+| item | why not now | promote when |
+|---|---|---|
+| **runtime module registry** (`13-bytecodes.md` `## technical specifications` 1, second link model): `QLangContext` has no reference to `QLangLinker`, `ctx.run()` never links | `getimport`/`callimport` already execute unmerged and the merge path is proven; the registry is a *host API* decision (who owns images, when they init), not a hole in `export`/`import` | a host needs to run images without `QLangLinker` (embedder request, or `qlang_run` gains `-r` for images) |
+| **export a class** (audit F4) | `## keyword export` lists functions/variables/constants; a type export needs a spec decision (instance construction across the boundary, `deepcopy` rules) | the spec adds it (**Q42** stays open until then) |
+| **cross-module captures** — an exported `def` whose sibling `def` has *local* captures is refused | refusal is correct and diagnosed; making it work means shipping the defining module's frame with the call | someone needs a module built around closures, and it should be its own design round |
+| **by-value arguments across a module boundary**, `m.x++` silent no-op | both recorded in `history.md` (Round 68) as value-semantics questions, orthogonal to what an `import` binds | the value-semantics round |
+| **Q36 warn on `MODULE_NAME` ≠ file stem** | nothing warns for `.qlc` either; a warning-only feature with no diagnostic channel | a warnings channel exists (C1 owns strict-typing levels) |
+| **a library's own directory in its dependency search** | documented limit (`--help`, `07-api.md` §module search paths); the search list belongs to the context, so a fix needs a resolver-side stack of current module dirs | a real project hits it (nested third-party libs outside the entry dir) |
+| **library-mode assignment to a module const** reports `assignment to undeclared identifier 'C'` (audit F5's sibling) | P0.3 closed the *read* path; the assign site resolves before the module-const lookup, so its message is merely wrong, not silent | someone hits the misleading message (same shape as F5's first bullet, which Round 73 fixed) |
+
 ## Conventions (per AGENTS.md)
 
 - One detailed plan per phase item before implementation; commit by concern.

@@ -1,3 +1,24 @@
+## Round 73 — 2026-11-10 — a loaded-but-not-imported module says so (spec `09-modules.md` §import statement; impl `QLangCompiler.cpp`)
+
+- **Fixed (audit F5, plan P3): the misleading module diagnostic.** A qualified read
+  or call through a module pulled in only transitively reported `'leaf' is a module,
+  not a value: reach what it offers as 'leaf.<name>'` — advice that is exactly what
+  the code was already doing. The value-read site now checks whether the qualifier is
+  **bound in this module** (`m_moduleNs`): unbound but loaded/resolvable reports
+  `module 'leaf' is not imported in this module: bind it with 'import leaf' or 'from
+  leaf import <name>'`; an imported module read as a plain value keeps the old
+  message, whose advice is correct there. The member-call form falls through to the
+  same identifier site, so one branch covers reads and calls; `.ql` and native
+  modules alike. The spec gained the rule as a bullet; the plan's P3 is complete and
+  [../plans/archive/module-export-import-plan.md](../plans/archive/module-export-import-plan.md)
+  moved to `docs/plans/archive/` with its deferred table folded into
+  `missing-features-plan.md` (new row: library-mode assignment to a module const
+  still misreports `assignment to undeclared identifier` — audit F5's sibling).
+- Tests: `module_search` 112→117 checks (`testNotImportedModule` — the read and the
+  call both say "not imported", importing fixes the read, an imported module still
+  says "not a value"). **58/58 ctest green.** Audit F1–F5 now closed (F4 deferred,
+  Q42 open).
+
 ## Round 72 — 2026-11-10 — `from m import f as g` parses and binds (spec `09-modules.md` §import statement; impl `QLangParser.cpp` / `QLangCompiler.cpp`)
 
 - **Fixed (audit F3, plan P2): the per-name alias parses.** SPEC §bytecodes

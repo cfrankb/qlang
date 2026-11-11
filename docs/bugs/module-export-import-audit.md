@@ -1,14 +1,15 @@
 # Module export/import audit (2026-11-10)
 
 Status: **F1 fixed 2026-11-10 (Round 70, plan P0); F2 fixed 2026-11-10 (Round 71, plan P1);
-F3 fixed 2026-11-10 (Round 72, plan P2);
-F5's silent-nil bullet closed with P0.3** — findings record otherwise unchanged. Found while
+F3 fixed 2026-11-10 (Round 72, plan P2); F5 closed 2026-11-10 (Round 73, plan P3)** — findings
+record otherwise unchanged. F4 stays deferred (Q42); the deferred items live in
+[../plans/missing-features-plan.md](../plans/missing-features-plan.md). Found while
 auditing what is still missing
 for `export`/`import` after **C8b** (Round 69, `.ql` discovery + nested compile). Everything here
 reproduced on `HEAD` after C8b; none of it was a C8b regression (the const defect reproduced on the
 `.qlc` path, which predates C8b, and on `--import`, which predates it too).
 
-Implementation plan: [../plans/module-export-import-plan.md](../plans/module-export-import-plan.md).
+Implementation plan: [../plans/archive/module-export-import-plan.md](../plans/archive/module-export-import-plan.md) (landed P0–P3, archived Round 73).
 
 Probes: ~25 two-file QLang pairs (`main.ql` + a module beside it), run as
 `build/qlang_run main.ql` with **no** `--module-path` (C8b's entry-directory rule makes the module
@@ -164,16 +165,23 @@ unspecified form — silently ignores its alias (recorded, Round 72).
 `## keyword export` lists functions, variables and constants only, so a module that wants to offer a
 type has no answer in the spec. Plan Q42 (default: out of scope until the spec says otherwise).
 
-## F5 — diagnostics that mislead
+## F5 — diagnostics that mislead  **(closed, Round 73)**
 
 - Reading through a module the entry never imported (pulled in only transitively) reports
   `'leaf' is a module, not a value: reach what it offers as 'leaf.<name>'` — advice that cannot
-  work, the module is not bound here.
+  work, the module is not bound here. **Fixed Round 73 (plan P3):** the value-read site checks
+  whether the qualifier is bound in this module, and a loaded-but-unimported one now reports
+  `module 'leaf' is not imported in this module: bind it with 'import leaf' or 'from leaf
+  import <name>'`; the same site catches the call form, and an imported module read as a plain
+  value keeps the old message. Guard: `testNotImportedModule` (`module_search`); rule recorded
+  in `09-modules.md`.
 - A `def` reading a module-level **var** without `global` reports `use of undeclared variable`,
   while the same read of a module-level **const** silently compiled to nil (F1). **Closed for
   library modules** with plan P0.3 (Round 70): a def capture that resolves to no cell is now
   `def '<fn>' captures '<name>', which has no cell in module '<mod>'`. Assigning a module const
-  in library mode is the sibling that still misreports: `assignment to undeclared identifier 'C'`.
+  in library mode is the sibling that still misreports: `assignment to undeclared identifier 'C'` —
+  **deferred**, tracked in `../plans/missing-features-plan.md` §"Deferred from the module
+  export/import plan".
 - The cross-module capture guard's message is good and *is* the shape F1 needs:
   `imported function 'outer' captures a local of its own module and cannot be called across a
   module boundary: its captures are seeded from the defining module's frame` — it fires for *local*
@@ -189,8 +197,8 @@ two `.ql` modules with different names in one run; a `.qlc` as the entry file.
 
 ## Follow-ups
 
-- Plan: [../plans/module-export-import-plan.md](../plans/module-export-import-plan.md) — P0 (F1 +
-  the silent-nil half of F5) landed Round 70, P1 (F2) landed Round 71, P2 (F3) landed Round 72;
-  the rest of P3 (the not-imported-module message) open.
+- Plan: [../plans/archive/module-export-import-plan.md](../plans/archive/module-export-import-plan.md)
+  — P0–P3 landed Rounds 70–73; archived, its deferred table in
+  [../plans/missing-features-plan.md](../plans/missing-features-plan.md).
 - `docs/plans/todo.md` §6 carried F1 as a defect line with a pointer here; closed Round 70.
 - Probe sources: F1 above; the rest of the matrix is small enough to re-type from the shape column.

@@ -1,19 +1,19 @@
 # Plan: module export/import gaps (post-C8b audit)
 
-Status: **P0 landed 2026-11-10 (Round 70); P1 landed 2026-11-10 (Round 71); P2 landed 2026-11-10
-(Round 72); P3 remainder open**.
+Status: **all phases landed — P0 Round 70, P1 Round 71, P2 Round 72, P3 Round 73 (2026-11-10)**.
+Archived; the deferred table moved to [missing-features-plan.md](../missing-features-plan.md).
 Baseline `HEAD = 87356aa` ("C8b: compile a discovered .ql into a module image");
 `cmake -B build` clean, `ctest --test-dir build` **56/56** green including `doc_hashes` at that
 baseline (P0 + P1 + P2 landed on top of it: **58/58**, Round 72).
-Findings this plan executes: [../bugs/module-export-import-audit.md](../bugs/module-export-import-audit.md)
+Findings this plan executes: [../../bugs/module-export-import-audit.md](../../bugs/module-export-import-audit.md)
 (F1–F6, probed 2026-11-10). Parent plans:
-[archive/external-modules-plan-v4.md](archive/external-modules-plan-v4.md) (Phases 1–3c, done,
-Round 65) and [missing-features-plan.md](missing-features-plan.md) **C8** (C8a Round 67, C8b
+[external-modules-plan-v4.md](external-modules-plan-v4.md) (Phases 1–3c, done,
+Round 65) and [missing-features-plan.md](../missing-features-plan.md) **C8** (C8a Round 67, C8b
 Round 69) — this plan is the *after* C8 work: what `export`/`import` still cannot do.
-Spec: [../spec/09-modules.md](../spec/09-modules.md) (`## import statement`, export rules),
-[../spec/13-bytecodes.md](../spec/13-bytecodes.md) (`## keyword export`, `## export table (lookup)`,
+Spec: [../../spec/09-modules.md](../../spec/09-modules.md) (`## import statement`, export rules),
+[../../spec/13-bytecodes.md](../../spec/13-bytecodes.md) (`## keyword export`, `## export table (lookup)`,
 `## import table (lookup)`, `## technical specifications` 1 and 5),
-[../spec/07-api.md](../spec/07-api.md) §module search paths (C8b contract, unchanged here).
+[../../spec/07-api.md](../../spec/07-api.md) §module search paths (C8b contract, unchanged here).
 
 Sequencing is not optional: **P0 was a blocker for the others.** P1/P2 are compiler-side binding
 changes and both want to assert values across a module boundary, which F1 made unreadable; P0
@@ -95,11 +95,14 @@ recorded not fixed in `history.md` Round 68; `ImportEntry::alias` was dead). Lan
 - Recorded, not fixed: `import m.f as g` — the legacy form with an alias, unspecified — still
   silently ignores it.
 
-## P3 — two diagnostics (F5)
+## P3 — two diagnostics (F5)  **landed Round 73**
 
 - A qualified read of a module that is loaded but **not imported here** must say so
   (`module 'leaf' is not imported in this module`; the current advice, "reach what it offers as
-  `leaf.<name>`", is the thing the code is already doing).
+  `leaf.<name>`", is the thing the code is already doing). **Landed Round 73**: the value-read
+  site splits on whether the qualifier is bound here, and the same site catches the call form;
+  an imported module read as a plain value keeps the old message. Guard: `testNotImportedModule`
+  (`module_search` 112→117); `09-modules.md` records the rule.
 - Library-mode reachability errors report instead of folding to nil — **landed with P0.3**
   (Round 70); the first bullet is what remains of P3.
 
@@ -113,6 +116,7 @@ recorded not fixed in `history.md` Round 68; `ImportEntry::alias` was dead). Lan
 | **by-value arguments across a module boundary**, `m.x++` silent no-op | both recorded in `history.md` (Round 68) as value-semantics questions, orthogonal to what an `import` binds | the value-semantics round |
 | **Q36 warn on `MODULE_NAME` ≠ file stem** | nothing warns for `.qlc` either; a warning-only feature with no diagnostic channel | a warnings channel exists (C1 owns strict-typing levels) |
 | **a library's own directory in its dependency search** | documented limit (`--help`, `07-api.md` §module search paths); the search list belongs to the context, so a fix needs a resolver-side stack of current module dirs | a real project hits it (nested third-party libs outside the entry dir) |
+| **library-mode assignment to a module const** reports `assignment to undeclared identifier 'C'` (audit F5's sibling) | P0.3 closed the *read* path; the assign site resolves before the module-const lookup, so its message is merely wrong, not silent | someone hits the misleading message (same shape as F5's first bullet, which Round 73 fixed) |
 
 ## Open questions — defaults adopted (numbering continues `missing-features-plan.md`)
 
@@ -151,4 +155,6 @@ recorded not fixed in `history.md` Round 68; `ImportEntry::alias` was dead). Lan
 - One phase per round, one commit per concern (code, then docs), commit names of the shape
   `C9a: one identity for a module-level const (F1)`.
 - This plan moves to `docs/plans/archive/` only when P0–P3 all land; the deferred table then moves to
-  `missing-features-plan.md` as tracked items so nothing is lost.
+  `missing-features-plan.md` as tracked items so nothing is lost. **Done Round 73** — all four
+  phases landed; the table lives in `missing-features-plan.md` §"Deferred from the module
+  export/import plan".

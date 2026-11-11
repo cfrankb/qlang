@@ -48,6 +48,9 @@ legal.
 
 - **A qualifier resolves wherever a name does** — inside a `def` body, at any nesting depth, in
   any expression. It is resolved at compile time like any other call target.
+- **A module is a qualifier here only if this module imported it.** One pulled in transitively
+  binds nothing here: `leaf.x` in a module that never imported `leaf` is a compile error saying
+  so (`module 'leaf' is not imported in this module`) — `import leaf` is what binds the qualifier.
 - **A module's entities are not values.** Reading one as a value (`println(vec.scale)`) is a
   compile error that names the call spelling to use instead.
 - **Nothing writes through a qualifier.** `m.x = 1`, `m.x += 1` and `m.x++` are compile errors
