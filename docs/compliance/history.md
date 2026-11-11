@@ -1,3 +1,39 @@
+## Round 75 — 2026-11-11 — P1: the meta becomes describable (plan `portable-module-plan.md` P1; impl `QLangMeta.h` / `QLangTypes.h` / `QLangContext.cpp`)
+
+- **Portable type tags.** `enum class QTypeTag : uint8_t` + `constexpr
+  qtype_tag<T>()` in `QLangMeta.h` — the exact scalar set `qval_of()`/
+  `QLangValue::as<T>()` speak (`Bool, Char, Short, Int, Long, Byte, Word,
+  Dword, Qword, Float, Str`) plus `External` (opaque class/pointer — names
+  are not portable), `Unknown` (everything else — checks involving it stay
+  silent) and `Void`. Never a hard error: a binding over an exotic member
+  type keeps compiling. Tags are **descriptive only** — no dispatch path
+  consults them, all 66 pre-existing `test_external` checks pass untouched.
+- **Describable shape.** `Member` gains `getTag`/`setTag` (properties;
+  `setTag` stays `Unknown` on read-only; a READ/WRITE accessor pair with
+  differing types gets distinct tags) and `argTags`/`retTag` (methods);
+  `SignalMeta` gains `argTags` beside `argChecks` (same pack, same order);
+  `TypeMeta`/`TypeDescriptor` gain `hasStr`/`hasCtor` (clause presence, set
+  by `add()`) and `ctorArgTags`. This is the shape the P2 `QLM1` manifest
+  will serialize.
+- **Typed `QL_CTOR` — the UB fixed where the information lives.**
+  `ctor_clause` splits by `requires` on
+  `is_invocable_v<F, QLangContext&, const vector<QLangValue>&>`: the
+  context-taking form is unchanged (still must validate `a.size()` itself —
+  documented), and the typed form — `QL_CTOR([](double x, double y) {
+  return std::make_shared<Point>(x, y); })` — deduces `R(A...)` (lambda
+  `operator()`, member pointer, or function pointer; generic lambdas get a
+  clean `static_assert`), generates the **arity guard** (a short-arity call
+  was an out-of-bounds read of `a` in host code, `QLangContext.cpp`
+  `construct` dispatch — now `constructor expects N argument(s), got M`),
+  applies the method-side `as<A>()` conversions, keeps the Phase 3
+  `typeInfo`/`check` deduction, and fills `ctorArgTags` for the manifest.
+- **Verify:** `ctest` 58/58; `test_external` 66 → 81 checks (per-direction
+  property tags incl. differing getter/setter types, method arg/return tags,
+  signal arg tags, enum-only type nothing-to-tag, `hasStr`/`hasCtor` flags,
+  context-form ctor ⇒ empty `ctorArgTags`, typed-form round trip + the exact
+  arity-error strings + `as<double>` conversion refusal). Docs unchanged —
+  the spec section stays *specified, not yet implemented* until P5.
+
 ## Round 74 — 2026-11-11 — extracting external types: OPEN TOPIC → normative spec (spec `11-external-types.md` §extracting external types; docs-only)
 
 - **The topic is now a requirement, not a question.** The user note

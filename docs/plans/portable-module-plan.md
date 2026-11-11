@@ -84,7 +84,7 @@ silently mix versions.
 
 ---
 
-## Phase 1 — describable meta (`include/qlang/QLangMeta.h`, `include/qlang/QLangTypes.h`)
+## Phase 1 — describable meta (`include/qlang/QLangMeta.h`, `include/qlang/QLangTypes.h`) ✓ DONE (Round 75, 2026-11-11)
 
 The `meta_detail` templates already know every property/argument/return type
 at compile time and erase it. Capture it as plain data, additively — the

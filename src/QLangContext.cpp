@@ -1133,6 +1133,9 @@ namespace {
     desc->signals = meta.signals;
     desc->typeInfo = meta.typeInfo;
     desc->typeCheck = meta.typeCheck;
+    desc->hasStr = meta.hasStr;
+    desc->hasCtor = meta.hasCtor;
+    desc->ctorArgTags = meta.ctorArgTags;
 
     if (meta.construct) {
       // `T(args)` constructs: the native wraps the construct result in an

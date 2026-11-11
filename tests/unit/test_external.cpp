@@ -62,6 +62,28 @@ struct DockArea : qlang::QLObject<DockArea> {
                      VerticalTabs, AllowNestedDocks, AllowFloat));
 };
 
+// P1 (portable-module-plan) fixtures: a rw READ/WRITE accessor pair whose
+// getter/setter types differ + a declared signal (per-direction tags), and
+// a typed QL_CTOR whose declared parameter types the meta can capture.
+struct Widget : qlang::QLObject<Widget> {
+  double sz = 0;
+  double size() const { return sz; }
+  void setSize(int v) { sz = v; }
+  void levelChanged(int);  // declared, never implemented (QL_SIGNAL)
+  QL_OBJECT(QL_PROPERTY(size, READ(size), WRITE(setSize)),
+            QL_SIGNAL(levelChanged));
+};
+
+struct Spot : qlang::QLObject<Spot> {
+  Spot(double x_, double y_) : x(x_), y(y_) {}
+  double x = 0, y = 0;
+  std::string str() const { return "Spot"; }
+  QL_OBJECT(QL_PROPERTY(x), QL_STR(str),
+            QL_CTOR([](double x_, double y_) {
+              return std::make_shared<Spot>(x_, y_);
+            }));
+};
+
 static int failures = 0;
 #define CHECK(cond)                                                     \
   do {                                                                  \
@@ -88,7 +110,8 @@ static bool runThrows(QLangContext &ctx, const std::string &src) {
 int main() {
   QLangContext ctx;
   auto pt = ctx.import<Point>();  // shared handle (Phase 3)
-  ctx.import<DockArea>();  // seeds the DockArea TypeRef (no instance needed)
+  // seeds the DockArea TypeRef (no instance needed)
+  auto da = ctx.import<DockArea>();
 
   // 1. Public data member = read-write: script SETTER works and is visible to C++.
   auto e = std::make_shared<Point>(1, 2);
@@ -298,6 +321,60 @@ int main() {
       threw = true;
     }
     CHECK(threw);  // "no method 'warp' ..." — Q20: throw, mirroring emitSignal
+  }
+
+  // 21. Portable type tags + clause flags (portable-module-plan P1): purely
+  // descriptive metadata — dispatch is unchanged (checks 1-20 still prove
+  // that). These pin the shape the P2 manifest will serialize.
+  {
+    auto member = [](const TypeDescriptor& d,
+                     const char* n) -> const Member* {
+      for (const auto& m : d.members)
+        if (m.name == n)
+          return &m;
+      return nullptr;
+    };
+    const std::vector<QTypeTag> ff{QTypeTag::Float, QTypeTag::Float};
+    const std::vector<QTypeTag> i1{QTypeTag::Int};
+    const Member* x = member(*pt, "x");
+    CHECK(x && x->getTag == QTypeTag::Float && x->setTag == QTypeTag::Float);
+    const Member* dist = member(*pt, "dist");
+    CHECK(dist && dist->getTag == QTypeTag::Float &&
+          dist->setTag == QTypeTag::Unknown);  // read-only: no setter
+    const Member* tr = member(*pt, "translate");
+    CHECK(tr && tr->argTags == ff);
+    CHECK(tr && tr->retTag == QTypeTag::Void);
+    CHECK(pt->hasStr && pt->hasCtor);
+    CHECK(pt->ctorArgTags.empty());  // Point's ctor is the context-taking form
+    CHECK(!da->hasStr && !da->hasCtor &&
+          da->members.empty());  // enum-only type: nothing to tag
+
+    QLangContext c;
+    auto wt = c.import<Widget>();
+    const Member* sz = member(*wt, "size");
+    CHECK(sz && sz->getTag == QTypeTag::Float &&
+          sz->setTag == QTypeTag::Int);  // getter/setter types differ
+    CHECK(wt->signals.size() == 1 && wt->signals[0].argTags == i1);
+
+    auto sp = c.import<Spot>();
+    CHECK(sp->hasCtor && sp->hasStr);
+    CHECK(sp->ctorArgTags == ff);  // typed QL_CTOR: signature captured
+    // The typed form guards arity before the host lambda can read a[] —
+    // a short-arity call is a clean error now (the context-taking form read
+    // out of bounds: UB).
+    auto ctorErr = [&](const std::string& expr) -> std::string {
+      try {
+        c.run("r = " + expr);
+      } catch (const QLangError& e) {
+        return e.message();
+      }
+      return {};
+    };
+    CHECK(ctorErr("Spot()") == "constructor expects 2 argument(s), got 0");
+    CHECK(ctorErr("Spot(1, 2, 3)") ==
+          "constructor expects 2 argument(s), got 3");
+    CHECK(!ctorErr("Spot(\"a\", 1)").empty());  // as<double> conversion rules
+    CHECK(runAndGet(c, "Spot(1, 2).x").asFloat() == 1);
   }
 
   if (failures) {

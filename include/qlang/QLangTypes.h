@@ -35,6 +35,12 @@ struct TypeDescriptor {
   // pointer against it (null when the ctor returns a void-typed shared_ptr).
   const std::type_info* typeInfo = nullptr;
   std::function<bool(const void*)> typeCheck = nullptr;
+  // Describable shape (portable-module-plan P1), copied from the TypeMeta:
+  // clause presence + the typed QL_CTOR's argument tags (empty + hasCtor
+  // means the context-taking form). Members/signals carry their own tags.
+  bool hasStr = false;
+  bool hasCtor = false;
+  std::vector<QTypeTag> ctorArgTags;
 };
 
 } // namespace qlang
