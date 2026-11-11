@@ -1,8 +1,9 @@
 # Plan: module export/import gaps (post-C8b audit)
 
-Status: **plan — not started**.
+Status: **P0 landed 2026-11-10 (Round 70); P1–P3 open**.
 Baseline `HEAD = 87356aa` ("C8b: compile a discovered .ql into a module image");
-`cmake -B build` clean, `ctest --test-dir build` **56/56** green including `doc_hashes`.
+`cmake -B build` clean, `ctest --test-dir build` **56/56** green including `doc_hashes` at that
+baseline (P0 landed on top of it: **57/57**, Round 70).
 Findings this plan executes: [../bugs/module-export-import-audit.md](../bugs/module-export-import-audit.md)
 (F1–F6, probed 2026-11-10). Parent plans:
 [archive/external-modules-plan-v4.md](archive/external-modules-plan-v4.md) (Phases 1–3c, done,
@@ -13,55 +14,47 @@ Spec: [../spec/09-modules.md](../spec/09-modules.md) (`## import statement`, exp
 `## import table (lookup)`, `## technical specifications` 1 and 5),
 [../spec/07-api.md](../spec/07-api.md) §module search paths (C8b contract, unchanged here).
 
-Sequencing is not optional: **P0 is a blocker for the others.** P1/P2 are compiler-side binding
-changes and both want to assert values across a module boundary, which F1 makes unreadable.
+Sequencing is not optional: **P0 was a blocker for the others.** P1/P2 are compiler-side binding
+changes and both want to assert values across a module boundary, which F1 made unreadable; P0
+landed first, as planned.
 
 ---
 
-## P0 — one identity for a module-level const (F1) — **defect, do first**
+## P0 — one identity for a module-level const (F1) — **landed Round 70**
 
-A module-level `const` that a `def` of the same module reads is unreachable at run time: the `def`
-returns nil for it and its exported cell reads nil through an import, while the module's own `<init>`
-sees it (F1's matrix in the findings doc). The observable rule to establish: **a top-level name has
+A module-level `const` that a `def` of the same module reads was unreachable at run time: the `def`
+returned nil for it and its exported cell read nil through an import, while the module's own `<init>`
+saw it (F1's matrix in the findings doc). The observable rule established: **a top-level name has
 one cell, and every reference — `<init>` store, in-module `def` read, export ref, importer
 `getimport` — names it.**
 
-**Phase 0.1 — pin it, do not guess.** The static tables are already self-consistent (findings doc,
-"what the merged image says"), so the divergence is only visible at run time. Instrument the F1
-pair for one run and print, in order: `CompiledProgram::initSequence` (`funcIndex`, `regBase`,
-`width`), each module export `ref`, each merged import entry `ref`, `tag`'s `Function::captures`,
-and `globalTable().slots[regBase-1 .. regBase+width]` immediately after the init sequence and again
-after main's first `getimport` (`src/QLangVM.cpp:1993-2004`, `:2540-2556`). Two outcomes:
+**Phase 0.1 pinned it, and both predicted forks were wrong.** The instrumentation showed one slot,
+written correctly and then *emptied*: the linker's `Function::captures` keeps the absolute sentinel
+`-1 - slot` for an immutable const, but the `MAKEFUNC` spec the def itself built captured
+`regOf(V, slot)` — the frame register the def's flat body reads. `bindCaptures` honoured that spec
+with a module-owned `Env` fed from the init frame, and at init-frame pop `releaseFrame` moved the
+value out of the merged slot into that `Env` (trace: `MOV2` write-back, then `RELEASE fn=1 move
+regs[1] -> env cell 0`), nilling it for every other reader. Neither "declareVar vs `globalSlotOf`
+divergence" nor "the store never reached the cell" — the audit's excluded table lost the release row.
 
-- *the slot the store named is not the slot the export/capture named* → the compiler gave the const
-  two identities: the frame register from `declareVar` (`src/QLangCompiler.cpp:670-690`) versus
-  `m_globalRegMap[name] = m_scope->globalSlotOf(name)` recorded when the capture was built
-  (`:3800-3828`, used at `:1817-1824`). Fix there.
-- *one slot, and it is nil at the reader* → the store is not reaching the table cell the init frame
-  claims; fix in the `<init>` frame/`ModuleInit` path (`src/QLangVM.cpp:1993-2004`).
+**Phase 0.2 — fixed in the compiler, not the linker (Q39 confirmed).** The def's capture-spec loop
+reuses the negative sentinel when the cell is an immutable module const, so store, def read, export
+ref and `GETIMPORT` name the one cell; the linker's rebase handles it unchanged, and `GETIMPORT` was
+already right. Mutable top-level `let` keeps the frame-relative copy — spec §1's copy rule. The
+linker needed no change.
 
-**Phase 0.2 — fix in the compiler, not the linker.** Preferred shape (audit's option 2, **Q39**): in
-**library mode**, a module-level immutable cell reached from a `def` is named the same way `global`
-already names a module var — an absolute cell operand that the linker's existing
-`-1 - slot → -1 - (regBase + slot)` rebase (`src/QLangLinker.cpp:117-131`, `:300-306`) already
-handles — instead of the `immutableCell` frame-relative special case
-(`src/QLangCompiler.cpp:1806-1824`, whose comment "At module top level the register IS the slot" is
-true only for a script's main frame at base 0). Whatever 0.1 proves, the change belongs to the side
-that records the number; the linker keeps rebasing what it is given, and `GETIMPORT` is already
-correct.
+**Phase 0.3 — the silent-nil path is dead in library mode (Q43 confirmed).** A `def` capture that
+resolves to no cell is a compile error — `def '<fn>' captures '<name>', which has no cell in module
+'<mod>'` — covering the non-exported module-local const/let and the missing-symbol case. Script mode
+is unchanged.
 
-**Phase 0.3 — kill the silent-nil path.** A module-level name a `def` cannot reach must be a
-compile error in library mode (the mutable case already reports `use of undeclared variable`,
-findings F1/p14, F5). Never emit a read that folds to nil.
-
-**Guards.** `tests/unit/linker_test.cpp` (ctest `linker`, 130 checks): a module whose `def` reads a
-module-level `const` **and** exports it — assert the merged run prints the value through all three
-readers (`m.CONST`, `from m import CONST`, `m.f()`), and assert `exports["CONST"].ref` equals the
-slot the init frame writes. The existing `tally` case cannot catch this: its `def` uses
-`global counter` and never reads a const.
-Script regression `tests/scripts/ql_module_const.ql` + fixture `tests/scripts/ql_module_const_dep.ql`
-(registered in `QL_SCRIPTS`), because F1 only shows through the driver: discovery → nested compile →
-`writeQlc`/`loadProgram` → link → run.
+**Guards — landed.** `tests/unit/linker_test.cpp` (ctest `linker`, 130→138 checks):
+`testModuleConstOneIdentity` runs the F1 shape with three readers printing the value and asserts the
+export and capture refs *are* the sentinel cell. Script regression
+`tests/scripts/ql_module_const.ql` + fixture `ql_module_const_dep.ql` (in `QL_SCRIPTS`): importer +
+same-module `def`, a duplicate `init`, and a live importer after the init frame popped. One
+`qlc_compile` capture-folding assertion flipped (`specs == 2 → 1`): the second spec named a frame
+register and was never a second module cell — it had encoded the defect.
 
 ## P1 — `from *` must not collide on identity (F2)
 
@@ -96,8 +89,8 @@ not fixed in `history.md` Round 68; `ImportEntry::alias` is dead). Scope, delibe
 - A qualified read of a module that is loaded but **not imported here** must say so
   (`module 'leaf' is not imported in this module`; the current advice, "reach what it offers as
   `leaf.<name>`", is the thing the code is already doing).
-- Library-mode reachability errors report instead of folding to nil — covered by P0.3, listed here
-  so the message work lands in one place.
+- Library-mode reachability errors report instead of folding to nil — **landed with P0.3**
+  (Round 70); the first bullet is what remains of P3.
 
 ## Explicitly deferred (with the trigger that would promote each)
 
@@ -112,25 +105,26 @@ not fixed in `history.md` Round 68; `ImportEntry::alias` is dead). Scope, delibe
 
 ## Open questions — defaults adopted (numbering continues `missing-features-plan.md`)
 
-- **Q39** (P0) which layer owns the fix — compiler identity, VM init frame, or linker? **Default: the
-  compiler**, per Phase 0.1's fork; the linker's contract ("rebase what the compiler recorded") and
-  `GETIMPORT` are already right. Change the answer only on instrumentation, not on reading.
+- **Q39** (P0) which layer owns the fix — compiler identity, VM init frame, or linker? **Resolved
+  Round 70: the compiler**, as the default predicted — the def's capture spec now reuses the
+  sentinel cell; the linker and `GETIMPORT` needed no change.
 - **Q40** (P1) is `MODULE_NAME` a public export? **Default: no for `import *`, yes for `m.MODULE_NAME`
   and the export table.**
 - **Q41** (P2) does an aliased import need image/format support? **Default: no** — compile-time
   binding, `.qlc` stays v9, `ImportEntry::alias` gets deleted.
 - **Q42** (deferred) may a `.ql` module export a class? **Default: no, unanswered — needs a spec
   sentence first.**
-- **Q43** (P3) should the F1 shape ever compile? **Default: no** — an unreachable module-level name
-  in a `def` is an error in library mode, matching the mutable case.
+- **Q43** (P3) should the F1 shape ever compile? **Resolved Round 70: no** — in library mode an
+  unreachable module-level name in a `def` is a compile error, as the default adopted.
 
 ## Verification (AGENTS.md, every phase)
 
-- `cmake -B build && cmake --build build`, then `ctest --test-dir build` — **56/56** must stay green
-  (P0 adds `script_ql_module_const`, so the count moves).
+- `cmake -B build && cmake --build build`, then `ctest --test-dir build` — 56/56 at the baseline,
+  **57/57 green since P0** added `script_ql_module_const`.
 - Single suites while iterating: `build/linker_test`, `build/module_search_test`.
 - F1's own reproduction is the acceptance test: the F1 pair must print `[tagged] / [two] / [three]`
-  and `fn:tagged`; P1's pair must print both star-imported names; P2's must print through `g`.
+  and `fn:tagged` — **passes since Round 70**; P1's pair must print both star-imported names;
+  P2's must print through `g`.
 - Docs that need a row/hash refresh after a verified change: `docs/spec/09-modules.md` (P1, P2),
   `docs/spec/13-bytecodes.md` (P2 — `## technical specifications` 5 flips to implemented),
   `docs/compliance/{status,tests,harness}.md`, `docs/compliance/history.md` (a new round entry),

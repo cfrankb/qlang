@@ -197,20 +197,22 @@ closing the **Q#**s its item points at:
       listings (Phase 3 §8)
 - [ ] `Opcode::Nop` casing (odd one out) — cosmetic, separate change
 
-- [ ] **module defect (pre-existing, found 2026-11-10 auditing C8b)**: a module-level `const` that a
-      `def` of the same module reads is unreachable at run time — the `def` sees nil and the exported
-      cell reads nil through an import, while the module's own `<init>` sees the value; identical
-      shapes without such a `def`, and the same shape in a plain script, are correct. `export const`
-      is therefore unusable in any module whose functions read it. Full audit, probe matrix and the
-      hypotheses already excluded: [../bugs/module-export-import-audit.md](../bugs/module-export-import-audit.md)
-      (F1); fix planned in [module-export-import-plan.md](module-export-import-plan.md) **P0**.
-      Same family as the f-string const defect two rows above.
+- [x] **module defect (pre-existing, found 2026-11-10 auditing C8b): FIXED Round 70 (plan P0)** — a
+      module-level `const` that a `def` of the same module read was unreachable at run time (the def
+      and every import saw nil; the module's own `<init>` saw the value). The def's `MAKEFUNC` spec
+      had captured the frame register while the linker's capture ABI names the slot, and the init
+      frame's release then moved the value out of the slot into that capture `Env`; the spec now
+      reuses the sentinel cell, and an unreachable def capture in a library module is a compile
+      error. Guards: `testModuleConstOneIdentity` (`linker`) + the `ql_module_const` script.
+      Audit closed: [../bugs/module-export-import-audit.md](../bugs/module-export-import-audit.md) F1.
+      The same family (f-string const, script mode) remains open one row above.
 - [ ] **module defect (found 2026-11-10)**: `from a import *` + `from b import *` always collides on
       `MODULE_NAME` (`'MODULE_NAME' is already imported from module 'a'`), so two star-imports cannot
       coexist — audit **F2**, plan **P1**/**Q40**
-- [ ] `docs/plans/module-export-import-plan.md` written (2026-11-10) — **not started**; owns
-      **Q39–Q43** and the F1–F3 fixes; F4 (class export) and the runtime module registry are
-      recorded as deferred there with their promotion triggers
+- [ ] `docs/plans/module-export-import-plan.md` (2026-11-10) — **P0 landed Round 70** (F1 + the
+      silent-nil half of F5); **P1–P3 open**; owns **Q39–Q43** (Q39/Q43 resolved) and the F1–F3
+      fixes; F4 (class export) and the runtime module registry are recorded as deferred there with
+      their promotion triggers
 
 ## 7. Codegen follow-ups recorded by M3 / Phase 3 (no plan yet)
 

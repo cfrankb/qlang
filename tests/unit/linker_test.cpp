@@ -1165,9 +1165,10 @@ static void testGeneratorAcrossBoundary() {
   // The fold (Q33): the defining module's own generator constant is the SAME
   // value the link synthesized, because the captures were rebased before the
   // pool merged — so exactly one slot holds the function's own capture spec.
-  // The module's def-time `makefunc` spec is a second, genuinely different
-  // value (it names the frame register the defining module's top level seeds),
-  // so it correctly stays a slot of its own.
+  // The module's def-time `makefunc` spec names the SAME absolute cell
+  // sentinel (F1 fix: one identity for a module-level const), so it folds
+  // into that one slot too — before the fix it named a frame register and
+  // correctly stayed a slot of its own, which was the defect.
   const Function &genFn = merged.functions[static_cast<size_t>(want)];
   auto sameSpec = [&genFn](const Closure &cl) {
     if (cl.captures.size() != genFn.captures.size())
@@ -1187,7 +1188,8 @@ static void testGeneratorAcrossBoundary() {
       folded++;
   }
   check(folded == 1, "gen: the synthesized closure folds with the module's");
-  check(specs == 2, "gen: the def-time capture spec stays a distinct value");
+  check(specs == 1,
+        "gen: the def-time capture spec folds with the module's too");
 
   // 11 + 12 and then nil: the generator ran against the defining module's cell
   // and terminated on its own.
@@ -1415,6 +1417,81 @@ static void testBoundaries() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// F1 (module-export/import plan P0): a module-level const read by a `def` of
+// the same module has ONE identity — the `<init>` store, the def's capture
+// read, the export reference and the importer's `getimport` all name it. The
+// defect: the def-time capture spec named a frame-relative register, so
+// MAKEFUNC bound a frame-local cell and releasing the module-init frame moved
+// the value out of the table, leaving the importers reading an emptied cell.
+// ---------------------------------------------------------------------------
+
+static const char *kConsts = R"(
+export const MODULE_NAME = "consts"
+export const TAG = "tagged"
+export def tag()
+  return "fn:" + TAG
+end
+)";
+
+static void testModuleConstOneIdentity() {
+  QLangContext ctx;
+  std::string err;
+  auto lib = addLibrary(ctx, kConsts, err);
+  if (!check(lib != nullptr, "const: the library loads (" + err + ")")) return;
+  const std::string app =
+      "from consts import TAG\n"
+      "from consts import tag\n"
+      "println(TAG)\nprintln(tag())\nprintln(TAG)\n";
+  CompiledProgram merged, entry;
+  if (!check(buildLinked(ctx, app, merged, err, "app", &entry),
+             "const: the app links (" + err + ")"))
+    return;
+
+  // Every reader prints the value — including the cell read AFTER the def
+  // ran, the F1 signature (the release used to empty the cell).
+  check(runText(merged, ctx) == "tagged\nfn:tagged\ntagged\n",
+        "const: the def and the importer read the one cell, before and after");
+
+  // The identity is structural, not just behavioral: the cell the init frame
+  // stores, the export's ref, the importer's cell and the def's capture are
+  // the same slot.
+  const ModuleInit *mi = nullptr;
+  for (const ModuleInit &m : merged.initSequence)
+    if (m.module == "consts") mi = &m;
+  if (!check(mi != nullptr, "const: the init sequence records the module"))
+    return;
+  int tagConst = -1;
+  for (size_t ci = 0; ci < merged.constants.size(); ci++)
+    if (merged.constants[ci].type() == QLangValue::Type::String &&
+        merged.constants[ci].asString() == "tagged")
+      tagConst = static_cast<int>(ci);
+  const Function &init = merged.functions[static_cast<size_t>(mi->funcIndex)];
+  int storeReg = -1;
+  for (size_t k = 0; k < init.instrOffsets.size(); k++) {
+    DecodedInstruction d;
+    decodeInstruction(init.code.data(), init.instrOffsets[k], init.code.size(),
+                      d);
+    if (d.op == Opcode::MOV && d.b == tagConst) storeReg = d.a;
+  }
+  if (!check(storeReg >= 0, "const: the init stores the const value")) return;
+  const int slot = mi->regBase + storeReg;
+
+  const ExportEntry *exp = findExport(lib->program, "TAG");
+  check(exp && exp->ref == storeReg,
+        "const: the export names the cell the init wrote");
+  const ImportEntry *cell = nullptr;
+  for (const ImportEntry &im : merged.imports)
+    if (im.name == "TAG") cell = &im;
+  check(cell && cell->ref == slot,
+        "const: the importer's cell is the one the init wrote");
+  const Function *tagFn = nullptr;
+  for (const Function &f : merged.functions)
+    if (f.name == "tag" && !f.captures.empty()) tagFn = &f;
+  check(tagFn && tagFn->captures[0].reg == -1 - slot,
+        "const: the def's capture names the same merged cell");
+}
+
 int main() {
   testRegistry();
   testLoadProgramFile();
@@ -1428,6 +1505,7 @@ int main() {
   testImportGuards();
   testClosureAcrossBoundary();
   testGeneratorAcrossBoundary();
+  testModuleConstOneIdentity();
   testBoundaries();
 
   std::cout << (fails == 0 ? "ALL PASS" : "FAILURES") << ": " << passes

@@ -2709,7 +2709,8 @@ void QLangCompiler::compileDef(const StmtPtr &s) {
     int r = declareVar(s->funcName);
     auto closure = std::make_shared<Closure>();
     closure->funcIndex = funcIndex;
-    for (const std::string &cap : built.captureNames) {
+    for (size_t ci = 0; ci < built.captureNames.size(); ci++) {
+      const std::string &cap = built.captureNames[ci];
       int reg = regOf(cap);
       if (reg < 0) {
         // The capture is itself a free variable of this scope (transitive
@@ -2721,8 +2722,30 @@ void QLangCompiler::compileDef(const StmtPtr &s) {
           emit(Opcode::REFLOAD, reg, cit->second, 0);
         }
       }
-      if (reg < 0)
+      // A capture buildFunction already named by its absolute global cell
+      // (`-1 - slot`, the value in built.captures) keeps that operand: the
+      // def-time MAKEFUNC runs in a frame aliasing the shared table (the
+      // entry or module-init frame), and a frame-relative register there
+      // binds a frame-local env cell whose release MOVES the table cell out
+      // of the table when the frame pops — importers then read an emptied
+      // cell (F1). The sentinel names the one merged cell, and the linker
+      // rebases negative capture registers, so it survives linking
+      // (external-modules plan v4 Phase 3b).
+      const bool absCell =
+          ci < built.captures.size() && built.captures[ci].reg < 0;
+      if (absCell) reg = built.captures[ci].reg;
+      if (!absCell && reg < 0) {
+        // A module-level `def` must reach its free variables through a cell.
+        // In library mode there is no caller frame to copy from, so a name
+        // that resolves to no cell is a compile error, never a silent nil
+        // (module-export/import plan P0.3, Q43).
+        if (m_libraryMode)
+          throw QLangError(QLangErrorKind::Parse, 0, 0,
+                           "def '" + s->funcName + "' captures '" + cap +
+                               "', which has no cell in module '" +
+                               m_moduleName + "'");
         reg = 0; // preserve legacy binding for unresolvable names
+      }
       CaptureRef cr;
       cr.reg = reg;
       closure->captures.push_back(cr);

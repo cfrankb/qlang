@@ -330,6 +330,7 @@ set(QL_SCRIPTS
   money.ql
   moneyv2.ql
   ql_module.ql
+  ql_module_const.ql
   perf_stress.ql
   table_subscript.ql
   test_assert.ql

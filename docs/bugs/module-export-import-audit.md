@@ -1,8 +1,9 @@
 # Module export/import audit (2026-11-10)
 
-Status: **open** — findings record, no fix attempted. Found while auditing what is still missing
+Status: **F1 fixed 2026-11-10 (Round 70, plan P0); F5's silent-nil bullet closed with
+P0.3** — findings record otherwise unchanged. Found while auditing what is still missing
 for `export`/`import` after **C8b** (Round 69, `.ql` discovery + nested compile). Everything here
-reproduces on `HEAD` after C8b; none of it is a C8b regression (the const defect reproduces on the
+reproduced on `HEAD` after C8b; none of it was a C8b regression (the const defect reproduced on the
 `.qlc` path, which predates C8b, and on `--import`, which predates it too).
 
 Implementation plan: [../plans/module-export-import-plan.md](../plans/module-export-import-plan.md).
@@ -11,7 +12,7 @@ Probes: ~25 two-file QLang pairs (`main.ql` + a module beside it), run as
 `build/qlang_run main.ql` with **no** `--module-path` (C8b's entry-directory rule makes the module
 findable). The ones worth keeping are quoted below; F1 is the minimal repro of the defect.
 
-## F1 — a module `const` that a `def` reads is unreachable at run time  **(defect)**
+## F1 — a module `const` that a `def` reads is unreachable at run time  **(fixed, Round 70)**
 
 `export const` is unusable in any module whose `def` bodies read it. Both the exported cell and the
 `def` read nil; the module's own top level is the only code that sees the value.
@@ -96,25 +97,33 @@ linker could have made.
 | module `<init>` never ran, or ran after the entry | F1 + `println` in the library prints first (`init sees [tagged]` before any of main's output); `QLangVM.cpp:1993-2004` runs `initSequence` before the main frame |
 | init frame ignores `regs.base` | a sibling const at `base + 2` is exported and read correctly in the same module (p43) |
 | two different slot vectors (host scope vs table) | same storage, see above |
-| the cell is nilled by capture release | `releaseFrame`/`releaseAllCaptures` only move values **into** `Env` cells; a global capture has `env == nullptr` (`QLangVM.cpp:1835-1861`, `:2369-2386`) — and p44 (script) reads the const unchanged after the call |
+| the cell is nilled by capture release | *wrong — this was the mechanism.* The reasoning holds only for global captures (`env == nullptr`, `QLangVM.cpp:1835-1861`, `:2369-2386`); the defective def-time closure captured a **frame register**, so `bindCaptures` gave it an `Env`, and `releaseFrame` moved the slot's value into it at init-frame pop. See Resolution above. |
 | pool folding collapsed the literal | the four literals differ; folding is keyed by value |
 | import-index mapping is off by one | a shift would print a sibling's value, not nil |
 | `getimport` of a `Const` reads somewhere else | one handler for both kinds, reads `im.ref` |
 
-### Where the fix has to be (unproven, ordered by suspicion)
+### Resolution (2026-11-10, plan P0)
 
-1. **Two identities for a captured module const.** The store in `<init>` uses the frame register the
-   free-list/declare path handed out (`QLangCompiler.cpp:670-690`, `declareVar`), while the capture
-   and the export `ref` use the slot recorded when the capture was built
-   (`:3800-3828`, `m_globalRegMap[name] = m_scope->globalSlotOf(name)`). For a library compiled on a
-   scratch context those two numbers are taken at different moments; if they diverge, the module is
-   self-consistent (p45) and every outside reader is wrong (F1) — exactly what is observed. The
-   image-level listing cannot show it because both prints are *labels*, and the module's own
-   numbering is used for both.
-2. **The `immutableCell` capture rule itself** (`:1806-1824`): a library-mode module const could be
-   reached the way `global` reaches a var (an absolute cell operand the linker already rewrites)
-   instead of a capture, which would remove the second identity instead of reconciling it.
-3. Not the linker: it faithfully rebases whatever the compiler recorded.
+Hypothesis 1 was the shape of it, hypothesis 3 was right, and the excluded table was wrong once:
+
+1. The two identities were **the linker's capture ABI vs the compiler's own closure**: the linker
+   records `Function::captures` for an immutable module const as the absolute sentinel `-1 - slot`
+   (what `tag`'s listing above shows), but the `MAKEFUNC` spec the *def itself* builds captured
+   `regOf(V, slot)` — the frame register `<init>` reads — because that is what the def's flat body
+   names. The def-time closure therefore did not capture the slot.
+2. That frame-register spec is what made the release table row wrong: `bindCaptures` honours it by
+   filling a **module-owned `Env` from the init frame**, and when the init frame popped,
+   `releaseFrame` moved the value *out of the merged slot into that `Env`* — the trace shows the
+   `MOV2` write-back and `RELEASE fn=1 move regs[1] -> env cell 0`. Every reader of slot 7 (both
+   import paths, and the call-time closure that does read the sentinel) then saw nil, while p45's
+   late top-level read, having run before the pop, saw the value. The row below is kept with a
+   correction rather than deleted: its reasoning is sound for *global* captures (`env == nullptr`);
+   the defective capture simply was not one.
+3. Fix: the def's capture-spec loop reuses the negative sentinel for a const cell, so store, def
+   read, export ref and import ref name the one cell; and in a library module a def capture that
+   resolves to no cell is a compile error (plan P0.3) instead of a nil at run time. Mutable
+   top-level `let` keeps the frame-relative copy — spec §1's copy rule. Guards:
+   `linker_test`'s `testModuleConstOneIdentity` and the `ql_module_const` script.
 
 ## F2 — two `from … import *` can never coexist  **(defect, needs a decision)**
 
@@ -148,8 +157,10 @@ type has no answer in the spec. Plan Q42 (default: out of scope until the spec s
   `'leaf' is a module, not a value: reach what it offers as 'leaf.<name>'` — advice that cannot
   work, the module is not bound here.
 - A `def` reading a module-level **var** without `global` reports `use of undeclared variable`,
-  while the same read of a module-level **const** silently compiles to nil (F1). The const path
-  should resolve or report, never both-fail-quietly.
+  while the same read of a module-level **const** silently compiled to nil (F1). **Closed for
+  library modules** with plan P0.3 (Round 70): a def capture that resolves to no cell is now
+  `def '<fn>' captures '<name>', which has no cell in module '<mod>'`. Assigning a module const
+  in library mode is the sibling that still misreports: `assignment to undeclared identifier 'C'`.
 - The cross-module capture guard's message is good and *is* the shape F1 needs:
   `imported function 'outer' captures a local of its own module and cannot be called across a
   module boundary: its captures are seeded from the defining module's frame` — it fires for *local*
@@ -165,6 +176,7 @@ two `.ql` modules with different names in one run; a `.qlc` as the entry file.
 
 ## Follow-ups
 
-- Plan: [../plans/module-export-import-plan.md](../plans/module-export-import-plan.md) (P0 = F1).
-- `docs/plans/todo.md` §6 carries F1 as a defect line with a pointer here.
+- Plan: [../plans/module-export-import-plan.md](../plans/module-export-import-plan.md) — P0 (F1 +
+  the silent-nil half of F5) landed Round 70; P1 (F2) and P2 (F3) open.
+- `docs/plans/todo.md` §6 carried F1 as a defect line with a pointer here; closed Round 70.
 - Probe sources: F1 above; the rest of the matrix is small enough to re-type from the shape column.

@@ -1,3 +1,39 @@
+## Round 70 — 2026-11-10 — Module-level const: one cell identity (spec `09-modules.md` §1; impl `QLangCompiler.cpp`)
+
+- **Fixed (audit F1, plan P0): a module-level `const` read by a `def` of the same
+  module is no longer nil at run time.** The P0.1 traces disproved the plan's
+  predicted root cause: the def-time `MAKEFUNC` capture spec *did* carry the const
+  — as the frame-relative register the def's flat body reads — and the fork was in
+  the ABI: the linker's `Function::captures` keeps the absolute sentinel `-1-slot`
+  for an immutable module const, while the closure the def itself built captured
+  `regOf(V, slot)` (frame register `slot+1`). `bindCaptures` honoured that frame-reg
+  spec by filling a module-owned `Env` from the init frame, and when the init frame
+  popped, `releaseFrame` **moved the value out of the merged slot into that `Env`**
+  (the trace: the `MOV2` write-back, then `RELEASE fn=1 move regs[1] -> env cell 0`)
+  — leaving the module's slot nil for every importer and for the call-time closure
+  that reads the sentinel. The def's capture-spec loop now reuses the negative
+  sentinel for a const cell, so the `<init>` store, the in-module `def` read, the
+  `EXPORT` ref and the importer's `GETIMPORT` all name the one cell (the audit's
+  Excluded-table line "the cell is nilled by capture release" had the direction
+  wrong: the release *was* the mechanism, on the wrong cell). Mutable top-level
+  `let` keeps the frame-relative copy — spec §1's copy rule. Q39 resolved: a
+  compiler fix; the linker never touched the slot and needed none.
+- **Fixed (plan P0.3, the library-module half of P3): a `def` capture in a library
+  module that resolves to no cell is a compile error** — `def '<fn>' captures
+  '<name>', which has no cell in module '<mod>'` — covering both a non-exported
+  module-local const/let and the missing-symbol case, instead of reading nil at
+  run time. `Q43` resolved: library mode only; script-mode behaviour unchanged.
+- Tests: `linker_test` 130→138 checks (+`testModuleConstOneIdentity` — the F1
+  shape runs with three readers, and the export/capture refs are asserted to be the
+  sentinel cell); new `ql_module_const` script guard (importer + same-module `def`,
+  a duplicate `init` and a live importer after the init frame popped) → 24 scripts,
+  57 ctest entries green. One `qlc_compile` assertion flipped: the capture-folding
+  case expected **two** specs because one of them named a frame register — a module
+  spec that names a frame local is not a second module cell, so the fold to one
+  sentinel spec is the correct behaviour; the assertion had encoded the defect.
+- **Recorded, not fixed:** the mutation half of audit F5 — assigning a module const
+  in library mode still reports `assignment to undeclared identifier 'C'`.
+
 ## Round 69 (2026-11-10)
 
 **C8b lands — a `.ql` on the search path is compiled into the module it stands for** (spec
