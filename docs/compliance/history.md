@@ -1,3 +1,35 @@
+## Round 74 — 2026-11-11 — extracting external types: OPEN TOPIC → normative spec (spec `11-external-types.md` §extracting external types; docs-only)
+
+- **The topic is now a requirement, not a question.** The user note
+  (`OPEN TOPIC`, staged 2026-11-11) became spec text: the `QL_OBJECT`
+  compile-time shape is extractable to a binary **type manifest (`QLM1`)** —
+  registration-driven (self-registering `QL_OBJECT`, no MOC), description-only
+  (portable type tags, enum tables, str/ctor presence; never closures or
+  mangled names). The `qlc` front end consumes one (`--qlmeta`) and validates
+  `.ql` sources **with no engine linked** — one compiler, any host; a
+  per-site check table defines what is and is not a compile error (unknown
+  member/method, arity, argument tags when inferable, ro/const field writes,
+  enum folding to `Int` literals, signals on known receivers), and a receiver
+  of unknown type keeps the lenient runtime-checked path. Manifest + the
+  `QLC1` images it validates — byte-for-byte unchanged — package as a
+  **portable module (`QPM1`)** whose load handshakes the manifest against the
+  host's registered types (drift = clean load error, never silent execution).
+- **Marked specified, NOT implemented** in the spec section itself and in
+  `status.md` (module row + the external-types Open Item); the compliance
+  flip happens with the implementation. Probe finding recorded while tracing
+  the construction path: `QLangContext.cpp` dispatches the context-taking
+  `QL_CTOR` lambda via `d->construct(c, a)` with **no arity guard** — the
+  documented lambda form indexes `a[0]` directly, so a short-arity script call
+  is an out-of-bounds vector read in host code, not a clean type error. The
+  planned **typed `QL_CTOR`** form generates the guard, reuses the method
+  `as<A>()` conversions, and captures the ctor argument tags for the manifest.
+- **Plan:** `docs/plans/portable-module-plan.md` (P1 type tags + typed
+  `QL_CTOR` → P2 `QLM1` codec → P3 meta registry + `--qlmeta-dump` → P4
+  compile-time validation + `--qlmeta` → P5 `QPM1` + handshake → docs round;
+  `QLC1`/`.qlc` v9 untouched — `QLM1`/`QPM1` carry their own magics). Docs
+  edit only; no code touched; hashes re-recorded with
+  `./update-doc-hashes.sh` after the suite.
+
 ## Round 73 — 2026-11-10 — a loaded-but-not-imported module says so (spec `09-modules.md` §import statement; impl `QLangCompiler.cpp`)
 
 - **Fixed (audit F5, plan P3): the misleading module diagnostic.** A qualified read

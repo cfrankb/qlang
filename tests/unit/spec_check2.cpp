@@ -1382,7 +1382,9 @@ int main() {
         "local u = deepcopy(t)");
     expectTrue("deepcopy hook runs once for shared original",
                toInt64(dctx.get("cnt")) == 1);
-    const auto &umap = dctx.get("u").asTable();
+    // Copy the handle: get() returns by value, so a reference into its
+    // temporary's member dangles (no lifetime extension for a member call).
+    const auto umap = dctx.get("u").asTable();
     expectTrue("deepcopy hook result shared by both refs",
                umap->at("a").asTable().get() == umap->at("b").asTable().get());
   } catch (const QLangError &e) {

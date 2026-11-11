@@ -70,7 +70,7 @@ Conventions:
 | CAST | dest reg | src reg | type id | | |
 | ARRGET | dest reg | array reg | index reg | | |
 | ARRPUT | array reg | index reg | value reg | | |
-| ARRAPP | array reg | — | element reg | | b unused |
+| ARRAPP | array reg | element reg | — | | |
 | ARRAPPV | array reg | extend-array reg | — | | |
 | ARRLEN | dest reg | array reg | — | | |
 | LEN | dest reg | value reg | — | | string/array/table/blob |
