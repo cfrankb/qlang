@@ -82,8 +82,10 @@ closing the **Q#**s its item points at:
       API), settle **Q12–Q18, Q27–Q28**; detailed plan needed
 - [ ] **C5** inheritance (`ObjectOps::base` returns null) — spec decision first (**Q21**); plan
 - [ ] **C7** enum-name string form — design decision first (**Q22**); plan
-- [ ] **C8** module search paths + `searchCallback` — **Q23–Q26**; plan; front end for
-      `archive/external-modules-plan-v4.md`
+- [x] **C8** module search paths + `searchCallback` — **Q23–Q26**; ✓ **C8a** Round 67, **C8b**
+      Round 69 (2026-11-10); front end for `archive/external-modules-plan-v4.md`. What
+      `export`/`import` still cannot do is planned in
+      [module-export-import-plan.md](module-export-import-plan.md) (P0 = the F1 const defect)
 - [x] **`external-modules-plan-v3.md` re-audited → `docs/plans/archive/external-modules-plan-v4.md`**
       (2026-11-08): v4 adds the `Status:` header, the **Q29–Q35** open-question set and an
       implementation order, and re-bases the machine on the tree — `.qlc` **v7 → v8** (unified
@@ -194,6 +196,21 @@ closing the **Q#**s its item points at:
       `indget`/`indput` mnemonics; `## opCode divi` / `## OpCode: swap` still show `movi`-era
       listings (Phase 3 §8)
 - [ ] `Opcode::Nop` casing (odd one out) — cosmetic, separate change
+
+- [ ] **module defect (pre-existing, found 2026-11-10 auditing C8b)**: a module-level `const` that a
+      `def` of the same module reads is unreachable at run time — the `def` sees nil and the exported
+      cell reads nil through an import, while the module's own `<init>` sees the value; identical
+      shapes without such a `def`, and the same shape in a plain script, are correct. `export const`
+      is therefore unusable in any module whose functions read it. Full audit, probe matrix and the
+      hypotheses already excluded: [../bugs/module-export-import-audit.md](../bugs/module-export-import-audit.md)
+      (F1); fix planned in [module-export-import-plan.md](module-export-import-plan.md) **P0**.
+      Same family as the f-string const defect two rows above.
+- [ ] **module defect (found 2026-11-10)**: `from a import *` + `from b import *` always collides on
+      `MODULE_NAME` (`'MODULE_NAME' is already imported from module 'a'`), so two star-imports cannot
+      coexist — audit **F2**, plan **P1**/**Q40**
+- [ ] `docs/plans/module-export-import-plan.md` written (2026-11-10) — **not started**; owns
+      **Q39–Q43** and the F1–F3 fixes; F4 (class export) and the runtime module registry are
+      recorded as deferred there with their promotion triggers
 
 ## 7. Codegen follow-ups recorded by M3 / Phase 3 (no plan yet)
 
