@@ -265,7 +265,9 @@ public:
   // resolve through the host-injected-external-var path (the VM seeds the
   // TypeRef from ctx when the module runs on a host with the bindings), enum
   // members fold like injected enums, and member/method/ctor/signal uses are
-  // checked against the manifest shape at compile time.
+  // checked against the manifest shape at compile time. Nothing is reserved for
+  // a type the source never constructs: `T(...)` takes its slot at the call
+  // (plan native-slot-portability P2).
   void addExternalTypes(const std::vector<ManifestType> &types);
 
   // Register names of C++ native functions. The compiler assigns them
@@ -281,9 +283,11 @@ public:
   // the source uses it (docs/SERIALIZATION.md §4.3). Ids are assigned on injection
   // because the map is also what makes a call resolvable: an unprefixed call with no
   // `def` falls back to it (`QLangCompiler.cpp`, "unknown function" otherwise), which
-  // is how a host native — and a manifest type's constructor name, see
-  // addExternalTypes — becomes callable at all. A driver that wires pointers for the
-  // loaded program iterates this; a driver that writes an image uses nativeSlotIds().
+  // is how a host native becomes callable at all. A manifest type's constructor
+  // is the exception: `addExternalTypes` declares the type, the call binds the
+  // name (plan native-slot-portability P2). A driver that wires pointers for
+  // the loaded program iterates this; a driver that writes an image uses
+  // nativeSlotIds().
   const std::unordered_map<std::string, int> &nativeFuncIds() const { return m_nativeFuncIds; }
   // The map to write the `.qlc` native-slot table from (docs/SERIALIZATION.md §4.3):
   // only the ids the compile emitted a `CALL` for, ordered by name as the codec
@@ -291,7 +295,7 @@ public:
   // any name the context cannot serve, so an injected name nothing calls must stay
   // out of the file — otherwise an image inherits its build host's whole native table
   // as a load requirement, where §5.2 promises "a native the program calls"
-  // (docs/plans/native-slot-portability-plan.md P1). A C++ module function reached
+  // (docs/plans/archive/native-slot-portability-plan.md P1). A C++ module function reached
   // through its qualifier is keyed `module.func`, so the image names the module it
   // wants; QLangContext::loadProgram re-resolves both spellings.
   std::map<std::string, int> nativeSlotIds() const;

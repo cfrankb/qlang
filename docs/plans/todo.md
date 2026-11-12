@@ -10,10 +10,10 @@ Maintained alongside `docs/plans/`; per AGENTS.md a plan that is fully implement
 [portable-module-follow-on-plan.md](archive/portable-module-follow-on-plan.md) (2026-11-11,
 the two portable-module gaps left open when `portable-module-plan.md` P1–P5 closed at
 Round 79; both phases closed at Rounds 80 and 81, so it is archived),
-[native-slot-portability-plan.md](native-slot-portability-plan.md) (2026-11-12, the
+[native-slot-portability-plan.md](archive/native-slot-portability-plan.md) (2026-11-12, the
 `.qlc` native-slot table naming natives no code calls — found by the Round 81 demo;
-Phase 1 + the doc corrections ✓ delivered at Round 82, Phase 2 left as optional
-cleanup).
+Phase 1 + the doc corrections ✓ delivered at Round 82, Phase 2 ✓ at Round 83, so the
+plan is archived).
 
 ## 1. Closed 2026-11-08 / 2026-11-09 (recent sessions)
 

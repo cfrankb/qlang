@@ -1,3 +1,30 @@
+## Round 83 — 2026-11-12 — a manifest type reserves its native slot **on use** (plan `native-slot-portability-plan.md` Phase 2; compiler `QLangCompiler.cpp/.h`, test `manifest_compile.cpp`)
+
+- **What Round 82 left behind.** Pruning the writer left the compile itself still
+  reserving a native id for every manifest constructor: `addExternalTypes` called
+  `addExternalFuncs({t.name})`, so `nativeFuncIds()` — the map a driver wires loaded
+  pointers from and a disassembly listing prints — claimed a `Point` the source never
+  named, and the header's "Validation input only — codegen is unchanged" was a claim
+  rather than a fact.
+- **The fix (resolve-site binding).** The eager reservation is gone and the call binds
+  instead: after `m_nativeFuncIds` misses a callee, `compileExpr` consults `m_extTypes`
+  and routes through `bindNative(e->callee, nullptr)` — the site that emits the negative
+  `CALL` and marks the id used. `extct` above the fallback already refused a type with no
+  constructor, so a slot cannot be invented for one; a host compile that injected the name
+  itself hits the existing entry and keeps its real pointer.
+- **Nothing user-visible, exactly as the plan predicted:** the demo's package is still 846
+  bytes and `loadProgram`'s requirements are unchanged (Round 82 already pruned the image).
+  What changed is the compile's own bookkeeping — an unused manifest type now asks for
+  nothing in the image *and* nothing from the compiler.
+- **Verify:** full `cmake --build build` + `ctest --test-dir build` **63/63 green**
+  (`perf` skipped in Debug), demo exit 0. `manifest_compile` 51 → **58** checks (62 with
+  its CLI smoke): §14 reads `nativeFuncIds()` and asserts a declared-but-never-constructed
+  manifest ctor is absent while an *injected* native stays (the map is resolve-time truth),
+  and that constructing one reserves it alone, with the image requiring exactly that name.
+  Both gates mutation-proven: deleting the resolve-site `bindNative` fails 25 gates with
+  `unknown function 'Point'`, restoring the eager reservation fails exactly the two new
+  ones. Plan complete and archived at `docs/plans/archive/native-slot-portability-plan.md`.
+
 ## Round 82 — 2026-11-12 — the `.qlc` native-slot table is the set of calls (plan `native-slot-portability-plan.md` Phase 1; compiler `QLangCompiler.cpp/.h`, writer sites in `QLangContext.cpp` / `qlang_run.cpp` / `module_search.cpp` / `portable_module.cpp`, tests `manifest_compile.cpp` + `linker_test.cpp`, docs `SERIALIZATION.md` §4.3/§5.2, `EXTERNAL_TYPES.md` §13, `spec/09-modules.md`)
 
 - **The defect Round 81 found.** `addExternalFuncs` assigns an id the moment a name is

@@ -506,15 +506,12 @@ void QLangCompiler::addExternalTypes(const std::vector<ManifestType> &types) {
     // on first use); the VM seeds the TypeRef from ctx when the module runs
     // on a host with the bindings — codegen is unchanged.
     m_externalVars.insert(t.name);
-    // `T(args)` compiles as the constructor native: a host compile already
-    // supplied the id via addExternalFuncs (existing ids win), an
-    // engine-agnostic compile reserves the negative slot by name — the .qlc
-    // native-slot table re-resolves it in the loading context. The reservation is
-    // also what makes `T(...)` recognizable as a call at all (compileCallExpr's
-    // native fallback), but it no longer puts the name in the image by itself:
-    // only a call does (plan native-slot-portability P1).
-    if (t.hasCtor)
-      addExternalFuncs({t.name});
+    // `T(args)` compiles as the constructor native, and the slot is taken at
+    // the call: compileCallExpr's native fallback consults `m_extTypes` (plan
+    // native-slot-portability P2), so a type nothing constructs asks for
+    // nothing — not in the image (P1) and not as a native this compile knows
+    // about. A host compile already injected the name, so existing ids win.
+    //
     // Enum tables fold exactly like registerEnum-injected ones (Round 41).
     // A name present in both sources must agree value-for-value, or the
     // host and its dump have drifted: compile fails (plan P4 check 4).
@@ -4963,6 +4960,16 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
                   "' on type '" + rit->second->name + "'");
       }
       auto nit = m_nativeFuncIds.find(e->callee);
+      if (nit == m_nativeFuncIds.end() && extct != m_extTypes.end()) {
+        // A manifest type's constructor, and this compile was never told the
+        // name: the contract is all the type knowledge it has, so the slot is
+        // taken here, at the call (plan native-slot-portability P2). `extct`
+        // above already refused a type with no constructor; an engine-agnostic
+        // compile has no pointer to bind, and `loadProgram` re-resolves the
+        // name in the host that loads the image.
+        bindNative(e->callee, nullptr);
+        nit = m_nativeFuncIds.find(e->callee);
+      }
       if (nit != m_nativeFuncIds.end()) {
         emit(Opcode::CALL, dest, nit->second, argCount);
         m_usedNativeIds.insert(nit->second);  // the image names the calls it makes

@@ -7,7 +7,7 @@
 // (checked on a single init, lenient after a second write), shadowing inside
 // function bodies, manifest-enum folding and registerEnum drift, the rule that the
 // `.qlc` native-slot table names only the natives the program calls
-// (docs/plans/native-slot-portability-plan.md P1), and (argv[1] = qlang_run
+// (docs/plans/archive/native-slot-portability-plan.md P1), and (argv[1] = qlang_run
 // binary) the --qlmeta CLI green/red smoke.
 #include <cstdio>
 #include <cstdlib>
@@ -157,16 +157,18 @@ static bool failsWith(const std::string &src, const std::string &fragment,
   }
 }
 
-// --- The native-slot table (docs/plans/native-slot-portability-plan.md P1) ---
+// --- The native-slot table (docs/plans/archive/native-slot-portability-plan.md P1) ---
 
 // Compiles `src` with `natives` injected and `types` as the manifest, writes the
 // `.qlc` and reads it back: the table's names come home, `*bytes` carries the image
-// and `*fault` any step's message.
+// and `*fault` any step's message. `*reserved`, when asked for, is every native
+// the compile knows about (`nativeFuncIds()`), called or not.
 static std::vector<std::string> slotTable(
     const std::string &src, const std::unordered_set<std::string> &natives,
     std::string *bytes, std::string *fault,
     const std::vector<ManifestType> &types = {},
-    const std::vector<QLangContext::Module> &modules = {}) {
+    const std::vector<QLangContext::Module> &modules = {},
+    std::vector<std::string> *reserved = nullptr) {
   std::vector<std::string> names;
   try {
     QLangLexer lexer(src);
@@ -180,6 +182,9 @@ static std::vector<std::string> slotTable(
     compiler.setModuleName("slotapp");
     compiler.setLibraryMode(true);
     const CompiledProgram prog = compiler.compile();
+    if (reserved)
+      for (const auto &entry : compiler.nativeFuncIds())
+        reserved->push_back(entry.first);
     std::ostringstream out(std::ios::binary);
     if (!writeQlc(out, prog, compiler.nativeSlotIds())) {
       *fault = "the image could not be written";
@@ -425,7 +430,36 @@ int main(int argc, char **argv) {
     CHECK(loadsWithout(manifestImage));
   }
 
-  // 14. CLI smoke (argv[1] = qlang_run binary): engine-agnostic compile is
+  // 14. A manifest type reserves its slot on use, not on injection (plan P2).
+  // `nativeFuncIds()` is what a driver wires loaded pointers from and what a
+  // disassembly listing prints, so an id the source never asked for must not
+  // live there either: `addExternalTypes` declares, the call reserves.
+  {
+    const std::string quiet = "local a = 1\nprint(a)\n";
+    std::vector<std::string> reserved;
+    std::string img, fault;
+    slotTable(quiet, {"host_only"}, &img, &fault, fixtures(), {}, &reserved);
+    CHECK(fault.empty());
+    CHECK(!namesNative(reserved, "Point"));  // declared, but not a native yet
+    // An injected name stays whether or not it is called: the map is the
+    // resolve-time truth for names the source may still use (§13).
+    CHECK(namesNative(reserved, "host_only"));
+
+    // The other half: calling the constructor reserves it. This fallback in
+    // compileCallExpr is what makes `T(...)` callable without a host, so the
+    // image asks for the one native it uses and nothing else.
+    const std::string builds = "local p = Point(1, 2.5)\nprint(p.mass)\n";
+    std::vector<std::string> called;
+    std::string ctorImage, ctorFault;
+    const std::vector<std::string> table =
+        slotTable(builds, {}, &ctorImage, &ctorFault, fixtures(), {}, &called);
+    CHECK(ctorFault.empty());
+    CHECK(namesNative(table, "Point"));
+    CHECK(called.size() == 1 && namesNative(called, "Point"));
+    CHECK(table.size() == 1);
+  }
+
+  // 15. CLI smoke (argv[1] = qlang_run binary): engine-agnostic compile is
   // green with the manifest, red on a checked violation, file errors exit 1.
   if (argc > 1) {
     const std::string dir = "/tmp/opencode/manifest_compile";

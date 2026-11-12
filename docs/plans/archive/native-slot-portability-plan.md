@@ -1,8 +1,7 @@
 # Plan: the `.qlc` native-slot table names only the natives the program calls
 
-Status: **Phase 1 delivered (Round 82, 2026-11-12).** Phase 2 (the reservation
-becoming pure declaration) is optional cleanup; Phase 3's doc corrections landed with
-Phase 1. `.qlc` stays **v9**, `QLM1`/`QPM1` **v1**.
+Status: **complete — Phases 1 and 2 delivered (Rounds 82 and 83, 2026-11-12).** Phase 3's
+doc corrections landed with Phase 1. `.qlc` stays **v9**, `QLM1`/`QPM1` **v1**.
 Baseline: Round 81 HEAD (`9de5aa9` + the Round 81 demo). **No format change and no
 version bump anywhere in this plan** — the work is in what the compiler puts into the
 table, not in how the table is written.
@@ -94,24 +93,28 @@ Harmless once Phase 1 lands (an unused entry is simply not written), so this is
 cleanup, not a fix — do it only because the reservation is then provably dead weight
 and the demo can lose its workaround.
 
+- **Delivered (Round 83).** The eager `addExternalFuncs({t.name})` in `addExternalTypes`
+  is gone and the resolve site binds instead: after `m_nativeFuncIds` misses the callee,
+  `m_extTypes` is consulted and `bindNative(e->callee, nullptr)` reserves the slot at the
+  call, which is the site that emits the `CALL` and marks it used. Nothing user-visible,
+  as predicted — the demo's package is still 846 bytes — but `nativeFuncIds()`, the map a
+  driver wires loaded pointers from and a disassembly lists, no longer claims constructors
+  the source never asked for, and `addExternalTypes` is pure declaration.
 - **Verified premise, do not re-litigate:** deleting the eager
   `addExternalFuncs({t.name})` in `addExternalTypes` (`src/QLangCompiler.cpp:505-514`)
-  is **not** the fix. Tried in this session: `manifest_compile` and
+  is **not** the fix on its own. Tried in this session: `manifest_compile` and
   `qlmeta_compile_cli` fail (gates 157–210) with `unexpected compile error: unknown
   function 'Point'`, i.e. the ctor's recognizability as a callable lives in
   `m_nativeFuncIds`, and the resolve site (`src/QLangCompiler.cpp:4948`, throw at
-  `4957`) has no `m_extTypes` fallback. Experiment reverted; suites 63/63 again.
+  `4957`) had no `m_extTypes` fallback — which is what the change above adds.
 - So the change belongs at the resolve site: when `m_nativeFuncIds` misses a callee,
   consult `m_extTypes` for a `hasCtor` type of that name and route through
-  `bindNative`, which already reserves on demand. The injection becomes pure
-  declaration, and the header comment's "Validation input only — codegen is
-  unchanged" (`include/qlang/QLangCompiler.h:262-268`) becomes literally true.
+  `bindNative`, which already reserves on demand. The injection is now pure declaration,
+  and the header comment's "Validation input only — codegen is unchanged"
+  (`include/qlang/QLangCompiler.h:262-268`) is literally true.
 - **The demo was the check — already spent by Phase 1.** `examples/portable_module.cpp`
   passes the manifest to **both** compiles and the workaround comment is gone (Round 82):
-  an unused reservation simply never reaches the file. What is left here is the
-  resolve-site move described above, nothing user-visible.
-- If this proves fiddly, stop: leave the reservation with a `ponytail:` comment
-  naming this phase as its removal path. Phase 1 already removed the symptom.
+  an unused reservation simply never reaches the file.
 
 ## Phase 3 — docs catch up (after the code, never before)
 
@@ -160,6 +163,9 @@ Landed with Phase 1 (Round 82):
 `perf` skips in Debug); `./build/qlang_portable_module` exits 0; every new gate
 mutation-checked; `bash update-doc-hashes.sh` last.
 
-**Phase 1 verified 2026-11-12** (all of the above, both marks mutation-proven). The
-plan stays out of the archive until Phase 2 lands or is declined — Phase 2 is the only
-thing left, and it is cleanup.
+**Phase 1 verified 2026-11-12** (all of the above, both marks mutation-proven).
+**Phase 2 verified 2026-11-12** (same: full build, `ctest` **63/63**, demo exit 0 at
+846 bytes unchanged; `manifest_compile` 51 → **58** checks, and both new gates are
+mutation-proven — deleting the resolve-site `bindNative` fails 25 gates with
+`unknown function 'Point'`, restoring the eager reservation fails exactly the two new
+ones). The plan is complete and archived.
