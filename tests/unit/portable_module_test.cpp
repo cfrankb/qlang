@@ -183,6 +183,19 @@ struct Point : qlang::QLObject<Point> {
             QL_CTOR([](double x_, double y_) { return std::make_shared<Point>(x_, y_); }));
 };
 
+// The same registered name and describable shape on a different C++ type. The
+// manifest carries shape and not C++ identity by design (§11 "tags, not mangled
+// names"), so nothing above the handoff can tell these two apart — which is why
+// `ExternalRef::check` exists.
+struct PointB : qlang::QLObject<PointB> {
+  PointB(double x_, double y_) : x(x_), y(y_) {}
+  double x = 0, y = 0;
+  std::string str() const { return "Point"; }
+
+  QL_OBJECT(QL_PROPERTY(x), QL_PROPERTY(y), QL_STR(str),
+            QL_CTOR([](double x_, double y_) { return std::make_shared<PointB>(x_, y_); }));
+};
+
 qlang::QLangContext g_host;  // the natives + modules a compile sees
 
 /// Compiles `source` as module `mod` the way `qlang_run` does and returns its
@@ -205,18 +218,42 @@ std::string qlcImage(const std::string &source, const std::string &mod,
   return out.str();
 }
 
-/// stdout of `body()`, so a script's printed answer can be checked in-process.
-std::string captureStdout(const std::function<void()> &body) {
+/// What `body()` printed, with the fault it stopped on in `fault` (`""` when it
+/// finished). A run that dies part-way keeps the output it produced, which is how
+/// "the guard fired before anything was read" is checkable.
+std::string captureRun(const std::function<void()> &body, std::string *fault,
+                       qlang::QLangErrorKind *kind) {
   std::ostringstream ss;
   std::streambuf *saved = std::cout.rdbuf(ss.rdbuf());
+  fault->clear();
   try {
     body();
+  } catch (const qlang::QLangError &e) {
+    std::cout.rdbuf(saved);
+    *fault = e.message();
+    *kind = e.kind();
+    return ss.str();
   } catch (...) {
     std::cout.rdbuf(saved);
     throw;
   }
   std::cout.rdbuf(saved);
   return ss.str();
+}
+
+/// Runs a loaded entry the way the driver does: merge the embedded libraries with
+/// it, run the merged program (an entry with unresolved `callimport` is not yet a
+/// program).
+void runEntry(qlang::QLangContext &ctx, const std::shared_ptr<LoadedModule> &entry) {
+  std::map<std::string, int> nativeIds;
+  for (const auto &slot : entry->nativeSlots) nativeIds[slot.second] = -1 - slot.first;
+  const qlang::CompiledProgram merged =
+      qlang::QLangLinker(ctx.loadedModules()).link(entry->program, nativeIds);
+  qlang::QLangVM(merged, ctx).run();
+}
+
+void loadAndRun(qlang::QLangContext &ctx, const std::string &path) {
+  runEntry(ctx, ctx.loadPortableModuleFile(path));
 }
 
 std::string g_calc;  // a self-contained module image, "calc"
@@ -234,6 +271,30 @@ std::string pack(const std::string &entry, const std::vector<ManifestType> &type
 const std::vector<ManifestType> &pointContract() {
   static const std::vector<ManifestType> types = {manifestTypeFrom(*g_host.import<Point>())};
   return types;
+}
+
+/// A package whose entry constructs the manifest's `Point` and hands the value to
+/// an embedded library that reads its members. Built once, because the same bytes
+/// are what the honest host runs and the drifted host has to refuse: `Point(...)`
+/// is a named native slot, so nothing in here binds a pointer to this process.
+std::string typedPackage() {
+  static const std::string bytes = [] {
+    const std::string shape = qlcImage(
+        "export def norm(p)\n  return p.x * p.x + p.y * p.y\nend\n", "shape");
+    qlang::QLangContext build;
+    build.import<Point>();
+    std::istringstream in(shape, std::ios::binary);
+    build.loadProgram(in, "shape:build");  // so `from shape import` resolves
+    const std::string app = qlcImage("from shape import norm\n"
+                                     "local p = Point(3.5, 2.0)\n"
+                                     "println(norm(p))\n"
+                                     "println(type(p))\n",
+                                     "app", build);
+    std::ostringstream out(std::ios::binary);
+    writeQpm(out, "app", pointContract(), {{"shape", shape}, {"app", app}});
+    return out.str();
+  }();
+  return bytes;
 }
 
 /// The message `writeQpm` refuses this package with ("<accepted>" when it wrote it).
@@ -501,26 +562,7 @@ void testHandshake() {
 void testTypedPayload() {
   std::cout << "-- an external type through a loaded package\n";
 
-  // A library that only ever sees the object through its members.
-  const std::string shape = qlcImage(
-      "export def norm(p)\n  return p.x * p.x + p.y * p.y\nend\n", "shape");
-
-  // The entry constructs a Point and hands it to the library: `Point(...)`
-  // compiles to a named native slot, never to a pointer into this process.
-  qlang::QLangContext build;
-  build.import<Point>();
-  {
-    std::istringstream in(shape, std::ios::binary);
-    build.loadProgram(in, "shape:build");  // so `from shape import` resolves
-  }
-  const std::string app =
-      qlcImage("from shape import norm\n"
-               "local p = Point(3.5, 2.0)\n"
-               "println(norm(p))\n"
-               "println(type(p))\n",
-               "app", build);
-
-  writeFile(kTmp + "typed.qpm", pack("app", pointContract(), {{"shape", shape}, {"app", app}}));
+  writeFile(kTmp + "typed.qpm", typedPackage());
 
   qlang::QLangContext host;
   host.import<Point>();
@@ -531,25 +573,16 @@ void testTypedPayload() {
   // The constructor travels as a name, which is the whole point of the handshake:
   // a slot bound to a pointer would be a package that only runs where it was built.
   bool ctorByName = false;
-  std::map<std::string, int> nativeIds;
   if (entry) {
-    for (const auto &slot : entry->nativeSlots) {
+    for (const auto &slot : entry->nativeSlots)
       if (slot.second == "Point") ctorByName = true;
-      nativeIds[slot.second] = -1 - slot.first;
-    }
   }
   CHECK_MSG(ctorByName, "the entry image asks for the constructor by name");
 
-  std::string out;
-  try {
-    out = captureStdout([&] {
-      const qlang::CompiledProgram merged =
-          qlang::QLangLinker(host.loadedModules()).link(entry->program, nativeIds);
-      qlang::QLangVM(merged, host).run();
-    });
-  } catch (const qlang::QLangError &e) {
-    check(false, std::string("the loaded package faulted: ") + e.what(), __LINE__);
-  }
+  std::string fault;
+  qlang::QLangErrorKind kind = qlang::QLangErrorKind::Type;
+  const std::string out = captureRun([&] { runEntry(host, entry); }, &fault, &kind);
+  CHECK_MSG(fault.empty(), "the loaded package runs without faulting: " + fault);
   CHECK_MSG(out.find("16.25") != std::string::npos,
             "the library read the host object's members (3.5^2 + 2^2)");
   CHECK_MSG(out.find("Point") != std::string::npos, "the value really is the external type");
@@ -565,6 +598,60 @@ void testTypedPayload() {
   }
   CHECK_MSG(refused, "a host without the type cannot run the typed package");
   CHECK(bare.loadedModules().empty());
+}
+
+// ===========================================================================
+// The same name, the same shape, another C++ type: the handoff guard's job
+// ===========================================================================
+
+// What the handshake deliberately cannot see (§14 "What it does not"): the manifest
+// carries describable shape, not C++ identity, so a host whose registered `Point` is
+// a different build passes the handshake byte for byte. The last line is the pointer
+// check the typed handoff records (`ExternalRef::check`, resolved in
+// `resolveExternal`). This gate is the package-world half of `phase3_api` T2: the
+// read that meets the lie happens inside a loaded module, not in a host one-liner.
+void testHandoffMismatch() {
+  std::cout << "-- a drifted host type: refused at the first read\n";
+
+  // The exact artifact that ran in the gate above — one byte different: nothing.
+  writeFile(kTmp + "drift.qpm", typedPackage());
+
+  qlang::QLangContext host;
+  qlang::TypeMeta meta = PointB::qlang_meta();
+  meta.name = "Point";  // same registered name, same describable shape
+  // A constructor built against another build of the type: it hands the registered
+  // descriptor an object of its own older layout. `check`/`expected` are wired from
+  // the descriptor by the engine's own ctor native, untouched here, which is what
+  // makes this the real path rather than a hand-rolled value.
+  meta.construct = [](qlang::QLangContext &, const std::vector<qlang::QLangValue> &) {
+    return std::shared_ptr<void>(std::make_shared<Point>(3.5, 2.0));
+  };
+  const std::shared_ptr<qlang::TypeDescriptor> desc = host.registerType(meta);
+
+  // The premise, asserted rather than assumed: the container cannot tell the two
+  // builds apart, so this is a case the handshake lets through by design.
+  CHECK_MSG(serializeTypeEntry(manifestTypeFrom(*desc)) ==
+                serializeTypeEntry(pointContract()[0]),
+            "the manifest cannot tell the two builds apart");
+
+  std::string fault;
+  qlang::QLangErrorKind kind = qlang::QLangErrorKind::Io;
+  const std::string out = captureRun([&] { loadAndRun(host, kTmp + "drift.qpm"); }, &fault, &kind);
+  CHECK_MSG(!fault.empty(), "the packaged read faults instead of reading the wrong bytes");
+  CHECK_MSG(kind == qlang::QLangErrorKind::Type, "the fault is a type error");
+  CHECK_MSG(fault.find("external type mismatch") != std::string::npos,
+            "the fault is the handoff guard's own");
+  CHECK_MSG(fault.find("for type 'Point'") != std::string::npos,
+            "it names the registered type the value was handed out under");
+  CHECK_MSG(out.empty(), "not one member was read: nothing printed before the guard fired");
+
+  // The guard refused that value, not the type: the same descriptor reading a value
+  // its own type built still works, and the context is usable afterwards.
+  host.set("p", qlang::qval_external_owned<PointB>(desc, std::make_shared<PointB>(7.5, 8.5)));
+  const std::string live =
+      captureRun([&] { host.run("println(p.x)"); }, &fault, &kind);
+  CHECK_MSG(fault.empty(), "a value of the registered type still reads: " + fault);
+  CHECK_MSG(live == "7.5\n", "and reads correctly");
 }
 
 // ===========================================================================
@@ -655,6 +742,7 @@ int main(int argc, char **argv) {
     testRejections();
     testHandshake();
     testTypedPayload();
+    testHandoffMismatch();
   } catch (const std::exception &e) {
     check(false, std::string("unexpected fault: ") + e.what(), __LINE__);
   }

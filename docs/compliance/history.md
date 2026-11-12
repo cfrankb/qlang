@@ -1,3 +1,37 @@
+## Round 80 — 2026-11-11 — the external-type handoff reached from a loaded package (plan `portable-module-follow-on-plan.md` Phase 1; tests `portable_module_test.cpp`, docs `EXTERNAL_TYPES.md` §14)
+
+- **What was missing.** Round 79 proved a package's *shapes* match its host and
+  that a manifest type is *usable* from a loaded image, but the **refusal** half
+  of the typed handoff had only ever been reached from a host-run one-liner
+  (`phase3_api` T2, whose value is built with `ctx.set`). Nothing pinned that a
+  member read *inside a package-loaded module* meets the same guard.
+- **Same name, same shape, another C++ type.** `testHandoffMismatch` registers
+  `PointB` under the name `Point` and asserts the premise first: its
+  `serializeTypeEntry` is **byte-identical** to the manifest's, so the handshake
+  lets it through by design (§11 "tags, not mangled names"). Its registered
+  `construct` hands out objects of the older build while the descriptor's
+  `typeInfo`/`typeCheck` — wired by the engine's own ctor native, untouched by
+  the test — still say `PointB`.
+- **One artifact, two hosts.** The typed package is now built once
+  (`typedPackage()`) and written to two files: the honest host runs it
+  (`16.25`), the drifted host loads it, passes the handshake and faults on the
+  first member read — `external type mismatch: … for type 'Point'`, a
+  `QLangError` of kind `Type`, **with nothing printed**, so no garbage ever
+  reached the library or stdout. Then one liveness check: the same descriptor
+  reading an honestly-built value still returns `7.5`, i.e. the guard refused
+  that pointer, not the type. `captureStdout` became `captureRun` (partial
+  output *plus* the fault it stopped on), which is what makes "nothing printed"
+  checkable, and the load-link-run sequence moved into `runEntry`/`loadAndRun`
+  instead of being repeated per gate.
+- **Verify:** `portable_module` **92 → 102 checks**. Mutation-checked: with the
+  `ref.check` guard in `resolveExternal` (`src/QLangValue.cpp`) forced off, the
+  five guard checks fail (`the packaged read faults instead of reading the wrong
+  bytes` and friends) — the fixture types share a layout, so without the guard
+  the run silently *succeeds*, which is exactly the failure mode the guard
+  exists for; the removal was reverted, `git diff` on `QLangValue.cpp` is empty.
+  ctest **63 entries** (62 green, `perf` skipped as usual), then the doc hashes
+  re-recorded.
+
 ## Round 79 — 2026-11-11 — P5: the `QPM1` container and the load handshake (plan `portable-module-plan.md` P5, the last phase; impl `QLangManifest.h` / `QLangManifest.cpp` / `QLangContext.h` / `QLangContext.cpp` / `qlang_run.cpp`, docs `SERIALIZATION.md` §12, `EXTERNAL_TYPES.md` §14)
 
 - **No version bump, no second codec.** `writeQpm` / `readQpm` / `QpmImage` /

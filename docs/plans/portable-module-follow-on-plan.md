@@ -1,9 +1,9 @@
 # Plan: portable modules, follow-on — the external-type handoff reached from a package
 
-Status: **PROPOSED** (2026-11-11). Baseline: Round 79 HEAD, `.qlc` **v9**,
-`QLM1`/`QPM1` v1. Closes the two gaps named when P5 shipped
-(`docs/plans/archive/portable-module-plan.md` P5) — neither is a container
-change.
+Status: **Phase 1 ✓ implemented (Round 80, 2026-11-11); Phase 2 not built.**
+Baseline: Round 79 HEAD, `.qlc` **v9**, `QLM1`/`QPM1` v1. Closes the two gaps
+named when P5 shipped (`docs/plans/archive/portable-module-plan.md` P5) — neither
+is a container change.
 
 **No `.qlc` version bump, no `QLM1`/`QPM1` layout change anywhere in this plan**,
 and no new public API unless Phase 1 cannot be written without one (it should
@@ -46,22 +46,43 @@ CMake change):
   check: `serializeTypeEntry(manifestTypeFrom(*A)) ==
   serializeTypeEntry(manifestTypeFrom(*B))` — the premise of the whole gate, and
   the reason it must not be "fixed" by a name-only or hash-only handshake.
-- The loading context registers **`PointB`** under the name `Point` and also a
-  native `stale_point()` returning `qval_external_owned<PointA>(...)` — the
-  shape of the real failure: a host whose own module was built against another
-  build of the same type name.
-- The packaged entry calls `stale_point()` and reads `.x`. Expected: a clean
-  `QLangError` of kind `Type` whose message says `external type mismatch`, not
-  a garbage number, not a crash. Then one liveness check — a `PointB` the same
-  context built still reads fine afterwards (the refusal must not poison the
-  value or the context).
-- Reuse `pack()`, `qlcImage()`, `captureStdout()` and the scratch area already in
-  the file; a fixture that cannot write is already an assertion failure.
+- The loading context registers **`PointB`** under the name `Point`, with its
+  registered `construct` handing out a `Point` (the older build) while the
+  descriptor's `typeInfo`/`typeCheck` still say `PointB`.
 
-**Verify:** the new checks fail when the guard is removed — delete the
-`dynamic_cast` check in `QLangVariant.h` locally and confirm the suite reports a
-wrong value rather than nothing (record the result in the commit message, do not
-commit the removal). Then full `ctest`.
+**Delivered (Round 80), with one correction to the plan text.** The construction
+this plan proposed — `qval_external_owned<PointA>(desc, ptrA)` behind a
+`stale_point()` native — **does not fault**: `resolveExternal` validates the
+`ExternalRef`'s *own recorded* `check`, and that helper records the handing-out
+code's `T`, so a stale module's `PointA` claim matches its own object and the
+member read proceeds. Nothing re-checks the descriptor at the access site. The
+value that does fault is one whose recorded check comes **from the descriptor**
+while the pointer is another build — which is exactly how the engine wires its own
+constructor native (`ref.expected = d->typeInfo; ref.check = d->typeCheck` in
+`QLangContext.cpp`). So the gate sabotages `meta.construct` on the registered type
+and touches nothing else: no hand-rolled `ExternalRef`, no extra native, and the
+path under test is the one a real host compiles.
+
+- The typed package is built **once** (`typedPackage()`) and written to two files:
+  the honest host runs it (`16.25` on stdout, `type(p) == Point`), the drifted host
+  loads the identical bytes and faults on the first member read — `QLangError` of
+  kind `Type`, `external type mismatch: … for type 'Point'`, with **nothing
+  printed**. Then one liveness check: the same descriptor reading an
+  honestly-built `PointB` still returns `7.5`, i.e. the guard refused that pointer
+  and not the type.
+- `captureStdout` became `captureRun` (returns the partial stdout **and** the fault
+  it stopped on — that is what makes "nothing printed" checkable), and
+  `loadPortableModuleFile` → `QLangLinker` → `QLangVM` moved into shared
+  `runEntry`/`loadAndRun` helpers instead of being repeated per gate.
+- Reuses `pack()`, `qlcImage()` and the scratch area; a fixture that cannot write is
+  already an assertion failure.
+
+**Verify (done):** `portable_module` **92 → 102 checks**, ctest 63/63. Forced
+`resolveExternal`'s `ref.check` guard off locally (`src/QLangValue.cpp`) — the five
+guard checks fail, and note *how*: `Point` and `PointB` share a layout, so with the
+guard removed the run **silently succeeds**, which is the failure mode the guard
+exists for. Removal reverted (`git diff src/QLangValue.cpp` empty), doc hashes
+re-recorded after green.
 
 ## Phase 2 — the host demo (`examples/portable_module.cpp`, optional)
 

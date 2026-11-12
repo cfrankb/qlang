@@ -402,18 +402,6 @@ whose type changed, a method that disappeared, an enum value that moved — is
 registered and the context is unchanged: the failure is a load error, not a
 wrong result at some later call.
 
-**What it does not.** The manifest carries *shape*, not C++ identity: two
-`Point`s with the same members but different `sizeof`, layout or method bodies
-compare equal, and each builds its own fingerprint-independent binding. That is
-deliberate (§11, "tags, not mangled names") — the package is portable across
-compilers and build configurations, which a mangled-name check would break. A
-host that wants layout equality must assert it in its own C++, not in the
-package.
-
-**A host that registers no types** needs no handshake: a package whose manifest
-is empty (what `qlang_run --package` writes without `--qlmeta`) loads anywhere
-`qlang_run` runs.
-
 **After the handshake, the values are the host's.** A manifest type with a
 `QL_CTOR` compiles (through §13) to a *named* native slot, so the constructor is
 resolved against the loading context, never carried in the package: `Point(3.5,
@@ -424,3 +412,27 @@ descriptor — which is where §10.2's typed `qval_external_*` handoff (and its
 building host's `Point` into a host that registered another one: nothing but the
 name crosses. Pinned by the `portable_module` typed-payload gate (library reads
 members of a Point the entry constructed, one package, one fresh context).
+
+**What it does not.** The manifest carries *shape*, not C++ identity: two
+`Point`s with the same members but different `sizeof`, layout or method bodies
+compare equal, and each builds its own fingerprint-independent binding. That is
+deliberate (§11, "tags, not mangled names") — the package is portable across
+compilers and build configurations, which a mangled-name check would break. A
+host that wants layout equality must assert it in its own C++, not in the
+package.
+
+**Where that leaves the guard.** Because the handshake cannot see C++ identity,
+the last check is the one the handoff itself carries: `ExternalRef::check`, wired
+from the registered descriptor by the constructor native and applied by
+`resolveExternal`, turns a pointer that is not the registered type into
+`external type mismatch: … for type 'Point'` at the **first member read**. A host
+whose `Point` drifted — same registered name, same describable shape, another
+build — passes the handshake byte for byte and still cannot read garbage out of
+its own objects. Pinned by the `portable_module` drifted-host gate, which loads
+the *same package bytes* the honest host ran above into a context whose
+registered constructor hands out the other build: the fault arrives before one
+member is read, and the context still reads an honestly-built value afterwards.
+
+**A host that registers no types** needs no handshake: a package whose manifest
+is empty (what `qlang_run --package` writes without `--qlmeta`) loads anywhere
+`qlang_run` runs.
