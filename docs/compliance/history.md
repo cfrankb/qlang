@@ -25,7 +25,11 @@
   passing the manifest where the type is used). The demo states this where a host
   author will read it; `--qlmeta`'s "validation input only" wording in
   `EXTERNAL_TYPES.md` §13 does not say it yet, and changing the reservation would
-  be a `.qlc`-visible behaviour change with no test asking for it.
+  be a `.qlc`-visible behaviour change with no test asking for it. Carried as
+  `docs/plans/native-slot-portability-plan.md`: the whole build-host native table
+  lands in every image the same way, and two doc sentences
+  (`EXTERNAL_TYPES.md` §13, `SERIALIZATION.md` §5.2) describe a loader that is
+  stricter than the table says it has to be.
 - **Verify:** new target builds clean; `./build/qlang_portable_module` exits 0 with
   nine `[ok]` lines (twice, to rule out a stale scratch directory); full
   `ctest --test-dir build` **63/63 green** (`perf` skipped in Debug). No `src/` or

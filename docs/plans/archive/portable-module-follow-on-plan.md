@@ -124,7 +124,7 @@ writes it, so that image demanded the type at load (`missing native function(s):
 'Point'`). The demo now injects the manifest only where the source names the type and
 says why. Narrowing that reservation is a `.qlc`-visible behaviour change with no
 test asking for it; `EXTERNAL_TYPES.md` §13's "validation input only" wording is what
-should catch up.
+should catch up — carried as `docs/plans/native-slot-portability-plan.md` (2026-11-12).
 
 **Verify (done):** target builds clean, the binary exits 0 with nine `[ok]` reports,
 full `ctest --test-dir build` 63/63 — no `src/` or test change, so no counts moved.

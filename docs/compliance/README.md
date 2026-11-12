@@ -19,7 +19,7 @@ below (spec hashes tracked in [../spec/README.md](../spec/README.md)); the
 | [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `a058ed6b2cc30d2213f2b57203fdc387238b44e0f1b032a56fb4e5e1f6911044` |
 | [coverage.md](coverage.md) | reserved-word coverage, value-type coverage | 02-lexical, 01-types | `789a0b58112961a6f32e98426923c17c88be737f0cfbc3a809ad771b11c898eb` |
 | [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `43177c142f68955b67994edffdc36881ae9e03cf04f84be782fe8e1d5c529c33` |
-| [history.md](history.md) | audit rounds 7–64 (append-only) | mixed (per round) | `b5131da83d24c8c35eeb1c6498f99fe294edd16645850b0ffa7e0fa99c8a43f1` |
+| [history.md](history.md) | audit rounds 7–64 (append-only) | mixed (per round) | `4be6db334e3c40eb733d8049e9c1f93c7cb27aaad427c81d28efddc9b5e3d443` |
 | [classes.md](classes.md) | class implementation details, class spec conformance | 10-classes | `c95a835ae11f6e25c87facb30dd7210a18e928b56ab9b3592e25acf805e99b40` |
 | [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `cd7297ec8fbcf68c73d35fb5941735777f6f066993a6d692f07d9df7e6cdc8aa` |
 | [migration-value-semantics.md](migration-value-semantics.md) | copy→share migration note for `array`/`set`/`blob` (Round 43) | 01-types | `3b38a16ad6e8f04386092ee2f588adb27d5f1bdfcada749135c7168066547e7d` |
