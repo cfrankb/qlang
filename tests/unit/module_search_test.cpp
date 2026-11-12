@@ -137,8 +137,7 @@ bool compile(QLangContext &ctx, const std::string &source, CompiledProgram &out,
     if (!moduleName.empty()) compiler.setModuleName(moduleName);
     compiler.setLibraryMode(libraryMode);
     out = compiler.compile();
-    const auto &ids = compiler.nativeFuncIds();
-    nativeIds = std::map<std::string, int>(ids.begin(), ids.end());
+    nativeIds = compiler.nativeSlotIds();
     for (const auto &[name, func] : ctx.nativeFuncs()) {
       auto it = nativeIds.find(name);
       if (it == nativeIds.end()) continue;

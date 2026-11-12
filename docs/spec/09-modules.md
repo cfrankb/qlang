@@ -83,7 +83,9 @@ Modules are registered from C++ via `ctx.registerModule(name, module)`. The `imp
 is resolved at compile time: the entity it binds becomes an external (native) function of the
 importing module, keyed by the **spelling the importer uses** — `import math` makes `math.min`
 a slot, `from math import min` makes `min` one. An image carries that spelling in its native-slot
-table and the context re-resolves it at load ([13-bytecodes.md](13-bytecodes.md)
+table — the calls its code makes, not every name its build host offered, so an imported function
+it never calls is not something the loading context has to serve — and the context re-resolves it
+at load ([13-bytecodes.md](13-bytecodes.md)
 `## native function table`). See [07-api.md](07-api.md) for `registerModule` /
 `importModule` / `clear`.
 

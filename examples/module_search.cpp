@@ -121,8 +121,8 @@ std::string runEntry(QLangContext &ctx) {
     if (resolved[i])
       entry.nativeFuncs[i] = resolved[i];
   }
-  std::map<std::string, int> nativeIds(compiler.nativeFuncIds().begin(),
-                                       compiler.nativeFuncIds().end());
+  // Only the natives the merged image calls (§5.2).
+  std::map<std::string, int> nativeIds = compiler.nativeSlotIds();
 
   QLangLinker linker(ctx.loadedModules());
   CompiledProgram merged = linker.link(entry, nativeIds);

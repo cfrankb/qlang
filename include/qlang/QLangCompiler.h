@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deque>
+#include <map>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -276,11 +277,24 @@ public:
   // "import statement"). This only records the names a registered module
   // exports, so a `.ql` export that collides with one is reported at import.
   void addModules(const std::vector<QLangContext::Module> &modules);
-  // Name -> negative id, the map the `.qlc` native-slot table is written from
-  // (docs/SERIALIZATION.md §4.3). A C++ module function reached through its
-  // qualifier is keyed `module.func`, so the image names the module it wants;
-  // QLangContext::loadProgram re-resolves both spellings.
+  // Name -> negative id for every name this compile was told about, whether or not
+  // the source uses it (docs/SERIALIZATION.md §4.3). Ids are assigned on injection
+  // because the map is also what makes a call resolvable: an unprefixed call with no
+  // `def` falls back to it (`QLangCompiler.cpp`, "unknown function" otherwise), which
+  // is how a host native — and a manifest type's constructor name, see
+  // addExternalTypes — becomes callable at all. A driver that wires pointers for the
+  // loaded program iterates this; a driver that writes an image uses nativeSlotIds().
   const std::unordered_map<std::string, int> &nativeFuncIds() const { return m_nativeFuncIds; }
+  // The map to write the `.qlc` native-slot table from (docs/SERIALIZATION.md §4.3):
+  // only the ids the compile emitted a `CALL` for, ordered by name as the codec
+  // wants. `loadProgram` resolves every entry of that table and refuses the image for
+  // any name the context cannot serve, so an injected name nothing calls must stay
+  // out of the file — otherwise an image inherits its build host's whole native table
+  // as a load requirement, where §5.2 promises "a native the program calls"
+  // (docs/plans/native-slot-portability-plan.md P1). A C++ module function reached
+  // through its qualifier is keyed `module.func`, so the image names the module it
+  // wants; QLangContext::loadProgram re-resolves both spellings.
+  std::map<std::string, int> nativeSlotIds() const;
   const std::vector<QLangContext::NativeFunc> &nativeFuncsResolved() const { return m_nativeFuncsResolved; }
 
   // One entry per name bound by an `import` statement (module provenance for
@@ -607,6 +621,10 @@ private:
   // Negative indices (-1, -2, ...) signal the VM to dispatch via the
   // context's native function registry.
   std::unordered_map<std::string, int> m_nativeFuncIds;
+  // Ids emitted as a negative `CALL` operand, i.e. the natives the program calls.
+  // What nativeSlotIds() filters by; the reservation map above stays the resolve-time
+  // truth (plan native-slot-portability P1).
+  std::unordered_set<int> m_usedNativeIds;
   // Resolved native function indices: index -> function (filled at compile time).
   std::vector<QLangContext::NativeFunc> m_nativeFuncsResolved;
   // Set of names that are module functions (imported from registered modules).

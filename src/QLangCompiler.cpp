@@ -509,7 +509,10 @@ void QLangCompiler::addExternalTypes(const std::vector<ManifestType> &types) {
     // `T(args)` compiles as the constructor native: a host compile already
     // supplied the id via addExternalFuncs (existing ids win), an
     // engine-agnostic compile reserves the negative slot by name — the .qlc
-    // native-slot table re-resolves it in the loading context.
+    // native-slot table re-resolves it in the loading context. The reservation is
+    // also what makes `T(...)` recognizable as a call at all (compileCallExpr's
+    // native fallback), but it no longer puts the name in the image by itself:
+    // only a call does (plan native-slot-portability P1).
     if (t.hasCtor)
       addExternalFuncs({t.name});
     // Enum tables fold exactly like registerEnum-injected ones (Round 41).
@@ -593,6 +596,19 @@ void QLangCompiler::addExternalFuncs(const std::unordered_set<std::string> &name
       next = std::min(next, id - 1);
     m_nativeFuncIds[name] = next;
   }
+}
+
+std::map<std::string, int> QLangCompiler::nativeSlotIds() const {
+  // The `.qlc` native-slot table is the natives the program calls, not the ones the
+  // compile was told about: `loadProgram` resolves every entry and refuses the image
+  // for a name the context cannot serve, so an unused reservation would become a load
+  // requirement for whoever loads it (docs/SERIALIZATION.md §5.2, plan
+  // native-slot-portability P1). Ordered by name, as §4.3 asks.
+  std::map<std::string, int> slots;
+  for (const auto &[name, id] : m_nativeFuncIds)
+    if (m_usedNativeIds.count(id))
+      slots.emplace(name, id);
+  return slots;
 }
 
 void QLangCompiler::addModules(const std::vector<QLangContext::Module> &modules) {
@@ -4502,6 +4518,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       const int mb = moduleMember(q, e->callee, e->callLine, e->callCol);
       if (mb < 0) {
         emit(Opcode::CALL, dest, mb, argCount);  // C++ module: negative slot
+        m_usedNativeIds.insert(mb);  // this call is what puts the slot in the image
         m_emitter.setLastLoc(static_cast<uint16_t>(e->callLine),
                              static_cast<uint16_t>(e->callCol));
       } else {
@@ -4948,6 +4965,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       auto nit = m_nativeFuncIds.find(e->callee);
       if (nit != m_nativeFuncIds.end()) {
         emit(Opcode::CALL, dest, nit->second, argCount);
+        m_usedNativeIds.insert(nit->second);  // the image names the calls it makes
         break;
       }
       // Not a user def, closure, generator var, builtin, or native/module

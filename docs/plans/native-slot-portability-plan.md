@@ -1,9 +1,11 @@
 # Plan: the `.qlc` native-slot table names only the natives the program calls
 
-Status: **not started.**
-Baseline: Round 81 HEAD (`9de5aa9` + the Round 81 demo), `.qlc` **v9**, `QLM1`/`QPM1`
-**v1**. **No format change and no version bump anywhere in this plan** — the work is
-in what the compiler puts into the table, not in how the table is written.
+Status: **Phase 1 delivered (Round 82, 2026-11-12).** Phase 2 (the reservation
+becoming pure declaration) is optional cleanup; Phase 3's doc corrections landed with
+Phase 1. `.qlc` stays **v9**, `QLM1`/`QPM1` **v1**.
+Baseline: Round 81 HEAD (`9de5aa9` + the Round 81 demo). **No format change and no
+version bump anywhere in this plan** — the work is in what the compiler puts into the
+table, not in how the table is written.
 
 Found by `examples/portable_module.cpp` (Round 81) and verified in that session.
 
@@ -23,8 +25,8 @@ Found by `examples/portable_module.cpp` (Round 81) and verified in that session.
    calls one, and `addExternalTypes` adds an entry per manifest type with `hasCtor`
    whether or not the source names it (`src/QLangCompiler.cpp:505-514`). The demo's
    `shape` library, compiled with the manifest it never uses, failed to load with
-   `missing native function(s): 'Point'`; the demo works around it by not passing
-   the manifest to that compile.
+   `missing native function(s): 'Point'`; the demo worked around it by not passing
+   the manifest to that compile (Round 82 removed the workaround).
 4. Two documents promise the opposite. `docs/EXTERNAL_TYPES.md` §13: a manifest ctor
    is a named slot and "running it on a host without the bindings fails **at that
    call only**". `docs/SERIALIZATION.md` §5.2: "A context lacking a native the
@@ -67,6 +69,25 @@ the program calls is missing from its own image); remove both marks → the firs
 fails. Both new checks are load-bearing; the Round 79/80 named-`Point`-slot gates pin
 the pruning boundary from the other side.
 
+**Delivered (Round 82), two differences from the sketch:**
+
+- `nativeFuncIds()` was **not** filtered. It returns a `const &` several drivers bind
+  by reference, and its full contents are what wire loaded pointers and label a
+  disassembly listing. `nativeSlotIds()` is a second accessor, returning the filtered
+  map by value ordered by name; the writer sites use it (`src/QLangContext.cpp`,
+  `examples/qlang_run.cpp` ×2, `examples/module_search.cpp`,
+  `examples/portable_module.cpp`, and the `codec_check` / `linker_test` /
+  `module_search_test` / `portable_module_test` / `manifest_compile` helpers), the
+  `find`-guarded sites keep the full map.
+- The module-qualified mark sits on the emit itself, not inside `bindNative`:
+  `bindNative` also runs for `from m import f` (`src/QLangCompiler.cpp:3629`), where
+  no call exists yet — marking there would keep imported-but-uncalled names, the same
+  defect one layer down. So the marks are the two `emit(Opcode::CALL, …, negative)`.
+
+Measured: the Round 81 demo's package went 1034 → **846 bytes**, `manifest_compile`
+38 → **51** checks, `linker` 142 → **141** (two gates restated for the corrected
+contract), suites **63/63**, and both marks fail the suite when removed.
+
 ## Phase 2 — a manifest type reserves its slot on use, not on injection
 
 Harmless once Phase 1 lands (an unused entry is simply not written), so this is
@@ -85,28 +106,32 @@ and the demo can lose its workaround.
   `bindNative`, which already reserves on demand. The injection becomes pure
   declaration, and the header comment's "Validation input only — codegen is
   unchanged" (`include/qlang/QLangCompiler.h:262-268`) becomes literally true.
-- **The demo is the check:** `examples/portable_module.cpp` passes the manifest to
-  **both** compiles, the explanatory workaround comment goes away, and the demo still
-  exits 0 — it fails if the library image stops loading or stops being contract-free.
+- **The demo was the check — already spent by Phase 1.** `examples/portable_module.cpp`
+  passes the manifest to **both** compiles and the workaround comment is gone (Round 82):
+  an unused reservation simply never reaches the file. What is left here is the
+  resolve-site move described above, nothing user-visible.
 - If this proves fiddly, stop: leave the reservation with a `ponytail:` comment
   naming this phase as its removal path. Phase 1 already removed the symptom.
 
 ## Phase 3 — docs catch up (after the code, never before)
 
-- `docs/EXTERNAL_TYPES.md` §13's closing sentence: a host that cannot serve a slot
+Landed with Phase 1 (Round 82):
+
+- ✓ `docs/EXTERNAL_TYPES.md` §13's closing sentence: a host that cannot serve a slot
   the program calls is refused **at load**, naming every such slot
-  (`missing native function(s): …`), not "at that call only"; and after Phase 1,
-  the table names exactly the calls.
-- `docs/SERIALIZATION.md` §4.3 and §5.2: the table is the natives the program calls;
-  a name nothing calls is no longer written; v9 is unchanged, and a longer table
-  from an older writer stays legal.
-- `docs/spec/11-external-types.md` § *compile-time validation*: one clause — a
-  manifest constructor becomes a named slot **when the source names it**.
-- `docs/compliance/{history,status,tests}.md`: round entry, the `manifest_compile`
-  and `portable_module` rows, and the counted-unit-cases tally, which moves.
-- `bash update-doc-hashes.sh` **after** the suites are green — the spec edit above
-  re-records a `doc_hashes` row (AGENTS: testing proves correctness, the hash merely
-  detects change).
+  (`missing native function(s): …`), not "at that call only"; and the table names
+  exactly the calls, so a manifest type nothing constructs asks for nothing.
+- ✓ `docs/SERIALIZATION.md` §4.3 (the table names the natives the program calls, a
+  longer table from an older writer stays legal, v9 unchanged) and §5.2 (the writer's
+  half of the sentence).
+- ✓ `docs/spec/09-modules.md` "C++ (native) modules": the image carries the spellings
+  its code calls, so an imported function it never calls is not a load requirement.
+- ✗→✓ `docs/spec/11-external-types.md`: **no clause needed** — it never described the
+  slot table, so there is nothing to correct. The normative statement lives in
+  `09-modules.md` and `SERIALIZATION.md`.
+- ✓ `docs/compliance/{history,status,tests}.md` (Round 82 entry, the external-types
+  open item, the `manifest_compile` 38 → 51 and `linker` 142 → 141 rows).
+- ✓ `bash update-doc-hashes.sh` re-run after the suites were green.
 
 ## Explicitly skipped (add when the trigger fires)
 
@@ -133,5 +158,8 @@ and the demo can lose its workaround.
 
 `cmake -B build && cmake --build build`; `ctest --test-dir build` (63 entries today,
 `perf` skips in Debug); `./build/qlang_portable_module` exits 0; every new gate
-mutation-checked; `bash update-doc-hashes.sh` last. Both phases land ⇒ move this plan
-to `docs/plans/archive/`.
+mutation-checked; `bash update-doc-hashes.sh` last.
+
+**Phase 1 verified 2026-11-12** (all of the above, both marks mutation-proven). The
+plan stays out of the archive until Phase 2 lands or is declined — Phase 2 is the only
+thing left, and it is cleanup.

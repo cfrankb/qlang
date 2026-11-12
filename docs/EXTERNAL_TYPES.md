@@ -363,11 +363,14 @@ else, mirroring the lenient runtime:
   (`enum 'E' member 'M' disagrees with external type 'T'`), so a stale
   manifest is caught instead of silently folded.
 
-Constructor and method calls on manifest types compile to **named**
-negative native slots, re-resolved when a `.qlc` loads: the image is
-portable, and running it on a host without the bindings fails at that
-call only — loose files carry no integrity link by design (§12, and the
-packaged handshake in §14).
+Constructor and method calls on manifest types compile to **named** negative
+native slots, re-resolved when a `.qlc` loads. Only the calls the source actually
+makes are written into the image: a manifest type it never constructs puts no name
+in the file, so a host without that constructor still loads the image. A host that
+cannot serve a name the image *does* carry is refused **at load**, which names
+every such slot (`missing native function(s): …`) and runs nothing — the failure is
+not deferred to the call. Loose files carry no integrity link by design (§12, and
+the packaged handshake in §14).
 
 ## 14. Portable modules (portable-module-plan P5)
 

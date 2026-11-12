@@ -5,8 +5,10 @@
 // field/method, ro write, arity, tag mismatch, no-ctor construction, typed
 // vs context ctor, unknown signal, bad T::M), the receiver-liveness rule
 // (checked on a single init, lenient after a second write), shadowing inside
-// function bodies, manifest-enum folding and registerEnum drift, and
-// (argv[1] = qlang_run binary) the --qlmeta CLI green/red smoke.
+// function bodies, manifest-enum folding and registerEnum drift, the rule that the
+// `.qlc` native-slot table names only the natives the program calls
+// (docs/plans/native-slot-portability-plan.md P1), and (argv[1] = qlang_run
+// binary) the --qlmeta CLI green/red smoke.
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -14,6 +16,7 @@
 #include <vector>
 #include <sys/wait.h> // WEXITSTATUS for the CLI smoke
 
+#include "qlang/QLangBytecodeIO.h"
 #include "qlang/QLangCompiler.h"
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
@@ -21,6 +24,9 @@
 #include "qlang/QLangManifest.h"
 #include "qlang/QLangParser.h"
 #include "qlang/QLangVM.h"
+
+#include <sstream>
+#include <utility>
 
 using namespace qlang;
 
@@ -148,6 +154,73 @@ static bool failsWith(const std::string &src, const std::string &fragment,
       return false;
     }
     return true;
+  }
+}
+
+// --- The native-slot table (docs/plans/native-slot-portability-plan.md P1) ---
+
+// Compiles `src` with `natives` injected and `types` as the manifest, writes the
+// `.qlc` and reads it back: the table's names come home, `*bytes` carries the image
+// and `*fault` any step's message.
+static std::vector<std::string> slotTable(
+    const std::string &src, const std::unordered_set<std::string> &natives,
+    std::string *bytes, std::string *fault,
+    const std::vector<ManifestType> &types = {},
+    const std::vector<QLangContext::Module> &modules = {}) {
+  std::vector<std::string> names;
+  try {
+    QLangLexer lexer(src);
+    QLangParser parser(lexer.tokenize());
+    QLangCompiler compiler(parser.parseProgram());
+    compiler.addExternalFuncs(natives);
+    if (!types.empty())
+      compiler.addExternalTypes(types);
+    if (!modules.empty())
+      compiler.addModules(modules);
+    compiler.setModuleName("slotapp");
+    compiler.setLibraryMode(true);
+    const CompiledProgram prog = compiler.compile();
+    std::ostringstream out(std::ios::binary);
+    if (!writeQlc(out, prog, compiler.nativeSlotIds())) {
+      *fault = "the image could not be written";
+      return names;
+    }
+    *bytes = out.str();
+    std::istringstream in(*bytes, std::ios::binary);
+    CompiledProgram back;
+    std::vector<std::pair<int, std::string>> slots;
+    std::string err;
+    if (!readQlc(in, back, slots, err)) {
+      *fault = err;
+      return names;
+    }
+    for (const auto &slot : slots)
+      names.push_back(slot.second);
+  } catch (const QLangError &e) {
+    *fault = e.message();
+  }
+  return names;
+}
+
+static bool namesNative(const std::vector<std::string> &table, const std::string &name) {
+  for (const auto &n : table)
+    if (n == name)
+      return true;
+  return false;
+}
+
+// A fresh context — it registers the engine's own natives and nothing else — loads
+// the image. `loadProgram` resolves every table entry and reports the ones it
+// cannot serve, so this is what an unused entry breaks (§5.2).
+static bool loadsWithout(const std::string &bytes) {
+  QLangContext ctx;
+  std::istringstream in(bytes, std::ios::binary);
+  try {
+    ctx.loadProgram(in, "slotapp");
+    return true;
+  } catch (const QLangError &e) {
+    printf("  unexpected load error: %s\n", e.message().c_str());
+    return false;
   }
 }
 
@@ -296,7 +369,63 @@ int main(int argc, char **argv) {
   // 12. No manifest -> no new checks (today's lenient path).
   CHECK(compiles("local p\nprint(p.zzz)\np.nope(1, 2, 3)\n", {}));
 
-  // 13. CLI smoke (argv[1] = qlang_run binary): engine-agnostic compile is
+  // 13. The native-slot table is the set of calls (native-slot-portability-plan
+  // P1). `addExternalFuncs` reserves an id the moment a name is injected, and that
+  // reservation is also what makes a call recognizable at resolve time, so the
+  // *writer* is where an unused name has to be dropped: `loadProgram` resolves every
+  // table entry and refuses the image for any it cannot serve — which is how a build
+  // host's whole native table (and every manifest constructor) became a load
+  // requirement, where §5.2 promises "a native the program calls".
+  {
+    const std::unordered_set<std::string> natives = {"host_only", "host_two"};
+
+    // A script that calls no native carries no native name, so any context can load
+    // it — the symptom the Round 81 demo reported for `Point`.
+    std::string unusedImage, unusedFault;
+    const std::vector<std::string> unused =
+        slotTable("local a = 1\nprint(a)\n", natives, &unusedImage, &unusedFault);
+    CHECK(unusedFault.empty());
+    CHECK(!namesNative(unused, "host_only"));
+    CHECK(!namesNative(unused, "host_two"));
+    CHECK(loadsWithout(unusedImage));
+
+    // A script that calls one native still carries that name, and only that one:
+    // pruning that cuts a call is not a fix, it is a broken image.
+    std::string usedImage, usedFault;
+    const std::vector<std::string> used =
+        slotTable("local a = host_only(1)\nprint(a)\n", natives, &usedImage, &usedFault);
+    CHECK(usedFault.empty());
+    CHECK(namesNative(used, "host_only"));
+    CHECK(!namesNative(used, "host_two"));
+
+    // A C++ module function is named by its qualified spelling (§4.3), and only the
+    // one the source calls: `import m` brings the module into scope, it does not
+    // make every function it exports a load requirement.
+    QLangContext::Module mathy;
+    mathy.name = "mathy";
+    mathy.funcs["two"] = [](QLangContext &, const std::vector<QLangValue> &) {
+      return QLangValue::Int(2);
+    };
+    mathy.funcs["three"] = [](QLangContext &, const std::vector<QLangValue> &) {
+      return QLangValue::Int(3);
+    };
+    std::string modImage, modFault;
+    const std::vector<std::string> qualified = slotTable(
+        "import mathy\nprint(mathy.two(2))\n", {}, &modImage, &modFault, {}, {mathy});
+    CHECK(modFault.empty());
+    CHECK(namesNative(qualified, "mathy.two"));
+    CHECK(!namesNative(qualified, "mathy.three"));
+
+    // The same rule for a manifest-injected constructor the source never names.
+    std::string manifestImage, manifestFault;
+    const std::vector<std::string> noCtor =
+        slotTable("local a = 1\nprint(a)\n", {}, &manifestImage, &manifestFault, fixtures());
+    CHECK(manifestFault.empty());
+    CHECK(!namesNative(noCtor, "Point"));
+    CHECK(loadsWithout(manifestImage));
+  }
+
+  // 14. CLI smoke (argv[1] = qlang_run binary): engine-agnostic compile is
   // green with the manifest, red on a checked violation, file errors exit 1.
   if (argc > 1) {
     const std::string dir = "/tmp/opencode/manifest_compile";

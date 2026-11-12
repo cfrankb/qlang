@@ -216,6 +216,11 @@ table is what makes the image loadable: bytecode references natives by slot
 (`index = -1 - opcode_b`), and without names the slots are meaningless.
 
 - Slots are written in ascending order; duplicates are a format error.
+- **The table names the natives the program calls, not the natives its build host
+  offered.** A name no `CALL` in the image reaches is not written, because the loader
+  requires every name it finds (§5.2) — writing it would make an uncallable function a
+  load requirement (`QLangCompiler::nativeSlotIds()`). A longer table from an older
+  writer is still legal; the version did not change.
 - Unbound (null) slots are omitted; the loader pads `nativeFuncs` with null.
 - `name` MUST be non-empty.
 - `name` is the spelling the *importer wrote*: `min` for `from math import min`, `math.min`
@@ -415,7 +420,9 @@ Binding is the loader's responsibility, in two steps:
    - on success, `compiled.nativeFuncs[slot] = func` for each bound slot.
 
 A context lacking a native the program calls is a load error, never a
-mid-execution crash.
+mid-execution crash. The name table holds exactly those calls (§4.3), so the
+report names what this program actually needs and a host that simply offers
+fewer natives than the build host is not excluded.
 
 ### 5.3 Errors
 

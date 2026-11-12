@@ -11,12 +11,14 @@
 //      type in this binary, to host.qlm. That is the artifact
 //      `qlang_run --qlmeta-dump` writes, and the only type knowledge a build
 //      machine needs.
-//   2. the build — two sources are compiled with no engine types registered at
-//      all: a library that reads the type's members (it names no type, so it
-//      needs no contract), an entry that constructs it against the manifest
-//      alone. `Point(...)` cannot bind to anything there, so it leaves an image
-//      that asks for the constructor by NAME. Both images and the manifest go
-//      into app.qpm through `writeQpm()`.
+//   2. the build — two sources are compiled against the manifest with no engine
+//      types registered at all: a library that reads the type's members, an entry
+//      that constructs it. `Point(...)` cannot bind to anything there, so the
+//      entry leaves an image that asks for the constructor by NAME — and the
+//      library, which never names it, asks for nothing: the slot table carries
+//      the calls a program makes, not what its build was told about (plan
+//      native-slot-portability P1). Both images and the manifest go into app.qpm
+//      through `writeQpm()`.
 //   3. the hosts — one that imports `Point` loads the package through the
 //      handshake, links and runs it, and its printed number comes off a live
 //      C++ object. Two that do not satisfy the contract are refused before any
@@ -131,9 +133,8 @@ std::string imageBytes(QLangContext &ctx, const std::string &source, const std::
   compiler.setModuleName(name);
   compiler.setLibraryMode(true);
   const CompiledProgram prog = compiler.compile();
-  const auto &ids = compiler.nativeFuncIds();
   std::ostringstream out(std::ios::binary);
-  if (!writeQlc(out, prog, std::map<std::string, int>(ids.begin(), ids.end())))
+  if (!writeQlc(out, prog, compiler.nativeSlotIds()))
     throw QLangError(QLangErrorKind::Io, 0, 0, name + ": the image is not serializable");
   return out.str();
 }
@@ -190,11 +191,7 @@ int main() {
 
     std::cout << "[2] the build (this context registers no engine type)\n";
     QLangContext build;
-    // The library names no type, so it is compiled without the contract. An
-    // injected constructor reserves a native slot in EVERY image that compile
-    // writes, and the load then demands the type — so `--qlmeta` belongs on the
-    // compiles that actually use it.
-    const std::string shape = imageBytes(build, kShapeSource, "shape", {});
+    const std::string shape = imageBytes(build, kShapeSource, "shape", types);
     std::istringstream shapeIn(shape, std::ios::binary);
     build.loadProgram(shapeIn, "shape:build");  // so `from shape import norm` resolves
     const std::string app = imageBytes(build, kEntrySource, "app", types);

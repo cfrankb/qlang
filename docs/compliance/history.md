@@ -1,3 +1,50 @@
+## Round 82 — 2026-11-12 — the `.qlc` native-slot table is the set of calls (plan `native-slot-portability-plan.md` Phase 1; compiler `QLangCompiler.cpp/.h`, writer sites in `QLangContext.cpp` / `qlang_run.cpp` / `module_search.cpp` / `portable_module.cpp`, tests `manifest_compile.cpp` + `linker_test.cpp`, docs `SERIALIZATION.md` §4.3/§5.2, `EXTERNAL_TYPES.md` §13, `spec/09-modules.md`)
+
+- **The defect Round 81 found.** `addExternalFuncs` assigns an id the moment a name is
+  injected and `writeQlc` wrote the whole reservation map, while `loadProgram`
+  resolves **every** table entry and refuses the image for a name it cannot serve. A
+  `.qlc` therefore inherited its build host's entire native table as a load
+  requirement: the demo's 1034-byte package carried `set_verbose`, `set_max_steps`,
+  `get_max_steps`, `connect` and `disconnect` that nothing called, and every manifest
+  constructor became required by every image compiled with `--qlmeta` — which is why
+  the demo had to stop handing the contract to its library compile.
+  `SERIALIZATION.md` §5.2 already promised "a native the program calls".
+- **The fix (`QLangCompiler::nativeSlotIds()`).** Two `m_usedNativeIds` inserts mark
+  exactly the sites that emit a negative `CALL` operand — the C++ module-qualified
+  call and the by-name native fallback (which is also how a manifest `QL_CTOR`
+  resolves) — and `nativeSlotIds()` filters the reservation map by them, ordered by
+  name as §4.3 asks. Every writer switched to it; `nativeFuncIds()` stays the full
+  map, because it is also what makes an unprefixed call recognizable at resolve time:
+  deleting the eager reservation instead was tried and fails six `manifest_compile`
+  gates with `unknown function 'Point'`. Pointer-wiring and disassembly sites keep
+  the full map. **No `.qlc` version bump** — `kQlcVersion` stays 9, and both a
+  shorter and a longer table remain legal v9, so old and new images load either way.
+- **The demo's workaround is gone.** `examples/portable_module.cpp` now compiles the
+  library *with* the contract (it still names no type, so its image names nothing) and
+  the package is 846 bytes rather than 1034; all nine reports still hold.
+- **Two existing gates restated** (`linker_test`): `testNativeResolution`'s library now
+  *calls* `tri` as well, so the one-error-naming-every-missing-name claim keeps two real
+  requirements instead of one requirement plus an unused reservation, and the merge gate
+  that asserted "the library's native slots dedup against the entry's" asserts the
+  corrected contract — neither `kTally` nor the app calls a native, so neither image
+  names one and the merge carries none.
+- **Verify:** full `cmake --build build` + `ctest --test-dir build` **63/63 green**
+  (`perf` skipped in Debug), demo exit 0. `manifest_compile` 38 → **51** checks
+  (55 with its CLI smoke, `qlmeta_compile_cli` unchanged): section 13 reads the table
+  back off a written image and asserts an unused native is absent *and loads*, a used
+  one present alone, a C++ module function present under its `m.f` spelling with its
+  uncalled sibling absent, and a manifest constructor the source never names absent.
+  `linker` 142 → **141**. Both marks are mutation-proven load-bearing: dropping the
+  by-name mark fails `codec`, `linker`, `manifest_compile`, `qlmeta_compile_cli`,
+  `portable_module`; dropping the module-qualified mark fails `codec`,
+  `manifest_compile`, `qlmeta_compile_cli`.
+- **Doc catch-up:** §4.3 states the table names calls, §5.2 states the writer's half,
+  `EXTERNAL_TYPES.md` §13 no longer claims a missing binding "fails at that call only"
+  (it is a load refusal naming every such slot), `spec/09-modules.md` says an image
+  carries the spellings its code calls. Phase 2 (reserving a manifest ctor slot only
+  on use) and the plan's remaining doc pass stay open at
+  `docs/plans/native-slot-portability-plan.md`.
+
 ## Round 81 — 2026-11-11 — the host demo: a `.qpm` built, loaded and refused in one program (plan `portable-module-follow-on-plan.md` Phase 2; example `examples/portable_module.cpp`, target `qlang_portable_module`)
 
 - **What was missing.** P5 landed as a codec, a CLI flag and 102 checks, and the

@@ -19,7 +19,7 @@ defined against C++20.
 | [06-functions.md](06-functions.md) | built-in functions incl. `deepcopy`, qlang native functions, C++ API | `8e7ac79a3f42b0e91bab2578551ef66d40b437e9a46683522f1e63cc1de3fe8c` |
 | [07-api.md](07-api.md) | module registration, QLang import syntax, `ctx.clear()`, verbose level, step budget, threading contract, module search paths, external search callback | `086f8502341e2447b07134bca17a61da765fc4cef61e675c35d8806d156c3fc0` |
 | [08-generators.md](08-generators.md) | generators, PROTOTYPE 1, Syntax, EOF sentinel | `a99107445f3850d8b600e84cf5d0e5860babc4173cda0e2a183debab0123200d` |
-| [09-modules.md](09-modules.md) | internal modules, import statement, math module | `72b67f5daef2a11d04585a1822991f24bc2a8d8241105d3f1512e61522a61785` |
+| [09-modules.md](09-modules.md) | internal modules, import statement, math module | `0f2c8c45af7b83db34c053ca87c6bafe998df4a1f30ff80742db8ef513d31741` |
 | [10-classes.md](10-classes.md) | user-defined classes, `static`, `::`, `deepcopy`, restrictions | `6f2cacb5b2135951a9aa27b2d69aa9b898a3fa27aeeaa56559dd18522621c458` |
 | [11-external-types.md](11-external-types.md) | conformance with external (C++) types | `ad6648c0b83df4bd4d1388d7ceaaca26669308991aa6dc9bd967e3f0ad57e01a` |
 | [12-errors-trace.md](12-errors-trace.md) | error reporting, requirements, execution trace, format | `f0814e4811e60570546d4771c048ecb1e903e6737ad388ee752d9699b9e68ff8` |

@@ -715,8 +715,10 @@ namespace {
       compiler.setModuleName(std::filesystem::path(path).stem().string());
       compiler.setLibraryMode(true);
       prog = compiler.compile();
-      const auto &ids = compiler.nativeFuncIds();
-      nativeIds = std::map<std::string, int>(ids.begin(), ids.end());
+      // Only the natives the module's code calls go in the image: it is loaded right
+      // here, and a name it never calls would still have to be resolvable
+      // (docs/SERIALIZATION.md §5.2, plan native-slot-portability P1).
+      nativeIds = compiler.nativeSlotIds();
     }
     catch (const QLangError &e)
     {

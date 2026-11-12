@@ -2118,8 +2118,8 @@ static void testScriptQlcRoundTrip() {
           prog.nativeFuncs.push_back(nullptr);
         if (resolved[i]) prog.nativeFuncs[i] = resolved[i];
       }
-      nativeIds.insert(compiler.nativeFuncIds().begin(),
-                       compiler.nativeFuncIds().end());
+      const auto slotIds = compiler.nativeSlotIds();
+      nativeIds.insert(slotIds.begin(), slotIds.end());
     } catch (const QLangError &e) {
       compiled = false;
       why = e.what();

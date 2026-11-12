@@ -1704,9 +1704,9 @@ namespace
     }
 
     // The codec wants the slot table ordered by name (docs/SERIALIZATION.md
-    // §4.3); the compiler keeps it hashed.
-    const std::map<std::string, int> nativeIds(compiler.nativeFuncIds().begin(),
-                                               compiler.nativeFuncIds().end());
+    // §4.3) and only the natives this image actually calls: a name it never calls
+    // would still have to exist wherever it loads (§5.2).
+    const std::map<std::string, int> nativeIds = compiler.nativeSlotIds();
     std::ostringstream os(std::ios::binary);
     if (!writeQlc(os, prog, nativeIds))
     {
@@ -2410,7 +2410,10 @@ int main(int argc, char **argv)
       if (resolved[i])
         compiled.nativeFuncs[i] = resolved[i];
     }
-    nativeIds.insert(compiler.nativeFuncIds().begin(), compiler.nativeFuncIds().end());
+    // The image's slot table is what its code calls (§5.2); the full reservation map
+    // stays for wiring pointers above and the disassembly listing below.
+    const auto slotIds = compiler.nativeSlotIds();
+    nativeIds.insert(slotIds.begin(), slotIds.end());
     reportStorage = compiler.registerReport();
     report = &reportStorage;
     for (const auto &imp : compiler.importedModuleFuncs())

@@ -211,9 +211,8 @@ std::string qlcImage(const std::string &source, const std::string &mod,
   compiler.setModuleName(mod);
   compiler.setLibraryMode(true);
   const qlang::CompiledProgram prog = compiler.compile();
-  const auto &ids = compiler.nativeFuncIds();
   std::ostringstream out(std::ios::binary);
-  if (!writeQlc(out, prog, std::map<std::string, int>(ids.begin(), ids.end())))
+  if (!writeQlc(out, prog, compiler.nativeSlotIds()))
     throw std::runtime_error("the fixture image is not serializable");
   return out.str();
 }

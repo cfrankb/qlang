@@ -88,8 +88,7 @@ bool compile(QLangContext &ctx, const std::string &source, CompiledProgram &out,
     if (!moduleName.empty()) compiler.setModuleName(moduleName);
     compiler.setLibraryMode(libraryMode);
     out = compiler.compile();
-    const auto &ids = compiler.nativeFuncIds();
-    nativeIds = std::map<std::string, int>(ids.begin(), ids.end());
+    nativeIds = compiler.nativeSlotIds();
     for (const auto &[name, func] : ctx.nativeFuncs()) {
       auto it = nativeIds.find(name);
       if (it == nativeIds.end()) continue;
@@ -343,21 +342,22 @@ static void testLoadProgramFile() {
 }
 
 // An image stores native slots by NAME, so the context that loads it has to be
-// able to resolve every one.
+// able to resolve every one — and the names it stores are the calls its code
+// makes, not the registry its build host happened to have (§5.2).
 static void testNativeResolution() {
+  // `tri` exists only to give the missing-name report below two names: the source
+  // calls it, so it is a real load requirement. docs/SERIALIZATION.md §5.2 requires
+  // ONE error naming all of them, not fail-on-first.
   const char *src = R"(
 export const MODULE_NAME = "hosty"
 export def twice(x)
-  return dbl(x)
+  return dbl(x) + tri(x)
 end
 )";
   QLangContext with;
   with.setFunc("dbl", [](QLangContext &, const std::vector<QLangValue> &a) {
     return QLangValue::Int(a.empty() ? 0 : a[0].asInt() * 2);
   });
-  // A second native so the missing-name report below has two names to list:
-  // docs/SERIALIZATION.md §5.2 requires ONE error naming all of them, not
-  // fail-on-first.
   with.setFunc("tri", [](QLangContext &, const std::vector<QLangValue> &a) {
     return QLangValue::Int(a.empty() ? 0 : a[0].asInt() * 3);
   });
@@ -366,8 +366,8 @@ end
   if (!check(lib != nullptr,
              "natives: a library with a native slot loads (" + err + ")"))
     return;
-  // Every native the context offers gets a slot (the driver hands the compiler
-  // the whole native set), so the check is that `dbl` is among them.
+  // The natives the library calls are named; a native it never calls is not, so
+  // a host without it could still load this image.
   int dblSlot = -1;
   for (const auto &[slot, name] : lib->nativeSlots)
     if (name == "dbl")
@@ -578,17 +578,13 @@ static void testMerge() {
   check(unique, "merge: the merged pool holds unique values");
 
   // Native slots concatenate but dedup by name, and both images were compiled
-  // against the same context, so the library contributes no new slot.
-  check(merged.nativeFuncs.size() == lib->nativeSlots.size(),
-        "merge: the library's native slots dedup against the entry's");
-  int dblSlot = -1;
-  for (const auto &[slot, name] : lib->nativeSlots)
-    if (name == "dbl")
-      dblSlot = slot;
-  check(dblSlot >= 0 &&
-            static_cast<size_t>(dblSlot) < merged.nativeFuncs.size() &&
-            merged.nativeFuncs[static_cast<size_t>(dblSlot)] != nullptr,
-        "merge: a native both modules offer keeps one resolved slot");
+  // against the same context. Neither kTally nor the app calls a native, so neither
+  // names one: the table is the natives the code calls, not the context the compile
+  // ran in (docs/SERIALIZATION.md §5.2, plan native-slot-portability P1). The gate
+  // below is the case where both images really do call one.
+  check(lib->nativeSlots.empty() && entry.nativeFuncs.empty() &&
+            merged.nativeFuncs.empty(),
+        "merge: an image names only the natives its code calls");
 
   // End to end: a native the entry calls directly and the library calls from
   // inside a function both go through that one slot.
