@@ -5,6 +5,9 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# IDE navigation (VS Code C/C++ and clangd both read build/compile_commands.json).
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 # MSVC: use the conforming preprocessor. The declarative-meta macros in
 # include/qlang/QLangMeta.h rely on __VA_ARGS__ content being re-scanned for
 # further macro expansion (the recursive QL_FE2_N fold, and macro calls such

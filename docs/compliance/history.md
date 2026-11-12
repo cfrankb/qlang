@@ -1,3 +1,28 @@
+## Round 84 — 2026-11-12 — docs only: `docs/spec/11-external-types.md` gains **### dumping the manifest** (no code, no container change)
+
+- **Why.** Every route documented so far (`qlang::writeTypeManifest`,
+  `qlang_run --qlmeta-dump`) presupposes a process that has *referenced* the
+  classes, and nothing said so out loud. The natural wrong reading is that a
+  second build target holding hand-picked types is the intended shape — and that
+  is exactly the drift the fingerprint cannot catch: a forgotten type is a missing
+  entry, not an error, and a same-named same-shape type from another build passes
+  the handshake (Round 80).
+- **What it specifies.** Extraction needs a running process (`qlang_meta()`
+  assembles at first call, the registrar registers at dynamic init; no parse-time,
+  RTTI/DWARF or `constexpr` route), so the dump is the **host's own** flag —
+  `--dump-qlm` calling `writeTypeManifest` — with the `.qlm` made a `POST_BUILD`
+  artifact of the target that ships, keeping the contract tied to the link set it
+  describes; `qlang_run --qlmeta-dump` named as that flag pre-installed. Records
+  the three rules that decide a dump's contents (referenced-TU reach, no local
+  classes, duplicate declared names refuse the dump), `writeManifest` +
+  `manifestTypeFrom` as the subset/escape hatch, and the empty case.
+- **Verified.** Docs-only, checked against HEAD: `--qlmeta-dump` from a binary
+  registering no `QL_OBJECT` type writes **12 bytes** and reports
+  `wrote 0 type(s)` (exit 0), and `--qlmeta <empty.qlm>` compiles
+  `tests/scripts/hello.ql` exactly as without it. `ctest --test-dir build`
+  **63/63**; the re-recorded `docs/spec/README.md` row passes `doc_hashes`. No
+  tally moves — no gate changed.
+
 ## Round 83 — 2026-11-12 — a manifest type reserves its native slot **on use** (plan `native-slot-portability-plan.md` Phase 2; compiler `QLangCompiler.cpp/.h`, test `manifest_compile.cpp`)
 
 - **What Round 82 left behind.** Pruning the writer left the compile itself still

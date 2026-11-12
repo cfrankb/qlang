@@ -21,3 +21,4 @@ range_check
 /perf_result.json
 .aider*
 .opencode/*
+.vscode/*

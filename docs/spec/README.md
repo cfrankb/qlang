@@ -21,7 +21,7 @@ defined against C++20.
 | [08-generators.md](08-generators.md) | generators, PROTOTYPE 1, Syntax, EOF sentinel | `a99107445f3850d8b600e84cf5d0e5860babc4173cda0e2a183debab0123200d` |
 | [09-modules.md](09-modules.md) | internal modules, import statement, math module | `0f2c8c45af7b83db34c053ca87c6bafe998df4a1f30ff80742db8ef513d31741` |
 | [10-classes.md](10-classes.md) | user-defined classes, `static`, `::`, `deepcopy`, restrictions | `6f2cacb5b2135951a9aa27b2d69aa9b898a3fa27aeeaa56559dd18522621c458` |
-| [11-external-types.md](11-external-types.md) | conformance with external (C++) types | `ad6648c0b83df4bd4d1388d7ceaaca26669308991aa6dc9bd967e3f0ad57e01a` |
+| [11-external-types.md](11-external-types.md) | conformance with external (C++) types | `3a615c3fc1bc51698abf86a77899c36cc93a4ea623615e6f00f26b8969d1d519` |
 | [12-errors-trace.md](12-errors-trace.md) | error reporting, requirements, execution trace, format | `f0814e4811e60570546d4771c048ecb1e903e6737ad388ee752d9699b9e68ff8` |
 | [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `c4bbae784a33534aee336b185f384603f24d4f40dc0955455be5747fdda13c6d` |
 | [14-scope.md](14-scope.md) | visibility scope. execution context | `ec1eadb21c4716b94590261fec12a16b1f11a715a5bfed53b5ca46232b6a0999` |

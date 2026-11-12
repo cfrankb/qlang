@@ -59,6 +59,54 @@ closures, function pointers or mangled names. The implementation stays in the
 host binary. Container layouts land in `docs/SERIALIZATION.md` with the
 implementation.
 
+### dumping the manifest
+
+Extraction needs a *running process*: `qlang_meta()` assembles its `TypeMeta` on
+first call and `QL_OBJECT`'s registrar registers it at dynamic init, so there is
+no parse-time, RTTI/DWARF or `constexpr` route to a `QLM1` — a binary that has
+referenced the classes must call a writer.
+
+That binary is the host, not a lookalike. A manifest is authoritative only
+because it describes the bindings the shipped host registers, and the
+fingerprint recovers neither a forgotten type (a missing type is a missing
+entry, not an error) nor a same-named same-shape type from another build (host
+obligations: `docs/EXTERNAL_TYPES.md` §14). So the flag belongs in the host, not
+in a second target carrying a hand-curated type list:
+
+```cpp
+// the host's main(), ahead of every other argument
+if (argc > 1 && std::strcmp(argv[1], "--dump-qlm") == 0) {
+  std::ofstream out(argc > 2 ? argv[2] : "host.qlm", std::ios::binary);
+  qlang::writeTypeManifest(out);   // every QL_OBJECT this process registered
+  return 0;
+}
+```
+
+with the manifest made an artifact of the target that ships, so it cannot drift
+from the link set it describes:
+
+```cmake
+add_custom_command(TARGET myapp POST_BUILD
+  COMMAND $<TARGET_FILE:myapp> --dump-qlm ${CMAKE_BINARY_DIR}/host.qlm)
+```
+
+`qlang_run --qlmeta-dump <file.qlm>` is that flag pre-installed (count on
+stdout, exit 0, no script mode combines with it); it dumps the types linked
+*and* referenced into `qlang_run` itself.
+
+Three registration rules decide what a dump holds (`docs/EXTERNAL_TYPES.md`
+§12): a registrar is emitted only in a translation unit that references the
+class, so a binding the dumping binary never touches is absent — the dead-strip
+case for types in a static library; a local class cannot hold a registrar, so
+`QL_OBJECT` types need namespace scope; and two bindings that extract the same
+declared name make `writeTypeManifest` refuse the dump, naming the clash. To
+dump a subset, or to resolve a clash on purpose, build the list directly —
+`writeManifest(os, {manifestTypeFrom(T::qlang_meta()), …})`, which takes a
+`TypeMeta` or a registered `TypeDescriptor` alike, and has no `ctx` getter
+either way: the descriptor is what `registerType`/`import<T>()` returns. An
+empty registry writes a valid manifest of zero types (12 bytes), and both
+`--qlmeta` and the load handshake no-op over it.
+
 ### compile-time validation
 
 The `qlc` front end consumes a manifest (`qlang_run --qlmeta <file.qlm>`);
