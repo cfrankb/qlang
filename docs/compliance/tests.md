@@ -9,10 +9,10 @@ Phases 0–5, not from the legacy monolith.
 
 | Requirement (15-tests.md) | Status | Evidence |
 |---|---|---|
-| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (28 C++ harnesses), `tests/scripts/` (23 `.ql`), `tests/perf/`; `examples/` holds demo only — `hello.cpp` (smoke app) + `qlang_run.cpp` (runner) |
+| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (29 C++ harnesses), `tests/scripts/` (23 `.ql`), `tests/perf/`; `examples/` holds demo only — `hello.cpp` (smoke app) + `qlang_run.cpp` (runner) |
 | Tests run after every task (regression gate) | ✓ | ctest is the gate (AGENTS.md "Build & test"); CI on every push to `main` |
-| Regression tests exist | ✓ | 26 script regressions (`script_*`, driven by `qlang_run`) + all 28 unit harnesses + the `qlang_run_cli` driver gate |
-| Unit tests exist (features + edge cases) | ✓ | 28 unit suites — see ctest matrix below |
+| Regression tests exist | ✓ | 26 script regressions (`script_*`, driven by `qlang_run`) + all 29 unit harnesses + the `qlang_run_cli` driver gate |
+| Unit tests exist (features + edge cases) | ✓ | 29 unit suites — see ctest matrix below |
 | Performance tests: immutable baseline for parser/compiler/execution time, logged and compared | ✓ | `tests/perf/perf_bench.cpp` + committed `tests/perf/baseline.json`; ctest `perf` gate (±20% / 0.5 ms) |
 | GitHub CI: library + smoke app + test suite against `msvc`, `g++`, `mingw`, `wasm`, `clang` | ✓ | three workflows, per the spec's "three separate ci/cd yaml" — see CI matrix |
 | Running on C++20 | ✓ | `CMAKE_CXX_STANDARD 20` (root `CMakeLists.txt`) |
@@ -45,9 +45,9 @@ tests/
 `examples/` retains only real demos: `hello.cpp` (smoke app) and `qlang_run.cpp`
 (script runner / smoke-test app).
 
-### ctest matrix — 62 entries (62/62 green, 2026-11-11)
+### ctest matrix — 63 entries (63/63 green, 2026-11-11)
 
-Unit (30 harnesses + `smoke`):
+Unit (31 harnesses + `smoke`):
 
 | ctest | binary | source | result |
 |---|---|---|---|
@@ -82,8 +82,9 @@ Unit (30 harnesses + `smoke`):
 | `codegen_size` | `codegen_size_check` | `tests/unit/codegen_size_check.cpp` | 4 checks (added Round 58; SPEC §bytecodes "encoding guidelines") — every budgeted script is compiled exactly as `qlang_run` compiles it and the **entry function's instruction count** (the number `--profile` prints) must stay within its ceiling: `hello.ql` 215, `money.ql` 151, `cast.ql` 163, `perf_stress.ql` 565 (the `perf` corpus, so a codegen change trips both gates; `hello`/`perf_stress` came down in M3 S5 — a flag compare + flag jump is one byte shorter than the boolean-temp path in branch position — and went **up** in Round 60 S1 by exactly one instruction per bare-truthiness test site, because `tst` + `je`/`jne` replaces the single `jmpfalse`/`jmptrue`: +4 in `hello.ql`, +44 in `perf_stress.ql`, `money`/`cast` unchanged — the reason is recorded in the file header and in `docs/plans/archive/phase3-opcode-retirement-plan.md` §5 S1). A ceiling is not a target: it comes down when the stream legitimately shrinks, and going up needs a reason recorded in `docs/compliance/`. This is the mechanical form of the hand comparison of the root `test-hello-*.qla` dumps that caught the 229 → 243 growth |
 | `manifest_check` | `manifest_check` | `tests/unit/manifest_check.cpp` | **35 checks passed** (added Round 76; count re-measured with the harness counter Round 78): the `QLM1` type-manifest codec — section round-trips (all member kinds, negative and >2^32 enum values, empty lists, `Unknown`/`Void` tags, context-form ctor), full-file and per-entry round-trips, truncation matrix, magic/version rejection, fingerprint stability and single-byte sensitivity, `manifestTypeFrom` host path, `metaRegistry()` self-registration + `writeTypeManifest` duplicate refusal (Round 77 §12–14). +4 more when driven by the `qlmeta_dump` entry (§12 CLI smoke) |
 | `manifest_compile` | `manifest_compile` | `tests/unit/manifest_compile.cpp` | **38 checks passed** (added Round 78, plan P4): compile-time external-type validation from hand-built `ManifestType` fixtures driving `QLangCompiler` with **no `QLangContext` anywhere** — positive full script; unknown field/method; read-only write (plain + compound); arity and literal-tag acceptance matrices; ctor matrix (typed vs context-form `QL_CTOR` presence-only); signal matrix incl. `connect`/`disconnect`; `T::M`/`T.M` fold + drift + method-not-value; receiver liveness (single init strict, any second write lenient, top-level-only receiver checks); enum fold **executed** through `QLangVM`; duplicate-type refusal; no-manifest leniency. +4 more when driven by the `qlmeta_compile_cli` entry |
+| `portable_module` | `portable_module` | `tests/unit/portable_module_test.cpp` | **84 checks passed** (added Round 79, plan P5): the `QPM1` container and its handshake — round-trip with every payload byte-identical to `writeQlc`, the layout walked by hand (magic, version, entry name, manifest size, image count/names/sizes), the untrusted-input matrix with the byte offset each fault reports (empty input, bad magic, unsupported version, oversized counts, truncation at every field, a manifest/payload fault prefixed `qlm:`/`qlc:` and located inside the container, an image declaring a different module name, trailing bytes), the four writer refusals, and the load handshake against a live registry (missing type, shape mismatch, **nothing registered** on refusal, a matching host type runs, a type-free package loads, two contexts stay independent). Always runs with `argv[1] = qlang_run`: `--package=<f.qpm>` writes and still runs, `.qpm` input runs and really links the embedded library, a package re-packages, the **magic** (not the extension) picks the format, `QPM1` + a bad version exits 3, `--package` refuses `--qlmeta-dump`, `--help` lists it |
 
-Counted unit cases: **39205** (529+33+20+7+7+22+13+17+18+49+8+358+36127+1324+151+88+142+117+8+3+7+23+17+40+4+35+38), plus
+Counted unit cases: **39289** (529+33+20+7+7+22+13+17+18+49+8+358+36127+1324+151+88+142+117+8+3+7+23+17+40+4+35+38+84), plus
 the three `ALL PASS` gate suites (`test_native`, `test_call`, `test_inject`). (The written sum had
 omitted `module_search` since its Round 67 addition; its checks are included from Round 72.)
 
@@ -109,6 +110,14 @@ combining it with script mode exits 1. `qlmeta_compile_cli` —
 also *runs*, so it must need no host natives), red script → exit 3 naming
 `has no field`, and the same red script **without** `--qlmeta` produces no
 manifest message (the lenient path).
+
+Portable-module driver gate (in-suite): `portable_module` is one ctest entry that
+always takes `argv[1] = qlang_run`, so the `--package` / `.qpm` flow is checked by
+the same binary that checks the codec (Round 79). It works in its own
+`/tmp/opencode/qpm-<pid>/` scratch directory (created, then made the working
+directory, every fixture write asserted open), so it never touches the source tree
+and cannot read a stale fixture: a missing scratch area fails the suite instead of
+silently re-running an earlier file.
 
 Perf (1): `perf` — `perf_bench` compared against `baseline.json` (below).
 

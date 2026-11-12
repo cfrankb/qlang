@@ -39,8 +39,11 @@ table key order is implementation defined (depends on the underlying container).
 
 ## extracting external types
 
-Specified 2026-11-11; **not yet implemented** (see the Open Item in
-`docs/compliance/status.md`; build plan: `docs/plans/portable-module-plan.md`).
+Specified 2026-11-11; implemented — `QLangManifest.h` (`QLM1` + `QPM1`),
+`qlang_run --qlmeta-dump` / `--qlmeta` / `--package`, and the load-time
+handshake in `QLangContext::loadPortableModuleFile`. Containers are specified in
+`docs/SERIALIZATION.md` §11–§12; host obligations in `docs/EXTERNAL_TYPES.md`
+§14.
 
 The compile-time shape `QL_OBJECT(...)` generates is extractable to a binary
 **type manifest** (`QLM1`), so the compiler can validate scripts against

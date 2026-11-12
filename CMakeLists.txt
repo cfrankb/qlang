@@ -263,6 +263,14 @@ add_test(NAME manifest_compile COMMAND manifest_compile)
 # CLI smoke: manifest_compile runs `qlang_run --qlmeta ... -c ...` green/red.
 add_test(NAME qlmeta_compile_cli COMMAND manifest_compile $<TARGET_FILE:qlang_run>)
 
+# QPM1 portable-module container (portable-module-plan P5, docs/SERIALIZATION.md
+# §12): package round-trip with untouched payloads, the untrusted-input matrix,
+# the load-time type handshake, and the --package / .qpm CLI flow.
+add_executable(portable_module tests/unit/portable_module_test.cpp)
+target_link_libraries(portable_module PRIVATE qlang)
+# One entry, always with argv[1]: the --package / .qpm gate runs in-suite.
+add_test(NAME portable_module COMMAND portable_module $<TARGET_FILE:qlang_run>)
+
 # Native/variable injection: ctx.set (incl. const) + ctx.setFunc + ctx.call.
 add_executable(test_inject tests/unit/test_inject.cpp)
 target_link_libraries(test_inject PRIVATE qlang)

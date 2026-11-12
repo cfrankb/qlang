@@ -20,3 +20,4 @@ range_check
 /examples/qla/
 /perf_result.json
 .aider*
+.opencode/*

@@ -569,6 +569,7 @@ A codec is not "done" until all of these pass:
 | `QLangContext::loadProgram` (§5.2, §9 item 4) | done — plan v4 Phase 3b: reads an image, re-resolves every native-slot name against the context's natives **and** its registered C++ modules, reports all missing names in one `Io` error, and registers the module by name (`loadedModule`/`loadedModules`) |
 | `QLangContext::execute()` | not implemented — running a loaded image is `QLangVM(prog, ctx).run()`, which is what the `qlc-exec` gate and `qlang_run` do; a context-level `execute()` over the registry would be a second way to do the same thing |
 | `QLangLinker` (merge images into one program) | done — plan v4 Phase 3b (`QLangLinker.h`/`.cpp`, `linker` suite) |
+| `writeQpm`/`readQpm` (§12), `QLangContext::loadPortableModuleFile` | done — portable-module-plan P5 (`portable_module` suite) |
 | Snapshot (v2) | not started |
 
 §9 item 2 (execute-from-image parity) is discharged by the `codec_check`
@@ -623,3 +624,58 @@ byte`, `invalid member kind`, `invalid type tag`, `fingerprint mismatch`,
 `manifest_check` suite (round-trip of every section, truncation matrix,
 version/magic rejection, fingerprint stability + single-byte sensitivity,
 host `manifestTypeFrom` equality-by-construction).
+
+## 12. Portable module (magic `QPM1`, version 1)
+
+One self-contained deployment artifact (`QLangManifest.h`, portable-module-plan
+P5): the entry image, every library image it needs, and the §11 manifest that
+describes the external types they reference. Payloads are **stored as bytes** —
+a package never re-encodes a `QLC1` image or a `QLM1` manifest, so an image
+inside a package is the same bytes `writeQlc`/`writeManifest` produced.
+
+```
+magic            4s     "QPM1"
+version          u32    = 1 (kQpmVersion; readers accept 1 only)
+entryName        String        // which image is the entry
+manifestSize     u32
+manifest         bytes         // a full QLM1 (§11), magic + version included
+imageCount       u32
+images           imageCount ×  (name String + size u32 + bytes)  // untouched QLC1
+```
+
+**Container invariants** (`writeQpm` refuses to emit, `readQpm` refuses to
+accept, one shared check): at least one image; no image with an empty or
+duplicate name; `entryName` names exactly one of them; no trailing bytes. Each
+image's declared module name (§4.6) has to equal the name the package files it
+under — the loader keys its registry by the declared name, so a package that
+disagreed would load a module nothing can `import`.
+
+**Load contract** (extends §8): every read bounds-checked, counts capped at the
+§8 limit, the manifest parsed through `readManifest` and every image through
+`readQlc` before anything else looks at them →
+`QLangError(Io, "qpm: … (byte offset N)")`, no partial state. A manifest or
+image fault is re-wrapped with its origin (`qpm: manifest: …`,
+`qpm: image 'geom': …`) so the three formats carried by one package stay
+distinguishable.
+
+**Handshake** (`QLangContext::loadPortableModuleFile`): the package is fully
+read and its manifest checked against the host's registered types *before* an
+image is loaded, so a package the host cannot serve leaves the context exactly
+as it was. A type the host does not register is
+`missing type 'T' required by portable module`; a registered type whose
+canonical entry bytes (§11) differ is
+`external type 'T' does not match the portable module`. Libraries load first,
+the entry last, each through `loadProgram` — the one path that re-resolves
+native slots (§5.2). What the handshake guarantees is the *type* half: a load
+that fails later, on a native slot the host does not have (§5.2), behaves like
+a failing `--import` and can leave the libraries it already loaded registered.
+
+**Driver.** `qlang_run --package <file.qpm>` writes the entry image plus every
+library image the invocation loaded and the `--qlmeta` manifest (empty when
+none was given); a `.qpm` input is recognized by its magic, not its extension,
+and merges through the same link step as `--import`ed images.
+
+**Tests.** `portable_module` (round-trip with byte-for-byte payloads, the
+truncation/corruption matrix, the handshake in all three outcomes) and
+`portable_module_cli` (`--package`, `.qpm` run parity against the source, the
+`--qlmeta-dump` refusal).

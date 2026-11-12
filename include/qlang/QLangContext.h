@@ -252,6 +252,20 @@ namespace qlang
     std::shared_ptr<LoadedModule> loadProgram(std::istream &is,
                                               const std::string &path = "");
     std::shared_ptr<LoadedModule> loadProgramFile(const std::string &path);
+    // A `QPM1` portable module (docs/SERIALIZATION.md §12; plan
+    // portable-module-plan P5): a package of `.qlc` images plus the QLM1
+    // external-type contract its compile was validated against. The handshake
+    // runs FIRST, before anything touches the context: every manifest type has
+    // to be registered here (registerType/import) with an equal fingerprint, or
+    // the package is refused with `missing type 'T' required by portable
+    // module` / `external type 'T' does not match the portable module`. Only
+    // then are the images taken in through loadProgram — libraries first, the
+    // entry last, so the entry's `import`s find its own embedded libraries.
+    // Returns the entry module. Linking and running stay the caller's job, as
+    // with loadProgramFile; the entry is in the registry too, so a package
+    // feeds the linker and can itself be packaged again.
+    std::shared_ptr<LoadedModule> loadPortableModuleFile(
+        const std::string &path);
     // The loaded module importable as `name`, or nullptr. Invalidated by
     // clear().
     const LoadedModule *loadedModule(const std::string &name) const;

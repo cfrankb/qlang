@@ -1,3 +1,60 @@
+## Round 79 — 2026-11-11 — P5: the `QPM1` container and the load handshake (plan `portable-module-plan.md` P5, the last phase; impl `QLangManifest.h` / `QLangManifest.cpp` / `QLangContext.h` / `QLangContext.cpp` / `qlang_run.cpp`, docs `SERIALIZATION.md` §12, `EXTERNAL_TYPES.md` §14)
+
+- **No version bump, no second codec.** `writeQpm` / `readQpm` / `QpmImage` /
+  `QpmPackage` in `QLangManifest`: `QPM1` magic, `kQpmVersion = 1`, entry name,
+  the manifest size + bytes, then image count and `name String + size u32 +
+  bytes` per image. Payloads are **kept exactly as `writeQlc` /
+  `writeManifest` produced them** (`QpmImage.bytes`, `QpmPackage.manifestSize`),
+  so `QLC1` stays v9 and `loadProgram` stays the only `.qlc` load path; the
+  container has its own magic, version and §8 limits (`kMaxManifestSize` /
+  `kMaxImportCount`), and a reader that cannot read `QPM1` fails on the magic
+  instead of mis-parsing a version-9 image.
+- **Writer refuses a package that cannot mean anything** (`qpmInvariants`,
+  shared by writer and reader so they can never disagree): no images, an
+  unnamed image, duplicate image names, an entry that is not one of the
+  embedded images.
+- **Untrusted input, located.** The `Reader` in `QLangManifest.cpp` gained a
+  message `prefix` (`qlm` / `qpm`), so one strict reader serves both containers
+  and every fault says which. The reader checks the invariants **before** it
+  validates a payload, refuses an image whose declared module name differs
+  from the name it is filed under, and refuses trailing bytes; each embedded
+  payload goes through the existing `readManifest` / `readQlc`, and an embedded
+  fault is kept whole and located twice — `qpm: image 'calc': qlc: bad magic
+  (byte offset 0) (byte offset 326)`. Nothing is reported back and no state is
+  produced unless the whole package reads.
+- **The handshake is the portability guard** (`QLangContext::
+  loadPortableModuleFile`, the only public entry): every manifest type is
+  compared, **before anything loads**, against the live registry through
+  `serializeTypeEntry(manifestTypeFrom(*desc))` — byte identity is what the
+  compiler and the runtime both key on, so name-only checking would let a
+  member's type change silently. `missing type 'T' required by portable
+  module` / `external type 'T' does not match the portable module`
+  (`QLangErrorKind::Type`, line 0 — the fault is the pair, not a site), with
+  nothing loaded and the registry untouched. Load order is libraries first,
+  entry last. New `TypeRegistry::find` (and `contains()` is now built on it).
+- **CLI.** `qlang_run --package <f.qpm>` / `--package=<f.qpm>` — writes the
+  pre-link entry image (the same snapshot `-c` writes) plus every
+  registry-loaded import that has an image, the manifest being the `--qlmeta`
+  contents; refuses `--qlmeta-dump`; like `-c` it writes the artifact and still
+  runs. `.qpm` input is detected **by magic** ahead of the `.qlc` check and
+  reuses the existing link step, so a package needs no `--import` list.
+- **Docs.** `SERIALIZATION.md` §12 (layout, rules QP1–QP6, the handshake, the
+  status row), `EXTERNAL_TYPES.md` §14 (host contract), and
+  `docs/spec/11-external-types.md` §*extracting external types* flipped from
+  "not yet implemented" to implemented — which is what the `doc_hashes` gate
+  re-records.
+- **Verify:** new ctest entry `portable_module` (**84 checks**, `argv[1] =
+  qlang_run`): round-trip with payload bytes byte-identical, the layout walked
+  by hand, every rejection with its offset, the four writer refusals, the
+  handshake against a live registry (missing, mismatch, nothing registered on
+  refusal, matching host type runs, type-free package loads, two contexts
+  independent), and the driver flow — `--package=` writes and still runs, a
+  `.qpm` runs and really links, a package re-packages, the magic (not the
+  extension) picks the format, a bad version exits 3, `--package` refuses
+  `--qlmeta-dump`. The suite works in a `/tmp/opencode/qpm-<pid>/` scratch
+  directory with every write asserted. ctest **63 entries** (62 green, `perf`
+  skipped as usual), then the doc hashes re-recorded.
+
 ## Round 78 — 2026-11-11 — P4: compile-time external-type validation from a `QLM1` manifest (plan `portable-module-plan.md` P4; impl `QLangCompiler.h` / `QLangCompiler.cpp` / `qlang_run.cpp`, docs `EXTERNAL_TYPES.md` §13)
 
 - **One API, no engine.** `QLangCompiler::addExternalTypes(

@@ -13,6 +13,7 @@
 #include "qlang/QLangCompiler.h"
 #include "qlang/QLangErrors.h"
 #include "qlang/QLangLexer.h"
+#include "qlang/QLangManifest.h"
 #include "qlang/QLangObjects.h"
 #include "qlang/QLangVM.h"
 #include "qlang/QLangModules.h"
@@ -162,12 +163,16 @@ namespace {
       m_types.push_back(std::move(d));
       return m_types.back();
     }
-    bool contains(const std::string &name) const
+    const TypeDescriptor *find(const std::string &name) const
     {
       for (const auto &t : m_types)
         if (t->name == name)
-          return true;
-      return false;
+          return t.get();
+      return nullptr;
+    }
+    bool contains(const std::string &name) const
+    {
+      return find(name) != nullptr;
     }
     void clear() { m_types.clear(); }
 
@@ -473,6 +478,52 @@ namespace {
       throw QLangError(QLangErrorKind::Io, 0, 0,
                        "cannot open module file '" + path + "'");
     return loadProgram(in, path);
+  }
+
+  // A `QPM1` package is fully parsed before the handshake and the handshake is
+  // fully done before a single image is loaded: a package the host cannot serve
+  // must leave the context exactly as it was, not half a module registry. The
+  // fingerprint comparison is byte equality over the canonical entry form, so
+  // host and manifest agree by construction (QLangManifest.h).
+  std::shared_ptr<LoadedModule> QLangContext::loadPortableModuleFile(
+      const std::string &path)
+  {
+    bindThread();
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+      throw QLangError(QLangErrorKind::Io, 0, 0,
+                       "cannot open portable module file '" + path + "'");
+    const QpmPackage pkg = readQpm(in);
+
+    for (const ManifestType &t : pkg.manifest)
+    {
+      const TypeDescriptor *d = m_pimpl->types.find(t.name);
+      if (!d)
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "missing type '" + t.name +
+                             "' required by portable module");
+      if (serializeTypeEntry(manifestTypeFrom(*d)) != serializeTypeEntry(t))
+        throw QLangError(QLangErrorKind::Type, 0, 0,
+                         "external type '" + t.name +
+                             "' does not match the portable module");
+    }
+
+    // The images are the package's own payloads, so no search path, callback or
+    // source is consulted: a portable module is self-contained. Each one goes
+    // through loadProgram, which is what re-resolves its native slots and keys
+    // the registry by its declared module name.
+    auto loadOne = [this, &path](const QpmImage &img) {
+      std::istringstream is(img.bytes, std::ios::binary);
+      return loadProgram(is, path + ":" + img.name);
+    };
+    std::shared_ptr<LoadedModule> entry;
+    for (const QpmImage &img : pkg.images)
+      if (img.name != pkg.entryName)
+        loadOne(img);  // the libraries first, so the entry's imports resolve
+    for (const QpmImage &img : pkg.images)
+      if (img.name == pkg.entryName)
+        entry = loadOne(img);
+    return entry;
   }
 
   const LoadedModule *QLangContext::loadedModule(const std::string &name) const

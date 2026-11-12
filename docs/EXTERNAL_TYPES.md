@@ -366,5 +366,50 @@ else, mirroring the lenient runtime:
 Constructor and method calls on manifest types compile to **named**
 negative native slots, re-resolved when a `.qlc` loads: the image is
 portable, and running it on a host without the bindings fails at that
-call only — loose files carry no integrity link by design (§12; the
-packaged handshake is P5).
+call only — loose files carry no integrity link by design (§12, and the
+packaged handshake in §14).
+
+## 14. Portable modules (portable-module-plan P5)
+
+A `QPM1` package (§13's manifest + the `.qlc` images that need it) is the unit
+you ship when the script side is compiled ahead of time and the C++ side is
+already built: `docs/SERIALIZATION.md` §12 defines the container, this section
+the host's obligations.
+
+```sh
+qlang_run --qlmeta host.qlmeta -c app.qlc app.ql      # compile against the shape
+qlang_run --qlmeta host.qlmeta --package app.qpm app.ql lib.qlc
+qlang_run app.qpm                                     # or embed it:
+```
+
+```cpp
+QLangContext ctx;
+ctx.import<Point>();                       // the host's QL_OBJECT types
+auto entry = ctx.loadPortableModuleFile("app.qpm");
+std::map<std::string, int> nativeIds;      // the driver's slot re-resolution
+for (auto& [slot, name] : entry->nativeSlots) nativeIds[name] = -1 - slot;
+QLangLinker linker(ctx.loadedModules());   // merges the embedded libraries
+QLangVM vm(linker.link(entry->program, nativeIds), ctx);
+```
+
+**What the handshake guarantees.** Before any image is loaded, every type in
+the package's manifest must be registered by the host, and its canonical entry
+bytes must equal the manifest's (`manifestTypeFrom` on both sides, so the
+comparison is the same one the dumper wrote). A missing type is
+`missing type 'T' required by portable module`; a drifted one — a property
+whose type changed, a method that disappeared, an enum value that moved — is
+`external type 'T' does not match the portable module`. Either way nothing is
+registered and the context is unchanged: the failure is a load error, not a
+wrong result at some later call.
+
+**What it does not.** The manifest carries *shape*, not C++ identity: two
+`Point`s with the same members but different `sizeof`, layout or method bodies
+compare equal, and each builds its own fingerprint-independent binding. That is
+deliberate (§11, "tags, not mangled names") — the package is portable across
+compilers and build configurations, which a mangled-name check would break. A
+host that wants layout equality must assert it in its own C++, not in the
+package.
+
+**A host that registers no types** needs no handshake: a package whose manifest
+is empty (what `qlang_run --package` writes without `--qlmeta`) loads anywhere
+`qlang_run` runs.

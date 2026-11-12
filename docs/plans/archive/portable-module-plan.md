@@ -1,9 +1,10 @@
 # Plan: portable modules — `QL_OBJECT` meta extraction, `QLM1` manifest, compile-time external-type validation, `QPM1` packaging
 
-Status: **PROPOSED** (2026-11-11). The requirements it closes — the OPEN TOPIC
+Status: **IMPLEMENTED** (P1–P5 green, compliance Rounds 75–79, 2026-11-11; archived).
+It was **PROPOSED** (2026-11-11): the requirements it closes — the OPEN TOPIC
 `§ extracting external types` in `docs/spec/11-external-types.md` — were
 finalized as normative spec text the same day (compliance Round 74); that
-section flips to implemented only when P1–P5 below are green.
+section flipped to implemented when P1–P5 below went green (Round 79).
 Baseline: Round 73 HEAD, `.qlc` **v9**. **No `.qlc` version bump
 anywhere in this plan** — `QLM1` and `QPM1` are new containers with their own
 magics; the `QLC1` images inside them stay byte-for-byte unchanged.
@@ -307,7 +308,7 @@ dump fixture). Corpus regression: `tests/scripts/*.ql` unchanged (no manifest
 → no new checks; today's behavior is the no-manifest path).
 **Commit:** `compile-time external-type validation from QLM1 manifests (addExternalTypes, --qlmeta)`
 
-## Phase 5 — `QPM1` portable module + load handshake
+## Phase 5 — `QPM1` portable module + load handshake ✓ DONE (Round 79, 2026-11-11)
 (`src/QLangManifest.cpp`, `include/qlang/QLangContext.h`, `src/QLangContext.cpp`,
 `examples/qlang_run.cpp`)
 
@@ -346,6 +347,17 @@ script over `Point`. Truncation/magic/version matrix. `qlang_run` script
 regression: package an existing `tests/scripts` fixture, run the `.qpm`,
 stdout byte-identical to the `.ql` run. Full `ctest` green.
 **Commit:** `QPM1 portable module (package, load handshake, qlang_run --package / .qpm)`
+
+**Delivered (Round 79), where it differs from the sketch above:** the handshake
+compares the canonical **serialized entry** (`serializeTypeEntry`), not the
+fingerprint integer — same byte-identity rule the manifest reader already
+enforces, no new API. The success path is proven with a package whose manifest
+`Point` matches a host that registered `Point`, plus a type-free package that
+really runs through the driver; a fixture script that constructs a `Point`
+needs host natives, and `qlang_run` registers none, so the run-through-a-package
+half is the type-free fixture. The `tests/scripts` regression lives inside the
+`portable_module` suite instead (one ctest entry, `argv[1] = qlang_run`), so the
+package gate and the codec gate cannot drift apart.
 
 ## Docs round (after P5, before declaring the topic closed)
 

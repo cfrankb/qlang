@@ -126,4 +126,61 @@ void writeManifest(std::ostream &os, const std::vector<ManifestType> &types);
 // type name or trailing bytes -> QLangError(Io, "qlm: ...").
 std::vector<ManifestType> readManifest(std::istream &is);
 
+// --- Portable module (magic QPM1) ------------------------------------------
+//
+// One shipped unit: the `.qlc` images a run needs plus the QLM1 external-type
+// contract the compile was validated against (docs/SERIALIZATION.md §12,
+// docs/plans/portable-module-plan.md P5). It re-describes nothing — the
+// payloads are the byte-for-byte output of `writeQlc`/`writeManifest`, so a
+// package reader is a dispatcher over the readers that already exist and the
+// images stay loadable on their own.
+//
+//   magic        4s    "QPM1"
+//   version      u32   = kQpmVersion (readers accept 1 only)
+//   entryName    String        // which image is the entry
+//   manifestSize u32
+//   manifest     bytes         // a full QLM1, magic + version included
+//   imageCount   u32
+//   images       each: name String, size u32, bytes   // untouched QLC1
+//
+// A package carries module images, never a linked program: `writeQlc` refuses
+// a linked one (no init-sequence section), so the entry links the embedded
+// libraries at load time through the existing `loadProgram`/`QLangLinker` path.
+
+// QPM1 format version. Written by writeQpm, validated (strictly) by readQpm;
+// docs/SERIALIZATION.md §12 references this constant.
+constexpr uint32_t kQpmVersion = 1;
+
+// One embedded image. `name` is the module the image declares (the name
+// `import` binds it under, and what the loader keys its registry by); `bytes`
+// is untouched QLC1.
+struct QpmImage {
+  std::string name;
+  std::string bytes;
+};
+
+// A parsed package. `manifest` is the external-type contract (`empty()` when
+// the entry needed none), `entryName` names one of `images`.
+struct QpmPackage {
+  std::string entryName;
+  std::vector<ManifestType> manifest;
+  std::vector<QpmImage> images;
+};
+
+// Write a package. Throws QLangError(Io, "qpm: ...") on no images, a duplicate
+// image name, an `entryName` that names none of them, a section too large for
+// its u32 size, or a stream failure — never emits a package `readQpm` would
+// refuse.
+void writeQpm(std::ostream &os, const std::string &entryName,
+              const std::vector<ManifestType> &manifest,
+              const std::vector<QpmImage> &images);
+
+// Read a package, treating the input as untrusted: every read bounds-checked,
+// counts capped at the §8 limits, the embedded QLM1 parsed through
+// `readManifest` and every image through `readQlc` before anything else looks
+// at them, and trailing bytes refused -> QLangError(Io,
+// "qpm: ... (byte offset N)"). Image bytes are returned untouched; validating
+// a payload costs one throwaway `readQlc`, and the loader reads it again.
+QpmPackage readQpm(std::istream &is);
+
 }  // namespace qlang
