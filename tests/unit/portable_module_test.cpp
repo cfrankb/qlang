@@ -14,8 +14,10 @@
 
 #include <cstdio>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -25,8 +27,10 @@
 #include "qlang/QLangCompiler.h"
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
+#include "qlang/QLangLinker.h"
 #include "qlang/QLangManifest.h"
 #include "qlang/QLangMeta.h"
+#include "qlang/QLangVM.h"
 
 using namespace qlang;
 
@@ -167,24 +171,30 @@ bool runCli(const std::vector<std::string> &args, std::string &out, int &code) {
 // Fixtures
 // ---------------------------------------------------------------------------
 
+// The shape a host would have dumped: two properties, a `str`, a typed
+// `QL_CTOR` (so a script really can construct it, which is what the
+// typed-payload test does through a loaded package).
 struct Point : qlang::QLObject<Point> {
   Point(double x_, double y_) : x(x_), y(y_) {}
   double x = 0, y = 0;
   std::string str() const { return "Point"; }
 
-  QL_OBJECT(QL_PROPERTY(x), QL_PROPERTY(y));
+  QL_OBJECT(QL_PROPERTY(x), QL_PROPERTY(y), QL_STR(str),
+            QL_CTOR([](double x_, double y_) { return std::make_shared<Point>(x_, y_); }));
 };
 
 qlang::QLangContext g_host;  // the natives + modules a compile sees
 
 /// Compiles `source` as module `mod` the way `qlang_run` does and returns its
-/// `.qlc` image bytes.
-std::string qlcImage(const std::string &source, const std::string &mod) {
-  qlang::QLangCompiler compiler(g_host.parse(source), &g_host);
+/// `.qlc` image bytes. `ctx` is the host the compile sees: an entry that
+/// `import`s a loaded module needs a context that has it loaded.
+std::string qlcImage(const std::string &source, const std::string &mod,
+                     qlang::QLangContext &ctx = g_host) {
+  qlang::QLangCompiler compiler(ctx.parse(source), &ctx);
   std::unordered_set<std::string> nativeNames;
-  for (const auto &n : g_host.nativeFuncs()) nativeNames.insert(n.first);
+  for (const auto &n : ctx.nativeFuncs()) nativeNames.insert(n.first);
   compiler.addExternalFuncs(nativeNames);
-  compiler.addModules(g_host.modules());
+  compiler.addModules(ctx.modules());
   compiler.setModuleName(mod);
   compiler.setLibraryMode(true);
   const qlang::CompiledProgram prog = compiler.compile();
@@ -193,6 +203,20 @@ std::string qlcImage(const std::string &source, const std::string &mod) {
   if (!writeQlc(out, prog, std::map<std::string, int>(ids.begin(), ids.end())))
     throw std::runtime_error("the fixture image is not serializable");
   return out.str();
+}
+
+/// stdout of `body()`, so a script's printed answer can be checked in-process.
+std::string captureStdout(const std::function<void()> &body) {
+  std::ostringstream ss;
+  std::streambuf *saved = std::cout.rdbuf(ss.rdbuf());
+  try {
+    body();
+  } catch (...) {
+    std::cout.rdbuf(saved);
+    throw;
+  }
+  std::cout.rdbuf(saved);
+  return ss.str();
 }
 
 std::string g_calc;  // a self-contained module image, "calc"
@@ -464,6 +488,86 @@ void testHandshake() {
 }
 
 // ===========================================================================
+// A manifest-declared type in use: values cross the package boundary
+// ===========================================================================
+
+// The handshake only proves the *shape* matches. What has to work afterwards is
+// the real thing: a `.qlc` image built against the manifest calls the type's
+// constructor by NAME (the named native slot P4 leaves behind), so the loading
+// context resolves it against its own registered descriptor, and the script then
+// reads members off a live C++ object — the typed handoff, whose pointer check is
+// `qval_external_borrowed<T>`'s dynamic_cast. A package that merely round-trips
+// proves the container; this proves the module is portable.
+void testTypedPayload() {
+  std::cout << "-- an external type through a loaded package\n";
+
+  // A library that only ever sees the object through its members.
+  const std::string shape = qlcImage(
+      "export def norm(p)\n  return p.x * p.x + p.y * p.y\nend\n", "shape");
+
+  // The entry constructs a Point and hands it to the library: `Point(...)`
+  // compiles to a named native slot, never to a pointer into this process.
+  qlang::QLangContext build;
+  build.import<Point>();
+  {
+    std::istringstream in(shape, std::ios::binary);
+    build.loadProgram(in, "shape:build");  // so `from shape import` resolves
+  }
+  const std::string app =
+      qlcImage("from shape import norm\n"
+               "local p = Point(3.5, 2.0)\n"
+               "println(norm(p))\n"
+               "println(type(p))\n",
+               "app", build);
+
+  writeFile(kTmp + "typed.qpm", pack("app", pointContract(), {{"shape", shape}, {"app", app}}));
+
+  qlang::QLangContext host;
+  host.import<Point>();
+  const std::shared_ptr<LoadedModule> entry = host.loadPortableModuleFile(kTmp + "typed.qpm");
+  CHECK_MSG(entry != nullptr, "the typed package loads");
+  CHECK_MSG(entry && entry->program.moduleName == "app", "the entry module is returned");
+
+  // The constructor travels as a name, which is the whole point of the handshake:
+  // a slot bound to a pointer would be a package that only runs where it was built.
+  bool ctorByName = false;
+  std::map<std::string, int> nativeIds;
+  if (entry) {
+    for (const auto &slot : entry->nativeSlots) {
+      if (slot.second == "Point") ctorByName = true;
+      nativeIds[slot.second] = -1 - slot.first;
+    }
+  }
+  CHECK_MSG(ctorByName, "the entry image asks for the constructor by name");
+
+  std::string out;
+  try {
+    out = captureStdout([&] {
+      const qlang::CompiledProgram merged =
+          qlang::QLangLinker(host.loadedModules()).link(entry->program, nativeIds);
+      qlang::QLangVM(merged, host).run();
+    });
+  } catch (const qlang::QLangError &e) {
+    check(false, std::string("the loaded package faulted: ") + e.what(), __LINE__);
+  }
+  CHECK_MSG(out.find("16.25") != std::string::npos,
+            "the library read the host object's members (3.5^2 + 2^2)");
+  CHECK_MSG(out.find("Point") != std::string::npos, "the value really is the external type");
+
+  // The same image in a context that does not serve the contract: refused before
+  // any image loaded, exactly as the shape-only handshake test (no second policy).
+  qlang::QLangContext bare;
+  bool refused = false;
+  try {
+    bare.loadPortableModuleFile(kTmp + "typed.qpm");
+  } catch (const qlang::QLangError &e) {
+    refused = e.message() == "missing type 'Point' required by portable module";
+  }
+  CHECK_MSG(refused, "a host without the type cannot run the typed package");
+  CHECK(bare.loadedModules().empty());
+}
+
+// ===========================================================================
 // The driver end to end
 // ===========================================================================
 
@@ -550,6 +654,7 @@ int main(int argc, char **argv) {
     testLayout();
     testRejections();
     testHandshake();
+    testTypedPayload();
   } catch (const std::exception &e) {
     check(false, std::string("unexpected fault: ") + e.what(), __LINE__);
   }

@@ -413,3 +413,14 @@ package.
 **A host that registers no types** needs no handshake: a package whose manifest
 is empty (what `qlang_run --package` writes without `--qlmeta`) loads anywhere
 `qlang_run` runs.
+
+**After the handshake, the values are the host's.** A manifest type with a
+`QL_CTOR` compiles (through §13) to a *named* native slot, so the constructor is
+resolved against the loading context, never carried in the package: `Point(3.5,
+2.0)` in a packaged script builds that host's `Point`, hands it across module
+boundaries like any other value, and every member read goes through the host's
+descriptor — which is where §10.2's typed `qval_external_*` handoff (and its
+`dynamic_cast`) applies. A package therefore cannot smuggle an object of the
+building host's `Point` into a host that registered another one: nothing but the
+name crosses. Pinned by the `portable_module` typed-payload gate (library reads
+members of a Point the entry constructed, one package, one fresh context).

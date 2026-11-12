@@ -43,17 +43,22 @@
   `docs/spec/11-external-types.md` §*extracting external types* flipped from
   "not yet implemented" to implemented — which is what the `doc_hashes` gate
   re-records.
-- **Verify:** new ctest entry `portable_module` (**84 checks**, `argv[1] =
+- **Verify:** new ctest entry `portable_module` (**92 checks**, `argv[1] =
   qlang_run`): round-trip with payload bytes byte-identical, the layout walked
   by hand, every rejection with its offset, the four writer refusals, the
   handshake against a live registry (missing, mismatch, nothing registered on
-  refusal, matching host type runs, type-free package loads, two contexts
-  independent), and the driver flow — `--package=` writes and still runs, a
-  `.qpm` runs and really links, a package re-packages, the magic (not the
-  extension) picks the format, a bad version exits 3, `--package` refuses
-  `--qlmeta-dump`. The suite works in a `/tmp/opencode/qpm-<pid>/` scratch
-  directory with every write asserted. ctest **63 entries** (62 green, `perf`
-  skipped as usual), then the doc hashes re-recorded.
+  refusal, matching host type, type-free package loads, two contexts
+  independent), **a manifest type actually in use** — a two-image package whose
+  entry builds `Point(3.5, 2.0)` through the named ctor slot, links, runs, and
+  lets the embedded library read that host object's members (`16.25` +
+  `type(p)` == `Point`, so the §10.2 typed handoff is reached from a loaded
+  package, not only from a host-run script), and the driver flow — `--package=`
+  writes and still runs, a `.qpm` runs and really links, a package re-packages,
+  the magic (not the extension) picks the format, a bad version exits 3,
+  `--package` refuses `--qlmeta-dump`. The suite works in a
+  `/tmp/opencode/qpm-<pid>/` scratch directory with every write asserted. ctest
+  **63 entries** (62 green, `perf` skipped as usual), then the doc hashes
+  re-recorded.
 
 ## Round 78 — 2026-11-11 — P4: compile-time external-type validation from a `QLM1` manifest (plan `portable-module-plan.md` P4; impl `QLangCompiler.h` / `QLangCompiler.cpp` / `qlang_run.cpp`, docs `EXTERNAL_TYPES.md` §13)
 
