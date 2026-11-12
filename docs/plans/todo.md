@@ -7,8 +7,9 @@ Maintained alongside `docs/plans/`; per AGENTS.md a plan that is fully implement
 [encoding-v6-and-indirect-plan.md](encoding-v6-and-indirect-plan.md),
 [missing-features-plan.md](missing-features-plan.md),
 [offset-table-elimination-plan.md](offset-table-elimination-plan.md),
-[portable-module-follow-on-plan.md](portable-module-follow-on-plan.md) (2026-11-11, the two
-portable-module gaps left open when `portable-module-plan.md` P1–P5 closed at Round 79).
+[portable-module-follow-on-plan.md](archive/portable-module-follow-on-plan.md) (2026-11-11,
+the two portable-module gaps left open when `portable-module-plan.md` P1–P5 closed at
+Round 79; both phases closed at Rounds 80 and 81, so it is archived).
 
 ## 1. Closed 2026-11-08 / 2026-11-09 (recent sessions)
 

@@ -1,3 +1,39 @@
+## Round 81 — 2026-11-11 — the host demo: a `.qpm` built, loaded and refused in one program (plan `portable-module-follow-on-plan.md` Phase 2; example `examples/portable_module.cpp`, target `qlang_portable_module`)
+
+- **What was missing.** P5 landed as a codec, a CLI flag and 102 checks, and the
+  host half of the story existed only as prose in `EXTERNAL_TYPES.md` §14. Nothing
+  a human could run showed the actual sequence — dump the contract, pack images
+  around it, load it on a second host — so Phase 2 became that artifact.
+- **The demo (`qlang_portable_module`, five steps, self-checking).**
+  `writeTypeManifest` dumps the demo binary's one `QL_OBJECT` type to `host.qlm`
+  (61 bytes) and `readManifest` reads it back; two sources are then compiled in a
+  context that **registers no engine type**, and `writeQpm` packs manifest + both
+  images into `app.qpm` (1034 bytes). A host that `import<Point>()` loads it, links
+  the entry through its native slots and runs it, printing `norm(p) = 16.25`,
+  `type(p) = Point` and `str(p) = Point(3.500000, 2.000000)` — a number, a type name
+  and a string all produced by the live C++ object. Then the two refusals §14
+  promises: a context registering nothing (`missing type 'Point' required by
+  portable module`) and a context whose `Point` has lost its `str`
+  (`external type 'Point' does not match the portable module`), each with
+  `loadedModules()` still empty. Exit code 0 means all nine reports held.
+- **Finding: `--qlmeta` is not inert for images that never use the type.**
+  `addExternalTypes` calls `addExternalFuncs({t.name})` for **every** manifest type
+  with `hasCtor` (`QLangCompiler.cpp`), and `writeQlc` writes the reserved slot into
+  the image — so a `.qlc` compiled with `--qlmeta` demands every manifest constructor
+  by name at load, whether or not its source ever names it (the demo's library
+  compile failed with `missing native function(s): 'Point'` before it stopped
+  passing the manifest where the type is used). The demo states this where a host
+  author will read it; `--qlmeta`'s "validation input only" wording in
+  `EXTERNAL_TYPES.md` §13 does not say it yet, and changing the reservation would
+  be a `.qlc`-visible behaviour change with no test asking for it.
+- **Verify:** new target builds clean; `./build/qlang_portable_module` exits 0 with
+  nine `[ok]` lines (twice, to rule out a stale scratch directory); full
+  `ctest --test-dir build` **63/63 green** (`perf` skipped in Debug). No `src/` or
+  test change this round, so no counts moved.
+- **Registered as a target, not a ctest entry**, following `module_search`: the
+  suites stay the proof and the demo is for humans. `tests.md`'s portable-module
+  gate note records that, so its absence from the entry table is on purpose.
+
 ## Round 80 — 2026-11-11 — the external-type handoff reached from a loaded package (plan `portable-module-follow-on-plan.md` Phase 1; tests `portable_module_test.cpp`, docs `EXTERNAL_TYPES.md` §14)
 
 - **What was missing.** Round 79 proved a package's *shapes* match its host and

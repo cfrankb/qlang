@@ -117,7 +117,10 @@ the same binary that checks the codec (Round 79). It works in its own
 `/tmp/opencode/qpm-<pid>/` scratch directory (created, then made the working
 directory, every fixture write asserted open), so it never touches the source tree
 and cannot read a stale fixture: a missing scratch area fails the suite instead of
-silently re-running an earlier file.
+silently re-running an earlier file. The companion demo `qlang_portable_module`
+(`examples/portable_module.cpp`, Round 81) is a build target and not a ctest entry,
+following `module_search`: it narrates the flow for a human and reports its own
+failures, so its exit code is the assertion and the suites above stay the proof.
 
 Perf (1): `perf` — `perf_bench` compared against `baseline.json` (below).
 

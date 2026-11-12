@@ -1,6 +1,7 @@
 # Plan: portable modules, follow-on — the external-type handoff reached from a package
 
-Status: **Phase 1 ✓ implemented (Round 80, 2026-11-11); Phase 2 not built.**
+Status: **both phases ✓ implemented (Phase 1 Round 80, Phase 2 Round 81,
+2026-11-11).**
 Baseline: Round 79 HEAD, `.qlc` **v9**, `QLM1`/`QPM1` v1. Closes the two gaps
 named when P5 shipped (`docs/plans/archive/portable-module-plan.md` P5) — neither
 is a container change.
@@ -101,6 +102,32 @@ other example target. Script of the demo, in one process:
 
 Deterministic stdout, scratch under `/tmp/opencode/` (never the source tree),
 exit 0 only if the run printed the expected value.
+
+**Delivered (Round 81), with four deviations.** `examples/portable_module.cpp` +
+`add_executable(qlang_portable_module …)`. (a) **Two** refusals instead of one, and
+neither is the Phase 1 sabotage: a context registering nothing (`missing type …`)
+and a context whose registered `Point` has lost its `str` (the shape mismatch). A
+host author reading the demo needs the two ways a host fails the contract; the
+same-name-different-C++-type case is invisible at this altitude and `portable_module`
+owns it. (b) Registered as a **build target, not a ctest entry**, following
+`module_search`: the demo is self-checking (nine `[ok]` reports, non-zero exit on
+any failure), the suites stay the proof, and a 64th entry would move the tallies for
+no new assertion. (c) Scratch is `std::filesystem::temp_directory_path() /
+"qlang_portable_module"` — same reason as (b): it is what the sibling demo does, and
+it works where `/tmp/opencode` does not exist. (d) One extra print, `str(p)`, so the
+`QL_STR` fact the contract records is demonstrated as well as `type(p)`.
+
+The demo also earned its keep: the **library** compile, given the manifest, produced
+an image whose native-slot table named `Point` even though the library never mentions
+it — `addExternalTypes` reserves a slot for every `hasCtor` type and `writeQlc`
+writes it, so that image demanded the type at load (`missing native function(s):
+'Point'`). The demo now injects the manifest only where the source names the type and
+says why. Narrowing that reservation is a `.qlc`-visible behaviour change with no
+test asking for it; `EXTERNAL_TYPES.md` §13's "validation input only" wording is what
+should catch up.
+
+**Verify (done):** target builds clean, the binary exits 0 with nine `[ok]` reports,
+full `ctest --test-dir build` 63/63 — no `src/` or test change, so no counts moved.
 
 ## Explicitly skipped (add when the trigger fires)
 

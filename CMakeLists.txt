@@ -104,6 +104,12 @@ target_link_libraries(qlang_run PRIVATE qlang)
 add_executable(module_search examples/module_search.cpp)
 target_link_libraries(module_search PRIVATE qlang)
 
+# Portable module package demo (portable-module-plan P5, follow-on Phase 2):
+# dumps the type manifest, packs two images around it into a .qpm, then runs it
+# on a host that satisfies the contract and refuses two that do not.
+add_executable(qlang_portable_module examples/portable_module.cpp)
+target_link_libraries(qlang_portable_module PRIVATE qlang)
+
 enable_testing()
 add_test(NAME smoke COMMAND qlang_example)
 

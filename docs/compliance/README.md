@@ -16,12 +16,12 @@ below (spec hashes tracked in [../spec/README.md](../spec/README.md)); the
 
 | Module | Content | Validates spec module(s) | SHA256 (self) |
 |--------|---------|--------------------------|---------------|
-| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `a1cb4fcba1a9f96fb1df7279d45c6479e0a5fa3557f37d75181c70a43a50a224` |
+| [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `a058ed6b2cc30d2213f2b57203fdc387238b44e0f1b032a56fb4e5e1f6911044` |
 | [coverage.md](coverage.md) | reserved-word coverage, value-type coverage | 02-lexical, 01-types | `789a0b58112961a6f32e98426923c17c88be737f0cfbc3a809ad771b11c898eb` |
 | [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `43177c142f68955b67994edffdc36881ae9e03cf04f84be782fe8e1d5c529c33` |
-| [history.md](history.md) | audit rounds 7–64 (append-only) | mixed (per round) | `f47f8b58c0589733f5efbba4302946053b2dcab3d27c6db2f30ffc77f7e134e7` |
+| [history.md](history.md) | audit rounds 7–64 (append-only) | mixed (per round) | `b5131da83d24c8c35eeb1c6498f99fe294edd16645850b0ffa7e0fa99c8a43f1` |
 | [classes.md](classes.md) | class implementation details, class spec conformance | 10-classes | `c95a835ae11f6e25c87facb30dd7210a18e928b56ab9b3592e25acf805e99b40` |
-| [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `a74ac608c3b40ff52834be095386be17be538883c2906fb1aa97903bb70eec0d` |
+| [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `cd7297ec8fbcf68c73d35fb5941735777f6f066993a6d692f07d9df7e6cdc8aa` |
 | [migration-value-semantics.md](migration-value-semantics.md) | copy→share migration note for `array`/`set`/`blob` (Round 43) | 01-types | `3b38a16ad6e8f04386092ee2f588adb27d5f1bdfcada749135c7168066547e7d` |
 
 **New spec modules:** every new module in `docs/spec/` must get, at creation,
