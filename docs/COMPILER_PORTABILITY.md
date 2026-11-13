@@ -22,7 +22,7 @@ compile on a Windows box would close the last cell.
 | **Clang** | 22.1.8 | ✅ verified | compiles **and runs** the smoke test ("all checks passed") |
 | **MinGW** (`x86_64-w64-mingw32-g++`) | 16.2.0 (GCC) | ✅ verified | compiles to object |
 | **emscripten / WASM** (`em++`) | 6.0.9 | ✅ verified | compiles to object |
-| **MSVC** | via CI: VS 2022 on `windows-latest` (19.51.36260) | ⚠️ compiled clean, **link** blocked on a third construct (fixed, pending the next CI run) | first CI run: every target **compiled**; only `signal_test` failed to link (`LNK2019` on the declared-only signal function) — construct 3 below removed |
+| **MSVC** | via CI: VS 2022 on `windows-latest` (19.51.36260) | ⚠️ run 3 **build** failure in three new test targets (POSIX-only harness, fixed; mingw reproduces it locally) | runs 1–2: every library target **compiled and linked**, 42/43 ctest passed (the one failure was CRLF checkout, not a compiler defect); run 3 stopped at `manifest_compile.cpp: C1083 sys/wait.h` |
 
 Everything in the header is **standard C++20** (CRTP, qualified
 pointers-to-member, `std::variant`, templates, lambdas, `std::function`,
@@ -257,13 +257,39 @@ MSVC job details (the cell this document tracks):
   `.gitattributes` (`* text=auto eol=lf`, binaries declared `binary`) keeps the
   checkout byte-identical to the committed blobs — without it the `doc_hashes`
   entry fails with all 24 module hashes "stale" (Round 48).
+- **Test-harness portability:** the CLI smokes (`manifest_check`,
+  `manifest_compile`, `portable_module`) drive `qlang_run` through
+  `tests/unit/test_cli.h` — `run()` (popen/_popen, exit code + combined
+  output), `arg()` (shell quoting), `scratch()` (a per-run temp directory) —
+  instead of `std::system` + `WEXITSTATUS`. Neither Windows compiler has
+  `<sys/wait.h>`, and the shell half of the old checks (`2>/dev/null`,
+  `grep -q`) is replaced by matching the captured output. Both Windows gates
+  are reproducible on Linux with the MinGW cross, which breaks on the same
+  constructs: `cmake -B <tmp> -G "MinGW Makefiles"
+  -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ && cmake --build <tmp>`.
+  It also caught two non-header traps: `EnumEntry::value` is a `long`, so the
+  manifest fixture uses `std::numeric_limits<long>::max()` rather than
+  `5000000000L` (32-bit `long` on Windows), and `std::filesystem::path` does
+  not convert to `std::string` implicitly under MSVC
+  (`examples/portable_module.cpp`).
+- **What the MinGW proxy cannot see:** it *is* GCC, so GCC/Clang-only
+  predefined macros compile fine there — run 3's next error was
+  `__FILE_NAME__` in `examples/integration/logger.h` (now `LOG_FILE_NAME`,
+  `__FILE__` on MSVC, with `Logger::log` trimming to a basename so the output
+  is unchanged). Local proxies: compile with `-U__FILE_NAME__` to force the
+  fallback branch, and sweep the whole set with `-Wall` for
+  `no return statement` — MSVC makes that **error C4716**, and in
+  `CActor::tileAt` the empty body had also been letting GCC delete the only
+  reference to `tileDefs`, whose generated definition was never vendored
+  (`examples/integration/tilesdefs.cpp` now supplies the one entry the demo
+  reaches).
 - **Version capture:** the *Show compiler version* step prints `cl /?`
   and records the exact "C/C++ Optimizing Compiler Version" in the step
   output. That number is the one to fill into the matrix row above.
 
 ## Open item
 
-- **MSVC — two CI runs done; awaiting the third.** Run 1
+- **MSVC — three CI runs done; awaiting the fourth.** Run 1
   (`.github/workflows/ci-msvc.yml`): **every target compiled** with the hosted
   VS 2022 toolset and the only failure was a **link** error in `signal_test` —
   construct 3 above, invisible to a compile-only check and to GCC/Clang, which
@@ -271,7 +297,11 @@ MSVC job details (the cell this document tracks):
   reproduces it on Linux. Run 2: everything compiled **and** linked and the
   suite ran — 42/43 passed, the single failure being `doc_hashes`, i.e. **not a
   compiler defect** but the CRLF checkout described above (fixed by
-  `.gitattributes` + the LF-normalized hash). The rest is standard C++20, but
+  `.gitattributes` + the LF-normalized hash). Run 3: the **build** failed — the
+  three portable-module-era targets had landed since run 2 with a POSIX-only
+  harness (`<sys/wait.h>`, `popen`, `::mkdir`, a hardcoded `/tmp` scratch
+  path); see the test-harness bullet above — the mingw job breaks on the same
+  code. The rest is standard C++20, but
   MSVC is not present in the local environment, so the cell stays reasoned
   until CI is green: on the **first green run**, flip the MSVC matrix row to ✅
   verified and record the exact compiler version from the *Show compiler

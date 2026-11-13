@@ -142,7 +142,8 @@ std::string imageBytes(QLangContext &ctx, const std::string &source, const std::
 // What a host does with a package: the handshake load, then the same link step a
 // `.qlc` entry goes through.
 std::string loadAndRun(QLangContext &ctx, const fs::path &package) {
-  const std::shared_ptr<LoadedModule> entry = ctx.loadPortableModuleFile(package);
+  const std::shared_ptr<LoadedModule> entry =
+      ctx.loadPortableModuleFile(package.string());
   if (!entry) throw QLangError(QLangErrorKind::Io, 0, 0, "the package has no entry image");
   std::map<std::string, int> nativeIds;
   for (const auto &slot : entry->nativeSlots) nativeIds[slot.second] = -1 - slot.first;
@@ -158,7 +159,7 @@ std::string loadAndRun(QLangContext &ctx, const fs::path &package) {
 
 std::string refusal(QLangContext &ctx, const fs::path &package) {
   try {
-    ctx.loadPortableModuleFile(package);
+    ctx.loadPortableModuleFile(package.string());
   } catch (const QLangError &error) {
     return error.message();
   }

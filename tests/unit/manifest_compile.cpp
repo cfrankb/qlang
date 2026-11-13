@@ -14,7 +14,6 @@
 #include <fstream>
 #include <string>
 #include <vector>
-#include <sys/wait.h> // WEXITSTATUS for the CLI smoke
 
 #include "qlang/QLangBytecodeIO.h"
 #include "qlang/QLangCompiler.h"
@@ -24,6 +23,7 @@
 #include "qlang/QLangManifest.h"
 #include "qlang/QLangParser.h"
 #include "qlang/QLangVM.h"
+#include "test_cli.h"  // the CLI smoke's child process + scratch dir
 
 #include <sstream>
 #include <utility>
@@ -462,8 +462,7 @@ int main(int argc, char **argv) {
   // 15. CLI smoke (argv[1] = qlang_run binary): engine-agnostic compile is
   // green with the manifest, red on a checked violation, file errors exit 1.
   if (argc > 1) {
-    const std::string dir = "/tmp/opencode/manifest_compile";
-    std::system(("mkdir -p " + dir).c_str());
+    const std::string dir = testcli::scratch("manifest_compile");
     std::vector<ManifestType> m;
     m.push_back(pointType());
     m.push_back(widgetType());
@@ -479,24 +478,19 @@ int main(int argc, char **argv) {
     // is a pure Int constant — no constructor natives needed without a host.
     writeFile(dir + "/good.ql", "print(Point.Right)\n");
     writeFile(dir + "/bad.ql", "local p = Point(1, 2.5)\nprint(p.zzz)\n");
-    const std::string run = std::string(argv[1]);
-    CHECK(WEXITSTATUS(std::system((run + " --qlmeta " + dir +
-                                   "/host.qlm -c " + dir + "/good.ql" +
-                                   " 2>/dev/null")
-                                      .c_str())) == 0);
-    CHECK(WEXITSTATUS(std::system((run + " --qlmeta " + dir +
-                                   "/host.qlm -c " + dir + "/bad.ql" +
-                                   " 2>/dev/null")
-                                      .c_str())) == 3);
+    const std::string run = testcli::arg(argv[1]);
+    const std::string host = testcli::arg(dir + "/host.qlm");
+    const std::string good = testcli::arg(dir + "/good.ql");
+    const std::string bad = testcli::arg(dir + "/bad.ql");
+    CHECK(testcli::run(run + " --qlmeta " + host + " -c " + good).code == 0);
+    CHECK(testcli::run(run + " --qlmeta " + host + " -c " + bad).code == 3);
     // Without the manifest the same red script is lenient again (undeclared
     // Point is a different failure — but no 'has no field' message).
-    CHECK(WEXITSTATUS(std::system((run + " -c " + dir + "/bad.ql" +
-                                   " 2>&1 | grep -q \"has no field\"")
-                                      .c_str())) != 0);
-    CHECK(WEXITSTATUS(std::system((run + " --qlmeta " + dir +
-                                   "/missing.qlm -c " + dir + "/good.ql" +
-                                   " 2>/dev/null")
-                                      .c_str())) == 1);
+    CHECK(testcli::run(run + " -c " + bad).out.find("has no field") ==
+          std::string::npos);
+    CHECK(testcli::run(run + " --qlmeta " + testcli::arg(dir + "/missing.qlm") +
+                       " -c " + good)
+              .code == 1);
   }
 
   if (failures) {

@@ -9,15 +9,16 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
-#include <sys/wait.h>  // WEXITSTATUS for the CLI smoke
 
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
 #include "qlang/QLangManifest.h"
 #include "qlang/QLangMeta.h"
+#include "test_cli.h"  // the CLI smoke's child process + scratch dir
 
 using namespace qlang;
 
@@ -69,7 +70,14 @@ static ManifestType handType() {
   fn.retTag = QTypeTag::Void;
   fn.argTags = {QTypeTag::Int, QTypeTag::Unknown};  // Unknown round-trips
   t.members = {rw, ro, fn};
-  t.enums = {{"Mode", {{"Zero", 0}, {"Neg", -5}, {"Big", 5000000000L}}}};
+  // "Big" is the widest value the carrier can hold: EnumEntry::value is a
+  // `long`, which is 64-bit on Linux and 32-bit on Windows. The wire is always
+  // int64 (SERIALIZATION.md §11), so the widest long is the portable test.
+  // ponytail: the carrier caps at `long`; make it int64_t if a manifest ever
+  // has to carry a >2^31 enum from a 64-bit host to a Windows one.
+  t.enums = {
+      {"Mode",
+       {{"Zero", 0}, {"Neg", -5}, {"Big", std::numeric_limits<long>::max()}}}};
   t.signals = {{"tick", {QTypeTag::Int}}, {"halt", {}}};
   return t;
 }
@@ -120,7 +128,7 @@ static bool eq(const ManifestType &a, const ManifestType &b) {
 }
 
 int main(int argc, char **argv) {
-  // 1. Entry round-trip: every kind, enums (negative + >2^32 values),
+  // 1. Entry round-trip: every kind, enums (negative + the widest long),
   // signals, typed ctor args, Unknown/Void tags.
   ManifestType t = handType();
   std::string entry = serializeTypeEntry(t);
@@ -293,10 +301,9 @@ int main(int argc, char **argv) {
   // with script modes. (qlang_run itself registers no QL_OBJECT types, so
   // its dump is a valid empty manifest.)
   if (argc > 1) {
-    const std::string tmp = "/tmp/opencode/manifest_check_dump.qlm";
-    CHECK(WEXITSTATUS(std::system((std::string(argv[1]) + " --qlmeta-dump " +
-                                   tmp + " 2>/dev/null")
-                                      .c_str())) == 0);
+    const std::string tmp = testcli::scratch("manifest_check") + "/dump.qlm";
+    const std::string run = testcli::arg(argv[1]);
+    CHECK(testcli::run(run + " --qlmeta-dump " + testcli::arg(tmp)).code == 0);
     std::ifstream f(tmp, std::ios::binary);
     CHECK(f.is_open());
     bool parsed = true;
@@ -306,9 +313,9 @@ int main(int argc, char **argv) {
       parsed = false;
     }
     CHECK(parsed);
-    CHECK(WEXITSTATUS(std::system((std::string(argv[1]) + " --qlmeta-dump " +
-                                   tmp + " /nonexistent.ql 2>/dev/null")
-                                      .c_str())) == 1);
+    CHECK(testcli::run(run + " --qlmeta-dump " + testcli::arg(tmp) +
+                       " /nonexistent.ql")
+              .code == 1);
   }
 
   if (failures) {

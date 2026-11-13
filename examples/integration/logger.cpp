@@ -39,6 +39,11 @@ void Logger::setOutputFile(const std::string &filename)
 
 void Logger::log(Level level, const char *tag, const char *format, ...)
 {
+    // The tag is __FILE__ on the compilers without __FILE_NAME__, so print a
+    // basename wherever it lands: trim to the last separator.
+    for (const char *p = tag; *p; ++p)
+        if (*p == '/' || *p == '\\')
+            tag = p + 1;
     std::lock_guard<std::mutex> lock(m_mutex);
     va_list args;
     va_start(args, format);

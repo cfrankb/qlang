@@ -9,10 +9,9 @@
 // a fabricated payload would only be testing that validator. What matters here is that
 // the image bytes survive byte-for-byte, which is checked as such.
 
-#include <sys/stat.h>
-#include <unistd.h>
-
+#include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -31,6 +30,7 @@
 #include "qlang/QLangManifest.h"
 #include "qlang/QLangMeta.h"
 #include "qlang/QLangVM.h"
+#include "test_cli.h"  // the CLI drive: child exit code + combined output
 
 using namespace qlang;
 
@@ -144,7 +144,7 @@ Fields walk(const std::string &b) {
 // ---------------------------------------------------------------------------
 
 // Unique per run, so stale content can never masquerade as a pass.
-const std::string kTmp = "/tmp/opencode/qpm-" + std::to_string(::getpid()) + "/";
+const std::string kTmp = testcli::scratch("qpm") + "/";
 std::string g_cli;  // build/qlang_run, from argv[1] ("" = not given: skip the CLI set)
 
 void writeFile(const std::string &path, const std::string &data) {
@@ -156,15 +156,11 @@ void writeFile(const std::string &path, const std::string &data) {
 
 bool runCli(const std::vector<std::string> &args, std::string &out, int &code) {
   std::string cmd;
-  for (const auto &a : args) cmd += (cmd.empty() ? "" : " ") + a;
-  FILE *p = popen((cmd + " 2>&1").c_str(), "r");
-  if (!p) return false;
-  char buf[4096];
-  out.clear();
-  while (fgets(buf, sizeof(buf), p)) out += buf;
-  const int st = pclose(p);
-  code = WIFEXITED(st) ? WEXITSTATUS(st) : -1;
-  return WIFEXITED(st);
+  for (const auto &a : args) cmd += (cmd.empty() ? "" : " ") + testcli::arg(a);
+  const testcli::Result r = testcli::run(cmd);
+  out = r.out;
+  code = r.code;
+  return code >= 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -727,7 +723,7 @@ void testDriver() {
 }  // namespace
 
 int main(int argc, char **argv) {
-  if (::mkdir(kTmp.c_str(), 0700) != 0) {
+  if (!std::filesystem::is_directory(kTmp)) {
     std::cerr << "FAIL: cannot create the scratch area " << kTmp << "\n";
     return 1;
   }

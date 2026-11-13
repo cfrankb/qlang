@@ -125,6 +125,7 @@ add_executable(integration_demo
   examples/integration/logger.cpp
   examples/integration/map.cpp
   examples/integration/states.cpp
+  examples/integration/tilesdefs.cpp
 )
 target_include_directories(integration_demo PRIVATE examples/integration)
 # logger.cpp reaches for SDL3 unless the host says it has none; this demo has
@@ -135,6 +136,11 @@ target_link_libraries(integration_demo PRIVATE qlang)
 enable_testing()
 add_test(NAME smoke COMMAND qlang_example)
 add_test(NAME integration_demo COMMAND integration_demo)
+# --dump-qlm writes the QLM1 manifest of the registered bindings.
+add_test(NAME integration_demo_dump_qlm
+         COMMAND integration_demo --dump-qlm ${CMAKE_CURRENT_BINARY_DIR}/host.qlm)
+set_tests_properties(integration_demo_dump_qlm
+                     PROPERTIES PASS_REGULAR_EXPRESSION "wrote 3 types")
 
 # Unit test harnesses (tests/unit/). Each links libqlang and is registered
 # with ctest; a non-zero exit code fails the suite.

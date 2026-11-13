@@ -57,17 +57,24 @@ private:
 #define LOGE(...) qCritical(__VA_ARGS__)
 #define LOGF(...) qFatal(__VA_ARGS__)
 #else
+// __FILE_NAME__ is a GCC/Clang extension (MSVC has only __FILE__); the logger
+// trims whatever it is given down to a basename.
+#if defined(__FILE_NAME__)
+#define LOG_FILE_NAME __FILE_NAME__
+#else
+#define LOG_FILE_NAME __FILE__
+#endif
 #define LOGI(...)                          \
     if (Logger::level() <= Logger::L_INFO) \
-    Logger::log(Logger::L_INFO, __FILE_NAME__, __VA_ARGS__)
+    Logger::log(Logger::L_INFO, LOG_FILE_NAME, __VA_ARGS__)
 #define LOGW(...)                          \
     if (Logger::level() <= Logger::L_WARN) \
-    Logger::log(Logger::L_WARN, __FILE_NAME__, __VA_ARGS__)
+    Logger::log(Logger::L_WARN, LOG_FILE_NAME, __VA_ARGS__)
 #define LOGE(...)                           \
     if (Logger::level() <= Logger::L_ERROR) \
-    Logger::log(Logger::L_ERROR, __FILE_NAME__, __VA_ARGS__)
+    Logger::log(Logger::L_ERROR, LOG_FILE_NAME, __VA_ARGS__)
 #define LOGF(...)                                             \
-    Logger::log(Logger::L_FATAL, __FILE_NAME__, __VA_ARGS__); \
+    Logger::log(Logger::L_FATAL, LOG_FILE_NAME, __VA_ARGS__); \
     exit(1)
 #endif
 

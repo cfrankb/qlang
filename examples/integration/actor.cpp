@@ -228,7 +228,7 @@ bool CActor::isPlayerThere(JoyAim aim) const {
  * @param aim
  * @return uint8_t
  */
-uint8_t CActor::tileAt(JoyAim aim) const {}
+uint8_t CActor::tileAt(JoyAim aim) const { return 0; }  // stub: no tile lookup
 
 /**
  * @brief Change Sprite Type
