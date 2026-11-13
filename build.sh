@@ -41,6 +41,9 @@ case "${1:-build}" in
     rm -rf "$BUILD_DIR"
     echo "Removed $BUILD_DIR/"
     ;;
+  demo)
+    cmake --build build --target integration_demo -j8 
+    ;;
   *)
     echo "usage: $0 [build|test|clean]" >&2
     exit 2

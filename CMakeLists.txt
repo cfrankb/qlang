@@ -113,8 +113,28 @@ target_link_libraries(module_search PRIVATE qlang)
 add_executable(qlang_portable_module examples/portable_module.cpp)
 target_link_libraries(qlang_portable_module PRIVATE qlang)
 
+# Vendored cs3 map/actor model driven from QLang (examples/integration/). The
+# host registers the QL_OBJECT bindings for CMap/CLayer/CActor, drives them
+# from a script and CHECKs every bound line, so it is registered with ctest
+# like the other suites. `integration_demo --dump-qlm FILE` writes the same
+# bindings as a QLM1 manifest.
+add_executable(integration_demo
+  examples/integration/main.cpp
+  examples/integration/actor.cpp
+  examples/integration/layer.cpp
+  examples/integration/logger.cpp
+  examples/integration/map.cpp
+  examples/integration/states.cpp
+)
+target_include_directories(integration_demo PRIVATE examples/integration)
+# logger.cpp reaches for SDL3 unless the host says it has none; this demo has
+# neither SDL nor Qt, so both engine logging backends stay compiled out.
+target_compile_definitions(integration_demo PRIVATE SDL_NOT_WANTED)
+target_link_libraries(integration_demo PRIVATE qlang)
+
 enable_testing()
 add_test(NAME smoke COMMAND qlang_example)
+add_test(NAME integration_demo COMMAND integration_demo)
 
 # Unit test harnesses (tests/unit/). Each links libqlang and is registered
 # with ctest; a non-zero exit code fails the suite.
