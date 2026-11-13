@@ -4,7 +4,7 @@ Date: 2026-07-11
 Scope: the two-commit change described in [plans/archive/qlc-codec-plan.md](plans/archive/qlc-codec-plan.md) —
 (1) `Instruction` restructured to a 12-byte record with a `b/c | i32` union,
 (2) the `.qlc` codec (`serializeValue`/`deserializeValue`/`writeQlc`/`readQlc`)
-moved from the `qlang_run` POC into `libqlang.a`.
+moved from the `qlcc` POC into `libqlang.a`.
 Format spec: [SERIALIZATION.md](SERIALIZATION.md) · Operand map: [spec/13-bytecodes.md](spec/13-bytecodes.md)
 
 **Verdict: net architectural improvement.** Serialization moves from a POC inside
@@ -14,7 +14,7 @@ self-describing. The costs are real but bounded.
 ## Improvements
 
 - **The struct *is* the format.** Before, the 25-byte POC encoding lived in
-  `examples/qlang_run.cpp`, hand-written field by field, and drifted from the
+  `examples/qlcc.cpp`, hand-written field by field, and drifted from the
   in-memory struct. Now the raw 12 bytes of `Instruction` are the on-disk
   record, pinned by `static_assert(sizeof(Instruction) == 12)`. One place to
   look; one assert to break if it changes.

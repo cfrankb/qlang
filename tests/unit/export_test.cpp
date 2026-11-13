@@ -50,7 +50,7 @@ static bool check(bool cond, const std::string &what) {
 
 namespace {
 
-// Compile `source` exactly as `qlang_run` does (addExternalConsts /
+// Compile `source` exactly as `qlcc` does (addExternalConsts /
 // addExternalFuncs / addModules from the context), so the export table is built
 // by the same path the driver uses. `moduleName` is the driver-supplied name
 // ("" leaves the compiler's default alone) and `libraryMode` compiles a module

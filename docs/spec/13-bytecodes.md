@@ -2,7 +2,7 @@
 
 ## disassembler
 
-IMPORTANT: every time a change is made to the opcodes or bytecode encoding, always update the disassembler: `examples/qlang_run.cpp`.
+IMPORTANT: every time a change is made to the opcodes or bytecode encoding, always update the disassembler: `examples/qlcc.cpp`.
 
 
 ## Instruction operand map (8-byte layout)
@@ -573,7 +573,7 @@ disambiguation: these are **not** the reserved `INDGET`/`INDPUT` placeholders
 (`$$` indirect access, [05-operators.md](05-operators.md) `## operator $$`),
 which remain unimplemented.
 
-the disassembler (`examples/qlang_run.cpp`) prints both with the existing
+the disassembler (`examples/qlcc.cpp`) prints both with the existing
 subscript mnemonics: `r5 = r3[r4]`, `r3[r4] = r5`.
 
 
@@ -781,7 +781,7 @@ would be a section no reader could use differently. Revisit if the compatibility
 rule is ever relaxed.
 
 consumers: the compiler (name classification and `CALL` operand `b`), the
-disassembler (`examples/qlang_run.cpp` — its hardcoded name switch is gone, so
+disassembler (`examples/qlcc.cpp` — its hardcoded name switch is gone, so
 both the `# builtin:<name>` note and the pseudo-mnemonic come from this table)
 and any future tool. the VM's `callBuiltin` dispatch stays a `switch` on the
 ids: it never needs a name.
@@ -863,7 +863,7 @@ How the bullets above are read (plan **Q30** settles the second and fourth):
 **Module identity** (plan **Q29**): the name is the value of the module's own
 `export const MODULE_NAME = "<name>"` when it declares one — a `const` holding a constant string,
 because a loader has to read the identity out of the image without running the module — else the
-name the driver supplies (`qlang_run` passes the source file stem), else `main`. A **library**
+name the driver supplies (`qlcc` passes the source file stem), else `main`. A **library**
 compile (`QLangCompiler::setLibraryMode`) requires that name to exist — its own `MODULE_NAME` or
 the driver's, since a library no name reaches cannot be imported — and compiles the top level
 as `<init>` rather than `main` (`## technical specifications` 2, "no main function"); an application

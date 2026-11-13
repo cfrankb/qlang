@@ -162,8 +162,8 @@ needs ([13-bytecodes.md](13-bytecodes.md) `## keyword export`,
 - **Loading** — the host loads an image into the context
   (`QLangContext::loadProgram` / `loadProgramFile`). Finding one by name — the search paths, the
   external search callback, and a `[name].ql` hit compiled on the spot — is
-  [07-api.md](07-api.md) `## module search paths`, so `qlang_run app.ql` resolves `import lib`
-  from a `lib.qlc` or `lib.ql` on the path; `--import lib.ql` / `qlang_run app.ql lib.qlc` name
+  [07-api.md](07-api.md) `## module search paths`, so `qlcc app.ql` resolves `import lib`
+  from a `lib.qlc` or `lib.ql` on the path; `--import lib.ql` / `qlcc app.ql lib.qlc` name
   libraries explicitly and keep the image beside the source.
 
 **Implemented (Round 65, 2026-11-09)** — plan

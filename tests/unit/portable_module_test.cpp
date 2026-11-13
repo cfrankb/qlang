@@ -2,8 +2,8 @@
 //
 // Container round-trip, the byte layout hand-walked field by field, every rejection
 // path with its byte offset, the load-time handshake (missing / mismatched host type,
-// refused before anything loads) and an end-to-end drive of `qlang_run --package`
-// plus `qlang_run <file>.qpm` through the library loader.
+// refused before anything loads) and an end-to-end drive of `qlcc --package`
+// plus `qlcc --run <file>.qpm` through the library loader.
 //
 // Payloads are real `.qlc` images: `readQpm` validates each one through `readQlc`, so
 // a fabricated payload would only be testing that validator. What matters here is that
@@ -145,7 +145,7 @@ Fields walk(const std::string &b) {
 
 // Unique per run, so stale content can never masquerade as a pass.
 const std::string kTmp = testcli::scratch("qpm") + "/";
-std::string g_cli;  // build/qlang_run, from argv[1] ("" = not given: skip the CLI set)
+std::string g_cli;  // build/qlcc, from argv[1] ("" = not given: skip the CLI set)
 
 void writeFile(const std::string &path, const std::string &data) {
   std::ofstream f(path, std::ios::binary | std::ios::trunc);
@@ -194,7 +194,7 @@ struct PointB : qlang::QLObject<PointB> {
 
 qlang::QLangContext g_host;  // the natives + modules a compile sees
 
-/// Compiles `source` as module `mod` the way `qlang_run` does and returns its
+/// Compiles `source` as module `mod` the way `qlcc` does and returns its
 /// `.qlc` image bytes. `ctx` is the host the compile sees: an entry that
 /// `import`s a loaded module needs a context that has it loaded.
 std::string qlcImage(const std::string &source, const std::string &mod,
@@ -654,9 +654,9 @@ void testHandoffMismatch() {
 // ===========================================================================
 
 void testDriver() {
-  std::cout << "-- qlang_run --package and .qpm input\n";
+  std::cout << "-- qlcc --package and .qpm input\n";
   if (g_cli.empty()) {
-    std::cout << "   (no qlang_run given on the command line; skipping)\n";
+    std::cout << "   (no qlcc given on the command line; skipping)\n";
     return;
   }
   int code = -1;
@@ -665,17 +665,18 @@ void testDriver() {
   writeFile(kTmp + "geom.ql", "export def area(name)\n  return 3.14 * 2 * 2\nend\n");
   writeFile(kTmp + "app.ql", "from geom import area\nlocal a = area(\"x\")\nprintln(a)\n");
 
-  // Writing: one image per module, the entry last, and the run still happens.
+  // Writing: one image per module, the entry last; execution needs --run.
   CHECK_MSG(runCli({g_cli, kTmp + "app.ql", "--package=" + kTmp + "app.qpm"}, out, code) &&
                 code == 0,
             "app.ql --package=app.qpm succeeds");
   CHECK_MSG(out.find("portable module written: " + kTmp + "app.qpm (2 image(s), 0 type(s))") !=
                 std::string::npos,
             "the notice names the file and what went in");
-  CHECK_MSG(out.find("12.56") != std::string::npos, "--package still runs the program (like -c)");
+  CHECK_MSG(out.find("12.56") == std::string::npos, "--package alone does not run the program");
 
-  // Reading: the embedded library really links and runs.
-  CHECK_MSG(runCli({g_cli, kTmp + "app.qpm"}, out, code) && code == 0, "app.qpm runs");
+  // Reading: the embedded library really links and runs (with --run).
+  CHECK_MSG(runCli({g_cli, "--run", kTmp + "app.qpm"}, out, code) && code == 0,
+            "app.qpm runs");
   CHECK_MSG(out.find("12.56") != std::string::npos, "the imported function really ran");
 
   // The same file through the library loader: libraries first, entry last.
@@ -698,7 +699,7 @@ void testDriver() {
 
   // The magic decides the format, not the file name.
   writeFile(kTmp + "plain.qpm", "local v = 41 + 1\nprintln(v)\n");
-  CHECK_MSG(runCli({g_cli, kTmp + "plain.qpm"}, out, code) && code == 0,
+  CHECK_MSG(runCli({g_cli, "--run", kTmp + "plain.qpm"}, out, code) && code == 0,
             "a .qpm without the magic runs as source");
   CHECK_MSG(out.find("42") != std::string::npos, "the source really ran");
 

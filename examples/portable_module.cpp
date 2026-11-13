@@ -9,7 +9,7 @@
 //
 //   1. the contract — `writeTypeManifest()` dumps `Point`, the only QL_OBJECT
 //      type in this binary, to host.qlm. That is the artifact
-//      `qlang_run --qlmeta-dump` writes, and the only type knowledge a build
+//      `qlcc --qlmeta-dump` writes, and the only type knowledge a build
 //      machine needs.
 //   2. the build — two sources are compiled against the manifest with no engine
 //      types registered at all: a library that reads the type's members, an entry
@@ -120,7 +120,7 @@ const char kEntrySource[] = "from shape import norm\n"
                             "println(\"str(p) = \" + str(p))\n";
 
 // Compiles `source` as module `name` against `types` (the manifest) and
-// serializes it with its native slot table — what `qlang_run --qlmeta <file>
+// serializes it with its native slot table — what `qlcc --qlmeta <file>
 // --compile` does per file, and what `--package` does for both images at once.
 std::string imageBytes(QLangContext &ctx, const std::string &source, const std::string &name,
                        const std::vector<ManifestType> &types) {

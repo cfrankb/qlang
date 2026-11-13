@@ -98,9 +98,10 @@ install(FILES
 add_executable(qlang_example examples/hello.cpp)
 target_link_libraries(qlang_example PRIVATE qlang)
 
-# Small script runner: qlang_run [options] file.ql|file.qlc (see docs/spec/18-qlang-run.md)
-add_executable(qlang_run examples/qlang_run.cpp)
-target_link_libraries(qlang_run PRIVATE qlang)
+# qlcc (formerly qlang_run): .ql/.qlc compiler driver, runs only with --run
+# (see docs/spec/18-qlang-run.md)
+add_executable(qlcc examples/qlcc.cpp)
+target_link_libraries(qlcc PRIVATE qlang)
 
 # Module search paths demo (plan C8a): finds a library by path, by host
 # callback, and shows a registered C++ module outranking both.
@@ -286,17 +287,17 @@ add_test(NAME external COMMAND test_external)
 add_executable(manifest_check tests/unit/manifest_check.cpp)
 target_link_libraries(manifest_check PRIVATE qlang)
 add_test(NAME manifest_check COMMAND manifest_check)
-# CLI smoke: manifest_check runs `qlang_run --qlmeta-dump <tmp>` (P3) and
+# CLI smoke: manifest_check runs `qlcc --qlmeta-dump <tmp>` (P3) and
 # parses the file — exit 0 required, plus the refuse-to-combine check.
-add_test(NAME qlmeta_dump COMMAND manifest_check $<TARGET_FILE:qlang_run>)
+add_test(NAME qlmeta_dump COMMAND manifest_check $<TARGET_FILE:qlcc>)
 
 # Compile-time external-type validation from a QLM1 manifest (portable-module-
 # plan P4): the negative matrix, receiver liveness, enum folding/drift.
 add_executable(manifest_compile tests/unit/manifest_compile.cpp)
 target_link_libraries(manifest_compile PRIVATE qlang)
 add_test(NAME manifest_compile COMMAND manifest_compile)
-# CLI smoke: manifest_compile runs `qlang_run --qlmeta ... -c ...` green/red.
-add_test(NAME qlmeta_compile_cli COMMAND manifest_compile $<TARGET_FILE:qlang_run>)
+# CLI smoke: manifest_compile runs `qlcc --qlmeta ... -c ...` green/red.
+add_test(NAME qlmeta_compile_cli COMMAND manifest_compile $<TARGET_FILE:qlcc>)
 
 # QPM1 portable-module container (portable-module-plan P5, docs/SERIALIZATION.md
 # §12): package round-trip with untouched payloads, the untrusted-input matrix,
@@ -304,7 +305,7 @@ add_test(NAME qlmeta_compile_cli COMMAND manifest_compile $<TARGET_FILE:qlang_ru
 add_executable(portable_module tests/unit/portable_module_test.cpp)
 target_link_libraries(portable_module PRIVATE qlang)
 # One entry, always with argv[1]: the --package / .qpm gate runs in-suite.
-add_test(NAME portable_module COMMAND portable_module $<TARGET_FILE:qlang_run>)
+add_test(NAME portable_module COMMAND portable_module $<TARGET_FILE:qlcc>)
 
 # Native/variable injection: ctx.set (incl. const) + ctx.setFunc + ctx.call.
 add_executable(test_inject tests/unit/test_inject.cpp)
@@ -371,7 +372,7 @@ target_compile_definitions(codegen_size_check PRIVATE
 add_test(NAME codegen_size COMMAND codegen_size_check)
 
 # Script-level regression suite (tests/scripts/). Each .ql script is driven
-# by qlang_run (the smoke-test app); a non-zero exit code fails the suite.
+# by qlcc --run (the smoke-test app); a non-zero exit code fails the suite.
 # Explicit list (Phase 5, F7) — no file(GLOB), so a new script is a deliberate
 # CMake edit, not a silent pickup. `ql_module.ql` is the exception that proves
 # the rule: it imports `ql_module_dep.ql`, a sibling source module with no image
@@ -407,23 +408,24 @@ set(QL_SCRIPTS
 foreach(ql_script IN LISTS QL_SCRIPTS)
   get_filename_component(ql_name ${ql_script} NAME_WE)
   add_test(NAME script_${ql_name}
-           COMMAND qlang_run ${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/${ql_script})
+           COMMAND qlcc --run ${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts/${ql_script})
 endforeach()
 
-# Driver contract gate (docs/spec/18-qlang-run.md): drives the real qlang_run
+# Driver contract gate (docs/spec/18-qlang-run.md): drives the real qlcc
 # executable over a generated fixture tree and checks the observable surface —
-# the removed --output/--asm, the -c/-a/-r/--output-path artifact rules, and the
+# the removed --output/--asm, the -c/-a/-r/--run/--output-path artifact rules,
+# combinable flags, and the
 # --import compile-and-cache rule (an image is reused only when it carries this
 # build's .qlc version and is not older than its source). CMake script mode —
 # no binary, no shell — so it runs on every CI job including MSVC (same
 # reasoning as doc_hashes). The scratch directory is wiped and rebuilt by the
 # script on every run, so the suite is repeatable and never touches the source
 # tree.
-add_test(NAME qlang_run_cli
+add_test(NAME qlcc_cli
          COMMAND ${CMAKE_COMMAND}
-                 -DQLANG_RUN=$<TARGET_FILE:qlang_run>
-                 -DQLANG_CLI_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/_qlang_run_cli
-                 -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_qlang_run_cli.cmake)
+                 -DQLCC=$<TARGET_FILE:qlcc>
+                 -DQLCC_CLI_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/_qlcc_cli
+                 -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/check_qlcc_cli.cmake)
 
 # Performance baseline harness (SPEC # performance tests): median-of-5 per
 # stage (parse/compile/execute) over a fixed corpus, compared against

@@ -4,7 +4,7 @@
 # modifier byte (docs/plans/encoding-v6-and-indirect-plan.md 2.2/2.4). The
 # assertions prove the value survives encode -> load -> execute; the byte
 # layout itself is asserted in encoding_v6_test. To see the forms:
-#   qlang_run --asm /tmp/imm.qla --asm-level 4 tests/scripts/imm_kinds.ql
+#   qlcc -a --output-path /tmp --asm-level 4 tests/scripts/imm_kinds.ql
 #
 #   i8     e=0x40   -128 .. 127
 #   i16    e=0x50   -32768 .. 32767   (255 is i16: the compiler never emits the

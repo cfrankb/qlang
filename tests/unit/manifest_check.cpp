@@ -4,7 +4,7 @@
 // and single-byte sensitivity, the untrusted-input guards (bad kind/tag
 // bytes, duplicate names, trailing bytes), manifestTypeFrom flowing the P1
 // describable meta into the manifest form, the self-registering meta
-// registry + writeTypeManifest, and (argv[1] = qlang_run binary) the
+// registry + writeTypeManifest, and (argv[1] = qlcc binary) the
 // --qlmeta-dump CLI smoke.
 #include <cstdio>
 #include <cstdlib>
@@ -296,9 +296,9 @@ int main(int argc, char **argv) {
   }
   CHECK(dupThrew);
 
-  // 14. CLI smoke (the qlmeta_dump ctest entry passes the qlang_run binary):
+  // 14. CLI smoke (the qlmeta_dump ctest entry passes the qlcc binary):
   // --qlmeta-dump exits 0 with a parseable file, and refuses to combine
-  // with script modes. (qlang_run itself registers no QL_OBJECT types, so
+  // with script modes. (qlcc itself registers no QL_OBJECT types, so
   // its dump is a valid empty manifest.)
   if (argc > 1) {
     const std::string tmp = testcli::scratch("manifest_check") + "/dump.qlm";

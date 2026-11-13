@@ -83,7 +83,7 @@ struct CallSite {
   int argc;
 };
 
-// Compile `source` exactly as `qlang_run` does (addExternalConsts /
+// Compile `source` exactly as `qlcc` does (addExternalConsts /
 // addExternalFuncs / addModules from the context), then decode the main
 // function's instruction stream and collect every CALL. Returns false with the
 // error text when compilation fails.

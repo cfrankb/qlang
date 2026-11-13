@@ -40,7 +40,7 @@ table key order is implementation defined (depends on the underlying container).
 ## extracting external types
 
 Specified 2026-11-11; implemented — `QLangManifest.h` (`QLM1` + `QPM1`),
-`qlang_run --qlmeta-dump` / `--qlmeta` / `--package`, and the load-time
+`qlcc --qlmeta-dump` / `--qlmeta` / `--package`, and the load-time
 handshake in `QLangContext::loadPortableModuleFile`. Containers are specified in
 `docs/SERIALIZATION.md` §11–§12; host obligations in `docs/EXTERNAL_TYPES.md`
 §14.
@@ -50,7 +50,7 @@ The compile-time shape `QL_OBJECT(...)` generates is extractable to a binary
 external types **without the engine linked** — one `qlc` front end builds
 modules for any host. Extraction is registration-driven, not parse-driven (no
 MOC): `QL_OBJECT` self-registers in a process-wide meta registry, a host
-binary dumps it — `qlang_run --qlmeta-dump <file.qlm>` or the library
+binary dumps it — `qlcc --qlmeta-dump <file.qlm>` or the library
 one-liner `qlang::writeTypeManifest(os)`. The manifest carries description
 only: type name, members (kind, name, portable **type tags** for property
 read/write, method arguments/return, signal arguments, typed-constructor
@@ -90,9 +90,9 @@ add_custom_command(TARGET myapp POST_BUILD
   COMMAND $<TARGET_FILE:myapp> --dump-qlm ${CMAKE_BINARY_DIR}/host.qlm)
 ```
 
-`qlang_run --qlmeta-dump <file.qlm>` is that flag pre-installed (count on
+`qlcc --qlmeta-dump <file.qlm>` is that flag pre-installed (count on
 stdout, exit 0, no script mode combines with it); it dumps the types linked
-*and* referenced into `qlang_run` itself.
+*and* referenced into `qlcc` itself.
 
 Three registration rules decide what a dump holds (`docs/EXTERNAL_TYPES.md`
 §12): a registrar is emitted only in a translation unit that references the
@@ -109,7 +109,7 @@ empty registry writes a valid manifest of zero types (12 bytes), and both
 
 ### compile-time validation
 
-The `qlc` front end consumes a manifest (`qlang_run --qlmeta <file.qlm>`);
+The `qlc` front end consumes a manifest (`qlcc --qlmeta <file.qlm>`);
 each violation is a compile error worded like the runtime error it replaces.
 
 | site | checked at compile time |
@@ -127,8 +127,8 @@ with a manifest of the same name.
 ### portable module
 
 A manifest plus the `QLC1` images it validates — byte-for-byte unchanged —
-package as a **portable module** (`QPM1`, `qlang_run --package`). Loading one
-(`qlang_run app.qpm` / `QLangContext::loadPortableModuleFile`) handshakes the
+package as a **portable module** (`QPM1`, `qlcc --package`). Loading one
+(`qlcc app.qpm` / `QLangContext::loadPortableModuleFile`) handshakes the
 manifest against the host's registered types: every type present, fingerprints
 equal, or a clean load error. Bytecode can never silently run against drifted
 bindings.
@@ -147,7 +147,7 @@ every host's `main()` re-implements two-file load + handshake.
 editor (host binary, QL_OBJECT bindings compiled in)
   ├─ qlang::writeTypeManifest / --qlmeta-dump   → map.qlm   (once per editor build)
   ├─ edit maplogic.ql
-  ├─ qlang_run -c --qlmeta map.qlm maplogic.ql  → maplogic.qlc (compile-verified, no editor linked into qlc)
+  ├─ qlcc -c --qlmeta map.qlm maplogic.ql  → maplogic.qlc (compile-verified, no editor linked into qlc)
   └─ run/load the bare .ql or .qlc inside editor — real bindings, runtime checks
 ship: --package → game.qpm (manifest + images), load-time handshake
 ```

@@ -1,11 +1,13 @@
-# check_qlang_run_cli.cmake — qlang_run command-line contract gate.
+# check_qlcc_cli.cmake — qlcc command-line contract gate.
 #
-# docs/spec/18-qlang-run.md defines the driver's surface: --output/--asm are
-# gone, -c (save the compiled image), -a (save a disassembly listing), -r
-# (--rotate) and --output-path replace them, the artifact names are derived from
-# the entry file, and --import resolves a MODULE (compiling and saving its .qlc
-# when the image is missing, of another .qlc version, or older than its source)
-# instead of requiring a path to an image.
+# docs/spec/18-qlang-run.md defines the driver's surface: the program runs only
+# with --run, --output/--asm are gone, -c (save the compiled image), -a (save a
+# disassembly listing), -r (--rotate) and --output-path replace them, -c/-a/-r
+# combine (-ca, -car), the artifact names are derived from the entry file,
+# --strict parses and is rejected as not implemented, and --import resolves a
+# MODULE (compiling and saving its .qlc when the image is missing, of another
+# .qlc version, or older than its source) instead of requiring a path to an
+# image.
 #
 # This gate drives the real executable over a generated fixture tree and checks
 # the observable results: exit codes, which files appeared where, and what the
@@ -13,11 +15,11 @@
 # runs on every CI job including MSVC (same reasoning as check_doc_hashes).
 #
 # Usage:
-#   cmake -DQLANG_RUN=<build>/qlang_run \
-#         -DQLANG_CLI_WORK_DIR=<scratch dir> \
-#         -P cmake/check_qlang_run_cli.cmake
+#   cmake -DQLCC=<build>/qlcc \
+#         -DQLCC_CLI_WORK_DIR=<scratch dir> \
+#         -P cmake/check_qlcc_cli.cmake
 #
-# Registered as the `qlang_run_cli` ctest entry (see CMakeLists.txt). The work
+# Registered as the `qlcc_cli` ctest entry (see CMakeLists.txt). The work
 # directory is wiped and rebuilt on every run, so the suite is repeatable and
 # never touches the source tree.
 #
@@ -25,17 +27,17 @@
 # newer than an image is touched only after a sleep longer than the coarsest
 # filesystem timestamp granularity (1 s on some volumes).
 
-if(NOT DEFINED QLANG_RUN)
-  message(FATAL_ERROR "QLANG_RUN (path to the qlang_run executable) is not defined")
+if(NOT DEFINED QLCC)
+  message(FATAL_ERROR "QLCC (path to the qlcc executable) is not defined")
 endif()
-if(NOT EXISTS "${QLANG_RUN}")
-  message(FATAL_ERROR "QLANG_RUN '${QLANG_RUN}' does not exist")
+if(NOT EXISTS "${QLCC}")
+  message(FATAL_ERROR "QLCC '${QLCC}' does not exist")
 endif()
-if(NOT DEFINED QLANG_CLI_WORK_DIR)
-  message(FATAL_ERROR "QLANG_CLI_WORK_DIR (scratch directory) is not defined")
+if(NOT DEFINED QLCC_CLI_WORK_DIR)
+  message(FATAL_ERROR "QLCC_CLI_WORK_DIR (scratch directory) is not defined")
 endif()
 
-set(W "${QLANG_CLI_WORK_DIR}")
+set(W "${QLCC_CLI_WORK_DIR}")
 file(REMOVE_RECURSE "${W}")
 file(MAKE_DIRECTORY "${W}/libs" "${W}/nest" "${W}/only")
 
@@ -80,7 +82,7 @@ println(aa.quad(21))
 # working directory, so relative arguments resolve as they would for a user).
 macro(run)
   execute_process(
-    COMMAND ${QLANG_RUN} ${ARGN}
+    COMMAND ${QLCC} ${ARGN}
     WORKING_DIRECTORY "${W}"
     RESULT_VARIABLE RC
     OUTPUT_VARIABLE OUT
@@ -179,26 +181,66 @@ expect_match("--output is reported as an unknown option" ERR "unknown option")
 run(--asm x.qla plain.ql)
 expect_rc("--asm is no longer accepted" 1)
 
+# --strict parses, is range-checked, and is then rejected: the strict-typing
+# engine does not exist yet (docs/spec/16-strict_typing.md).
+run(--strict 1 plain.ql)
+expect_rc("--strict N exits 1 until the engine exists" 1)
+expect_match("--strict says it is not implemented" ERR "not implemented")
+run(--strict plain.ql)
+expect_rc("--strict without a level exits 1" 1)
+expect_match("--strict names the accepted levels" ERR "0, 1, or 2")
+
 # --- help still answers -----------------------------------------------------
 run(--help)
 expect_rc("--help exits 0" 0)
 expect_match("--help documents --output-path" OUT "output-path")
 expect_match("--help documents -c" OUT "-c  ")
+expect_match("--help documents --run" OUT "--run")
+expect_match("--help documents --strict" OUT "--strict")
+expect_match("--help documents combinable flags" OUT "-ca")
 expect_no_match("--help no longer advertises --output <file>" OUT "--output ")
 
-# --- -c / -a name their files and default to the entry's directory ----------
+# --- the program runs only with --run ---------------------------------------
+# Without --run the driver compiles: nothing executes, and with no -c/-a/-r
+# there is no artifact at all.
+run(plain.ql)
+expect_rc("plain compile-only exits 0" 0)
+expect_no_match("without --run the program does not execute" OUT "42")
+expect_count("compile-only writes no artifact" "${W}/plain.qlc" 0)
+expect_count("compile-only writes no listing" "${W}/plain.qla" 0)
+
+# -c names its file and defaults to the entry's directory; it does not execute.
 run(-c plain.ql)
-expect_rc("-c runs the script" 0)
-expect_match("-c leaves the program output on stdout" OUT "42")
+expect_rc("-c exits 0" 0)
+expect_no_match("-c does not execute the program" OUT "42")
 expect_exists("-c wrote <stem>.qlc beside the source" "${W}/plain.qlc")
 expect_match("-c reports the artifact" ERR "bytecode written")
-run(-a plain.ql)
-expect_rc("-a runs the script" 0)
-expect_exists("-a wrote <stem>.qla beside the source" "${W}/plain.qla")
+# -a lists and does not execute either.
+run(-a plain.ql --output-path aonly)
+expect_rc("-a exits 0" 0)
+expect_no_match("-a does not execute the program" OUT "42")
+expect_exists("-a wrote <stem>.qla" "${W}/aonly/plain.qla")
 expect_match("-a reports the listing" ERR "disassembly written")
-expect_missing("-a alone writes no image" "${W}/plain2.qlc")
+expect_missing("-a alone writes no image" "${W}/aonly/plain.qlc")
+# --run executes and, with no artifact flags, writes nothing.
+run(--run plain.ql)
+expect_rc("--run exits 0" 0)
+expect_match("--run executes the program" OUT "42")
+expect_count("--run alone writes no artifact" "${W}/plain.qla" 0)
 
-# --- --output-path ----------------------------------------------------------
+# --- combinable short flags --------------------------------------------------
+run(-ca plain.ql --output-path combo)
+expect_rc("-ca combines -c and -a" 0)
+expect_exists("-ca wrote the image" "${W}/combo/plain.qlc")
+expect_exists("-ca wrote the listing" "${W}/combo/plain.qla")
+expect_no_match("-ca does not execute the program" OUT "42")
+run(-car plain.ql --output-path combo2)
+expect_rc("-car adds --rotate" 0)
+expect_count("-car rotates the image name" "${W}/combo2/plain_*.qlc" 1)
+expect_count("-car rotates the listing name" "${W}/combo2/plain_*.qla" 1)
+expect_missing("-car is not a package request" "${W}/combo2/plain.qpm")
+
+# --- --output-path ------------------------------------------------------------
 run(-c -a --output-path out plain.ql)
 expect_rc("--output-path run exits 0" 0)
 expect_dir("--output-path is created" "${W}/out")
@@ -208,7 +250,7 @@ run(-c -a --output-path=nested/deep plain.ql)
 expect_exists("--output-path= form works" "${W}/nested/deep/plain.qlc")
 expect_missing("--output-path leaves the source directory clean" "${W}/nested.qlc")
 
-# --- -r / --rotate ----------------------------------------------------------
+# --- -r / --rotate ------------------------------------------------------------
 run(-c -a -r --output-path rot plain.ql)
 expect_count("-r rotates the image name" "${W}/rot/plain_*.qlc" 1)
 expect_count("-r rotates the listing name" "${W}/rot/plain_*.qla" 1)
@@ -216,39 +258,41 @@ expect_missing("-r does not also write the plain name" "${W}/rot/plain.qlc")
 run(-c --rotate --output-path rot2 plain.ql)
 expect_count("--rotate is the long form of -r" "${W}/rot2/plain_*.qlc" 1)
 
-# --- --import compiles a .ql and caches it as a .qlc ------------------------
-run(--import libs/greeter app.ql)
+# --- --import compiles a .ql and caches it as a .qlc ---------------------------
+# These runs pass --run so the checks below observe both the compile cache on
+# disk and the program output; the caching itself happens at compile time.
+run(--run --import libs/greeter app.ql)
 expect_rc("--import of a source compiles and runs" 0)
 expect_match("--import made the library callable" OUT "hello, world")
 expect_exists("--import saved the image beside the source" "${W}/libs/greeter.qlc")
 expect_match("--import reports the compile" ERR "module compiled")
-run(--import libs/greeter app.ql)
+run(--run --import libs/greeter app.ql)
 expect_rc("a current image is loaded" 0)
 expect_no_match("a current image is not recompiled" ERR "module compiled")
 touch_new("${W}/libs/greeter.ql")
-run(--import libs/greeter app.ql)
+run(--run --import libs/greeter app.ql)
 expect_match("a source newer than its image recompiles" ERR "module compiled")
 # An image whose header is not this build's QLC1 v9 is stale even when it is
 # newer than the source, so it must be rebuilt rather than rejected at load.
 file(WRITE "${W}/libs/greeter.qlc" "QLC1 not a version header\n")
-run(--import libs/greeter app.ql)
+run(--run --import libs/greeter app.ql)
 expect_match("an image of another version recompiles" ERR "module compiled")
 expect_rc("the rebuilt image loads" 0)
 # A bare name resolves on the module search paths, .qlc before .ql.
-run(--module-path libs --import greeter app.ql)
+run(--run --module-path libs --import greeter app.ql)
 expect_rc("a bare module name resolves on the search path" 0)
 expect_no_match("a bare name reuses the current image" ERR "module compiled")
 # A module with an image and no source beside it is loaded as-is.
 file(COPY "${W}/libs/greeter.qlc" DESTINATION "${W}/only")
-run(--import only/greeter app.ql)
+run(--run --import only/greeter app.ql)
 expect_rc("an image with no source loads" 0)
 expect_no_match("an image with no source is not recompiled" ERR "module compiled")
 # A name nothing can answer is a missing file, not a QLang error.
-run(--import nosuch app.ql)
+run(--run --import nosuch app.ql)
 expect_rc("a module that is nowhere exits 2" 2)
 expect_match("a missing module names what was asked for" ERR "nosuch")
 
-# --- -a lists every image it generates --------------------------------------
+# --- -a lists every image it generates ----------------------------------------
 touch_new("${W}/libs/greeter.ql")
 run(-a --import libs/greeter app.ql)
 expect_exists("-a lists a generated image" "${W}/libs/greeter.qla")
@@ -257,7 +301,6 @@ expect_exists("-a still lists the entry" "${W}/app.qla")
 run(-a --module-path nest --import nest/aa nest/main.ql)
 expect_exists("a dependency is compiled transitively" "${W}/nest/bb.qlc")
 expect_exists("a transitive dependency is listed with -a" "${W}/nest/bb.qla")
-expect_match("the dependency chain runs" OUT "84")
 # Generated images keep their plain name: a rotated one could never be found
 # again by the name its dependent imports.
 touch_new("${W}/nest/bb.ql")
@@ -265,37 +308,42 @@ run(-r -a --module-path nest --import nest/bb nest/main.ql)
 expect_count("a generated image is never rotated" "${W}/nest/bb_*.qlc" 0)
 expect_exists("a generated image keeps its plain name" "${W}/nest/bb.qlc")
 
-# --- positional library arguments behave like --import ----------------------
+# --- positional library arguments behave like --import ------------------------
 # The first positional is the entry, every later one a module (see --help), so
 # the library is spelled after the script it serves.
-run(app.ql libs/greeter.qlc)
+run(--run app.ql libs/greeter.qlc)
 expect_rc("a positional image still loads" 0)
 expect_match("a positional image makes the library callable" OUT "hello, world")
 touch_new("${W}/libs/greeter.ql")
-run(app.ql libs/greeter.ql)
+run(--run app.ql libs/greeter.ql)
 expect_match("a positional source is compiled like --import" ERR "module compiled")
 expect_rc("a positional source runs the entry" 0)
 
-# --- -c writes the entry's own module image ---------------------------------
-# The entry imports, so the program that runs is the linked one; the image on
-# disk is the entry module, which is what .qlc v9 can represent.
+# --- -c writes the entry's own module image -----------------------------------
+# The entry imports, so the run needs the linked program; the image on disk is
+# the entry module, which is what .qlc v9 can represent.
 run(-c --module-path nest --import nest/aa nest/main.ql)
 expect_rc("-c on an importing entry succeeds" 0)
+expect_no_match("-c does not execute the entry" OUT "84")
 expect_exists("-c wrote the entry image" "${W}/nest/main.qlc")
 expect_match("-c says the linked program is not serializable" ERR "not serializable")
-run(--module-path nest --import nest/aa nest/main.qlc)
+# A .qlc entry is compiled as-is: it too needs --run to execute.
+run(plain.qlc)
+expect_rc("an entry image compiles without --run" 0)
+expect_no_match("an entry image does not execute without --run" OUT "42")
+run(--run --module-path nest --import nest/aa nest/main.qlc)
 expect_rc("the written entry image runs" 0)
 expect_match("the written entry image still prints" OUT "84")
-run(--module-path nest --import nest/aa -c nest/main.qlc)
+run(--module-path nest --import nest/aa -c --run nest/main.qlc)
 expect_match("-c on its own source skips the write" ERR "skipping bytecode")
-expect_rc("-c on its own source still runs" 0)
+expect_rc("-c on its own source still runs with --run" 0)
 
-# --- report -----------------------------------------------------------------
+# --- report -------------------------------------------------------------------
 if(NOT QL_CLI_FAIL)
-  message("qlang_run cli: ${QL_CLI_OK} checks passed")
+  message("qlcc cli: ${QL_CLI_OK} checks passed")
 else()
   list(LENGTH QL_CLI_FAIL QL_CLI_FAIL_N)
   list(JOIN QL_CLI_FAIL "\n  " QL_CLI_REPORT)
-  message(FATAL_ERROR "qlang_run cli check failed (${QL_CLI_FAIL_N} of "
+  message(FATAL_ERROR "qlcc cli check failed (${QL_CLI_FAIL_N} of "
                       "${QL_CLI_OK} checks):\n  ${QL_CLI_REPORT}")
 endif()

@@ -311,7 +311,7 @@ refuses such a dump with a `QLangError` naming the duplicate rather than
 silently dropping one.
 
 `writeTypeManifest` is the host one-liner for extracting the process's
-type interface as a `QLM1` manifest (SERIALIZATION.md §11); `qlang_run
+type interface as a `QLM1` manifest (SERIALIZATION.md §11); `qlcc
 --qlmeta-dump <file.qlm>` is the same call as a standalone mode for
 binaries shaped like it (report on stdout, exit 0; no script mode combines
 with it).
@@ -334,7 +334,7 @@ with it).
 
 ## 13. Compile-time validation from a manifest (portable-module-plan P4)
 
-`qlang_run --qlmeta <file.qlm>` loads a `QLM1` manifest (SERIALIZATION.md
+`qlcc --qlmeta <file.qlm>` loads a `QLM1` manifest (SERIALIZATION.md
 §11) and feeds it to `QLangCompiler::addExternalTypes(...)` — shape checks
 on `.ql` sources with **no engine linked**: type names resolve, `T(...)`
 constructor arity/tags, field reads and writes (read-only included),
@@ -380,9 +380,9 @@ already built: `docs/SERIALIZATION.md` §12 defines the container, this section
 the host's obligations.
 
 ```sh
-qlang_run --qlmeta host.qlmeta -c app.qlc app.ql      # compile against the shape
-qlang_run --qlmeta host.qlmeta --package app.qpm app.ql lib.qlc
-qlang_run app.qpm                                     # or embed it:
+qlcc --qlmeta host.qlmeta -c app.qlc app.ql      # compile against the shape
+qlcc --qlmeta host.qlmeta --package app.qpm app.ql lib.qlc
+qlcc --run app.qpm                                     # or embed it:
 ```
 
 ```cpp
@@ -437,5 +437,5 @@ registered constructor hands out the other build: the fault arrives before one
 member is read, and the context still reads an honestly-built value afterwards.
 
 **A host that registers no types** needs no handshake: a package whose manifest
-is empty (what `qlang_run --package` writes without `--qlmeta`) loads anywhere
-`qlang_run` runs.
+is empty (what `qlcc --package` writes without `--qlmeta`) loads anywhere
+`qlcc` runs.

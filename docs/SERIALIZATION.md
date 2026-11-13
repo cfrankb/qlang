@@ -348,7 +348,7 @@ Phase 3a).
   it names live in another file (§5.1 step 3).
 - `moduleName` MUST be non-empty. The compiler takes it from the module's own
   `export const MODULE_NAME = "<name>"` when present, else from the driver
-  (`QLangCompiler::setModuleName` — `qlang_run` passes the source file stem),
+  (`QLangCompiler::setModuleName` — `qlcc` passes the source file stem),
   else `"main"`.
 - Export names are unique. The compiler rejects a second export of one name at
   the source level (SPEC `## keyword export`: `already exported`); the reader
@@ -571,10 +571,10 @@ A codec is not "done" until all of these pass:
 | `QLangErrorKind::Io` | done |
 | Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v9 only, pool-index, `callfn`-index and import-index range checks (all three from `operandRole()`), §4.6 tail validation |
 | Writer refuses a linked program (§4, "A linked program is not an image") | done — `initSequence` present → `writeQlc` returns false |
-| App writer (POC `QlcWriter` in `qlang_run.cpp`) | deleted — replaced by `writeQlc` |
+| App writer (POC `QlcWriter` in `qlcc.cpp`) | deleted — replaced by `writeQlc` |
 | Tests (`codec_check`: §9 items 1, 3) | done |
 | `QLangContext::loadProgram` (§5.2, §9 item 4) | done — plan v4 Phase 3b: reads an image, re-resolves every native-slot name against the context's natives **and** its registered C++ modules, reports all missing names in one `Io` error, and registers the module by name (`loadedModule`/`loadedModules`) |
-| `QLangContext::execute()` | not implemented — running a loaded image is `QLangVM(prog, ctx).run()`, which is what the `qlc-exec` gate and `qlang_run` do; a context-level `execute()` over the registry would be a second way to do the same thing |
+| `QLangContext::execute()` | not implemented — running a loaded image is `QLangVM(prog, ctx).run()`, which is what the `qlc-exec` gate and `qlcc` do; a context-level `execute()` over the registry would be a second way to do the same thing |
 | `QLangLinker` (merge images into one program) | done — plan v4 Phase 3b (`QLangLinker.h`/`.cpp`, `linker` suite) |
 | `writeQpm`/`readQpm` (§12), `QLangContext::loadPortableModuleFile` | done — portable-module-plan P5 (`portable_module` suite) |
 | Snapshot (v2) | not started |
@@ -677,7 +677,7 @@ native slots (§5.2). What the handshake guarantees is the *type* half: a load
 that fails later, on a native slot the host does not have (§5.2), behaves like
 a failing `--import` and can leave the libraries it already loaded registered.
 
-**Driver.** `qlang_run --package <file.qpm>` writes the entry image plus every
+**Driver.** `qlcc --package <file.qpm>` writes the entry image plus every
 library image the invocation loaded and the `--qlmeta` manifest (empty when
 none was given); a `.qpm` input is recognized by its magic, not its extension,
 and merges through the same link step as `--import`ed images.

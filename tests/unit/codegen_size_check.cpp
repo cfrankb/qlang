@@ -6,9 +6,9 @@
 // The `test-hello-*.qla` dumps of tests/scripts/hello.ql have been compared by
 // hand across commits, which is how the 229 -> 243 growth was found. This suite
 // makes that comparison mechanical: every budgeted script is compiled exactly
-// the way `qlang_run` compiles it (no external constants, the context's natives
+// the way `qlcc` compiles it (no external constants, the context's natives
 // and modules registered) and the instruction count of the entry function — the
-// number `qlang_run --profile` prints — must stay within its budget.
+// number `qlcc --profile` prints — must stay within its budget.
 //
 // A budget is a ceiling, not a target: shrinking a stream is a win and the
 // ceiling comes down in the same commit; raising one needs a reason recorded in
@@ -79,7 +79,7 @@ static std::string readScript(const std::string &path) {
   return ss.str();
 }
 
-// Compile `source` as `qlang_run` does. `entry` receives the entry function's
+// Compile `source` as `qlcc` does. `entry` receives the entry function's
 // instruction count, `total` the count over every function (both are printed so
 // a failure says where the growth is).
 static bool measure(const std::string &source, size_t &entry, size_t &total,

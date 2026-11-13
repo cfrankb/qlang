@@ -2018,9 +2018,9 @@ static void testV6LoadValidation() {
 // --- script-corpus .qlc round-trip + execute (plan
 // docs/plans/phase3-opcode-retirement-plan.md S4) ---
 //
-// Every script under tests/scripts is compiled exactly as `qlang_run` compiles
+// Every script under tests/scripts is compiled exactly as `qlcc` compiles
 // it, written with writeQlc, read back with readQlc, and executed on a fresh
-// context (the same isolation `qlang_run file.qlc` gets from a new process).
+// context (the same isolation `qlcc file.qlc` gets from a new process).
 // The loaded run's stdout must be byte-identical to the freshly compiled
 // program's: the v7 -> v8 bump moves the constant pool into a module-level
 // section, so any behavioural difference here is a codec bug, not a format
@@ -2057,7 +2057,7 @@ private:
 
 // Execute `prog` on `scope`, capturing everything it prints. Returns false and
 // sets `err` when the VM threw (a failed assert or a runtime error), exactly
-// the case `qlang_run` reports as exit 3.
+// the case `qlcc` reports as exit 3.
 static bool runCaptured(const CompiledProgram &prog, QLangContext &scope,
                         std::string &out, std::string &err) {
   QLangVM vm(prog, scope);
@@ -2089,7 +2089,7 @@ static void testScriptQlcRoundTrip() {
     std::ostringstream src;
     src << in.rdbuf();
 
-    // --- Compile, wire natives and collect nativeIds as qlang_run does ---
+    // --- Compile, wire natives and collect nativeIds as qlcc does ---
     CompiledProgram prog;
     std::map<std::string, int> nativeIds;
     QLangContext ctx;

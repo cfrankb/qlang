@@ -233,7 +233,7 @@ namespace
       }
       t.parse = msBetween(t0, Clock::now());
 
-      // --- Compile (wired exactly as qlang_run does) ---
+      // --- Compile (wired exactly as qlcc does) ---
       QLangCompiler compiler(std::move(program), &ctx);
       compiler.addExternalConsts({});
       std::unordered_set<std::string> nativeNames;

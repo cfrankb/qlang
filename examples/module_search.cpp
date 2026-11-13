@@ -89,7 +89,7 @@ private:
 
 // Compiles kEntrySource against whatever `ctx` resolves, links the entry with
 // every loaded image (QLangLinker), runs the merged program, and returns what
-// it printed. This is the same pipeline qlang_run drives for a script.
+// it printed. This is the same pipeline qlcc drives for a script.
 std::string runEntry(QLangContext &ctx) {
   std::vector<StmtPtr> program = ctx.parse(kEntrySource);
   QLangCompiler compiler(std::move(program), &ctx);
@@ -102,7 +102,7 @@ std::string runEntry(QLangContext &ctx) {
   compiler.setModuleName("app");
   CompiledProgram entry = compiler.compile();
 
-  // Wire the natives the compiler assigned slots to, exactly as qlang_run
+  // Wire the natives the compiler assigned slots to, exactly as qlcc
   // does: negative ids index `nativeFuncs` from the end, resolved module
   // functions from the front.
   for (const auto &[name, func] : ctx.nativeFuncs()) {

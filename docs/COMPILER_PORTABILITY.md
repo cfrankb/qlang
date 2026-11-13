@@ -258,7 +258,7 @@ MSVC job details (the cell this document tracks):
   checkout byte-identical to the committed blobs — without it the `doc_hashes`
   entry fails with all 24 module hashes "stale" (Round 48).
 - **Test-harness portability:** the CLI smokes (`manifest_check`,
-  `manifest_compile`, `portable_module`) drive `qlang_run` through
+  `manifest_compile`, `portable_module`) drive `qlcc` through
   `tests/unit/test_cli.h` — `run()` (popen/_popen, exit code + combined
   output), `arg()` (shell quoting), `scratch()` (a per-run temp directory) —
   instead of `std::system` + `WEXITSTATUS`. Neither Windows compiler has

@@ -1,17 +1,22 @@
-// qlang_run — the .ql / .qlc loader (SPEC §qlang-run): runs a QLang script or
-// a compiled QLC1 v9 image with a selectable diagnostic trace level, optional
-// stage timing, and optional artifacts on disk.
+// qlcc (formerly qlang_run) — the .ql / .qlc compiler driver (SPEC §qlang-run):
+// compiles a QLang script or loads a compiled QLC1 v9 image, writes artifacts
+// on demand, and runs the program only with --run. A selectable diagnostic
+// trace level and optional stage timing apply throughout.
 //
-//   qlang_run [--trace-level <0-3>] [--profile] [-c] [-a] [-r]
-//             [--output-path <dir>] [--asm-level <0-5>]
-//             [--module-path <dir>]... [--no-module-search]
-//             [--import <lib>]... file.ql | file.qlc [lib]...
-//   qlang_run --qlmeta-dump <file.qlm>
+//   qlcc [--trace-level <0-3>] [--profile] [-c] [-a] [-r] [--run]
+//        [--output-path <dir>] [--asm-level <0-5>]
+//        [--module-path <dir>]... [--no-module-search]
+//        [--import <lib>]... file.ql | file.qlc [lib]...
+//   qlcc --qlmeta-dump <file.qlm>
+//
+// qlcc is a compiler: without --run nothing of the program executes — the -c/-a
+// artifacts (and the --import compile-and-cache) are all it does. The short
+// flags combine: -ca == -c -a, -car == -c -a -r.
 //
 // A .ql input drives the pipeline directly (parse -> compile -> execute) so
 // the app can time each stage and hand the compiled program to the .qlc
-// writer. A .qlc input (QLC1 magic) is loaded with readQlc, its native
-// functions are re-bound by name, and the image is executed as-is.
+// writer. A .qlc input (QLC1 magic) is loaded with readQlc and its native
+// functions are re-bound by name. Both execute only with --run.
 //
 // Artifacts are named, not specified: -c saves the entry's compiled image and
 // -a writes a disassembly listing, both as <entry stem>.qlc / <entry stem>.qla
@@ -26,7 +31,7 @@
 // directory, then the working directory, then each --module-path — where a
 // <name>.qlc is taken in as an image and a <name>.ql is compiled into one. A
 // discovered module is registered under its own declared name and its own
-// imports are resolved with it, so `qlang_run app.ql` needs no library
+// imports are resolved with it, so `qlcc app.ql` needs no library
 // arguments at all. --import (and
 // extra positional library arguments) still loads a module explicitly — useful
 // for a library outside every search path — and now accepts a name, a
@@ -42,7 +47,7 @@
 // own program output (print/println) goes to stdout and is never affected.
 //
 // Exit codes:
-//   0  script ran to completion
+//   0  compiled (and, with --run, ran) to completion
 //   1  usage error (bad/missing arguments)
 //   2  a required file could not be read
 //   3  QLang error (lex/parse/type/runtime)
@@ -82,7 +87,7 @@ using namespace qlang;
 namespace
 {
 
-  const char *kAppName = "qlang_run";
+  const char *kAppName = "qlcc";
 
   using Clock = std::chrono::steady_clock;
 
@@ -93,8 +98,8 @@ namespace
 
   void printHelp(const char *prog)
   {
-    std::cout << "Run a QLang (.ql) script, a compiled .qlc image (QLC1 v9) or a\n"
-                 "portable module (.qpm, QPM1).\n"
+    std::cout << "Compile a QLang (.ql) script, a compiled .qlc image (QLC1 v9) or a\n"
+                 "portable module (.qpm, QPM1); the program runs only with --run.\n"
               << "\n"
               << "usage: " << prog
               << " [options] <file.ql|file.qlc|file.qpm> [library ...]\n"
@@ -112,12 +117,16 @@ namespace
               << "                        3 = full detail (generators, table ops, compile)\n"
               << "  --profile           report parse / compile / execute times in ms (stderr,\n"
               << "                        also appended to the -a .qla listing when given)\n"
+              << "  --run               execute the compiled/loaded program; without it\n"
+              << "                        qlcc only writes the requested artifacts\n"
               << "  -c                  save the compiled entry image as <stem>.qlc in the\n"
               << "                        output path (see --output-path). The entry's own\n"
               << "                        module image is written, not the linked program\n"
               << "  -a                  save a disassembly listing as <stem>.qla in the output\n"
               << "                        path; every image --import generates gets one too\n"
               << "  -r                  alias for --rotate\n"
+              << "                        (the short flags combine: -ca == -c -a,\n"
+              << "                         -car == -c -a -r, -ar == -a -r)\n"
               << "  --output-path <dir> directory the -c/-a artifacts are written to (created\n"
               << "                        when missing); defaults to the entry file's directory\n"
               << "  --asm-level <n>     disassembly detail (default 1):\n"
@@ -176,17 +185,20 @@ namespace
               << "  --package <file.qpm>  write a QPM1 portable module holding the entry\n"
               << "                        image, every library image this invocation loaded\n"
               << "                        and the --qlmeta manifest (empty when none was\n"
-              << "                        given). Load one with: qlang_run file.qpm — the\n"
+              << "                        given). Load one with: qlcc --run file.qpm — the\n"
               << "                        load handshake requires this binary to register\n"
               << "                        every manifest type unchanged, so a manifest built\n"
               << "                        from another host's bindings loads only there\n"
               << "  --rotate            append a YYYYMMDDHHMM timestamp to the -c/-a\n"
               << "                        file names (e.g. cmp.qlc -> cmp_202611010513.qlc);\n"
               << "                        images generated by --import are never rotated\n"
+              << "  --strict <n>        strict typing enforcement level (0-2, see\n"
+              << "                        docs/spec/16-strict_typing.md); the engine does\n"
+              << "                        not enforce it yet, so the flag is rejected\n"
               << "  -h, --help          show this help and exit\n"
               << "\n"
               << "exit codes:\n"
-              << "  0  script ran to completion\n"
+              << "  0  compiled (and, with --run, ran) to completion\n"
               << "  1  usage error\n"
               << "  2  a required file could not be read\n"
               << "  3  QLang error (lex/parse/type/runtime)\n"
@@ -300,7 +312,7 @@ namespace
   }
 
   // True when two spellings name the same file. Guards against writing an
-  // artifact over the file it was read from (`qlang_run -c lib.qlc` with the
+  // artifact over the file it was read from (`qlcc -c lib.qlc` with the
   // default output path would otherwise rewrite the image in place). Falls back
   // to a string compare when the filesystem cannot canonicalise either path.
   bool samePath(const std::string &a, const std::string &b)
@@ -1857,6 +1869,9 @@ int main(int argc, char **argv)
   int traceLevel = TRACE_OFF;
   bool profile = false;
   bool rotate = false;
+  // --run: execute the program. qlcc without it only compiles (SPEC §qlang-run
+  // "only run the bytecodes if --run is added to the command line").
+  bool runProgram = false;
   int asmLevel = 1;
   // -c / -a: save the entry's image and/or its disassembly listing. The names
   // are derived (SPEC §qlang-run), only the directory is given (--output-path).
@@ -1925,22 +1940,54 @@ int main(int argc, char **argv)
       continue;
     }
 
-    // -r is the short form of --rotate (SPEC §qlang-run).
-    if (arg == "--rotate" || arg == "-r")
+    if (arg == "--run")
+    {
+      runProgram = true;
+      continue;
+    }
+
+    // --strict <0-2> (SPEC §qlang-run, docs/spec/16-strict_typing.md).
+    // ponytail: the enforcement lives at the QLangContext level and that API
+    // does not exist yet (compliance Open Item for spec 16); reject the flag
+    // rather than accept a level nothing would enforce. Wire ctx here when
+    // the engine grows setStrictTypingLevel().
+    if (arg == "--strict" || arg.rfind("--strict=", 0) == 0)
+    {
+      std::string level = (arg == "--strict") ? (i + 1 < argc ? argv[++i] : "")
+                                              : arg.substr(9);
+      if (level.size() != 1 || level[0] < '0' || level[0] > '2')
+      {
+        std::fprintf(stderr, "%s: invalid --strict '%s' (expected 0, 1, or 2)\n",
+                     kAppName, level.c_str());
+        return 1;
+      }
+      std::fprintf(stderr,
+                   "%s: --strict %s is not implemented yet "
+                   "(docs/spec/16-strict_typing.md)\n",
+                   kAppName, level.c_str());
+      return 1;
+    }
+
+    if (arg == "--rotate")
     {
       rotate = true;
       continue;
     }
 
-    if (arg == "-c")
+    // The short flags -c/-a/-r, in any combination (SPEC §qlang-run: -ca,
+    // -car, -ar).
+    if (arg.size() > 1 && arg[0] == '-' &&
+        arg.find_first_not_of("car", 1) == std::string::npos)
     {
-      saveImage = true;
-      continue;
-    }
-
-    if (arg == "-a")
-    {
-      saveListing = true;
+      for (char ch : arg.substr(1))
+      {
+        if (ch == 'c')
+          saveImage = true;
+        else if (ch == 'a')
+          saveListing = true;
+        else if (ch == 'r')
+          rotate = true;
+      }
       continue;
     }
 
@@ -2099,8 +2146,8 @@ int main(int argc, char **argv)
 
   // --- --qlmeta-dump: standalone manifest extraction (portable-module-plan
   // P3). Writes this binary's own QL_OBJECT registry as a QLM1 manifest and
-  // exits — no script is read, no context is created. Hosts that are not
-  // qlang_run call qlang::writeTypeManifest themselves; this flag makes the
+  // exits — no script is read, no context is created. Hosts other than
+  // qlcc call qlang::writeTypeManifest themselves; this flag makes the
   // editor's own binary its own dumper.
   if (!qlmetaDump.empty())
   {
@@ -2578,28 +2625,34 @@ int main(int argc, char **argv)
                  listingOut.c_str(), compiled.functions.size());
   }
 
-  // --- Execute ---
+  // --- Execute (--run) ---
+  // qlcc is a compiler: the program runs only when --run was given. Without
+  // it the compile/link/artifacts above are the whole job (SPEC §qlang-run).
   const size_t instrCount = compiled.functions.empty()
                                 ? 0
                                 : compiled.functions[0].instrOffsets.size();
-  QLangVM vm(compiled, ctx);
-  const auto t3 = Clock::now();
-  try
+  Clock::time_point t3 = Clock::now();
+  Clock::time_point t4 = t3;
+  if (runProgram)
   {
-    vm.run();
+    QLangVM vm(compiled, ctx);
+    t3 = Clock::now();
+    try
+    {
+      vm.run();
+    }
+    catch (const QLangError &e)
+    {
+      std::fprintf(stderr, "%s: %s: %s\n", kAppName, file.c_str(), e.what());
+      return 3;
+    }
+    catch (const std::exception &e)
+    {
+      std::fprintf(stderr, "%s: %s: %s\n", kAppName, file.c_str(), e.what());
+      return 3;
+    }
+    t4 = Clock::now();
   }
-  catch (const QLangError &e)
-  {
-    std::fprintf(stderr, "%s: %s: %s\n", kAppName, file.c_str(), e.what());
-    return 3;
-  }
-  catch (const std::exception &e)
-  {
-    std::fprintf(stderr, "%s: %s: %s\n", kAppName, file.c_str(), e.what());
-    return 3;
-  }
-  const auto t4 = Clock::now();
-
   if (profile)
   {
     const std::string text =

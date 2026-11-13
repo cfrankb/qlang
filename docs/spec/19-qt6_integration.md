@@ -144,7 +144,7 @@ metatype** — never a silent pass-through or opaque value.
   involving them are type errors (plan P3);
 - no models/views, no `QTimer`, no script-side subclassing of Qt classes, no
   queued/cross-thread connections, no signal-to-signal connections beyond 17;
-- `qlang_run` stays Qt-free (18-qlang-run.md unchanged) — Qt hosting is the
+- `qlcc` stays Qt-free (18-qlang-run.md unchanged) — Qt hosting is the
   embedding application's job.
 
 ## tests
@@ -158,3 +158,5 @@ conversion; overload no-match listing candidates; `emit` reaching a C++
 subscriber; Qt↔Qt direct connect; access after `deleteLater` →
 `object destroyed`; non-Qt-host load rejection of a Qt-typed package (the
 portable-module gate).
+
+ baseline testing is done against g++ so pre-emptively screening for possible msvc or clang compatibility issues is paramount.

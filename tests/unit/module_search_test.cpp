@@ -108,7 +108,7 @@ public:
   std::filesystem::path root;
 };
 
-// Compile `source` exactly as `qlang_run` does (external consts/funcs/modules
+// Compile `source` exactly as `qlcc` does (external consts/funcs/modules
 // from the context, natives wired into the program), so an image built here
 // behaves like one the driver wrote.
 //

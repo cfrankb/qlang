@@ -19,7 +19,7 @@
 # they still behave.
 #
 # To see the shapes:
-#   qlang_run --asm /tmp/flags.qla --asm-level 4 tests/scripts/flags.ql
+#   qlcc -a --output-path /tmp --asm-level 4 tests/scripts/flags.ql
 
 class Point {
   x = 0

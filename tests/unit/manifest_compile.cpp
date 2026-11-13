@@ -7,7 +7,7 @@
 // (checked on a single init, lenient after a second write), shadowing inside
 // function bodies, manifest-enum folding and registerEnum drift, the rule that the
 // `.qlc` native-slot table names only the natives the program calls
-// (docs/plans/archive/native-slot-portability-plan.md P1), and (argv[1] = qlang_run
+// (docs/plans/archive/native-slot-portability-plan.md P1), and (argv[1] = qlcc
 // binary) the --qlmeta CLI green/red smoke.
 #include <cstdio>
 #include <cstdlib>
@@ -459,7 +459,7 @@ int main(int argc, char **argv) {
     CHECK(table.size() == 1);
   }
 
-  // 15. CLI smoke (argv[1] = qlang_run binary): engine-agnostic compile is
+  // 15. CLI smoke (argv[1] = qlcc binary): engine-agnostic compile is
   // green with the manifest, red on a checked violation, file errors exit 1.
   if (argc > 1) {
     const std::string dir = testcli::scratch("manifest_compile");
@@ -474,8 +474,8 @@ int main(int argc, char **argv) {
       std::ofstream f(path);
       f << body;
     };
-    // Green script must also RUN (qlang_run executes after -c): enum folding
-    // is a pure Int constant — no constructor natives needed without a host.
+    // Green script must compile clean (qlcc only compiles without --run):
+    // enum folding is a pure Int constant — no constructor natives needed.
     writeFile(dir + "/good.ql", "print(Point.Right)\n");
     writeFile(dir + "/bad.ql", "local p = Point(1, 2.5)\nprint(p.zzz)\n");
     const std::string run = testcli::arg(argv[1]);

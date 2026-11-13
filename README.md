@@ -42,7 +42,7 @@ byte code encoding
 ```
 include/qlang/   Public API headers
 src/             Library implementation (libqlang.a)
-examples/        qlang_run driver, demos, and per-feature test suites
+examples/        qlcc driver, demos, and per-feature test suites
 docs/            spec/ (18 modules), compliance/, plans/, design docs
 SPEC.md          Stub — spec migrated to docs/spec/ (authoritative)
 SPEC_COMPLIANCE.md  Stub — tracker migrated to docs/compliance/ (SHA256-gated)
@@ -73,7 +73,7 @@ ctest --test-dir build
 ```
 
 Targets: `qlang` (library → `libqlang.a`), `qlang_example` (hello),
-`qlang_run` (driver), plus one executable per test suite. A single suite can
+`qlcc` (driver), plus one executable per test suite. A single suite can
 also be built and run directly against `build/libqlang.a` with g++ (C++20);
 see `AGENTS.md` for the exact harness.
 
@@ -152,7 +152,7 @@ named native function groups to `import`.
   dispatch, read-only properties, enum constants
 - Bytecode: `.qlc` program-image codec (write + read back, `QLC1` v9)
 - Portable modules: `.qpm` packages (`QPM1`) bundle the linked entry image with a
-  `QL_OBJECT` type manifest (`.qlm`, `QLM1`); `qlang_run file.qpm` loads one, and
+  `QL_OBJECT` type manifest (`.qlm`, `QLM1`); `qlcc --run file.qpm` loads one, and
   its manifest is validated against the host's registered types
 - Const vars (`const`) with reassignment guards
 - Native interop: inject C++ functions (`setFunc`), call script functions
@@ -170,18 +170,22 @@ for the full open-items list.
 
 ## Driver
 
-`qlang_run [options] <file.ql|file.qlc|file.qpm> [library ...]` runs a script, a
-compiled image, or a portable package; the contract is
+`qlcc [options] <file.ql|file.qlc|file.qpm> [library ...]` compiles a script, a
+compiled image, or a portable package; the program executes only with `--run`
+(loads one with `qlcc --run file.qpm`). The contract is
 `docs/spec/18-qlang-run.md`. Three modes are not "run": `--qlmeta-dump` writes
 this binary's `QL_OBJECT` types as a `.qlm` manifest, `--qlmeta` compiles a `.ql`
-entry against one, and `--package` writes a `.qpm`. Flags:
+entry against one, and `--package` writes a `.qpm`. The short flags combine
+(`-ca` = `-c -a`, `-car` = `-c -a -r`). Flags:
 
 | Flag | Effect |
 |------|--------|
 | `--trace-level <0-3>` | Diagnostic verbosity on stderr (0 = off, 3 = full detail) |
 | `--profile` | Report parse / compile / execute times in ms |
+| `--run` | Execute the program; without it `qlcc` only compiles |
+| `--strict <0-2>` | Strict-typing level (parsed; rejected as not implemented yet — `docs/spec/16-strict_typing.md`) |
 | `-c` | Save the compiled entry image as `<stem>.qlc` |
-| `-a` | Save a disassembly listing as `<stem>.qla` |
+| `-a` | Save a disassembly listing as `<stem>.qla` (with `-c` at once: `-ca`) |
 | `--asm-level <0-5>` | Disassembly detail (0 = instructions, 5 = register breakdown) |
 | `--output-path <dir>` | Directory the `-c`/`-a` artifacts go to (created when missing); defaults to the entry file's own directory |
 | `-r`, `--rotate` | Append a timestamp to the `-c`/`-a` names (`cmp.qlc` → `cmp_202611010513.qlc`) |
@@ -190,7 +194,7 @@ entry against one, and `--package` writes a `.qpm`. Flags:
 | `--import <lib>` | Load one module explicitly (a name, a directory, or a `.ql`/`.qlc` path) |
 | `--qlmeta-dump <file.qlm>` | Write this binary's registered `QL_OBJECT` types as a `QLM1` type manifest |
 | `--qlmeta <file.qlm>` | Compile the `.ql` entry against a `QLM1` manifest (external-type contract; checks only) |
-| `--package <file.qpm>` | Write a `QPM1` portable module (entry image + linked modules + manifest); load it with `qlang_run file.qpm` |
+| `--package <file.qpm>` | Write a `QPM1` portable module (entry image + linked modules + manifest); load it with `qlcc --run file.qpm` |
 
 Artifacts are named, not specified: `-c` and `-a` write `<entry stem>.qlc` and
 `<entry stem>.qla`. A module argument (`--import` or a positional library) is

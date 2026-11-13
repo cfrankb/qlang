@@ -19,17 +19,17 @@ defined against C++20.
 | [06-functions.md](06-functions.md) | built-in functions incl. `deepcopy`, qlang native functions, C++ API | `8e7ac79a3f42b0e91bab2578551ef66d40b437e9a46683522f1e63cc1de3fe8c` |
 | [07-api.md](07-api.md) | module registration, QLang import syntax, `ctx.clear()`, verbose level, step budget, threading contract, module search paths, external search callback | `086f8502341e2447b07134bca17a61da765fc4cef61e675c35d8806d156c3fc0` |
 | [08-generators.md](08-generators.md) | generators, PROTOTYPE 1, Syntax, EOF sentinel | `a99107445f3850d8b600e84cf5d0e5860babc4173cda0e2a183debab0123200d` |
-| [09-modules.md](09-modules.md) | internal modules, import statement, math module | `0f2c8c45af7b83db34c053ca87c6bafe998df4a1f30ff80742db8ef513d31741` |
+| [09-modules.md](09-modules.md) | internal modules, import statement, math module | `4396cb0275b2b18a87c6833bfbdb64512502ff0909e7a5543e32ad5030c849d7` |
 | [10-classes.md](10-classes.md) | user-defined classes, `static`, `::`, `deepcopy`, restrictions | `6f2cacb5b2135951a9aa27b2d69aa9b898a3fa27aeeaa56559dd18522621c458` |
-| [11-external-types.md](11-external-types.md) | conformance with external (C++) types | `3a615c3fc1bc51698abf86a77899c36cc93a4ea623615e6f00f26b8969d1d519` |
+| [11-external-types.md](11-external-types.md) | conformance with external (C++) types | `380952dbb96bbe054adaf8ac948de683b4dbb778e28751bf49ce36135b12096e` |
 | [12-errors-trace.md](12-errors-trace.md) | error reporting, requirements, execution trace, format | `f0814e4811e60570546d4771c048ecb1e903e6737ad388ee752d9699b9e68ff8` |
-| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `c4bbae784a33534aee336b185f384603f24d4f40dc0955455be5747fdda13c6d` |
+| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `4e96fb7b0aec70e94271455678023b8120859a3cb6801524b8a6fdc803e514ae` |
 | [14-scope.md](14-scope.md) | visibility scope. execution context | `ec1eadb21c4716b94590261fec12a16b1f11a715a5bfed53b5ca46232b6a0999` |
 | [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
 | [16-strict_typing.md](16-strict_typing.md) | strict typing | `0e2c24e5d5121b784c31561d2a9b94bf32e52eb518df2b9f65531c11eafed4fd` |
 | [17-signals.md](17-signals.md) | signals | `ede443b5ab88d73af308203e90444a56c0593e66459d8ed60d07f6fef0815e1d` |
-| [18-qlang-run.md](18-qlang-run.md) | qlang_run loader | `7ea9a11fecf02668006fdb4091545d1c318864ca9ad7a93b42315060b1535b9a` |
-| [19-Qt6_integration.md](19-Qt6_integration.md) | Qt6 integration (**draft 2026-11-13, unimplemented** — `QLANG_WITH_QT`: meta-driven Q_OBJECT class imports, dialogs/widgets, QFile + `:/` resources, Qt signal/slot bridge, GUI-thread contract; plan `docs/plans/qt-bridge-plan.md`) | `6ff5575b6ce52f9f123555ddb58c4ce3add98bf0be36ab84a8ab2b5810452054` |
+| [18-qlang-run.md](18-qlang-run.md) | qlcc driver | `d578643176281ee9fb03351bf55bfd72e3bb86afe2e11b80c69e296bf667fe2a` |
+| [19-qt6_integration.md](19-qt6_integration.md) | Qt6 integration (**draft 2026-11-13, unimplemented** — `QLANG_WITH_QT`: meta-driven Q_OBJECT class imports, dialogs/widgets, QFile + `:/` resources, Qt signal/slot bridge, GUI-thread contract; plan `docs/plans/qt-bridge-plan.md`) | `81849ea558dc0211da72219b77b578b40fdcc7cfa711f32869e28871ceefc518` |
 
 Compliance: see [../compliance/README.md](../compliance/README.md).
 Migration plan: [../plans/archive/spec_migration_plan.md](../plans/archive/spec_migration_plan.md).

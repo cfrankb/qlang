@@ -70,7 +70,7 @@ static bool check(bool cond, const std::string &what) {
 
 namespace {
 
-// Compile `source` exactly as `qlang_run` does (external consts/funcs/modules
+// Compile `source` exactly as `qlcc` does (external consts/funcs/modules
 // taken from the context), and wire the native slots the same way, so a linked
 // program can actually call the natives its modules imported. `nativeIds` is
 // the name -> negative CALL operand map the writer and the linker both take.
@@ -154,7 +154,7 @@ std::string runError(CompiledProgram &prog, QLangContext &ctx) {
 }
 
 // Compiles `source` as a library, serializes it to a `.qlc` image and loads
-// that image into `ctx` — the path `qlang_run app.ql lib.qlc` takes, minus the
+// that image into `ctx` — the path `qlcc app.ql lib.qlc` takes, minus the
 // driver (which has no library-mode flag yet). Returns nullptr with the error
 // text when any step fails.
 std::shared_ptr<LoadedModule> addLibrary(QLangContext &ctx,
