@@ -29,6 +29,7 @@ defined against C++20.
 | [16-strict_typing.md](16-strict_typing.md) | strict typing | `0e2c24e5d5121b784c31561d2a9b94bf32e52eb518df2b9f65531c11eafed4fd` |
 | [17-signals.md](17-signals.md) | signals | `ede443b5ab88d73af308203e90444a56c0593e66459d8ed60d07f6fef0815e1d` |
 | [18-qlang-run.md](18-qlang-run.md) | qlang_run loader | `7ea9a11fecf02668006fdb4091545d1c318864ca9ad7a93b42315060b1535b9a` |
+| [19-Qt6_integration.md](19-Qt6_integration.md) | Qt6 integration (**draft 2026-11-13, unimplemented** — `QLANG_WITH_QT`: meta-driven Q_OBJECT class imports, dialogs/widgets, QFile + `:/` resources, Qt signal/slot bridge, GUI-thread contract; plan `docs/plans/qt-bridge-plan.md`) | `6ff5575b6ce52f9f123555ddb58c4ce3add98bf0be36ab84a8ab2b5810452054` |
 
 Compliance: see [../compliance/README.md](../compliance/README.md).
 Migration plan: [../plans/archive/spec_migration_plan.md](../plans/archive/spec_migration_plan.md).

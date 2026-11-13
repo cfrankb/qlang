@@ -13,7 +13,10 @@ Round 79; both phases closed at Rounds 80 and 81, so it is archived),
 [native-slot-portability-plan.md](archive/native-slot-portability-plan.md) (2026-11-12, the
 `.qlc` native-slot table naming natives no code calls — found by the Round 81 demo;
 Phase 1 + the doc corrections ✓ delivered at Round 82, Phase 2 ✓ at Round 83, so the
-plan is archived).
+plan is archived),
+[qt-bridge-plan.md](qt-bridge-plan.md) (2026-11-13, **draft — pending approval, P0 spike
+not run**; the QMetaObject bridge: Q_OBJECT classes (dialogs, widgets, `QFile`) for hosted
+scripts behind `QLANG_WITH_QT`, spec draft `../spec/19-Qt6_integration.md` authored same day).
 
 ## 1. Closed 2026-11-08 / 2026-11-09 (recent sessions)
 
