@@ -77,6 +77,11 @@ Targets: `qlang` (library → `libqlang.a`), `qlang_example` (hello),
 also be built and run directly against `build/libqlang.a` with g++ (C++20);
 see `AGENTS.md` for the exact harness.
 
+C++20 throughout. Three CI gates cover the toolchains: `ci.yml` (native g++,
+clang++, and a mingw-w64 Windows cross-compile), `ci-msvc.yml` (MSVC x64 on
+`windows-latest`), and `ci-wasm.yml` (emscripten). The declarative-meta header's
+portability across these is tracked in `docs/COMPILER_PORTABILITY.md`.
+
 ## Usage
 
 ```cpp
@@ -145,7 +150,10 @@ named native function groups to `import`.
 - Enums: compile-time constant tables (`enum Name[:type] { … }`, `E::M`)
 - External types: import C++ objects (`QL_` declarative meta), method
   dispatch, read-only properties, enum constants
-- Bytecode: `.qlc` program-image codec (write + read back, `QLC1` v1)
+- Bytecode: `.qlc` program-image codec (write + read back, `QLC1` v9)
+- Portable modules: `.qpm` packages (`QPM1`) bundle the linked entry image with a
+  `QL_OBJECT` type manifest (`.qlm`, `QLM1`); `qlang_run file.qpm` loads one, and
+  its manifest is validated against the host's registered types
 - Const vars (`const`) with reassignment guards
 - Native interop: inject C++ functions (`setFunc`), call script functions
   from C++ (`call`), modules (`import`, built-in `math`)
@@ -162,8 +170,11 @@ for the full open-items list.
 
 ## Driver
 
-`qlang_run [options] <file.ql|file.qlc> [library ...]` runs a script or a
-compiled image; the contract is `docs/spec/18-qlang-run.md`. Flags:
+`qlang_run [options] <file.ql|file.qlc|file.qpm> [library ...]` runs a script, a
+compiled image, or a portable package; the contract is
+`docs/spec/18-qlang-run.md`. Three modes are not "run": `--qlmeta-dump` writes
+this binary's `QL_OBJECT` types as a `.qlm` manifest, `--qlmeta` compiles a `.ql`
+entry against one, and `--package` writes a `.qpm`. Flags:
 
 | Flag | Effect |
 |------|--------|
@@ -177,6 +188,9 @@ compiled image; the contract is `docs/spec/18-qlang-run.md`. Flags:
 | `--module-path <dir>` | Add a directory `import <name>` resolves against (repeatable) |
 | `--no-module-search` | Resolve `import` only against C++ modules and images named on this command line |
 | `--import <lib>` | Load one module explicitly (a name, a directory, or a `.ql`/`.qlc` path) |
+| `--qlmeta-dump <file.qlm>` | Write this binary's registered `QL_OBJECT` types as a `QLM1` type manifest |
+| `--qlmeta <file.qlm>` | Compile the `.ql` entry against a `QLM1` manifest (external-type contract; checks only) |
+| `--package <file.qpm>` | Write a `QPM1` portable module (entry image + linked modules + manifest); load it with `qlang_run file.qpm` |
 
 Artifacts are named, not specified: `-c` and `-a` write `<entry stem>.qlc` and
 `<entry stem>.qla`. A module argument (`--import` or a positional library) is
@@ -193,9 +207,10 @@ Exit codes 0–5 (completion → write failures) are documented in `--help`.
 |-----|--------|
 | `docs/spec/README.md` | The language itself — 18 modules, authoritative |
 | `docs/compliance/README.md` | Spec ↔ implementation tracker (SHA256-gated) |
-| `docs/SERIALIZATION.md` | `.qlc` (bytecode) and `.qls` (state snapshot) formats, step counter |
+| `docs/SERIALIZATION.md` | `.qlc` (bytecode), `.qls` (state snapshot), `.qlm` (type manifest), `.qpm` (portable module) formats, step counter |
 | `docs/EXTERNAL_TYPES.md` | C++ object import: the `ObjectOps` dispatch surface, ownership model |
 | `docs/EVENT_HANDLERS.md` | **Engine-specifics:** how the engine drives QLang as event handlers |
+| `docs/COMPILER_PORTABILITY.md` | Portability of the declarative-meta header (`QLangMeta.h`) across g++, Clang, MinGW, MSVC, emscripten/WASM |
 
 The C++ API (object dispatch, step counter, ownership model, error boundary)
 is part of **QLang**; the multi-level event-handler architecture and its
