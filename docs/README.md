@@ -10,3 +10,5 @@
   missing features, defects, housekeeping)
 - Standalone: [EVENT_HANDLERS.md](EVENT_HANDLERS.md), [EXTERNAL_TYPES.md](EXTERNAL_TYPES.md),
   [SERIALIZATION.md](SERIALIZATION.md), [PI_AGENT.md](PI_AGENT.md)
+- [briefs/](briefs/) — task briefs for agents: `add-qlmeta-to-cpp.md` (adding
+  `QL_OBJECT` / `QL_*` bindings to host C++ types)
