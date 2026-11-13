@@ -272,6 +272,15 @@ bool endsWith(const std::string &s, const std::string &suffix) {
          s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
 }
 
+// The library builds a resolved module path with std::filesystem's native
+// separator (backslash on Windows); this suite writes forward slashes. Compare
+// the generic form so a path is equal to itself on every platform — the full
+// directory prefix still has to match, so provenance is still pinned.
+bool samePath(const std::string &a, const std::string &b) {
+  return std::filesystem::path(a).generic_string() ==
+         std::filesystem::path(b).generic_string();
+}
+
 // A library whose only observable is what `who()` answers, so two images with
 // the same module name can be told apart by what a linked program prints.
 std::string whoLibrary(const std::string &moduleName, const std::string &answer,
@@ -341,7 +350,7 @@ void testSearchOrder() {
   ctx.setModuleSearchPaths({first, second});
   auto mod = ctx.findModule("one");
   if (!check(mod != nullptr, "order: the module is found")) return;
-  check(mod->path == first + "/one.qlc",
+  check(samePath(mod->path, first + "/one.qlc"),
         "order: the first directory that has it wins");
   check(ctx.loadedModules().size() == 1,
         "order: the losing candidate is never loaded");
@@ -368,7 +377,7 @@ void testSearchOrder() {
   auto lone = s.findModule("three");
   if (!check(lone != nullptr, "order: a lone .ql is compiled, not refused"))
     return;
-  check(lone->path == sourceOnly + "/three.ql",
+  check(samePath(lone->path, sourceOnly + "/three.ql"),
         "order: the compiled source is the file that answered");
   check(lone->program.moduleName == "three" &&
             s.loadedModule("three") == lone.get(),
@@ -402,7 +411,8 @@ void testResolveOnce() {
   ctx.setModuleSearchPaths({libs});
   auto mod = ctx.findModule("greeter");
   if (!check(mod != nullptr, "cache: resolved from the search path")) return;
-  check(mod->path == written, "cache: the image remembers where it came from");
+  check(samePath(mod->path, written),
+        "cache: the image remembers where it came from");
   check(ctx.loadedModule("greeter") == mod.get(),
         "cache: a resolved image is in the registry");
 
@@ -464,7 +474,7 @@ void testCallback() {
     if (!check(mod != nullptr, "callback: nullptr+empty falls through to the paths"))
       return;
     check(calls == 1, "callback: consulted once per resolution");
-    check(mod->path == libs + "/greeter.qlc",
+    check(samePath(mod->path, libs + "/greeter.qlc"),
           "callback: the fall-through really used the file");
   }
 
@@ -611,7 +621,7 @@ void testDependencies() {
         "deps: its own import arrived with it");
   check(ctx.loadedModules().size() == 2,
         "deps: both images are registered");
-  check(ctx.loadedModule("dep")->path == more + "/dep.qlc",
+  check(samePath(ctx.loadedModule("dep")->path, more + "/dep.qlc"),
         "deps: the dependency was found on the same path list");
 
   // The same pair with the dependency nowhere: the failure names the module
