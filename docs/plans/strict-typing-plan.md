@@ -259,8 +259,17 @@ existing unannotated programs at any level.
    return-expression-type site stays deferred (return annotations enforced
    where written, M4 at the boundary). `strict_typing` 27 → 41 checks;
    behavior-neutral below level 2, ctest 67/67 (Round 88).
-5. **M4 — VM runtime checks (1 d).** §5. The spec's §example blocks run
-   verbatim as tests at this milestone.
+5. **M4 — VM runtime checks (1 d).** ✅ **DONE 2026-11-14.** §5 shipped:
+   `QLangVM::checkCallArgs` in `pushCall` (CALLFN/CALLCLOS/imported calls)
+   and every generator-argument copy (`MAKEGEN`, the imported-generator
+   build, both host `callFunction` branches); `checkReturnValue` at `RETURN`
+   and at fall-off-end; file-local `typeMatches` per Q12/Q13/Q16/Q18 (nil
+   admits params only, `__class__`/external-name class match, same-signed-
+   group widening by storage rank, bool strict); `Function::paramNames`
+   carries the exact parameter names. Plan §5's paraphrased messages
+   superseded by the spec's pinned forms. The spec's §example blocks assert
+   verbatim. `strict_typing` 41 → 65 checks, `qlcc_cli` 88 → 91
+   (`strictcalls.ql` fixture); ctest 67/67 (Round 89).
 6. **M5 — codec v10 + SERIALIZATION + `codec_check` (1 d).** §6.
 
 Each milestone: `cmake -B build && cmake --build build && ctest --test-dir

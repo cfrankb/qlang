@@ -1818,12 +1818,131 @@ void QLangVM::pushCall(int calleeIndex, RegFile &callerRegs,
   // callee's parameter registers 0..argc-1.
   for (int k = 0; k < argc; k++)
     cf.regs[k] = callerRegs[argBase + 1 + k];
+  // Strict typing (SPEC §strict typing): reject a mismatched argument before
+  // the frame goes live. Throws unwind with no state changed.
+  checkCallArgs(callee, cf.regs.vec(), static_cast<size_t>(argc));
   trace(TRACE_FRAME, "[pushCall] after arg copy, argc=%d\n", argc);
   m_frames.push_back(std::move(cf));
   trace(TRACE_FRAME, "[pushCall] after push_back\n");
   m_cur = static_cast<int>(m_frames.size()) - 1;
   m_frames[m_cur].pc = 0;
   trace(TRACE_FRAME, "[pushCall] done\n");
+}
+
+// ---------------------------------------------------------------------------
+// Strict typing (SPEC §strict typing "rules" + "error messages")
+// ---------------------------------------------------------------------------
+
+namespace {
+// Implicit integer widening: within the same signed group, storage no larger
+// than the declared type satisfies it (char/short/int/long; byte/word/
+// unsigned/qword). -1 = member of neither group.
+int intStorageSize(QLangValue::Type t) {
+  switch (t) {
+    case QLangValue::Type::Char:
+    case QLangValue::Type::Byte: return 1;
+    case QLangValue::Type::Short:
+    case QLangValue::Type::Word: return 2;
+    case QLangValue::Type::Int:
+    case QLangValue::Type::Unsigned: return 4;
+    case QLangValue::Type::Long:
+    case QLangValue::Type::Qword: return 8;
+    default: return -1;
+  }
+}
+
+bool isSignedInt(QLangValue::Type t) {
+  return t == QLangValue::Type::Char || t == QLangValue::Type::Short ||
+         t == QLangValue::Type::Int || t == QLangValue::Type::Long;
+}
+
+// Annotation display name for the exact-typed diagnostics (mirrors
+// QLangValue::typeName; a `dword` annotation reads as the engine's own
+// `unsigned` — the spec pins only the int/string/nil forms).
+const char *annotationTypeName(QLangValue::Type t) {
+  switch (t) {
+    case QLangValue::Type::Nil: return "nil";
+    case QLangValue::Type::Bool: return "bool";
+    case QLangValue::Type::Char: return "char";
+    case QLangValue::Type::Byte: return "byte";
+    case QLangValue::Type::Word: return "word";
+    case QLangValue::Type::Short: return "short";
+    case QLangValue::Type::Int: return "int";
+    case QLangValue::Type::Unsigned: return "unsigned";
+    case QLangValue::Type::Qword: return "qword";
+    case QLangValue::Type::String: return "string";
+    case QLangValue::Type::Blob: return "blob";
+    case QLangValue::Type::Array: return "array";
+    case QLangValue::Type::Float: return "float";
+    case QLangValue::Type::Table: return "table";
+    case QLangValue::Type::Function: return "function";
+    case QLangValue::Type::Generator: return "generator";
+    case QLangValue::Type::Object: return "object";
+    case QLangValue::Type::Eof: return "eof";
+    case QLangValue::Type::Long: return "long";
+    case QLangValue::Type::Set: return "set";
+    case QLangValue::Type::External: return "external";
+    case QLangValue::Type::BoundMethod: return "bound method";
+    case QLangValue::Type::TypeRef: return "type";
+  }
+  return "?";
+}
+
+std::string annotationName(const TypeAnnotation &a) {
+  return a.className.empty() ? annotationTypeName(a.type) : a.className;
+}
+
+// True when `v` satisfies the (declared) annotation `a`. Nil admits at
+// parameter sites only (Q13); a class annotation compares the script class
+// instance's `__class__` string or the external type's registered name (Q18).
+bool typeMatches(const QLangValue &v, const TypeAnnotation &a, bool params) {
+  if (params && v.type() == QLangValue::Type::Nil)
+    return true;
+  if (!a.className.empty()) {
+    std::string got;
+    if (v.type() == QLangValue::Type::Table) {
+      const auto &t = *v.asTable();
+      auto it = t.find("__class__");
+      if (it != t.end() && it->second.type() == QLangValue::Type::String)
+        got = it->second.asString();
+    } else if (v.type() == QLangValue::Type::External) {
+      got = v.asExternal().type->name;
+    }
+    return got == a.className;
+  }
+  if (v.type() == a.type)
+    return true; // exact match: bool, float, string, table, array, set, …
+  int want = intStorageSize(a.type), have = intStorageSize(v.type());
+  return want >= 0 && have >= 0 && have <= want &&
+         isSignedInt(a.type) == isSignedInt(v.type());
+}
+} // namespace
+
+void QLangVM::checkCallArgs(const Function &fn,
+                            const std::vector<QLangValue> &regs,
+                            size_t argc) const {
+  if (m_scope.strictTypingLevel() < QLangContext::STRICT_DECLARED)
+    return;
+  for (size_t k = 0;
+       k < fn.paramTypes.size() && k < argc && k < regs.size(); k++) {
+    const TypeAnnotation &a = fn.paramTypes[k];
+    if (!a.declared() || typeMatches(regs[k], a, /*params=*/true))
+      continue;
+    std::string pname =
+        k < fn.paramNames.size() ? fn.paramNames[k] : std::to_string(k);
+    vmThrow(QLangErrorKind::Type, "parameter '" + pname + "' of '" + fn.name +
+                                      "' expects " + annotationName(a) +
+                                      ", got " + regs[k].typeName());
+  }
+}
+
+void QLangVM::checkReturnValue(const Function &fn, const QLangValue &v) const {
+  if (m_scope.strictTypingLevel() < QLangContext::STRICT_DECLARED ||
+      !fn.returnType.declared() || typeMatches(v, fn.returnType, false))
+    return;
+  vmThrow(QLangErrorKind::Type, "function '" + fn.name + "' must return " +
+                                    annotationName(fn.returnType) +
+                                    ", returned " + v.typeName());
 }
 
 // ---------------------------------------------------------------------------
@@ -2037,6 +2156,9 @@ RunResult QLangVM::runFrames() {
       // Fell off the end without an explicit return: unwind with nil.
       // (No scope sync: the main frame aliases the global table — Phase 2.)
       m_returnValue = frame.regs.empty() ? QLangValue() : frame.regs[0];
+      // The spec's must-return case: a body that ends without a statement
+      // returns nil, and nil never satisfies a declared return type.
+      checkReturnValue(fn, m_returnValue);
       popFrame();
       if (m_cur >= 0)
         // Generator frame fell off its end: stop at the resume boundary.
@@ -2414,6 +2536,10 @@ RunResult QLangVM::runFrames() {
       for (int k = 0; k < i.c; k++)
         gen->regs[static_cast<size_t>(k)] =
             frame.regs[static_cast<size_t>(i.a + 1 + k)];
+      // Strict typing: a generator's arguments are checked at instance
+      // creation (its call boundary).
+      checkCallArgs(m_prog.functions[static_cast<size_t>(spec.funcIndex)],
+                    gen->regs, static_cast<size_t>(i.c));
       gen->pc = 0;
       gen->exhausted = false;
       frame.regs[i.a] = QLangValue::Generator(gen);
@@ -2431,6 +2557,7 @@ RunResult QLangVM::runFrames() {
     }
     case Opcode::RETURN: {
       m_returnValue = frame.regs.empty() ? QLangValue() : frame.regs[0];
+      checkReturnValue(fn, m_returnValue);
       int callDest = frame.callDest;
       popFrame();
       if (m_cur >= 0 && callDest >= 0)
@@ -2597,6 +2724,7 @@ RunResult QLangVM::runFrames() {
       for (int k = 0; k < i.c; k++)
         gen->regs[static_cast<size_t>(k)] =
             frame.regs[static_cast<size_t>(i.a + 1 + k)];
+      checkCallArgs(calleeFn, gen->regs, static_cast<size_t>(i.c));
       gen->pc = 0;
       gen->exhausted = false;
       frame.regs[i.a] = QLangValue::Generator(gen);
@@ -2660,6 +2788,7 @@ QLangValue QLangVM::callFunction(int funcIndex,
     gen->regs.assign(args.size(), QLangValue());
     for (size_t k = 0; k < args.size(); k++)
       gen->regs[k] = args[k];
+    checkCallArgs(fn, gen->regs, args.size());
     gen->pc = 0;
     gen->exhausted = false;
     return resumeGenerator(*gen);
@@ -2672,6 +2801,7 @@ QLangValue QLangVM::callFunction(int funcIndex,
   frame.regs.resize(static_cast<size_t>(fn.registerCount), QLangValue());
   for (size_t k = 0; k < args.size() && k < frame.regs.size(); k++)
     frame.regs[k] = args[k];
+  checkCallArgs(fn, frame.regs.vec(), args.size());
   // Bind the capture spec the same way the def-time closure would: prefer
   // the prototype's cells, else bind from the top frame (nil cells when
   // there is no live frame — bindCaptures handles frame == nullptr).

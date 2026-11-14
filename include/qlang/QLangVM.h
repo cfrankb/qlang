@@ -210,6 +210,14 @@ public:
   void pushCall(int calleeIndex, RegFile &callerRegs,
                 int resultDest, int argBase, int argc);
 
+  // Strict typing (SPEC §strict typing): arguments and the return value are
+  // checked against the callee's declared signature (Function::paramTypes /
+  // returnType) at the call boundary. No-ops below STRICT_DECLARED and for
+  // unannotated callees — the level-0 hot path costs one int compare.
+  void checkCallArgs(const Function &fn, const std::vector<QLangValue> &regs,
+                     size_t argc) const;
+  void checkReturnValue(const Function &fn, const QLangValue &v) const;
+
   const CompiledProgram &m_prog;
   QLangContext &m_scope;
   // Frame stack. A deque keeps pointers to frames stable so that cell owner

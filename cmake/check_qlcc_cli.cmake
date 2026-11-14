@@ -4,7 +4,8 @@
 # with --run, --output/--asm are gone, -c (save the compiled image), -a (save a
 # disassembly listing), -r (--rotate) and --output-path replace them, -c/-a/-r
 # combine (-ca, -car), the artifact names are derived from the entry file,
-# --strict parses and is rejected as not implemented, and --import resolves a
+# --strict parses, is range-checked, and configures the context, and --import
+# resolves a
 # MODULE (compiling and saving its .qlc when the image is missing, of another
 # .qlc version, or older than its source) instead of requiring a path to an
 # image.
@@ -59,6 +60,11 @@ file(WRITE "${W}/dupdecl.ql" [[
 local a
 local a
 println(a)
+]])
+file(WRITE "${W}/strictcalls.ql" [[
+def hello_world(name:str, age:int) {
+}
+hello_world("Tommy", "24")
 ]])
 file(WRITE "${W}/app.ql" [[
 import greeter
@@ -204,6 +210,18 @@ expect_match("--strict 1 warns" ERR "warning: duplicated variable .a. declaratio
 run(--strict 2 dupdecl.ql)
 expect_rc("--strict 2 rejects a duplicate declaration" 3)
 expect_match("--strict 2 reports the error" ERR "duplicated variable .a. declaration within scope")
+
+# Call-boundary enforcement carries to the driver (docs/spec/16-strict_typing.md
+# "error messages"): a mismatched argument raises at run time with the pinned
+# spec message and the driver's failure exit code; level 0 runs it silently.
+run(--strict 0 --run strictcalls.ql)
+expect_rc("--strict 0 does not check the call boundary" 0)
+expect_no_match("--strict 0 says nothing about parameters" ERR "expects int")
+run(--strict 1 --run strictcalls.ql)
+expect_rc("--strict 1 raises at the call boundary" 3)
+expect_match("--strict 1 prints the pinned spec message" ERR "parameter 'age' of 'hello_world' expects int, got string")
+run(--strict 2 --run strictcalls.ql)
+expect_rc("--strict 2 raises at the call boundary" 3)
 
 # --- help still answers -----------------------------------------------------
 run(--help)

@@ -8,7 +8,8 @@
 // annotations and annotated assignments parse at every level and stay
 // unchecked at level 0. M3: signature plumbing onto the Function record
 // (behavior-neutral) and the level-2 `undeclared type for '<site>'` checks
-// at definition sites. Call-site/return enforcement arrives with M4.
+// at definition sites. M4: the VM call-boundary and return checks at levels
+// 1–2 with the spec's pinned messages.
 #include <iostream>
 #include <string>
 #include <vector>
@@ -299,6 +300,116 @@ int main() {
               "assert(add(1, 2) == 3, \"def\")\n"
               "assert(t.d(21) == 42, \"closure\")\n")
            .empty());
+  }
+
+  // 12. M4 — the spec's `## example of regular functions` and error-message
+  //     table at the call boundary and the return (level 1): the pinned
+  //     strings are `parameter 'age' of 'hello_world' expects int, got
+  //     string` and `function 'sum_int2int' must return int, returned nil`.
+  {
+    Captured cap;
+    cap.ctx.setStrictTypingLevel(QLangContext::STRICT_DECLARED);
+    const std::string HW = "def hello_world(name:str, age:int) {\n}\n";
+    ok("M4: string into the int parameter (spec case 1)",
+       runErr(cap.ctx, HW + "hello_world(\"Tommy\", \"24\")\n") ==
+           "parameter 'age' of 'hello_world' expects int, got string");
+    ok("M4: int into the string parameter (spec case 2)",
+       runErr(cap.ctx, HW + "hello_world(112, 24)\n") ==
+           "parameter 'name' of 'hello_world' expects string, got int");
+    ok("M4: long storage is too large for int (spec case 3)",
+       runErr(cap.ctx,
+              HW + "let age:long = 24\nhello_world(\"Tommy\", age)\n") ==
+           "parameter 'age' of 'hello_world' expects int, got long");
+    ok("M4: byte is not an int (spec case 4: cross-sign)",
+       runErr(cap.ctx,
+              HW + "let age:long = 24\nage:byte = 24\n"
+                   "hello_world(\"Tommy\", age)\n") ==
+           "parameter 'age' of 'hello_world' expects int, got byte");
+    ok("M4: the correct call passes clean",
+       runErr(cap.ctx, HW + "hello_world(\"Tommy\", 24)\n").empty());
+    ok("M4: nil passes a declared parameter (Q13)",
+       runErr(cap.ctx, HW + "hello_world(\"Tommy\", nil)\n").empty());
+    ok("M4: same-group widening is implicit (short satisfies int)",
+       runErr(cap.ctx,
+              HW + "local s:short = 5\nhello_world(\"Tommy\", s)\n")
+           .empty());
+    ok("M4: storage is never narrowed implicitly (int into word)",
+       runErr(cap.ctx,
+              "def w(a:word) { }\nlocal x:int = 1\nw(x)\n")
+               .find("parameter 'a' of 'w' expects word, got int") !=
+           std::string::npos);
+    ok("M4: byte satisfies word (same group, smaller storage)",
+       runErr(cap.ctx, "def w(a:word) { }\nlocal b:byte = 1\nw(b)\n")
+           .empty());
+    ok("M4: a bool never satisfies an integer parameter",
+       runErr(cap.ctx, "def ib(a:int) { }\nib(true)\n") ==
+           "parameter 'a' of 'ib' expects int, got bool");
+    ok("M4: only a bool satisfies a bool parameter",
+       runErr(cap.ctx, "def bb(a:bool) { }\nbb(1)\n") ==
+           "parameter 'a' of 'bb' expects bool, got int");
+    ok("M4: the sum_int2int spec example raises at the return",
+       runErr(cap.ctx,
+              "def sum_int2int(a:int, b:int) -> int {\n    a += b\n}\n"
+              "sum_int2int(1, 2)\n") ==
+           "function 'sum_int2int' must return int, returned nil");
+    ok("M4: a wrong return value is named by its type",
+       runErr(cap.ctx, "def m5() -> int { return \"x\" }\nm5()\n") ==
+           "function 'm5' must return int, returned string");
+    ok("M4: a matching return passes",
+       runErr(cap.ctx,
+              "def m5() -> int { return 5 }\nassert(m5() == 5, \"m4\")\n")
+           .empty());
+    ok("M4: closure literal checked by parameter name",
+       runErr(cap.ctx,
+              "local t:table = { f = (a:int)[] { } }\nt.f(\"x\")\n") ==
+           "parameter 'a' of 'closure' expects int, got string");
+    ok("M4: generator arguments checked at instance creation",
+       runErr(cap.ctx, "def gen(a:int) { yield a }\ngen(\"s\")\n") ==
+           "parameter 'a' of 'gen' expects int, got string");
+    ok("M4: class method checked (hidden self exempt)",
+       runErr(cap.ctx,
+              "class T {\n x = 0\n m(self, k:int)[] { }\n}\n"
+              "local o:table = T()\no.m(\"bad\")\n") ==
+           "parameter 'k' of 'm' expects int, got string");
+    ok("M4: class annotation accepts instances (Q18)",
+       runErr(cap.ctx,
+              "class Person {\n name = \"\"\n __init__(self, n:str)[] { "
+              "self.name = n }\n}\ndef greet(p:Person) { }\n"
+              "greet(Person(\"x\"))\n")
+           .empty());
+    ok("M4: class annotation rejects foreign values by name",
+       runErr(cap.ctx,
+              "class Person2 {\n name = \"\"\n __init__(self, n:str)[] { "
+              "self.name = n }\n}\ndef greet2(p:Person2) { }\n"
+              "greet2(5)\n") ==
+           "parameter 'p' of 'greet2' expects Person2, got int");
+    ok("M4: a class-typed return names the class",
+       runErr(cap.ctx,
+              "class Person3 {\n name = \"\"\n}\ndef mk() -> Person3 { "
+              "return 5 }\nmk()\n") ==
+           "function 'mk' must return Person3, returned int");
+    ok("M4: an unannotated callable is invisible at level 1",
+       runErr(cap.ctx, "def u(x) { }\nu(\"anything\")\n").empty());
+    ok("M4: enforcement throws, it never warns",
+       cap.warnings().empty(), cap.warnings());
+  }
+
+  // 13. M4 gating: every level-1 refusal above runs silently at level 0, and
+  //     the boundary checks hold at level 2 as well.
+  {
+    Captured cap;
+    ok("M4: level 0 (default) does not check the call boundary",
+       runErr(cap.ctx,
+              "def hello_world(name:str, age:int) { }\n"
+              "hello_world(\"Tommy\", \"24\")\n"
+              "def sum_int2int(a:int, b:int) -> int { a += b }\n"
+              "sum_int2int(1, 2)\n")
+           .empty());
+    Captured all;
+    all.ctx.setStrictTypingLevel(QLangContext::STRICT_ALL);
+    ok("M4: level 2 enforces the same call-boundary rule",
+       runErr(all.ctx, "def f(a:int) { }\nf(\"s\")\n") ==
+           "parameter 'a' of 'f' expects int, got string");
   }
 
   std::cout << passes << " passed, " << fails << " failed\n";

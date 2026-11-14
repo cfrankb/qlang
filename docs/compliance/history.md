@@ -1,3 +1,35 @@
+## Round 89 — 2026-11-14 — strict typing M4: the VM enforces declared signatures at the call boundary and at return (plan `docs/plans/strict-typing-plan.md` M4, `docs/spec/16-strict_typing.md`; impl `QLangVM.h`/`.cpp` + `Function::paramNames`, tests `strict_typing_test.cpp` 41 → 64, `qlcc_cli` 88 → 91)
+
+- **Why.** M3 put signatures on the `Function`; M4 reads them. The spec's
+  `## example of regular functions` (`hello_world` parameter mismatches,
+  `sum_int2int` ending without a return) now raises its pinned messages —
+  `parameter 'age' of 'hello_world' expects int, got string` and
+  `function 'sum_int2int' must return int, returned nil` — at run time.
+  The plan §5 message paraphrase loses to the spec table (M3 precedent).
+- **Matcher.** One file-local `typeMatches`: nil admits at parameter sites
+  only (Q13); class annotations compare the script instance's `__class__`
+  string or an external type's registered name (Q18); exact `Type` equality
+  otherwise, plus same-signed-group widening by storage rank
+  (`char<short<int<long`, `byte<word<unsigned<qword`) — cross-sign and
+  narrowing never coerce; `bool` matches `bool` only.
+- **Sites.** `QLangVM::checkCallArgs` runs in `pushCall` (covers CALLFN,
+  CALLCLOS, CALL-import) and at the generator-argument copies — `MAKEGEN`,
+  the imported-generator call, and both `callFunction` branches (host entry)
+  — before any frame or instance goes live. `checkReturnValue` guards the
+  `RETURN` opcode and the fall-off-end path (the `sum_int2int` case). Both
+  short-circuit on one int compare below `STRICT_DECLARED`, so level 0 (the
+  default everywhere, 67/67 legacy corpus) is untouched.
+- **Names.** `Function::paramNames` (parallel to `paramTypes`, hidden
+  receivers included) carries the exact parameter names the diagnostics
+  quote; `buildFunction` stores `params` verbatim. The `.qlc` codec does not
+  serialize either record yet — v9 images stay signature-less (M5).
+- **Verified.** `strict_typing` 41 → 64 checks: every spec example case
+  asserted with `==` on the exact message, plus nil-admits, widening,
+  cross-sign, narrowing, bool strictness, closure/method/generator/class
+  (accept + reject) boundaries, level-0 silence and level-2 equality.
+  `qlcc_cli` gained the `strictcalls.ql` fixture (silent at 0, pinned
+  message + exit 3 at 1 and 2). ctest 67/67.
+
 ## Round 88 — 2026-11-14 — strict typing M3: declared signatures ride the `Function` record, and level 2 refuses undeclared types (plan `docs/plans/strict-typing-plan.md` M3, `docs/spec/16-strict_typing.md`; impl `QLangBytecode.h` + `QLangCompiler.h`/`.cpp`, tests `strict_typing_test.cpp` 27 → 41)
 
 - **Why.** M2 made annotations writable; nothing *read* them. M3 carries each

@@ -591,6 +591,10 @@ struct Function {
   // annotation. Serialized with `.qlc` v10; unchecked at levels below 1.
   std::vector<TypeAnnotation> paramTypes;
   TypeAnnotation returnType;
+  // Parameter names parallel to `paramTypes` (hidden receivers included):
+  // the exact-typed strict-typing diagnostic names the offending parameter.
+  // Carried to `.qlc` v10 alongside paramTypes.
+  std::vector<std::string> paramNames;
 };
 
 // Opcode mnemonics for dumping/debugging. The compiled program itself is

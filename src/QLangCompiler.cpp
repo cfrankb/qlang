@@ -2073,6 +2073,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   // args and returns against it at levels >= 1; the codec carries it in v10.
   fn.paramTypes = paramTypes;
   fn.returnType = returnType;
+  fn.paramNames = params;
   // Populate the capture spec so the VM can bind enclosing-frame registers
   // when this function is called.
   fn.captureNames = updatedCaptures;
