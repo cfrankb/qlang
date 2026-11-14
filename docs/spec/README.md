@@ -13,9 +13,9 @@ defined against C++20.
 |--------|--------|--------|
 | [01-types.md](01-types.md) | language intro, data types, value semantics, strings, sets, append | `4ed004cec48d9c1ec3626c48deb02919e9c3b6c6831b1eb7332fa11aa02b2c64` |
 | [02-lexical.md](02-lexical.md) | reserved words, constants, enum, comments | `0e746264958922212c10368a5f8085f520c39e1712b46694f8ea92a8c218c46a` |
-| [03-declarations.md](03-declarations.md) | boolean evaluation, declarations and assignments | `f6996ecd1bd9ce15f29a000e65360c1932fa6acc098ed7717809e5a1a17917ae` |
+| [03-declarations.md](03-declarations.md) | boolean evaluation, declarations and assignments | `b574e9fba63221df31582ba5ced416982d7438a66a5421f27b36df5a5b21741a` |
 | [04-control-flow.md](04-control-flow.md) | conditions, range, switch, loops, label/goto | `b531d6356ea43f7b470c3e22f4f58af887926b8987533b419ce91602c0e0d0e2` |
-| [05-operators.md](05-operators.md) | operators incl. `?`, `<`/`>`, `**`, cast, `==`/`!=`, `$`, `$$` | `5f71e2c3dc86ee9a6101caf87d71729c8e5c3dd195ca6736d0a0b7e00f2e0e46` |
+| [05-operators.md](05-operators.md) | operators incl. `?`, `<`/`>`, `**`, cast, `==`/`!=`, `$`, `$$` | `b16ac686b61309a6f9df7ffc31c4e121a4c6ea014658aec2041a3b6721874555` |
 | [06-functions.md](06-functions.md) | built-in functions incl. `deepcopy`, qlang native functions, C++ API | `8e7ac79a3f42b0e91bab2578551ef66d40b437e9a46683522f1e63cc1de3fe8c` |
 | [07-api.md](07-api.md) | module registration, QLang import syntax, `ctx.clear()`, verbose level, step budget, threading contract, module search paths, external search callback, output callback (universal) | `a48885b4d46882814f55a2d7e8035d8cba07dfbd001975bcd9fbdefad857d387` |
 | [08-generators.md](08-generators.md) | generators, PROTOTYPE 1, Syntax, EOF sentinel | `a99107445f3850d8b600e84cf5d0e5860babc4173cda0e2a183debab0123200d` |
@@ -26,7 +26,7 @@ defined against C++20.
 | [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `4e96fb7b0aec70e94271455678023b8120859a3cb6801524b8a6fdc803e514ae` |
 | [14-scope.md](14-scope.md) | visibility scope. execution context | `ec1eadb21c4716b94590261fec12a16b1f11a715a5bfed53b5ca46232b6a0999` |
 | [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
-| [16-strict_typing.md](16-strict_typing.md) | strict typing | `0e2c24e5d5121b784c31561d2a9b94bf32e52eb518df2b9f65531c11eafed4fd` |
+| [16-strict_typing.md](16-strict_typing.md) | strict typing | `fe73b1ff53960150911c9941e9784b60ac76369f8deb85744ccb0de23f5b1dfa` |
 | [17-signals.md](17-signals.md) | signals | `ede443b5ab88d73af308203e90444a56c0593e66459d8ed60d07f6fef0815e1d` |
 | [18-qlang-run.md](18-qlang-run.md) | qlcc driver | `d578643176281ee9fb03351bf55bfd72e3bb86afe2e11b80c69e296bf667fe2a` |
 | [19-qt6_integration.md](19-qt6_integration.md) | Qt6 integration (**draft 2026-11-13, unimplemented** — `QLANG_WITH_QT`: meta-driven Q_OBJECT class imports, dialogs/widgets, QFile + `:/` resources, Qt signal/slot bridge, GUI-thread contract; plan `docs/plans/qt-bridge-plan.md`) | `81849ea558dc0211da72219b77b578b40fdcc7cfa711f32869e28871ceefc518` |

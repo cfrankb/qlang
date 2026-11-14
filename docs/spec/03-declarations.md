@@ -90,7 +90,7 @@ if true {
 }
 
 t = 5
-local t = 9   # possible warning or error depending on strict typing guidelines
+local t = 9   # strict typing level 1: warning; level 2: error (16-strict_typing.md, redeclared variables)
 
 # anonymous functions inside a table
 local events:table = {

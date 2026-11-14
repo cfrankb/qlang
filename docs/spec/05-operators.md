@@ -327,9 +327,13 @@ unresolved name.
 
 A name is targetable only after its **declaration event** has executed. The first
 declaration of a name is either an explicit `local`/`let` or its first plain
-assignment; a later explicit `local`/`let` for the same name is a compile warning
-declares into the enclosing function frame, so a `$$` targeting a name declared
-in a branch that has not run is a `not declared` error:
+assignment; a later explicit `local`/`let` for the same name is a duplicate
+declaration, diagnosed at the configured strict typing level — silent at level 0,
+`warning: duplicated variable "a" declaration within scope` at level 1, an error
+at level 2 (see `16-strict_typing.md` `## redeclared variables within a scope`;
+one shared check). A declaration executes into the enclosing function frame, so
+a `$$` targeting a name declared in a branch that has not run is a
+`not declared` error:
 
 ```python
 local a = "x"

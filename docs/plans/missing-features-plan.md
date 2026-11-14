@@ -91,7 +91,7 @@ closed by §7 of the plan: the declaration bit is **not** encoded.
 | # | Item | Spec anchor | Blocks |
 |---|------|-------------|--------|
 | B1 | Warning emission infrastructure | *was* `11-external-types.md` `# warning` — **section deleted (`1db387d`, 2026-11-06)**; no standalone anchor remains | B2 (as a C1 dependency: level 1 must be able to warn) |
-| B2 | Duplicate-declaration diagnostic (level-dependent) | `16-strict_typing.md` `## redeclared variables within a scope` (new), `03-declarations.md` dup-decl example ("possible warning or error depending on strict typing guidelines"), `05-operators.md` `## operator $$` (declaration-state rules — wording drift, **Q28**) | — |
+| B2 | Duplicate-declaration diagnostic (level-dependent) | `16-strict_typing.md` `## redeclared variables within a scope` (new), `03-declarations.md` dup-decl example (comment pinned to the level table 2026-11-14), `05-operators.md` `## operator $$` (declaration-state rules — **Q28** wording aligned 2026-11-14) | — |
 
 The former dependency `B1 ──> B2` (warnings must be toggleable before the
 dup-decl check can re-land) is superseded: the strict-typing level is the
@@ -102,7 +102,7 @@ warning toggle still exists is **Q27**.
 
 | # | Item | Spec anchor | Notes |
 |---|------|-------------|-------|
-| C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | draft spec — C++ API "to be provided"; examples show runtime exceptions at call/return sites; **now also owns the duplicate-declaration diagnostic (B2) and warning emission (B1)** |
+| C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | **specified (finalized 2026-11-14), planned** — implementation plan `docs/plans/strict-typing-plan.md`; **now also owns the duplicate-declaration diagnostic (B2) and warning emission (B1)** |
 | C5 | Inheritance (`ObjectOps::base`) | `10-classes.md` v1 restrictions, `EXTERNAL_TYPES.md` §10.3 | reserved, returns null; base-chain walk deferred to v2 |
 | C7 | Enum-name string form for enum-valued properties | `EXTERNAL_TYPES.md` §10.5 | no dispatch point sees both field value and type context |
 | C8 | Module search paths + external search callback | `07-api.md` `## module search paths`, `## external search callback` | **✓ implemented (C8a Round 67, C8b Round 69, 2026-11-10)** — `moduleSearchPaths`/`setModuleSearchPaths`/`addModuleSearchPath`/`setModuleSearchCallback`/`moduleSearchCallback`/`findModule` on `QLangContext`, `import` resolves through it, `qlang_run --module-path` / `--no-module-search`, `--import` deprecated; a `[name].ql` hit is compiled into an image and taken in (Q36–Q38 answered); front end for `archive/external-modules-plan-v4.md` |
@@ -319,7 +319,10 @@ now names is the level-1 duplicate-declaration diagnostic in
   the level the sole control? **Default:** the level is the sole control — no
   independent toggle; re-introduce one only when a warning class exists outside
   the strict-typing levels (cf. **Q1**).
-- **Q28 `$$` spec wording drift** — `05-operators.md` `## operator $$`
+- **Q28 `$$` spec wording drift** — **RESOLVED 2026-11-14**: the sentence is
+  aligned to `16-strict_typing.md` `## redeclared variables within a scope`
+  (level-dependent diagnostic, one shared check per **Q5**); spec edited,
+  re-hashed. — `05-operators.md` `## operator $$`
   ("declaration state") still says "a later explicit `local`/`let` for the same
   name is a compile warning", i.e. unconditional, while the level table makes
   it silent/warning/error by level. Spec edit aligning the sentence to
@@ -506,7 +509,14 @@ cross-references.
 
 ### Phase 3 — API surface (absorbs the former Phase 1)
 
-1. **C1 strict typing** — step 1: finalize `16-strict_typing.md` (define the
+1. **C1 strict typing** — **step 1 DONE 2026-11-14**: `16-strict_typing.md`
+   finalized (M0 of `docs/plans/strict-typing-plan.md`), **Q12–Q18, Q27–Q28
+   settled there** (Q28's `$$` sentence aligned this round). Q12's premise was
+   wrong — the `## rules` table and the examples do **not** contradict: they
+   encode same-sign-group widening with no cross-sign and no narrowing, and
+   the spec now says so explicitly. Step 2 (implement levels 1/2) follows
+   `strict-typing-plan.md` milestones M1–M5. Historical decision record:
+   define the
    `QLangContext` API, e.g. `setStrictTypingLevel(0/1/2)`) and settle
    **Q12–Q18, Q27–Q28**. Q12 gates everything: the draft's `## rules` coercion table
    ("smaller storage size" within the signed/unsigned group) contradicts its own
