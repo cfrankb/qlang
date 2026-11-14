@@ -366,6 +366,21 @@ int main() {
     ok("M4: generator arguments checked at instance creation",
        runErr(cap.ctx, "def gen(a:int) { yield a }\ngen(\"s\")\n") ==
            "parameter 'a' of 'gen' expects int, got string");
+    ok("M4: a generator accepts nil at exhaustion (spec §implicit return "
+       "types)",
+       runErr(cap.ctx,
+              "def gen() -> int { yield 1 }\nlocal g = gen()\ng(); g(); g()\n")
+           .empty());
+    ok("M4: a generator accepts an explicit return nil (spec §implicit "
+       "return types)",
+       runErr(cap.ctx,
+              "def gen() -> int { yield 1\n return nil }\nlocal g = gen()\n"
+              "g(); g()\n")
+           .empty());
+    ok("M4: a generator's non-nil return is still checked (spec §implicit "
+       "return types)",
+       runErr(cap.ctx, "def gen() -> int { return \"x\" }\ngen()\n") ==
+           "function 'gen' must return int, returned string");
     ok("M4: class method checked (hidden self exempt)",
        runErr(cap.ctx,
               "class T {\n x = 0\n m(self, k:int)[] { }\n}\n"

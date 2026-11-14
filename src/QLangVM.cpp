@@ -1937,8 +1937,12 @@ void QLangVM::checkCallArgs(const Function &fn,
 }
 
 void QLangVM::checkReturnValue(const Function &fn, const QLangValue &v) const {
+  // SPEC §16 "implicit return types": a generator always accepts nil — the
+  // EOF sentinel and an explicit `return nil` pass any declared return type.
   if (m_scope.strictTypingLevel() < QLangContext::STRICT_DECLARED ||
-      !fn.returnType.declared() || typeMatches(v, fn.returnType, false))
+      !fn.returnType.declared() ||
+      (fn.isGenerator && v.type() == QLangValue::Type::Nil) ||
+      typeMatches(v, fn.returnType, false))
     return;
   vmThrow(QLangErrorKind::Type, "function '" + fn.name + "' must return " +
                                     annotationName(fn.returnType) +
@@ -2157,7 +2161,8 @@ RunResult QLangVM::runFrames() {
       // (No scope sync: the main frame aliases the global table — Phase 2.)
       m_returnValue = frame.regs.empty() ? QLangValue() : frame.regs[0];
       // The spec's must-return case: a body that ends without a statement
-      // returns nil, and nil never satisfies a declared return type.
+      // returns nil, and nil never satisfies a declared return type (the
+      // generator nil exception lives in checkReturnValue).
       checkReturnValue(fn, m_returnValue);
       popFrame();
       if (m_cur >= 0)

@@ -1,3 +1,23 @@
+## Round 91 — 2026-11-14 — strict typing: generators always accept `nil` as a return (`docs/spec/16-strict_typing.md` `## implicit return types`; impl `QLangVM.cpp` `checkReturnValue`, tests `strict_typing_test.cpp` 64 → 68)
+
+- **Why.** The spec gained `## implicit return types`: "`generators` always
+  accept `nil` as a valid return type." The M4 return check had no generator
+  exception, so an annotated generator (`def g() -> int { … }`) died at
+  exhaustion with the synthesized trailing `CONST nil; RETURN` — and at an
+  explicit `return nil` — reproducing exactly the pinned
+  `function 'g' must return int, returned nil` against the new rule.
+- **Fix.** One guard in `QLangVM::checkReturnValue`: a nil return from
+  `fn.isGenerator` passes any declared return type, at every level. The
+  single enforcement site (`RETURN` + fall-off-end share it) means the
+  generator flag rides the `.qlc` already (Round 90's record keeps
+  `isGenerator`), so loaded module images get the rule with no codec change.
+  Non-nil generator returns stay checked; regular functions are untouched
+  (`nil never satisfies a declared return` still holds for them).
+- **Verified.** `strict_typing_test` 64 → **68**: nil at EOF exhaustion,
+  explicit `return nil`, non-nil mismatch still raises; the regular-function
+  must-return case stays green. `doc_hashes` gate re-recorded the
+  `16-strict_typing.md` row after the suites went green. ctest **67/67**.
+
 ## Round 90 — 2026-11-14 — strict typing M5: `.qlc` v10 carries the declared signature (plan `docs/plans/archive/strict-typing-plan.md` M5, `docs/spec/16-strict_typing.md`; impl `QLangBytecodeIO.h`/`.cpp`, docs `SERIALIZATION.md` §4/§4.1a, tests `codec_check.cpp` 358 → 366)
 
 - **Why.** With M4 the VM enforced signatures, but only for freshly compiled

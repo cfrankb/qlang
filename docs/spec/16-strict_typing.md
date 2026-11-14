@@ -173,3 +173,7 @@ compile error.
 |return mismatch|`function 'sum_int2int' must return int, returned nil`|
 |duplicate declaration (level 1 / level 2)|`warning: duplicated variable "a" declaration within scope` / `error: duplicated variable "a" declaration within scope`|
 |undeclared type (level 2)|`undeclared type for 'x'`|
+
+## implicit return types
+
+`generators` always accept `nil` as a valid return type.

@@ -26,7 +26,7 @@ defined against C++20.
 | [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `4e96fb7b0aec70e94271455678023b8120859a3cb6801524b8a6fdc803e514ae` |
 | [14-scope.md](14-scope.md) | visibility scope. execution context | `ec1eadb21c4716b94590261fec12a16b1f11a715a5bfed53b5ca46232b6a0999` |
 | [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
-| [16-strict_typing.md](16-strict_typing.md) | strict typing | `fe73b1ff53960150911c9941e9784b60ac76369f8deb85744ccb0de23f5b1dfa` |
+| [16-strict_typing.md](16-strict_typing.md) | strict typing | `81084dcccd977ebcdd7bdad5c3b815971fb25852f3f1bc2808f88a0dbfac4324` |
 | [17-signals.md](17-signals.md) | signals | `ede443b5ab88d73af308203e90444a56c0593e66459d8ed60d07f6fef0815e1d` |
 | [18-qlang-run.md](18-qlang-run.md) | qlcc driver | `d578643176281ee9fb03351bf55bfd72e3bb86afe2e11b80c69e296bf667fe2a` |
 | [19-qt6_integration.md](19-qt6_integration.md) | Qt6 integration (**draft 2026-11-13, unimplemented** — `QLANG_WITH_QT`: meta-driven Q_OBJECT class imports, dialogs/widgets, QFile + `:/` resources, Qt signal/slot bridge, GUI-thread contract; plan `docs/plans/qt-bridge-plan.md`) | `81849ea558dc0211da72219b77b578b40fdcc7cfa711f32869e28871ceefc518` |
