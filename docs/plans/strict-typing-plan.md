@@ -248,7 +248,17 @@ existing unannotated programs at any level.
    `compileDeclaration` re-type resolution (`regOf` else bare-assign
    auto-declare, no dup-decl diagnostic — Q5). `strict_typing` 15 → 27 checks;
    the whole legacy suite is untouched (Round 87).
-4. **M3 — signature plumbing + level-2 compile checks (0.5 d).** §4.
+4. **M3 — signature plumbing + level-2 compile checks (0.5 d).** ✅ **DONE
+   2026-11-14.** §4 shipped: `Function::paramTypes`/`returnType` carried from
+   all five `buildFunction` call sites (self/anchor entries undeclared), the
+   spec-pinned `undeclared type for '<name>'` checks at definition sites —
+   one param loop in `buildFunction` (hidden receivers exempt) + the
+   initialized-declaration checks in `compileDeclaration`/`compileConst`
+   (valueless `local z`, loop vars, class fields exempt; missing `->` legal).
+   Plan §4's paraphrased messages superseded by the spec's single form; the
+   return-expression-type site stays deferred (return annotations enforced
+   where written, M4 at the boundary). `strict_typing` 27 → 41 checks;
+   behavior-neutral below level 2, ctest 67/67 (Round 88).
 5. **M4 — VM runtime checks (1 d).** §5. The spec's §example blocks run
    verbatim as tests at this milestone.
 6. **M5 — codec v10 + SERIALIZATION + `codec_check` (1 d).** §6.

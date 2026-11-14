@@ -6,7 +6,9 @@
 // error at level 2. Shadowing and parameters are deliberately not duplicates
 // (Q5). M2: the annotation grammar — typed parameters, `-> type` return
 // annotations and annotated assignments parse at every level and stay
-// unchecked at level 0. Call-site/return enforcement arrives with M3/M4.
+// unchecked at level 0. M3: signature plumbing onto the Function record
+// (behavior-neutral) and the level-2 `undeclared type for '<site>'` checks
+// at definition sites. Call-site/return enforcement arrives with M4.
 #include <iostream>
 #include <string>
 #include <vector>
@@ -232,6 +234,70 @@ int main() {
     ok("M2: label statements still parse (colon gate)",
        runErr(cap.ctx, "local a = 10\n:label1\n--a\nif a > 1 goto label1\n"
                        "assert(a == 1, \"label\")\n")
+           .empty());
+  }
+
+  // 10. M3 — level-2 undeclared-type checks at definition sites (spec
+  //     "level 2 — undeclared types"); exact diagnostic `undeclared type
+  //     for '<name>'`. Exemptions: valueless `local z`, loop variables,
+  //     class fields, hidden self/anchor. A missing `->` stays legal
+  //     (enforced only where written).
+  {
+    Captured cap;
+    cap.ctx.setStrictTypingLevel(QLangContext::STRICT_ALL);
+    ok("M3: unannotated parameter is a compile error",
+       runErr(cap.ctx, "def f(a) { }\n")
+               .find("undeclared type for 'a'") != std::string::npos);
+    ok("M3: annotated params without a return annotation are legal",
+       runErr(cap.ctx, "def f(a:int) { return a }\nlocal r:int = f(1)\n")
+           .empty());
+    ok("M3: initialized declaration without a type is an error",
+       runErr(cap.ctx, "local a = 1\n")
+               .find("undeclared type for 'a'") != std::string::npos);
+    ok("M3: annotated declaration is legal",
+       runErr(cap.ctx, "local a:int = 1\n").empty());
+    ok("M3: valueless local z is exempt (nil-implicit invariant)",
+       runErr(cap.ctx, "local z\n").empty());
+    ok("M3: unannotated const is an error; annotated const is legal",
+       runErr(cap.ctx, "const k = 5\n")
+               .find("undeclared type for 'k'") != std::string::npos &&
+           runErr(cap.ctx, "const k:int = 5\n").empty());
+    ok("M3: loop variables are exempt",
+       runErr(cap.ctx, "for i = 1 to 3 { }\n").empty());
+    ok("M3: re-type assignment stays legal (always annotated)",
+       runErr(cap.ctx, "local a:int = 1\na:byte = 2\n").empty());
+    ok("M3: unannotated closure-literal parameter is an error",
+       runErr(cap.ctx, "local t:table = { f = (a)[] { return a } }\n")
+               .find("undeclared type for 'a'") != std::string::npos);
+    ok("M3: class fields exempt; unannotated method param errors (self exempt)",
+       runErr(cap.ctx, "class T {\n x = 0\n m(self, a)[] { }\n}\n")
+               .find("undeclared type for 'a'") != std::string::npos);
+    ok("M3: annotated methods (hidden self exempt) compile and run",
+       runErr(cap.ctx,
+              "class T {\n x = 0\n __init__(self, v:int)[] { self.x = v }\n"
+              " m(self, k:int)[] -> int { return self.x * k }\n}\n"
+              "local p:table = T(3)\nassert(p.m(2) == 6, \"m3 method\")\n")
+           .empty());
+    ok("M3: static methods (hidden anchor exempt) compile and run",
+       runErr(cap.ctx,
+              "class T {\n static bump(k:int)[] -> int { return k + 1 }\n}\n"
+              "local r:int = T::bump(1)\nassert(r == 2, \"m3 static\")\n")
+           .empty());
+    ok("M3: level-2 diagnostics are warnings-free (thrown, not warned)",
+       cap.warnings().empty(), cap.warnings());
+  }
+
+  // 11. M3 plumbing is behavior-neutral below level 2: annotated callables
+  //     run unchanged at the default level (Function::paramTypes/returnType
+  //     are carried but unchecked until M4's call-boundary enforcement).
+  {
+    Captured cap;
+    ok("M3: annotated def/closure run unchanged at level 0",
+       runErr(cap.ctx,
+              "def add(a:int, b:int) -> int { return a + b }\n"
+              "local t:table = { d = (x:int)[] -> int { return x * 2 } }\n"
+              "assert(add(1, 2) == 3, \"def\")\n"
+              "assert(t.d(21) == 42, \"closure\")\n")
            .empty());
   }
 

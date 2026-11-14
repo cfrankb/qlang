@@ -1877,7 +1877,23 @@ static void collectStmtIds(const StmtPtr &s, std::unordered_set<std::string> &id
 int QLangCompiler::buildFunction(const std::string &name,
                                  const std::vector<std::string> &params,
                                  std::vector<std::string> captures,
-                                 const std::vector<StmtPtr> &body) {
+                                 const std::vector<StmtPtr> &body,
+                                 const std::vector<TypeAnnotation> &paramTypes,
+                                 const TypeAnnotation &returnType, int line) {
+  // STRICT_ALL (SPEC §strict typing "level 2 — undeclared types"): every
+  // callable parameter needs a declared type; the exact diagnostic is
+  // `undeclared type for '<name>'`. Hidden receivers are exempt: a method's
+  // `self` and a static method's `__anchor__` are never written by the user.
+  // Thrown before any state is touched, so the compiler stays consistent.
+  if (m_scope && m_scope->strictTypingLevel() >= QLangContext::STRICT_ALL) {
+    for (size_t i = 0; i < params.size(); ++i) {
+      if (params[i] == "self" || params[i] == "__anchor__")
+        continue;
+      if (i >= paramTypes.size() || !paramTypes[i].declared())
+        throw QLangError(QLangErrorKind::Parse, line, 0,
+                         "undeclared type for '" + params[i] + "'");
+    }
+  }
   // Receiver checks from a manifest apply at top level only (plan P4 v1):
   // inside a function/closure body a parameter or local could shadow a known
   // receiver name, so the body stays fully lenient.
@@ -2053,6 +2069,10 @@ int QLangCompiler::buildFunction(const std::string &name,
   fn.name = name;
   fn.paramCount = static_cast<int>(params.size());
   fn.registerCount = m_nextReg;
+  // Declared signature verbatim (SPEC §strict typing): the VM checks call
+  // args and returns against it at levels >= 1; the codec carries it in v10.
+  fn.paramTypes = paramTypes;
+  fn.returnType = returnType;
   // Populate the capture spec so the VM can bind enclosing-frame registers
   // when this function is called.
   fn.captureNames = updatedCaptures;
@@ -2241,6 +2261,14 @@ void QLangCompiler::compileDeclaration(const StmtPtr &s) {
       r = declareVar(s->name);
   } else {
     checkDupDecl(s);
+    // STRICT_ALL (SPEC §strict typing "level 2 — undeclared types"): an
+    // initialized declaration without a declared type. `local z` (no
+    // initializer) is exempt — the nil-implicit invariant; the re-type
+    // branch above always carries its annotation.
+    if (s->value && !s->declaredType && m_scope &&
+        m_scope->strictTypingLevel() >= QLangContext::STRICT_ALL)
+      throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                       "undeclared type for '" + s->name + "'");
     r = declareVar(s->name, true);
   }
   if (s->value && s->value->kind == ExprKind::Literal) {
@@ -2286,6 +2314,12 @@ void QLangCompiler::compileDeclaration(const StmtPtr &s) {
 
 void QLangCompiler::compileConst(const StmtPtr &s) {
   checkDupDecl(s);
+  // STRICT_ALL (SPEC §strict typing "level 2"): a const always has an
+  // initializer, so an unannotated const can never pin its type.
+  if (!s->declaredType && m_scope &&
+      m_scope->strictTypingLevel() >= QLangContext::STRICT_ALL)
+    throw QLangError(QLangErrorKind::Parse, s->line, s->col,
+                     "undeclared type for '" + s->name + "'");
   int r = declareVar(s->name, true);
   m_constVars.insert(s->name);
   // Compile the RHS directly into the declared register (SPEC
@@ -2972,7 +3006,9 @@ void QLangCompiler::compileDef(const StmtPtr &s) {
   trace(TRACE_FULL, "[DBG-GENVAR] Def stmt for '%s', m_generatorVars={", s->funcName.c_str());
   for (auto &g : m_generatorVars) trace(TRACE_FULL, " %s", g.c_str());
   trace(TRACE_FULL, " }, m_functions.size=%d\n", (int)m_functions.size());
-  int funcIndex = buildFunction(s->funcName, s->params, {}, s->body);
+  int funcIndex =
+      buildFunction(s->funcName, s->params, {}, s->body, s->paramTypes,
+                    s->returnType, s->line);
   m_userFuncs[s->funcName] = funcIndex;
   // Track generator functions at the outer scope so assignments from them
   // are recognized as producing generator values.
@@ -3043,7 +3079,8 @@ void QLangCompiler::compileDef(const StmtPtr &s) {
 
 void QLangCompiler::compileArrow(const StmtPtr &s) {
   // `local name = (params)[captures] { ... }`: an arrow-closure value.
-  int funcIndex = buildFunction(s->name, s->params, s->captures, s->body);
+  int funcIndex = buildFunction(s->name, s->params, s->captures, s->body,
+                                s->paramTypes, s->returnType, s->line);
   m_closureVars.insert(s->name);
   m_varTypes[s->name] = QLangValue::Type::Function;
   // If the closure contains yield (at any nesting depth), mark it as a
@@ -3790,6 +3827,9 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
   struct StaticMethodDecl {
     std::string name;
     std::vector<std::string> params;
+    std::vector<TypeAnnotation> paramTypes;
+    TypeAnnotation returnType;
+    int line = 0;
     std::vector<std::string> captures;
     std::vector<StmtPtr> body;
     int funcIndex = -1; // filled in the post-loop statics build
@@ -3845,15 +3885,18 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       if (st->isStatic) {
         // Static method: compiled (with a hidden anchor param) in the
         // post-loop statics build, after all static names are known.
-        staticMethodDecls.push_back(
-            {st->name, st->params, st->captures, st->body});
+        staticMethodDecls.push_back({st->name, st->params, st->paramTypes,
+                                     st->returnType, st->line, st->captures,
+                                     st->body});
         continue;
       }
       // Instance method: compile now, with the class's static names visible
       // so the body can reference statics via `self.__statics__`.
       m_classStaticNames = allStatics;
       m_inStaticMethod = false;
-      int funcIndex = buildFunction(st->name, st->params, st->captures, st->body);
+      int funcIndex = buildFunction(st->name, st->params, st->captures,
+                                    st->body, st->paramTypes, st->returnType,
+                                    st->line);
       m_classStaticNames.clear();
       // Record the class method's provenance so tools never list it as a
       // main-module export.
@@ -3900,9 +3943,14 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       std::vector<std::string> params = {"__anchor__"};
       for (auto &p : sm.params)
         params.push_back(p);
+      // Signature alignment: the anchor entry is undeclared by construction.
+      std::vector<TypeAnnotation> ptypes = {TypeAnnotation{}};
+      for (auto &pt : sm.paramTypes)
+        ptypes.push_back(pt);
       m_classStaticNames = allStatics;
       m_inStaticMethod = true;
-      int funcIndex = buildFunction(sm.name, params, sm.captures, sm.body);
+      int funcIndex = buildFunction(sm.name, params, sm.captures, sm.body,
+                                    ptypes, sm.returnType, sm.line);
       m_inStaticMethod = false;
       m_classStaticNames.clear();
       // Record the static method's provenance (see the instance-method note).
@@ -5129,7 +5177,8 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
   }
   case ExprKind::Closure: {
     // Anonymous arrow closure: build the function and emit MAKEFUNC.
-    int funcIndex = buildFunction("closure", e->params, e->captures, e->body);
+    int funcIndex = buildFunction("closure", e->params, e->captures, e->body,
+                                  e->paramTypes, e->returnType, m_curLine);
     auto closure = std::make_shared<Closure>();
     closure->funcIndex = funcIndex;
     for (auto &cap : e->captures) {

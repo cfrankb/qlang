@@ -585,6 +585,12 @@ struct Function {
   // a generator instance for calls to such functions rather than executing
   // them inline.
   bool isGenerator = false;
+  // Declared signature (SPEC §strict typing): parallel to params
+  // [0..paramCount-1] — a class method's entry 0 (hidden self) and a static
+  // method's anchor entry stay undeclared — plus the `-> type` return
+  // annotation. Serialized with `.qlc` v10; unchecked at levels below 1.
+  std::vector<TypeAnnotation> paramTypes;
+  TypeAnnotation returnType;
 };
 
 // Opcode mnemonics for dumping/debugging. The compiled program itself is

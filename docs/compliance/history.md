@@ -1,3 +1,38 @@
+## Round 88 — 2026-11-14 — strict typing M3: declared signatures ride the `Function` record, and level 2 refuses undeclared types (plan `docs/plans/strict-typing-plan.md` M3, `docs/spec/16-strict_typing.md`; impl `QLangBytecode.h` + `QLangCompiler.h`/`.cpp`, tests `strict_typing_test.cpp` 27 → 41)
+
+- **Why.** M2 made annotations writable; nothing *read* them. M3 carries each
+  callable's declared signature into the compiled `Function` (the record M4's
+  call-boundary checks and M5's codec v10 will consume) and enforces the
+  spec's `## level 2 — undeclared types` at definition sites.
+- **Plumbing.** `Function` gains `paramTypes` (parallel to params) +
+  `returnType`; `buildFunction` takes them (defaulted — the internal
+  `ternary` block needs none) and stores them verbatim. All five real call
+  sites pass through: `def`, arrow-closure statement, instance method (the
+  written `self` keeps an undeclared entry 0), static method (an undeclared
+  entry is prepended for the hidden `__anchor__`), closure literal
+  (`m_curLine` for the diagnostic). No emitter/codec change — below level 2
+  behavior is byte-identical (67/67, legacy corpus untouched).
+- **Level-2 checks (exact `undeclared type for '<name>'`, thrown as
+  `QLangError(Parse)`).** Params: one check at the top of `buildFunction`
+  covers all five definition forms before any state is touched; a method's
+  `self` and a static's `__anchor__` are exempt (never user-written).
+  Declarations: initialized `local`/`let`/`const` without a type in
+  `compileDeclaration`/`compileConst` — valueless `local z` exempt (the
+  nil-implicit invariant), the re-type branch always carries its annotation.
+  Loop variables and class fields are exempt by construction (they never
+  route through these paths). A missing `->` stays legal: the spec enforces
+  return annotations "only where written".
+- **Deviations.** Plan §4's paraphrased messages (`parameter 'a' has no
+  declared type`) lose to the spec's pinned single form `undeclared type for
+  'x'`. The spec's third level-2 site — "a `return` expression whose type the
+  compiler cannot determine" — is not in plan §4's scope (it needs static
+  expression typing) and stays deferred; returns are checked against `->`
+  annotations at the call boundary in M4.
+- **Guard.** `strict_typing` 27 → **41 checks**: the level-2 matrix (param/
+  decl/const/closure/method errors; exemptions; annotated method and static
+  method compiling *and running* at level 2; diagnostics thrown, never
+  warned) + a level-0 behavior-neutral smoke. ctest **67/67**.
+
 ## Round 87 — 2026-11-14 — strict typing M2: the annotation grammar — typed parameters, `-> type` returns, annotated assignments (plan `docs/plans/strict-typing-plan.md` M2, `docs/spec/16-strict_typing.md`; impl `QLangLexer.h`/`.cpp` + `QLangValue.h` + `QLangParser.h`/`.cpp` + `QLangCompiler.cpp`, tests `strict_typing_test.cpp` 15 → 27)
 
 - **Why.** M3/M4 enforce at signatures and call sites, but a signature could

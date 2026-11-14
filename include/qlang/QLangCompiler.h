@@ -554,7 +554,9 @@ private:
   int buildFunction(const std::string &name,
                     const std::vector<std::string> &params,
                     std::vector<std::string> captures,
-                    const std::vector<StmtPtr> &body);
+                    const std::vector<StmtPtr> &body,
+                    const std::vector<TypeAnnotation> &paramTypes = {},
+                    const TypeAnnotation &returnType = {}, int line = 0);
 
   // Compile a statement inside a function body (used by buildFunction for the
   // body and by compileStmt for the main program). The current function's
