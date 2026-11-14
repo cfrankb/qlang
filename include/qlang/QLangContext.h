@@ -201,6 +201,19 @@ namespace qlang
     // True when the current level is >= minLevel (used to gate trace output).
     bool isAt(int minLevel) const { return m_verboseLevel >= minLevel; }
 
+    // Strict typing enforcement level (SPEC §strict typing):
+    //   STRICT_OFF (0, default) — no type checking.
+    //   STRICT_DECLARED (1)     — declared types are enforced; a duplicated
+    //                             variable declaration is a warning.
+    //   STRICT_ALL (2)          — additionally, undeclared types are errors
+    //                             and a duplicated declaration is an error.
+    // setStrictTypingLevel clamps an out-of-range level to the nearest
+    // constant and reports the clamp as an OUT_WARNING diagnostic. Host
+    // configuration: survives clear() (like the output callback).
+    enum { STRICT_OFF = 0, STRICT_DECLARED = 1, STRICT_ALL = 2 };
+    void setStrictTypingLevel(int level);
+    int strictTypingLevel() const { return m_strictTypingLevel; }
+
     // Gated diagnostic emit (mirrors QLangVM::trace / QLangCompiler::trace):
     // printf-style output to stderr only when the level is >= minLevel. Used
     // by the context's own diagnostics — module resolution (plan C8a).
@@ -487,6 +500,7 @@ namespace qlang
     // (Phase 3, H1): shared handles stay valid across clear() because the
     // registry drops only its own reference.
     int m_verboseLevel = 0;
+    int m_strictTypingLevel = STRICT_OFF; // SPEC §strict typing (host config)
     std::size_t m_maxSteps = 100000; // live infinite-loop guard (see setMaxSteps)
     std::size_t m_stepsUsed = 0; // cumulative instruction counter (Phase 5, F6)
     // Threading contract (Phase 5, H5): one context, one thread. The first

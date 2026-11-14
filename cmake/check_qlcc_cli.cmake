@@ -55,6 +55,11 @@ file(WRITE "${W}/plain.ql" [[
 local n = 6
 println(n * 7)
 ]])
+file(WRITE "${W}/dupdecl.ql" [[
+local a
+local a
+println(a)
+]])
 file(WRITE "${W}/app.ql" [[
 import greeter
 println(greeter.hello("world"))
@@ -181,14 +186,24 @@ expect_match("--output is reported as an unknown option" ERR "unknown option")
 run(--asm x.qla plain.ql)
 expect_rc("--asm is no longer accepted" 1)
 
-# --strict parses, is range-checked, and is then rejected: the strict-typing
-# engine does not exist yet (docs/spec/16-strict_typing.md).
-run(--strict 1 plain.ql)
-expect_rc("--strict N exits 1 until the engine exists" 1)
-expect_match("--strict says it is not implemented" ERR "not implemented")
+# --strict parses, is range-checked, and configures the context
+# (docs/spec/16-strict_typing.md). Enforcement landed with the duplicate
+# declaration diagnostic: level 1 warns, level 2 is a compile error (exit 3,
+# the driver's compile-failure code), level 0 says nothing.
+run(--strict 3 plain.ql)
+expect_rc("--strict 3 is out of range" 1)
+expect_match("--strict names the accepted levels" ERR "0, 1, or 2")
 run(--strict plain.ql)
 expect_rc("--strict without a level exits 1" 1)
-expect_match("--strict names the accepted levels" ERR "0, 1, or 2")
+run(--strict 0 dupdecl.ql)
+expect_rc("--strict 0 compiles a duplicate declaration" 0)
+expect_no_match("--strict 0 says nothing" ERR "duplicated variable")
+run(--strict 1 dupdecl.ql)
+expect_rc("--strict 1 compiles a duplicate declaration" 0)
+expect_match("--strict 1 warns" ERR "warning: duplicated variable .a. declaration within scope")
+run(--strict 2 dupdecl.ql)
+expect_rc("--strict 2 rejects a duplicate declaration" 3)
+expect_match("--strict 2 reports the error" ERR "duplicated variable .a. declaration within scope")
 
 # --- help still answers -----------------------------------------------------
 run(--help)

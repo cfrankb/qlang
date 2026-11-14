@@ -1162,6 +1162,21 @@ namespace {
     m_pimpl->modules.clear();
   }
 
+  void QLangContext::setStrictTypingLevel(int level)
+  {
+    bindThread();
+    // SPEC §strict typing: out-of-range levels clamp to the nearest constant
+    // and report the clamp, so a host typo cannot silently select a level.
+    int clamped = level;
+    if (clamped < STRICT_OFF) clamped = STRICT_OFF;
+    if (clamped > STRICT_ALL) clamped = STRICT_ALL;
+    if (clamped != level)
+      output(OUT_WARNING, "warning: strict typing level " +
+                              std::to_string(level) + " clamped to " +
+                              std::to_string(clamped) + "\n");
+    m_strictTypingLevel = clamped;
+  }
+
   void QLangContext::setFunc(const std::string &name, NativeFunc func)
   {
     bindThread();

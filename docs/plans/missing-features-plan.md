@@ -90,8 +90,8 @@ closed by §7 of the plan: the declaration bit is **not** encoded.
 
 | # | Item | Spec anchor | Blocks |
 |---|------|-------------|--------|
-| B1 | Warning emission infrastructure | *was* `11-external-types.md` `# warning` — **section deleted (`1db387d`, 2026-11-06)**; no standalone anchor remains | B2 (as a C1 dependency: level 1 must be able to warn) |
-| B2 | Duplicate-declaration diagnostic (level-dependent) | `16-strict_typing.md` `## redeclared variables within a scope` (new), `03-declarations.md` dup-decl example (comment pinned to the level table 2026-11-14), `05-operators.md` `## operator $$` (declaration-state rules — **Q28** wording aligned 2026-11-14) | — |
+| B1 | Warning emission infrastructure | *was* `11-external-types.md` `# warning` — **section deleted (`1db387d`, 2026-11-06)**; no standalone anchor remains | B2 (as a C1 dependency: level 1 must be able to warn). **✓ implemented (C1 M1, 2026-11-14):** `QLangCompiler::warn` → `QLangContext::output(OUT_WARNING, …)`; the strict level is the sole control |
+| B2 | Duplicate-declaration diagnostic (level-dependent) | `16-strict_typing.md` `## redeclared variables within a scope` (new), `03-declarations.md` dup-decl example (comment pinned to the level table 2026-11-14), `05-operators.md` `## operator $$` (declaration-state rules — **Q28** wording aligned 2026-11-14) | — . **✓ implemented (C1 M1, 2026-11-14):** `QLangCompiler::checkDupDecl`, level 0/1/2 matrix, `strict_typing` suite |
 
 The former dependency `B1 ──> B2` (warnings must be toggleable before the
 dup-decl check can re-land) is superseded: the strict-typing level is the
@@ -102,7 +102,7 @@ warning toggle still exists is **Q27**.
 
 | # | Item | Spec anchor | Notes |
 |---|------|-------------|-------|
-| C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | **specified (finalized 2026-11-14), planned** — implementation plan `docs/plans/strict-typing-plan.md`; **now also owns the duplicate-declaration diagnostic (B2) and warning emission (B1)** |
+| C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | **in progress — M0+M1 landed 2026-11-14** (spec finalized; context level api + duplicate-declaration matrix + `qlcc --strict` shipped, **closing B1/B2**) — plan `docs/plans/strict-typing-plan.md`; M2–M5 (grammar, signatures, VM checks, `.qlc` v10) pending |
 | C5 | Inheritance (`ObjectOps::base`) | `10-classes.md` v1 restrictions, `EXTERNAL_TYPES.md` §10.3 | reserved, returns null; base-chain walk deferred to v2 |
 | C7 | Enum-name string form for enum-valued properties | `EXTERNAL_TYPES.md` §10.5 | no dispatch point sees both field value and type context |
 | C8 | Module search paths + external search callback | `07-api.md` `## module search paths`, `## external search callback` | **✓ implemented (C8a Round 67, C8b Round 69, 2026-11-10)** — `moduleSearchPaths`/`setModuleSearchPaths`/`addModuleSearchPath`/`setModuleSearchCallback`/`moduleSearchCallback`/`findModule` on `QLangContext`, `import` resolves through it, `qlang_run --module-path` / `--no-module-search`, `--import` deprecated; a `[name].ql` hit is compiled into an image and taken in (Q36–Q38 answered); front end for `archive/external-modules-plan-v4.md` |
@@ -209,6 +209,15 @@ owning spec module (then re-hashing it) or recording the decision in
 The `# warning` section that anchored B1 is deleted; the only warning the spec
 now names is the level-1 duplicate-declaration diagnostic in
 `16-strict_typing.md`. These questions survive as C1 design inputs.
+
+**✓ Resolved as defaulted and implemented (C1 M1, 2026-11-14).** Q1: the
+strict level is the only control. Q2: fresh contexts sit at level 0 (survives
+`clear()`). Q3: **one deviation** — the destination is
+`QLangContext::output(OUT_WARNING, …)` only, no `ctx.warnings()` accumulation
+and no `trace()` echo (strict-typing plan Q27: the sink is the warning
+infrastructure; a host collects through the output callback). Q4: compile-only.
+Q5: same-scope via `declaredInCurrentScope`; parameters exempt, shadowing
+silent.
 
 - **Q1 control granularity** — the deleted `# warning` section said only
   "compiler and interpreter warning can be toggled off"; the surviving control

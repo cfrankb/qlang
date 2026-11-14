@@ -348,6 +348,19 @@ public:
   }
 
 private:
+ // Engine warning diagnostic (SPEC §strict typing): routed through the
+ // context's OUT_WARNING sink, never throws. The warning infrastructure is
+ // this plus the sink — the strict typing level is the sole control (Q3/Q27).
+ void warn(int line, const std::string &msg);
+ // True when `name` is already bound in the innermost active scope: the
+ // block map's back() inside block scopes, else this scope's named
+ // registers (m_regs). Parameters and outer-scope names are deliberately
+ // not matches (Q5) — nested shadowing stays silent.
+ bool declaredInCurrentScope(const std::string &name) const;
+ // SPEC §strict typing dup-decl diagnostic: warning at STRICT_DECLARED,
+ // error at STRICT_ALL, silent (the default) at STRICT_OFF.
+ void checkDupDecl(const StmtPtr &s);
+
  // Owning context, used to gate trace() output on its verbose level.
  // Null when the compiler is constructed standalone (trace() is then a no-op).
  QLangContext *m_scope = nullptr;
@@ -608,6 +621,10 @@ private:
   // land here (SPEC # block scope); bare assignments and loop vars stay in
   // m_regs so they cross block boundaries.
   std::vector<std::unordered_map<std::string, int>> m_blockScopes;
+  // Current function's parameter names (saved/restored by buildFunction):
+  // re-declaring a parameter with `local` is not a duplicate declaration
+  // (Q5), so declaredInCurrentScope excludes them at function top level.
+  std::unordered_set<std::string> m_paramNames;
   std::unordered_set<std::string> m_constVars; // names declared with `const`
   std::unordered_set<std::string> m_externalVars; // injected writable host vars
   // External types from a QLM1 manifest (addExternalTypes, plan P4). The

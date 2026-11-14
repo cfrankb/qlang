@@ -1,3 +1,49 @@
+## Round 86 — 2026-11-14 — strict typing M1: the enforcement level lands on the context, and the duplicate-declaration diagnostic returns as a level-dependent warning/error (plan `docs/plans/strict-typing-plan.md` M1, `docs/spec/16-strict_typing.md`; impl `QLangContext.h`/`.cpp` + `QLangCompiler.h`/`.cpp` + `examples/qlcc.cpp`, tests `strict_typing_test.cpp` + `check_qlcc_cli.cmake`, docs `README.md` flag row + compliance `status.md`/`tests.md` re-hashed)
+
+- **Why.** `docs/spec/16-strict_typing.md` was finalized (M0, same day) but the
+  engine had no place to *hold* a level and no warning channel: the reverted
+  Round-25 duplicate-declaration `std::cerr` check could not return until the
+  level existed. M1 is the level plumbing (B1 warning infrastructure) that the
+  later type-enforcement milestones (M2–M5) sit on.
+- **Context api (`QLangContext`).** `enum { STRICT_OFF, STRICT_DECLARED,
+  STRICT_ALL }` + `setStrictTypingLevel(int)` / `strictTypingLevel()`; the
+  member survives `clear()` (host configuration, like the output callback and
+  verbose level). `setStrictTypingLevel` **clamps** an out-of-range level to the
+  nearest constant and reports the clamp as an `OUT_WARNING` (a host typo can't
+  silently pick a level).
+- **Warning channel (B1).** `QLangCompiler::warn(line, msg)` routes
+  `"warning: " + msg` through `QLangContext::output(OUT_WARNING, …)` — the
+  Round-85 sink gains its first engine `OUT_WARNING` producer; the strict level
+  is the *sole* control (Q27, no per-warning id). Never throws.
+- **Duplicate-declaration diagnostic (B2).** `checkDupDecl` at the top of
+  `compileDeclaration`/`compileConst`, gated on the level: `declaredInCurrentScope`
+  (innermost block map, else `m_regs`, minus the current function's parameters
+  via a save/restored `m_paramNames`) fires on an explicit `local`/`let`/`const`
+  naming a name already bound in the same scope. Level 0 silent (default → no
+  legacy behavior change), level 1 the exact `warning: duplicated variable "a"
+  declaration within scope`, level 2 a compile error with the same text. Nested
+  shadowing and `local` over a parameter stay silent (Q5).
+- **Driver (`qlcc --strict`).** `--strict <0-2>` stops being a parse-and-reject
+  stub: it sets `strictTyping` on the entry context and, through `ModuleLoader`,
+  every imported-`.ql` scratch context. `--strict=2` supported; `--help` text and
+  the `README.md` flag row updated from "rejected" to the level semantics.
+- **Gate.** New `strict_typing` suite, **15 checks** (output-callback capture,
+  precedent `output_callback_test`): the level matrix on `local a; local a`
+  (silent / exact warning / compile error), `const`-after-`local`,
+  bare-assign-then-`local`, block-shadow and parameter silent, plus the api
+  (constants, round-trip, `clear()` survival, high/low clamp). `qlcc_cli`
+  **83 → 88** checks (new `dupdecl.ql` fixture: exit 0 silent at 0, exit 0 with
+  `warning:` at 1, exit 3 at 2; `--strict 3` range rejection kept).
+- **Still open.** Type enforcement at call and return sites — typed
+  parameters/returns in the grammar (M2), signature plumbing + level-2 compile
+  checks (M3), VM call-boundary/return enforcement (M4), `.qlc` v10 signatures
+  (M5) — remains unimplemented; declared types are unchecked at every level
+  until those land. The strict-typing Open Item moves to **partial**.
+- **Docs.** `docs/compliance/status.md` (dup-decl Open Item → implemented;
+  strict-typing → partial; output-callback + `--strict` driver rows updated),
+  `docs/compliance/tests.md` (67 ctest entries, `strict_typing` row, driver 88
+  checks) re-hashed via `update-doc-hashes.sh`.
+
 ## Round 85 — 2026-11-13 — the output callback: one sink for every message the engine emits (plan `docs/plans/archive/output-callback-plan.md` P1; impl `QLangContext.h`/`.cpp` + `QLangVM.h`/`.cpp` + `QLangCompiler.h`, tests `output_callback_test.cpp`, demo `examples/output_callback.cpp`, docs `docs/spec/07-api.md` § *output callback (universal)* finalized + hash re-recorded)
 
 - **Why.** A host embedding the engine (the spec's example: a Qt6 widget) needs

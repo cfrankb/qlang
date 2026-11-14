@@ -185,7 +185,7 @@ entry against one, and `--package` writes a `.qpm`. The short flags combine
 | `--trace-level <0-3>` | Diagnostic verbosity on stderr (0 = off, 3 = full detail) |
 | `--profile` | Report parse / compile / execute times in ms |
 | `--run` | Execute the program; without it `qlcc` only compiles |
-| `--strict <0-2>` | Strict-typing level (parsed; rejected as not implemented yet — `docs/spec/16-strict_typing.md`) |
+| `--strict <0-2>` | Strict-typing level (SPEC `docs/spec/16-strict_typing.md`): 0 off, 1 check declared, 2 enforce; applied to the context |
 | `-c` | Save the compiled entry image as `<stem>.qlc` |
 | `-a` | Save a disassembly listing as `<stem>.qla` (with `-c` at once: `-ca`) |
 | `--asm-level <0-5>` | Disassembly detail (0 = instructions, 5 = register breakdown) |

@@ -211,6 +211,10 @@ add_executable(signal_test tests/unit/signal_test.cpp)
 target_link_libraries(signal_test PRIVATE qlang)
 add_test(NAME signal COMMAND signal_test)
 
+add_executable(strict_typing_test tests/unit/strict_typing_test.cpp)
+target_link_libraries(strict_typing_test PRIVATE qlang)
+add_test(NAME strict_typing COMMAND strict_typing_test)
+
 # .qlc codec round-trip + the v7 version boundary + v6-encoding load-time
 # validation + malformed-input robustness + the script-corpus .qlc round-trip
 # and execute gate (docs/SERIALIZATION.md §9).

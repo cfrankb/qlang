@@ -234,8 +234,12 @@ existing unannotated programs at any level.
    duplicate wording (Q28); update both `docs/spec/README.md` hash rows; update
    `missing-features-plan.md` C1 → "specified, planned (this file)".
 2. **M1 — context API + warnings + dup-decl (B1/B2) + driver wiring (1 d).**
-   §1, §4 (dup-decl + `warn`), §7. Testable on its own: the dup-decl level
-   matrix and `--strict` acceptance.
+   ✅ **DONE 2026-11-14.** §1, §4 (dup-decl + `warn`), §7 shipped:
+   `STRICT_*`/`setStrictTypingLevel` on `QLangContext` (clamp + warn, survives
+   `clear()`), `QLangCompiler::warn` → `OUT_WARNING`, `checkDupDecl` level
+   matrix in `compileDeclaration`/`compileConst`, `qlcc --strict` wired.
+   `strict_typing` suite (15 checks) + `qlcc_cli` 83 → 88; compliance rows
+   flipped (Round 86).
 3. **M2 — grammar (1 d).** §3. Parse-only tests (typed params/returns/retyping
    parse at level 0 with zero behavior change).
 4. **M3 — signature plumbing + level-2 compile checks (0.5 d).** §4.

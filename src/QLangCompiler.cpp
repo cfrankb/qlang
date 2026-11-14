@@ -844,6 +844,40 @@ void QLangCompiler::buildRegisterReport()
   m_report.slotRanges = m_slotRanges;
 }
 
+void QLangCompiler::warn(int line, const std::string &msg) {
+  // Messages route verbatim to the sink (stdout/stderr or the host
+  // callback), so the line break belongs to the message.
+  if (m_scope)
+    m_scope->output(OUT_WARNING, "warning: " + msg + "\n",
+                    m_moduleName, line);
+}
+
+bool QLangCompiler::declaredInCurrentScope(const std::string &name) const {
+  if (!m_blockScopes.empty())
+    return m_blockScopes.back().count(name) > 0;
+  // Function top level / top level: the named-register map. Parameters live
+  // there too, but `local x` for a parameter x is not a duplicate (Q5).
+  if (m_paramNames.count(name))
+    return false;
+  return m_regs.count(name) > 0;
+}
+
+// SPEC §strict typing "redeclared variables within a scope": an explicit
+// `local`/`let`/`const` naming a name already bound in the current scope is
+// a warning at STRICT_DECLARED and an error at STRICT_ALL; silent at
+// STRICT_OFF (the default, so existing programs are untouched).
+void QLangCompiler::checkDupDecl(const StmtPtr &s) {
+  if (!m_scope || m_scope->strictTypingLevel() < QLangContext::STRICT_DECLARED)
+    return;
+  if (!declaredInCurrentScope(s->name))
+    return;
+  std::string msg = "duplicated variable \"" + s->name +
+                    "\" declaration within scope";
+  if (m_scope->strictTypingLevel() >= QLangContext::STRICT_ALL)
+    throw QLangError(QLangErrorKind::Parse, s->line, s->col, msg);
+  warn(s->line, msg);
+}
+
 int QLangCompiler::declareVar(const std::string &name, bool blockScoped) {
   // A named register must never alias an active call-arg slot region:
   // declare-on-first-use (host-injected external vars, register-less consts)
@@ -1864,6 +1898,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   // Save the enclosing function's compilation state.
   FnEmitter savedEmitter = std::move(m_emitter);
   auto savedRegs = m_regs;
+  auto savedParamNames = m_paramNames;
   // Save caller's register mapping for global keyword use.
   m_savedRegs = m_regs;
   auto savedConstVars = m_constVars;
@@ -1918,6 +1953,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   if (m_nextNamedReg < 1)
     m_nextNamedReg = 1;
   m_inFunction = true;
+  m_paramNames = paramSet; // dup-decl diagnostics skip parameters (Q5)
   for (size_t i = 0; i < params.size(); i++) {
     int r = static_cast<int>(i);
     m_regs[params[i]] = r;
@@ -2087,6 +2123,7 @@ int QLangCompiler::buildFunction(const std::string &name,
   // Restore the enclosing function's compilation state.
   m_emitter = std::move(savedEmitter);
   m_regs = std::move(savedRegs);
+  m_paramNames = std::move(savedParamNames);
   m_constVars = std::move(savedConstVars);
   m_enums = std::move(savedEnums);
   m_varTypes = std::move(savedVarTypes);
@@ -2194,6 +2231,7 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
 }
 
 void QLangCompiler::compileDeclaration(const StmtPtr &s) {
+  checkDupDecl(s);
   int r = declareVar(s->name, true);
   if (s->value && s->value->kind == ExprKind::Literal) {
     // `local a = 0` -> one store of the literal into the target register
@@ -2237,6 +2275,7 @@ void QLangCompiler::compileDeclaration(const StmtPtr &s) {
 }
 
 void QLangCompiler::compileConst(const StmtPtr &s) {
+  checkDupDecl(s);
   int r = declareVar(s->name, true);
   m_constVars.insert(s->name);
   // Compile the RHS directly into the declared register (SPEC
@@ -3669,6 +3708,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
   // Store the function index; at construction time we CALLFN it to get the prototype.
   FnEmitter savedEmitter = std::move(m_emitter);
   auto savedRegs = m_regs;
+  auto savedParamNames = m_paramNames;
   auto savedConstVars = m_constVars;
   auto savedVarTypes = m_varTypes;
   auto savedUserFuncs = m_userFuncs;
@@ -3701,6 +3741,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
 
   m_emitter = FnEmitter();
   m_regs.clear();
+  m_paramNames.clear(); // the prototype frame has no parameters
   m_constVars.clear();
   m_varTypes.clear();
   m_userFuncs.clear();
@@ -3981,6 +4022,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       {s->className, s->className + "_prototype", true});
   m_emitter = std::move(savedEmitter);
   m_regs = std::move(savedRegs);
+  m_paramNames = std::move(savedParamNames);
   m_constVars = std::move(savedConstVars);
   m_varTypes = std::move(savedVarTypes);
   m_userFuncs = std::move(savedUserFuncs);
