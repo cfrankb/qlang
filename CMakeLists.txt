@@ -108,6 +108,12 @@ target_link_libraries(qlcc PRIVATE qlang)
 add_executable(module_search examples/module_search.cpp)
 target_link_libraries(module_search PRIVATE qlang)
 
+# Universal output callback demo (SPEC §api "output callback (universal)";
+# docs/plans/output-callback-plan.md): captures every message the engine
+# emits into a table and prints it — the sibling of module_search.
+add_executable(output_callback examples/output_callback.cpp)
+target_link_libraries(output_callback PRIVATE qlang)
+
 # Portable module package demo (portable-module-plan P5, follow-on Phase 2):
 # dumps the type manifest, packs two images around it into a .qpm, then runs it
 # on a host that satisfies the contract and refuses two that do not.
@@ -274,6 +280,16 @@ add_test(NAME linker COMMAND linker_test)
 add_executable(module_search_test tests/unit/module_search_test.cpp)
 target_link_libraries(module_search_test PRIVATE qlang)
 add_test(NAME module_search COMMAND module_search_test)
+
+# Universal output callback (SPEC §api "output callback (universal)";
+# docs/plans/output-callback-plan.md P1): QLangContext::output as the one
+# sink — default stdout/stderr routing byte-identical, the callback redirect
+# exclusive, program output delivered at OUT_INFO with module name + line,
+# trace at OUT_TRACE with the ""/0 sentinels, verbose gating unchanged, the
+# must-not-throw guard, nullptr restoring defaults, and survival of clear().
+add_executable(output_callback_test tests/unit/output_callback_test.cpp)
+target_link_libraries(output_callback_test PRIVATE qlang)
+add_test(NAME output_callback COMMAND output_callback_test)
 
 # External C++ types (docs/EXTERNAL_TYPES.md): public-member setters,
 # read-only computed props, methods (incl. BoundMethod extraction), enum

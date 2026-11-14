@@ -160,7 +160,9 @@ named native function groups to `import`.
 - Safety: live infinite-loop step guard (`set_max_steps`, default 100 000)
 - Diagnostics: line+column error reports with module, function, and execution
   trace; gated trace tiers (`set_verbose_level`, 0–3) — never touches program
-  output
+  output; one universal output callback (`setOutputCallback`) routes every
+  message — program output and trace alike — into a single host sink
+  (`examples/output_callback.cpp`)
 
 **Spec'd, not yet built:** the `$$` indirect operator (fully specified in
 `docs/spec/05-operators.md`), the duplicate-declaration warning (deferred

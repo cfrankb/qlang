@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <map>
 #include <sstream>
 #include <utility>
@@ -575,6 +576,46 @@ namespace {
     return m_moduleSearchCallback;
   }
 
+  void QLangContext::setOutputCallback(OutputCallback callback)
+  {
+    bindThread();
+    m_outputCallback = std::move(callback);
+  }
+
+  const QLangContext::OutputCallback &
+  QLangContext::outputCallback() const
+  {
+    bindThread();
+    return m_outputCallback;
+  }
+
+  void QLangContext::output(int level, const std::string &message,
+                            const std::string &file, int line) const
+  {
+    if (m_outputCallback)
+    {
+      // The contract says the callback must not throw. Output has no
+      // reporting channel that is not the same broken callback, so a
+      // violation is swallowed rather than unwound through the engine
+      // (SPEC §api "output callback (universal)").
+      try
+      {
+        m_outputCallback(message, level, file, line);
+      }
+      catch (...)
+      {
+      }
+      return;
+    }
+    // Default routing, byte-identical to the pre-callback engine: program
+    // output to stdout (the old `std::cout <<` sites), diagnostics to stderr
+    // (the old `std::fputs(stderr)` sites).
+    if (level == OUT_INFO)
+      std::cout << message;
+    else
+      std::fputs(message.c_str(), stderr);
+  }
+
   // Every module `mod` itself imports, each name resolved through findModule
   // (SPEC §api "module search paths"; plan C8a). An image's import table names
   // the DEFINING module of every name it bound, and only `.ql` imports appear
@@ -1112,10 +1153,12 @@ namespace {
     m_pimpl->types.clear();
     // Loaded `.qlc` libraries die with the C++ modules they were resolved
     // against (their native slots point at those functions), and so does the
-    // resolution cache that keyed them by requested name. The search paths and
-    // the search callback do NOT: they are host configuration, not program
-    // state, so a host does not have to re-point the context at its libraries
-    // after every clear() (SPEC §api "module search paths").
+    // resolution cache that keyed them by requested name. The search paths,
+    // the search callback and the output callback do NOT: they are host
+    // configuration, not program state, so a host does not have to re-point
+    // the context at its libraries or re-arm its message sink after every
+    // clear() (SPEC §api "module search paths", "output callback
+    // (universal)").
     m_pimpl->modules.clear();
   }
 

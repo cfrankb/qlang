@@ -42,6 +42,22 @@ namespace qlang
     TRACE_FULL
   };
 
+  // Severity levels for the universal output sink (SPEC §api "output callback
+  // (universal)"): the level every QLangContext::output() call — and therefore
+  // every output-callback delivery — carries. Verbose trace (every TRACE_*
+  // tier) is delivered at OUT_TRACE; program output (print/println/printf) at
+  // OUT_INFO. OUT_DEBUG, OUT_WARNING, OUT_ERROR and OUT_FATAL are reserved
+  // for output() callers (hosts, future engine warnings).
+  enum
+  {
+    OUT_TRACE,
+    OUT_DEBUG,
+    OUT_INFO,
+    OUT_WARNING,
+    OUT_ERROR,
+    OUT_FATAL
+  };
+
   // The single home for every top-level (global) variable (Phase 2).
   // Owned by QLangContext; the VM's MAIN frame register file ALIASES
   // `slots`, so script reads/writes of top-level names and host get/set
@@ -193,7 +209,7 @@ namespace qlang
       if (!isAt(minLevel)) return;
       char buf[2048];
       int n = std::snprintf(buf, sizeof(buf), fmt, std::forward<Args>(args)...);
-      if (n > 0) std::fputs(buf, stderr);
+      if (n > 0) output(OUT_TRACE, buf);
     }
 
     // Infinite-loop step limit for the VM. The VM reads this live at every
@@ -299,6 +315,33 @@ namespace qlang
         const std::string &modulename, std::string &error)>;
     void setModuleSearchCallback(ModuleSearchCallback callback);
     const ModuleSearchCallback &moduleSearchCallback() const;
+
+    // Universal output callback (SPEC §api "output callback (universal)"):
+    // every message the engine emits — program output (print/println/printf),
+    // verbose trace, future warnings — funnels through QLangContext::output().
+    // Assigning a callback redirects ALL of it EXCLUSIVELY (nothing reaches
+    // stdout/stderr from those sites); assigning `nullptr` restores the
+    // default routing (OUT_INFO to stdout, every other level to stderr,
+    // byte-identical to the pre-callback engine). Like the search callback it
+    // is host configuration, so clear() keeps it. It fires synchronously on
+    // the thread driving the context (the one-context-one-thread contract)
+    // and must not throw — a throwing callback is caught and ignored (the
+    // sink has no reporting channel that is not the same broken callback).
+    using OutputCallback =
+        std::function<void(const std::string &message, int level,
+                           const std::string &file, int line)>;
+    void setOutputCallback(OutputCallback callback);
+    const OutputCallback &outputCallback() const;
+
+    // The single machinery (SPEC §api "output callback (universal)"): with a
+    // callback assigned, delivers (message, level, file, line) there and
+    // stops; with none, default-routes by level — OUT_INFO to std::cout,
+    // every other level to stderr. `file`/`line` carry the script position of
+    // program output (module name + statement line); verbose trace passes the
+    // sentinels ""/0. Public so hosts and future engine warnings route
+    // through it too.
+    void output(int level, const std::string &message,
+                const std::string &file = "", int line = 0) const;
 
     // Resolve `name` to a loaded module (SPEC §api "module search paths";
     // plan C8a + C8b). The order is the spec's: a registered C++ module
@@ -462,6 +505,10 @@ namespace qlang
     // clear() drops the module registry but keeps both.
     std::vector<std::string> m_moduleSearchPaths;
     ModuleSearchCallback m_moduleSearchCallback;
+    // The universal output callback (SPEC §api "output callback
+    // (universal)"): host configuration like the search callback, so clear()
+    // keeps it too.
+    OutputCallback m_outputCallback;
     // Compiles one discovered `.ql` source into an image and takes it in
     // (SPEC §api "module search paths": a `[modulename].ql` hit "compiles into
     // an image and takes in by the same path"; plan C8b). Called by findModule,

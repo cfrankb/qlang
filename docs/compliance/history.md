@@ -1,3 +1,39 @@
+## Round 85 — 2026-11-13 — the output callback: one sink for every message the engine emits (plan `docs/plans/archive/output-callback-plan.md` P1; impl `QLangContext.h`/`.cpp` + `QLangVM.h`/`.cpp` + `QLangCompiler.h`, tests `output_callback_test.cpp`, demo `examples/output_callback.cpp`, docs `docs/spec/07-api.md` § *output callback (universal)* finalized + hash re-recorded)
+
+- **Why.** A host embedding the engine (the spec's example: a Qt6 widget) needs
+  one place to intercept every message — `print`/`println`/`printf` program
+  output and `trace()` diagnostics — without hijacking the process's stdio.
+  Before this round program output went straight to `std::cout`/`std::fputs`
+  from the VM's print sites and trace had its own gated writes; three routing
+  points, no seam.
+- **What landed.** `QLangContext::output(level, message, file, line)` is now
+  *the* sink: no callback → the old routing byte-for-byte (`OUT_INFO` →
+  `std::cout`, every other level → stderr); callback set → exclusive redirect,
+  nothing reaches stdout/stderr. Severity enum `OUT_TRACE`(0)…`OUT_FATAL`(5)
+  beside `TRACE_*`; only `OUT_INFO` (program output, carries
+  `scope.moduleName()` + the call statement's resolved line) and `OUT_TRACE`
+  (every `trace()` site, sentinels `""`/`0`, unchanged verbose gating) are
+  emitted — `QLangError` stays an exception (spec `12-errors-trace.md`), the
+  four middle levels stay reserved for the host. A throwing callback is
+  swallowed (enforced, not assumed); `nullptr` restores defaults; the callback
+  survives `clear()` (host configuration, like module search paths).
+- **Deviation (plan D4/D7).** No `QLangVM::context()` / `currentLine()`
+  accessors: the print sites live in `callBuiltin`, which already receives
+  `QLangContext &scope` and the resolved instruction `line` — the accessors
+  would have been dead plumbing with the same semantics.
+- **Gate.** `output_callback` suite, 14 checks — fd-pipe capture on **both**
+  descriptors (harness pattern from `class_str_test`), the default-routing
+  bytes pinned, exclusivity measured (a leak to either fd fails), attributes
+  pinned at lines 2/3/4 of a 3-statement scenario, gating verified both ways,
+  throw-swallow and `nullptr`-restore checked end to end. ctest 66/66.
+  Demo `examples/output_callback.cpp` is a build target, not a ctest entry
+  (following `module_search` / `portable_module`).
+- **Docs.** The spec section, drafted with the plan, was finalized to the
+  shipped API (prototype, severity table, routing, exclusivity, `clear()`
+  survival, must-not-throw) and its `docs/spec/README.md` hash re-recorded;
+  `docs/spec/README.md` 07-api domain row now names the callback; compliance
+  `status.md` + `tests.md` updated with this round. Plan archived.
+
 ## Round 84 — 2026-11-12 — docs only: `docs/spec/11-external-types.md` gains **### dumping the manifest** (no code, no container change)
 
 - **Why.** Every route documented so far (`qlang::writeTypeManifest`,

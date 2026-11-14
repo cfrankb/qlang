@@ -566,12 +566,16 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
   }
   case Builtin::Print:
     need(1, "print");
-    std::cout << vm->displayString(args[0]);
+    scope.output(OUT_INFO, vm->displayString(args[0]), scope.moduleName(),
+                 line);
     return QLangValue();
-  case Builtin::Println:
+  case Builtin::Println: {
     need(1, "println");
-    std::cout << vm->displayString(args[0]) << "\n";
+    std::string text = vm->displayString(args[0]);
+    text += '\n';
+    scope.output(OUT_INFO, text, scope.moduleName(), line);
     return QLangValue();
+  }
   case Builtin::Printf: {
     if (args.empty())
       thr(QLangErrorKind::Runtime,
@@ -611,7 +615,7 @@ QLangValue callBuiltin(Builtin id, const std::vector<QLangValue> &args,
         out += fmt[i++];
       }
     }
-    std::cout << out;
+    scope.output(OUT_INFO, out, scope.moduleName(), line);
     return QLangValue();
   }
   case Builtin::Sprintf: {

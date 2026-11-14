@@ -327,3 +327,67 @@ return `nullptr` if module not found and loading. `error` contains the cause if 
 | `nullptr` | non-empty | found but unusable — resolution stops and the message is reported |
 
 The callback is consulted **after** the native-module and registry lookups and **before** the search paths, so it can supply or shadow a file module but not a C++ module the host registered deliberately. It must not throw — a failure is reported through `error`. Assigning `nullptr` restores the default behaviour.
+
+## output callback (universal)
+
+output callback allows to redirect outputs (stdout, stderr, log, info, warning, errors) to an outside message manager. for example, this could be a Qt6 widget.
+
+All output is concentrated so it goes through a single machinery — `QLangContext::output(int severity_level, const std::string &message, const std::string &filename = "", int line = 0) const` — where the optional callback is tied to. It is public: host code and future engine warnings route through it too.
+
+### prototype
+
+on `QLangContext`, mirroring the external search callback:
+
+```
+using OutputCallback = std::function<void(const std::string &message,
+                                          int severity_level,
+                                          const std::string &filename,
+                                          int line)>;
+void setOutputCallback(OutputCallback callback);   // nullptr restores defaults
+const OutputCallback &outputCallback() const;
+```
+
+The `[optional]` filename/line become the sentinel convention `filename == ""` / `line == 0` (a callback has no default arguments).
+
+### severity levels
+
+|level| name| description|
+|-|-|-|
+|0|`OUT_TRACE`| verbose trace (every verbose level, `[DBG-*]` and `[MODULE]` diagnostics alike) |
+|1|`OUT_DEBUG`| debug — no engine site today, for `output()` callers |
+|2|`OUT_INFO`| program output: `print`, `println`, `printf` |
+|3|`OUT_WARNING`| warning — no engine site today, for `output()` callers |
+|4|`OUT_ERROR`| error — reserved for `output()` callers; `QLangError` stays an exception |
+|5|`OUT_FATAL`| fatal — reserved for `output()` callers |
+
+### routing
+
+**No callback assigned** — the default route by level, byte-identical to a callback-free engine: `OUT_INFO` to `stdout`, every other level to `stderr`.
+
+**A callback assigned** — the redirect is **exclusive**: nothing from these sites reaches stdout or stderr; each message arrives at the callback exactly once. Program output is one call per `print`/`println`/`printf` (a `println` message includes its `\n`; no engine-side line buffering), carrying `filename` = the owning module name (the `QLangError` convention — `"main"` for a script) and `line` = the line of the print statement. Trace messages carry the `""`/`0` sentinels. The verbose level keeps gating which trace messages exist; severity says what a message is, so all trace is delivered at `OUT_TRACE` regardless of tier.
+
+The callback is host configuration, not program state: it **survives `clear()`** (like the search paths and the search callback), and it fires synchronously on the thread driving the context (the threading contract above). It **must not throw** — the engine catches and ignores a throwing callback (the sink has no reporting channel that is not the same broken callback). Assigning `nullptr` restores the default routing.
+
+`QLangError`s are **not** converted to callback traffic: errors stay exceptions and their report stays at the top-level catch ([12-errors-trace.md](12-errors-trace.md)). A host that wants error reports in the same message manager formats them there (`QLangError::formatReport`) and feeds its sink itself.
+
+### example
+
+```
+QLangContext ctx;
+ctx.setOutputCallback([](const std::string &message, int severity_level,
+                         const std::string &filename, int line) {
+  if (severity_level == OUT_INFO)            // program output: print/println/printf
+    messages_.append(filename.c_str(), line, message.c_str());
+  else                                       // OUT_TRACE (and anything the host emits)
+    debugLog_.append(message.c_str());
+});
+ctx.run(source);   // nothing from this run touches stdout/stderr — it all lands above
+ctx.setOutputCallback(nullptr);              // back to the default routing
+```
+
+A complete runnable demo — default routing, the captured message table with
+module/line attributes, trace sentinels, and the `nullptr` restore — is
+`examples/output_callback.cpp` (build target `output_callback`).
+
+
+

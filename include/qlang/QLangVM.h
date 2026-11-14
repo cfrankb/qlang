@@ -324,7 +324,7 @@ public:
     if (!m_scope.isAt(minLevel)) return;
     char buf[2048];
     int n = std::snprintf(buf, sizeof(buf), fmt, std::forward<Args>(args)...);
-    if (n > 0) std::fputs(buf, stderr);
+    if (n > 0) m_scope.output(OUT_TRACE, buf);
   }
 };
 
