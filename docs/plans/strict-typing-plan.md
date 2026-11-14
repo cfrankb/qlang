@@ -240,8 +240,14 @@ existing unannotated programs at any level.
    matrix in `compileDeclaration`/`compileConst`, `qlcc --strict` wired.
    `strict_typing` suite (15 checks) + `qlcc_cli` 83 → 88; compliance rows
    flipped (Round 86).
-3. **M2 — grammar (1 d).** §3. Parse-only tests (typed params/returns/retyping
-   parse at level 0 with zero behavior change).
+3. **M2 — grammar (1 d).** ✅ **DONE 2026-11-14.** §3 shipped: `RArrow` token,
+   `TypeAnnotation` (`QLangValue.h`), shared `typeFromToken` (the two decl/
+   const `tmap` blocks collapsed), `parseParamList` + `parseTypeAnnotation`
+   at all four signature sites, the annotated-assignment branch (gated on
+   `<builtin type> '='` so `Ident`-then-label statements still parse),
+   `compileDeclaration` re-type resolution (`regOf` else bare-assign
+   auto-declare, no dup-decl diagnostic — Q5). `strict_typing` 15 → 27 checks;
+   the whole legacy suite is untouched (Round 87).
 4. **M3 — signature plumbing + level-2 compile checks (0.5 d).** §4.
 5. **M4 — VM runtime checks (1 d).** §5. The spec's §example blocks run
    verbatim as tests at this milestone.
@@ -312,6 +318,11 @@ as the script-level regression.
 2. **Loaded `.qlc` before M5** — enforcement is silently absent for precompiled
    modules until v10 lands. M5 is inside this plan precisely so the feature
    never ships with that gap.
+3. **Pre-existing f-string defect (found at M2, unchanged)** — f-strings with
+   ≥2 interpolations inside a function body compile garbled (template lands in
+   slot 2; byte-identical at HEAD). The spec's lambda example only *declares*
+   the closure, so M4's verbatim call-boundary checks never execute its body;
+   do not assert interpolated text in strict-typing tests until this is fixed.
 3. **`CONV` stays lenient** — typed declarations coerce rather than check at
    every level (§Scope). If the spec later wants `local x:int = "abc"` to fail
    at level 1+, gate the `CONV` handler on the level and reuse `typeMatches`.

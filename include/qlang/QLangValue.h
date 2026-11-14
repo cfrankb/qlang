@@ -275,4 +275,15 @@ private:
   QLangVariant m_storage;
 };
 
+// A declared type annotation (SPEC §strict typing): builtin `type` (Nil =
+// none) plus `className` when the annotation names a user class or external
+// type (`p:Person`).
+struct TypeAnnotation {
+  QLangValue::Type type = QLangValue::Type::Nil;
+  std::string className;
+  bool declared() const {
+    return type != QLangValue::Type::Nil || !className.empty();
+  }
+};
+
 } // namespace qlang

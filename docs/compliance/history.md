@@ -1,3 +1,51 @@
+## Round 87 — 2026-11-14 — strict typing M2: the annotation grammar — typed parameters, `-> type` returns, annotated assignments (plan `docs/plans/strict-typing-plan.md` M2, `docs/spec/16-strict_typing.md`; impl `QLangLexer.h`/`.cpp` + `QLangValue.h` + `QLangParser.h`/`.cpp` + `QLangCompiler.cpp`, tests `strict_typing_test.cpp` 15 → 27)
+
+- **Why.** M3/M4 enforce at signatures and call sites, but a signature could
+  not be *written*: parameters were bare `Ident` lists and `->` was not a
+  token. M2 is grammar only — annotations parse and are ignored until M3, so
+  every unannotated legacy program compiles and runs byte-identically at
+  every level.
+- **Lexer.** New punctuation token `RArrow` for `->`, checked **after** `--`
+  (Decrement), so decrement sequences keep lexing as before; the only `->`
+  occurrences in the corpus live inside comments and strings.
+- **Shared type mapping.** File-local `typeFromToken(TokenType,
+  QLangValue::Type&)` replaces the two duplicated `tmap` blocks in
+  `parseDeclaration`/`parseConst` (the enum and `cast<>` maps stay:
+  deliberately restricted numeric subsets). Side effect: the old range check
+  (`tt >= TypeBool && tt <= TypeTable`) silently accepted `local x:yield`
+  with type nil — that is now `unknown type after ':'`.
+- **AST.** `TypeAnnotation { type, className }` in `QLangValue.h` (shared by
+  parser/compiler/bytecode/codec); `Stmt` and the closure `Expr` gain
+  `paramTypes` (parallel to `params`; unannotated = default entry) +
+  `returnType`; `Stmt::isRetype` marks the annotated assignment.
+- **Parser.** Shared `parseParamList` (`name[:type]` comma lists) +
+  `parseTypeAnnotation` (builtin keyword → `type`, bare `Ident` →
+  `className`, anything else a parse error) at all four signature sites —
+  `parseFunction`, `parseArrowClosure`, the class-body method form, the
+  closure literal — with the return annotation after `)` (`def`) or after
+  `]` (closures/methods). `-> nil` is rejected naturally: `nil` is neither a
+  type keyword nor an `Ident`.
+- **Annotated assignment.** `age:byte = 24` parses as a `Declaration` flagged
+  `isRetype`; the branch is gated on `Ident ':' <builtin type> '='`, so an
+  expression statement followed by a label (`a` then `:label1`) still parses
+  (label regression pinned). `compileDeclaration` for a re-type: no
+  `checkDupDecl` (Q5 — not a new declaration), resolve the live binding via
+  `regOf` (block scopes outward, then `m_regs`) else auto-declare exactly
+  like a bare assignment, then the usual value path + trailing `CONV`.
+- **Known pre-existing defect (recorded, not fixed; M4 to face it).**
+  f-strings with two or more interpolations inside a function body compile to
+  garbled output — the template lands in the second slot
+  (`def f(n, a) { return f"hi {n} {a}" }` → `hi T hi %s %s`). Byte-identical
+  at committed HEAD and the M2 tree; found while writing the spec's lambda
+  test, which asserts call-boundary enforcement in M4, not the interpolated
+  text.
+- **Guard.** `strict_typing` 15 → **27 checks**: the spec's `def`/lambda
+  forms, annotated class method, annotated closure literal, annotated
+  assignment through param/function-local/block-local/global resolution,
+  Q5 re-type-is-not-a-duplicate at level 1, four malformed-annotation parse
+  errors, label regression. ctest **67/67** — legacy corpus and `qlcc`
+  guard suites unchanged.
+
 ## Round 86 — 2026-11-14 — strict typing M1: the enforcement level lands on the context, and the duplicate-declaration diagnostic returns as a level-dependent warning/error (plan `docs/plans/strict-typing-plan.md` M1, `docs/spec/16-strict_typing.md`; impl `QLangContext.h`/`.cpp` + `QLangCompiler.h`/`.cpp` + `examples/qlcc.cpp`, tests `strict_typing_test.cpp` + `check_qlcc_cli.cmake`, docs `README.md` flag row + compliance `status.md`/`tests.md` re-hashed)
 
 - **Why.** `docs/spec/16-strict_typing.md` was finalized (M0, same day) but the

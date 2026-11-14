@@ -80,6 +80,8 @@ struct Expr {
 
   // Closure: (params)[captures] { ... }  (anonymous arrow closure expression).
   std::vector<std::string> params;
+  std::vector<TypeAnnotation> paramTypes;  // parallel to params (Nil = none)
+  TypeAnnotation returnType;               // `-> type` after the capture list
   std::vector<std::string> captures;
   std::vector<std::shared_ptr<Stmt>> body;
 
@@ -155,6 +157,10 @@ struct Stmt {
   // Declaration: local name[:type] = value
   std::string name;
   std::optional<QLangValue::Type> declaredType;
+  // Annotated assignment (`age:byte = 24`, SPEC §strict typing): a
+  // re-coercion of the existing binding, not a new declaration — the
+  // duplicate-decl diagnostic skips it (Q5).
+  bool isRetype = false;
   ExprPtr value;
 
   // Const: const name[:type] = value (immutable after init)
@@ -196,6 +202,8 @@ struct Stmt {
   // Def: def name(params) { ... } / def name(params) ... end  (global fn).
   std::string funcName;
   std::vector<std::string> params;
+  std::vector<TypeAnnotation> paramTypes;  // parallel to params (Nil = none)
+  TypeAnnotation returnType;               // `-> type` after the signature
   // `body` (shared with For) holds the function's statements.
 
   // Arrow: local name = (params)[captures] { ... }  (closure assignment).
@@ -320,6 +328,13 @@ private:
   StmtPtr parseFunction();
   StmtPtr parseArrowClosure(const std::string &varName);
   bool looksLikeArrow() const;
+  // Full parameter list `name[:type], ...` (annotations optional; a bare
+  // Ident in type position names a class). types stays parallel to params.
+  void parseParamList(std::vector<std::string> &params,
+                      std::vector<TypeAnnotation> &types);
+  // Parse a type after ':' / '->' into `ann` (builtin keyword or class name).
+  // Throws a Parse error when the current token is not a type.
+  void parseTypeAnnotation(TypeAnnotation &ann, const char *what);
   ExprPtr parseExpression();
   ExprPtr parseTernary(ExprPtr cond);
   ExprPtr parseBinary(int minPrecedence);

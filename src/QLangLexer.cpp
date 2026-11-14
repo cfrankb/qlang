@@ -385,6 +385,7 @@ Token QLangLexer::operatorToken() {
   if (c == '*' && n == '*') return make(TokenType::Exponential, "**", 2);
   if (c == '+' && n == '+') return make(TokenType::Increment, "++", 2);
   if (c == '-' && n == '-') return make(TokenType::Decrement, "--", 2);
+  if (c == '-' && n == '>') return make(TokenType::RArrow, "->", 2);
   // :: scope resolution (ClassName::staticMember) - before single ':'
   if (c == ':' && n == ':') return make(TokenType::ScopeRes, "::", 2);
   // $$ operator (indirect access) - must be checked before $

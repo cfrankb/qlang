@@ -124,6 +124,7 @@ enum class TokenType {
   Colon,     // :
   Comma,     // ,
   Question,  // ?  (ternary operator)
+  RArrow,    // -> (callable return-type annotation, SPEC §strict typing)
 
   EndOfFile
 };

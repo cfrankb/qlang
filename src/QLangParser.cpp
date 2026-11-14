@@ -31,6 +31,36 @@ struct BodyDepthGuard {
   ~BodyDepthGuard() { --depth; }
 };
 
+// Built-in type keyword -> value type. Shared by typed declarations, typed
+// parameters, return annotations and annotated assignments (SPEC
+// §declarations, §strict typing).
+bool typeFromToken(TokenType tt, QLangValue::Type &out) {
+  static const std::pair<TokenType, QLangValue::Type> tmap[] = {
+      {TokenType::TypeBool, QLangValue::Type::Bool},
+      {TokenType::TypeChar, QLangValue::Type::Char},
+      {TokenType::TypeByte, QLangValue::Type::Byte},
+      {TokenType::TypeWord, QLangValue::Type::Word},
+      {TokenType::TypeShort, QLangValue::Type::Short},
+      {TokenType::TypeInt, QLangValue::Type::Int},
+      {TokenType::TypeUnsigned, QLangValue::Type::Unsigned},
+      {TokenType::TypeString, QLangValue::Type::String},
+      {TokenType::StrType, QLangValue::Type::String},
+      {TokenType::TypeBlob, QLangValue::Type::Blob},
+      {TokenType::TypeArray, QLangValue::Type::Array},
+      {TokenType::TypeFloat, QLangValue::Type::Float},
+      {TokenType::TypeTable, QLangValue::Type::Table},
+      {TokenType::TypeQword, QLangValue::Type::Qword},
+      {TokenType::TypeLong, QLangValue::Type::Long},
+      {TokenType::TypeSet, QLangValue::Type::Set},
+  };
+  for (const auto &kv : tmap)
+    if (kv.first == tt) {
+      out = kv.second;
+      return true;
+    }
+  return false;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -271,11 +301,7 @@ StmtPtr QLangParser::parseStatementImpl() {
       stmt->kind = StmtKind::Arrow;
       stmt->name = idt.value;
       consume(TokenType::LParen, "'(' after method name");
-      if (!check(TokenType::RParen)) {
-        do {
-          stmt->params.push_back(consume(TokenType::Ident, "parameter name").value);
-        } while (match(TokenType::Comma));
-      }
+      parseParamList(stmt->params, stmt->paramTypes);
       consume(TokenType::RParen, "')' after method params");
       // Mandatory explicit capture list: [x, y, ...]
       consume(TokenType::LBracket, "'[' to open capture list");
@@ -286,6 +312,8 @@ StmtPtr QLangParser::parseStatementImpl() {
         } while (match(TokenType::Comma));
       }
       consume(TokenType::RBracket, "']' to close capture list");
+      if (match(TokenType::RArrow))
+        parseTypeAnnotation(stmt->returnType, "return type after '->'");
       // Body in braces.
       BodyDepthGuard body{m_bodyDepth};
       if (match(TokenType::LBrace)) {
@@ -325,6 +353,27 @@ StmtPtr QLangParser::parseStatementImpl() {
         nxt == TokenType::Slash || nxt == TokenType::And || nxt == TokenType::Or ||
         nxt == TokenType::Xor || nxt == TokenType::ShiftLeft ||
         nxt == TokenType::ShiftRight;
+    // Typed assignment `age:byte = 24` (SPEC §strict typing): a re-coercion
+    // of the existing binding, parsed as a flagged Declaration (the compiler
+    // resolves the live register; no duplicate-decl diagnostic — Q5). Only
+    // builtin types annotate an assignment; the form is exactly
+    // Ident ':' <builtin type> '=' expr.
+    if (nxt == TokenType::Colon) {
+      QLangValue::Type vt = QLangValue::Type::Nil;
+      if (typeFromToken(peek(1).type, vt) &&
+          peek(2).type == TokenType::Assign) {
+        m_pos += 2; // consume ':' and the type token
+        m_pos++;    // consume '='
+        auto stmt = std::make_shared<Stmt>();
+        stmt->kind = StmtKind::Declaration;
+        stmt->isRetype = true;
+        stmt->name = idt.value;
+        stmt->declaredType = vt;
+        stmt->value = parseExpression();
+        match(TokenType::Semicolon);
+        return stmt;
+      }
+    }
     if (isAssign) {
       auto stmt = std::make_shared<Stmt>();
       stmt->kind = StmtKind::Assignment;
@@ -437,42 +486,12 @@ StmtPtr QLangParser::parseDeclaration() {
 
   // Optional typed declaration: local b:byte = 32
   if (match(TokenType::Colon)) {
-    TokenType tt = current().type;
-    bool isType =
-        (tt >= TokenType::TypeBool && tt <= TokenType::TypeTable) ||
-        tt == TokenType::StrType ||
-        tt == TokenType::TypeChar ||
-        tt == TokenType::TypeQword || tt == TokenType::TypeLong ||
-        tt == TokenType::TypeSet;
-    if (isType) {
-      // Explicit lookup table (formula is wrong — enums have different layouts).
-      static const std::pair<int,int> tmap[] = {
-        {static_cast<int>(TokenType::TypeBool),  static_cast<int>(QLangValue::Type::Bool)},
-        {static_cast<int>(TokenType::TypeChar),  static_cast<int>(QLangValue::Type::Char)},
-        {static_cast<int>(TokenType::TypeByte),  static_cast<int>(QLangValue::Type::Byte)},
-        {static_cast<int>(TokenType::TypeWord),  static_cast<int>(QLangValue::Type::Word)},
-        {static_cast<int>(TokenType::TypeShort), static_cast<int>(QLangValue::Type::Short)},
-        {static_cast<int>(TokenType::TypeInt),   static_cast<int>(QLangValue::Type::Int)},
-        {static_cast<int>(TokenType::TypeUnsigned),static_cast<int>(QLangValue::Type::Unsigned)},
-        {static_cast<int>(TokenType::TypeString), static_cast<int>(QLangValue::Type::String)},
-        {static_cast<int>(TokenType::TypeBlob),  static_cast<int>(QLangValue::Type::Blob)},
-        {static_cast<int>(TokenType::TypeArray), static_cast<int>(QLangValue::Type::Array)},
-        {static_cast<int>(TokenType::TypeFloat), static_cast<int>(QLangValue::Type::Float)},
-        {static_cast<int>(TokenType::TypeTable), static_cast<int>(QLangValue::Type::Table)},
-        {static_cast<int>(TokenType::TypeQword), static_cast<int>(QLangValue::Type::Qword)},
-        {static_cast<int>(TokenType::TypeLong),  static_cast<int>(QLangValue::Type::Long)},
-        {static_cast<int>(TokenType::TypeSet),   static_cast<int>(QLangValue::Type::Set)},
-      };
-      int ttv = static_cast<int>(tt);
-      QLangValue::Type vt = QLangValue::Type::Nil;
-      for (auto [t,v] : tmap) { if (t == ttv) { vt = static_cast<QLangValue::Type>(v); break; } }
-      if (vt == QLangValue::Type::Nil && tt == TokenType::StrType) vt = QLangValue::Type::String;
-      stmt->declaredType = vt;
-      m_pos++;
-    } else {
+    QLangValue::Type vt = QLangValue::Type::Nil;
+    if (!typeFromToken(current().type, vt))
       throw QLangError(QLangErrorKind::Parse, current().line, current().col,
-                        "unknown type after ':'");
-    }
+                       "unknown type after ':'");
+    stmt->declaredType = vt;
+    m_pos++;
   }
 
   // Optional value: `local z` declares a nil. `local name = (params)...{}`
@@ -496,42 +515,12 @@ StmtPtr QLangParser::parseConst() {
   stmt->name = consume(TokenType::Ident, "variable name").value;
 
   if (match(TokenType::Colon)) {
-    TokenType tt = current().type;
-    bool isType =
-        (tt >= TokenType::TypeBool && tt <= TokenType::TypeTable) ||
-        tt == TokenType::StrType ||
-        tt == TokenType::TypeChar ||
-        tt == TokenType::TypeQword || tt == TokenType::TypeLong ||
-        tt == TokenType::TypeSet;
-    if (isType) {
-      // Explicit lookup table (formula is wrong — enums have different layouts).
-      static const std::pair<int,int> tmap[] = {
-        {static_cast<int>(TokenType::TypeBool),  static_cast<int>(QLangValue::Type::Bool)},
-        {static_cast<int>(TokenType::TypeChar),  static_cast<int>(QLangValue::Type::Char)},
-        {static_cast<int>(TokenType::TypeByte),  static_cast<int>(QLangValue::Type::Byte)},
-        {static_cast<int>(TokenType::TypeWord),  static_cast<int>(QLangValue::Type::Word)},
-        {static_cast<int>(TokenType::TypeShort), static_cast<int>(QLangValue::Type::Short)},
-        {static_cast<int>(TokenType::TypeInt),   static_cast<int>(QLangValue::Type::Int)},
-        {static_cast<int>(TokenType::TypeUnsigned),static_cast<int>(QLangValue::Type::Unsigned)},
-        {static_cast<int>(TokenType::TypeString), static_cast<int>(QLangValue::Type::String)},
-        {static_cast<int>(TokenType::TypeBlob),  static_cast<int>(QLangValue::Type::Blob)},
-        {static_cast<int>(TokenType::TypeArray), static_cast<int>(QLangValue::Type::Array)},
-        {static_cast<int>(TokenType::TypeFloat), static_cast<int>(QLangValue::Type::Float)},
-        {static_cast<int>(TokenType::TypeTable), static_cast<int>(QLangValue::Type::Table)},
-        {static_cast<int>(TokenType::TypeQword), static_cast<int>(QLangValue::Type::Qword)},
-        {static_cast<int>(TokenType::TypeLong),  static_cast<int>(QLangValue::Type::Long)},
-        {static_cast<int>(TokenType::TypeSet),   static_cast<int>(QLangValue::Type::Set)},
-      };
-      int ttv = static_cast<int>(tt);
-      QLangValue::Type vt = QLangValue::Type::Nil;
-      for (auto [t,v] : tmap) { if (t == ttv) { vt = static_cast<QLangValue::Type>(v); break; } }
-      if (vt == QLangValue::Type::Nil && tt == TokenType::StrType) vt = QLangValue::Type::String;
-      stmt->declaredType = vt;
-      m_pos++;
-    } else {
+    QLangValue::Type vt = QLangValue::Type::Nil;
+    if (!typeFromToken(current().type, vt))
       throw QLangError(QLangErrorKind::Parse, current().line, current().col,
-                        "unknown type after ':'");
-    }
+                       "unknown type after ':'");
+    stmt->declaredType = vt;
+    m_pos++;
   }
 
   if (!check(TokenType::Assign) || current().text != "=") {
@@ -1127,12 +1116,10 @@ StmtPtr QLangParser::parseFunction() {
   stmt->kind = StmtKind::Def;
   stmt->funcName = consume(TokenType::Ident, "function name").value;
   consume(TokenType::LParen, "'(' after function name");
-  if (!check(TokenType::RParen)) {
-    do {
-      stmt->params.push_back(consume(TokenType::Ident, "parameter name").value);
-    } while (match(TokenType::Comma));
-  }
+  parseParamList(stmt->params, stmt->paramTypes);
   consume(TokenType::RParen, "')'");
+  if (match(TokenType::RArrow))
+    parseTypeAnnotation(stmt->returnType, "return type after '->'");
 
   if (match(TokenType::LBrace)) {
     // Brace form: def name(params) { ... }
@@ -1149,6 +1136,40 @@ StmtPtr QLangParser::parseFunction() {
   }
   match(TokenType::Semicolon);
   return stmt;
+}
+
+// Parameter list with optional annotations: `a, b:int, p:Person` (SPEC
+// §strict typing "type annotations"). Every parameter gets an entry in
+// `types` (undeclared = default TypeAnnotation) so the vectors stay parallel.
+void QLangParser::parseParamList(std::vector<std::string> &params,
+                                 std::vector<TypeAnnotation> &types) {
+  if (check(TokenType::RParen)) return;
+  do {
+    params.push_back(consume(TokenType::Ident, "parameter name").value);
+    if (match(TokenType::Colon)) {
+      TypeAnnotation ann;
+      parseTypeAnnotation(ann, "parameter type after ':'");
+      types.push_back(ann);
+    } else {
+      types.emplace_back();
+    }
+  } while (match(TokenType::Comma));
+}
+
+// A type annotation: a built-in type keyword or a class/external name
+// (`Person` -> className). Consumes the token; throws when it is neither.
+void QLangParser::parseTypeAnnotation(TypeAnnotation &ann, const char *what) {
+  if (typeFromToken(current().type, ann.type)) {
+    m_pos++;
+    return;
+  }
+  if (check(TokenType::Ident)) {
+    ann.className = consume(TokenType::Ident, what).value;
+    return;
+  }
+  const Token &t = current();
+  throw QLangError(QLangErrorKind::Parse, t.line, t.col,
+                   std::string("expected ") + what);
 }
 
 // True when the parenthesized group beginning at the current token is an arrow
@@ -1182,11 +1203,7 @@ StmtPtr QLangParser::parseArrowClosure(const std::string &varName) {
   auto stmt = std::make_shared<Stmt>();
   stmt->kind = StmtKind::Arrow;
   stmt->name = varName;
-  if (!check(TokenType::RParen)) {
-    do {
-      stmt->params.push_back(consume(TokenType::Ident, "parameter name").value);
-    } while (match(TokenType::Comma));
-  }
+  parseParamList(stmt->params, stmt->paramTypes);
   consume(TokenType::RParen, "')' of arrow function");
 
   // Mandatory explicit capture list: [x, y, ...]
@@ -1198,6 +1215,8 @@ StmtPtr QLangParser::parseArrowClosure(const std::string &varName) {
     } while (match(TokenType::Comma));
   }
   consume(TokenType::RBracket, "']' to close capture list");
+  if (match(TokenType::RArrow))
+    parseTypeAnnotation(stmt->returnType, "return type after '->'");
 
   // Body in braces.
   consume(TokenType::LBrace, "'{' to open arrow function body");
@@ -1603,11 +1622,7 @@ return node;
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Closure;
       consume(TokenType::LParen, "'(' of arrow function");
-      if (!check(TokenType::RParen)) {
-        do {
-          node->params.push_back(consume(TokenType::Ident, "parameter name").value);
-        } while (match(TokenType::Comma));
-      }
+      parseParamList(node->params, node->paramTypes);
       consume(TokenType::RParen, "')' of arrow function");
       // Mandatory explicit capture list: [x, y, ...]
       consume(TokenType::LBracket, "'[' to open capture list");
@@ -1617,6 +1632,8 @@ return node;
         } while (match(TokenType::Comma));
       }
       consume(TokenType::RBracket, "']' after capture list");
+      if (match(TokenType::RArrow))
+        parseTypeAnnotation(node->returnType, "return type after '->'");
       // Body: { ... } or ... end
       if (match(TokenType::LBrace)) {
         while (!check(TokenType::RBrace) && !atEnd())

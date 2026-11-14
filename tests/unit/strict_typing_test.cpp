@@ -1,10 +1,12 @@
-// Strict typing M1 (docs/spec/16-strict_typing.md, docs/plans/strict-typing-
-// plan.md M1): the QLangContext level API (STRICT_OFF/STRICT_DECLARED/
+// Strict typing (docs/spec/16-strict_typing.md, docs/plans/strict-typing-
+// plan.md). M1: the QLangContext level API (STRICT_OFF/STRICT_DECLARED/
 // STRICT_ALL, clamping, survives clear()) and the duplicate-declaration
 // diagnostic matrix — `local a; local a` is silent at level 0 (the default,
 // so legacy programs are untouched), an OUT_WARNING at level 1, and a compile
 // error at level 2. Shadowing and parameters are deliberately not duplicates
-// (Q5). Call-site/return enforcement arrives with M3/M4.
+// (Q5). M2: the annotation grammar — typed parameters, `-> type` return
+// annotations and annotated assignments parse at every level and stay
+// unchecked at level 0. Call-site/return enforcement arrives with M3/M4.
 #include <iostream>
 #include <string>
 #include <vector>
@@ -154,6 +156,83 @@ int main() {
                            "local r = f(1)\nprintln(r)\n");
     ok("level 1: parameter is not a duplicate",
        err.empty() && warn.warnings().empty(), warn.warnings() + err);
+  }
+
+  // 7. M2 grammar: typed parameters, `-> type` return annotations and
+  //    annotated assignments parse and run with today's (unchecked)
+  //    semantics at level 0 — enforcement arrives with M3/M4.
+  {
+    Captured cap;  // level 0 (default)
+    std::string err = runErr(cap.ctx,
+                             "def hello_world(name:str, age:int) { }\n"
+                             "hello_world(\"Tommy\", \"24\")\n"
+                             "hello_world(112, 24)\n");
+    ok("M2: spec annotated def parses; level 0 stays unchecked",
+       err.empty() && cap.warnings().empty(), err + cap.warnings());
+    err = runErr(cap.ctx,
+                 "def sum_int2int(a:int, b:int) -> int { a += b }\n"
+                 "sum_int2int(1, 2)\n");
+    ok("M2: return annotation parses; no return check yet", err.empty(), err);
+    err = runErr(cap.ctx,
+                 "let hello_word = (name:str, age:int)[]->str{\n"
+                 "    return \"hello \" + name\n"
+                 "}\n"
+                 "assert(hello_word(\"Tommy\", 24) == \"hello Tommy\", \"lambda\")\n");
+    ok("M2: spec lambda literal parses and runs", err.empty(), err);
+    err = runErr(cap.ctx,
+                 "class Point {\n"
+                 "  x = 0\n"
+                 "  __init__(self, v)[] { self.x = v }\n"
+                 "  scaled(self, k:int)[]->int { return self.x * k }\n"
+                 "}\n"
+                 "let p = Point(3)\n"
+                 "assert(p.scaled(2) == 6, \"method\")\n");
+    ok("M2: annotated class method parses and runs", err.empty(), err);
+    err = runErr(cap.ctx,
+                 "local t:table = { f = (a:int)[]->int { return a * 3 } }\n"
+                 "assert(t.f(2) == 6, \"closure literal\")\n");
+    ok("M2: annotated closure literal parses and runs", err.empty(), err);
+  }
+
+  // 8. Annotated assignment `age:byte = 24` re-coerces the live binding
+  //    (params, block locals and function-scope names all resolve) and is
+  //    not a duplicate-decl diagnostic at level 1 (Q5).
+  {
+    Captured cap;
+    std::string err = runErr(cap.ctx,
+                             "local age = 10\nage:byte = 24\n"
+                             "assert(age == 24, \"retype\")\n"
+                             "def f(p) { p:int = 9\nlocal b = 1\nb:byte = 2\n"
+                             "if true { local q = 5\nq:int = 6\n"
+                             "assert(q == 6, \"block\") }\n"
+                             "return p + b }\n"
+                             "assert(f(1) == 11, \"fn retype\")\n");
+    ok("M2: annotated assignment re-coerces the live binding", err.empty(),
+       err);
+    cap.ctx.setStrictTypingLevel(QLangContext::STRICT_DECLARED);
+    err = runErr(cap.ctx, "local b = 1\nb:byte = 2\n");
+    ok("M2: re-type is not a duplicate-decl diagnostic (Q5)",
+       err.empty() && cap.warnings().empty(), err + cap.warnings());
+  }
+
+  // 9. Malformed annotations stay parse errors; labels keep parsing (the
+  //    `Ident ':'` re-type branch is gated on <builtin type> '=').
+  {
+    Captured cap;
+    ok("M2: `def f(a int)` is a parse error",
+       runErr(cap.ctx, "def f(a int) { }\n")
+               .find("expected ')'") != std::string::npos);
+    ok("M2: `->` without a type is a parse error",
+       runErr(cap.ctx, "def f() -> { }\n")
+               .find("expected return type after '->'") != std::string::npos);
+    ok("M2: `-> nil` is not a return annotation",
+       !runErr(cap.ctx, "def f() -> nil { }\n").empty());
+    ok("M2: unknown annotation on assignment is a parse error",
+       !runErr(cap.ctx, "x:notatype = 5\n").empty());
+    ok("M2: label statements still parse (colon gate)",
+       runErr(cap.ctx, "local a = 10\n:label1\n--a\nif a > 1 goto label1\n"
+                       "assert(a == 1, \"label\")\n")
+           .empty());
   }
 
   std::cout << passes << " passed, " << fails << " failed\n";

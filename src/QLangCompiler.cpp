@@ -2231,8 +2231,18 @@ void QLangCompiler::compileStmt(const StmtPtr &s,
 }
 
 void QLangCompiler::compileDeclaration(const StmtPtr &s) {
-  checkDupDecl(s);
-  int r = declareVar(s->name, true);
+  int r;
+  if (s->isRetype) {
+    // age:byte = 24 — re-coerce the existing binding (SPEC §strict typing).
+    // Not a new declaration: no dup-decl diagnostic (Q5); an unbound name
+    // auto-declares exactly like a bare assignment.
+    r = regOf(s->name);
+    if (r < 0)
+      r = declareVar(s->name);
+  } else {
+    checkDupDecl(s);
+    r = declareVar(s->name, true);
+  }
   if (s->value && s->value->kind == ExprKind::Literal) {
     // `local a = 0` -> one store of the literal into the target register
     // (SPEC §bytecodes: encoding guidelines) instead of MOV tmp + MOV.
