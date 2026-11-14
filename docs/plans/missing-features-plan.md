@@ -102,7 +102,7 @@ warning toggle still exists is **Q27**.
 
 | # | Item | Spec anchor | Notes |
 |---|------|-------------|-------|
-| C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | **in progress — M0+M1 landed 2026-11-14** (spec finalized; context level api + duplicate-declaration matrix + `qlcc --strict` shipped, **closing B1/B2**) — plan `docs/plans/strict-typing-plan.md`; M2–M5 (grammar, signatures, VM checks, `.qlc` v10) pending |
+| C1 | Strict typing (levels 0/1/2) | `16-strict_typing.md` | **in progress — M0+M1 landed 2026-11-14** (spec finalized; context level api + duplicate-declaration matrix + `qlcc --strict` shipped, **closing B1/B2**) — plan `docs/plans/archive/strict-typing-plan.md`; M2–M5 (grammar, signatures, VM checks, `.qlc` v10) pending |
 | C5 | Inheritance (`ObjectOps::base`) | `10-classes.md` v1 restrictions, `EXTERNAL_TYPES.md` §10.3 | reserved, returns null; base-chain walk deferred to v2 |
 | C7 | Enum-name string form for enum-valued properties | `EXTERNAL_TYPES.md` §10.5 | no dispatch point sees both field value and type context |
 | C8 | Module search paths + external search callback | `07-api.md` `## module search paths`, `## external search callback` | **✓ implemented (C8a Round 67, C8b Round 69, 2026-11-10)** — `moduleSearchPaths`/`setModuleSearchPaths`/`addModuleSearchPath`/`setModuleSearchCallback`/`moduleSearchCallback`/`findModule` on `QLangContext`, `import` resolves through it, `qlang_run --module-path` / `--no-module-search`, `--import` deprecated; a `[name].ql` hit is compiled into an image and taken in (Q36–Q38 answered); front end for `archive/external-modules-plan-v4.md` |
@@ -519,7 +519,7 @@ cross-references.
 ### Phase 3 — API surface (absorbs the former Phase 1)
 
 1. **C1 strict typing** — **step 1 DONE 2026-11-14**: `16-strict_typing.md`
-   finalized (M0 of `docs/plans/strict-typing-plan.md`), **Q12–Q18, Q27–Q28
+   finalized (M0 of `docs/plans/archive/strict-typing-plan.md`), **Q12–Q18, Q27–Q28
    settled there** (Q28's `$$` sentence aligned this round). Q12's premise was
    wrong — the `## rules` table and the examples do **not** contradict: they
    encode same-sign-group widening with no cross-sign and no narrowing, and

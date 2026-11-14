@@ -1,7 +1,7 @@
 # QLang Serialization / Deserialization Spec
 
-Status: **implemented** — `.qlc` program image (v9)
-Covers: `.qlc` program image (v9) and state snapshot (v2, future)
+Status: **implemented** — `.qlc` program image (v10)
+Covers: `.qlc` program image (v10) and state snapshot (v2, future)
 Reference implementation: `src/QLangBytecodeIO.cpp` (library codec)
 Architecture assessment of this change: [qlc-codec-assessment.md](qlc-codec-assessment.md)
 
@@ -92,13 +92,13 @@ Rules:
   materialises **fresh** payloads — a decoded value
   never aliases another value's storage.
 
-## 4. Program image (magic `QLC1`, version 9)
+## 4. Program image (magic `QLC1`, version 10)
 
 ```
 offset  field            type   notes
 ──────  ───────────────  ─────  ──────────────────────────────────────────
 0       magic            4s     "QLC1"
-4       version          u32    = 9  (kQlcVersion; readers accept 9 only)
+4       version          u32    = 10  (kQlcVersion; readers accept 10 only)
 8       funcCount        u32
 …       functions        funcCount × Function
         poolCount        u32
@@ -131,7 +131,10 @@ transitively.
 **Version allocation** (the counter is shared across plans, so each bump is recorded here when it
 is decided): **v8** = the module constant pool (§4.2, Round 62,
 [plans/archive/external-modules-plan-v4.md](plans/archive/external-modules-plan-v4.md) Phase 2) · **v9** = module
-identity + export/import tables (§4.6, Round 63, same plan Phase 3a) · the portable-module plan allocates **no** `.qlc` version — `QLM1` (§11) and `QPM1` (P5) carry their own magic+version · the next free number belongs
+identity + export/import tables (§4.6, Round 63, same plan Phase 3a) · **v10** = the declared
+signature block at the end of every function record (§4.1a, strict-typing plan §6) · the
+portable-module plan allocates **no** `.qlc` version — `QLM1` (§11) and `QPM1` (P5) carry their
+own magic+version · the next free number belongs
 to whoever lands next ([plans/offset-table-elimination-plan.md](plans/offset-table-elimination-plan.md)
 is the candidate).
 
@@ -148,10 +151,13 @@ u32   codeSize
 u32   offCount
       offCount × u32 offset // byte offset of each instruction (strictly increasing)
 u32   locCount, locCount × (u16 line, u16 col)
+u32   sigCount
+      sigCount × (Annotation, String paramName)  // declared parameters (§4.1a, new in v10)
+      Annotation                                  // declared return (§4.1a, new in v10)
 ```
 
 The instruction stream is the **escape-byte format** introduced in v6 and
-unchanged in v7, v8 and v9 (see `include/qlang/QLangBytecode.h`, §4.5): a flat byte stream
+unchanged in v7 through v10 (see `include/qlang/QLangBytecode.h`, §4.5): a flat byte stream
 where each instruction starts with an opcode byte whose bit 7 is the escape flag
 and bits 0–6 are the opcode identity (128 base identities, 72 defined — v7
 retired `movc`, `movi`, `addi`, `subi`, `cmpi`, `jmpfalse` and `jmptrue` and
@@ -184,6 +190,27 @@ offset table: `locCount` entries of `(u16 line, u16 col)` with
   unknown).
 - Function records carry **no constant pool** since v8 — the pool is
   program-level (§4.2).
+
+### 4.1a Declared signature (new in v10; SPEC §strict typing)
+
+`sigCount` entries pair one **annotation** with the parameter's name, and one
+final annotation carries the declared return type. An annotation is a 1-byte
+tag:
+
+| Tag | Meaning |
+|---|---|
+| `0` | undeclared |
+| `2..23` | builtin type — tag = `QLangValue::Type` ordinal + 1 (Nil is never declared, so tag 1 never appears) |
+| `255` | class/external annotation — the class name follows as a `String` |
+
+A hidden `self`/`__anchor__` receiver keeps its name with tag 0. The vectors
+are stored verbatim — the reader does not cross-check `sigCount` against
+`paramCount` (the VM's call-boundary loop is bounded by `argc`) — and a tag
+outside `0 / 2..23 / 255` fails with `bad signature type tag`. The block is
+what lets a **loaded** module image enforce its signatures at the call
+boundary exactly like a source-compiled one; parameter names ride along
+because the strict-typing diagnostics quote them verbatim
+(`parameter 'age' of 'f' expects int, got string`).
 
 ### 4.2 Module constant pool (new in v8)
 
@@ -238,7 +265,7 @@ constVars: u32 nameLen, name bytes
 Backing containers are `std::unordered_map` / `std::unordered_set`: **order
 within both sections is unspecified**. Readers MUST NOT depend on it.
 
-### 4.5 Instruction stream (v6 layout, current in v9)
+### 4.5 Instruction stream (v6 layout, current in v10)
 
 Each instruction is `[opcode byte] [modifier byte] [operands…]`. In the opcode
 byte **bit 7 is the escape flag** and bits 0–6 are the opcode identity
@@ -371,13 +398,13 @@ surviving `getimport`, so a merged program's table describes the merged program
 
 ### 5.1 Validation sequence
 
-1. At least 12 bytes present; magic == `QLC1`; `version == 9`
+1. At least 12 bytes present; magic == `QLC1`; `version == 10`
    (`kQlcVersion`; anything else → "unsupported version", never a parse
-   attempt). Legacy v1–v8 files (fixed 8-byte instructions through v4, the
+   attempt). Legacy v1–v9 files (fixed 8-byte instructions through v4, the
    two-nibble modifier byte in v5, v6 — same layout but the seven identities
-   v7 retired — v7, whose constant pools live in the function records, and v8,
-   which simply ends at `registerCount` and carries no module tail) are NOT
-   accepted.
+   v7 retired — v7, whose constant pools live in the function records, v8,
+   which simply ends at `registerCount` and carries no module tail, and v9,
+   whose function records carry no §4.1a signature) are NOT accepted.
 2. Every read is bounds-checked. Truncation → `QLangError(Io)` with the byte
    offset where the read failed.
 3. Structural invariants: `funcCount >= 1`, `functions[0].name` is `"main"` or
@@ -388,7 +415,8 @@ surviving `getimport`, so a merged program's table describes the merged program
    `[0, poolCount)` (§4.2), every `callfn` operand in `[0, funcCount)`, every
    `getimport`/`callimport` operand in `[0, importCount)` (§4.6), all
    closure `funcIndex` in `[0, funcCount)`, native slots unique and `>= 0`, all
-   `registerCount >= 0`, all `paramCount >= 0`. All three table-reference checks
+   `registerCount >= 0`, all `paramCount >= 0`, every §4.1a annotation tag is
+   `0`, `2..23` or `255`. All three table-reference checks
    come from one source, the `operandRole()` table in `QLangBytecode.h` — the
    same table the linker consults to know which operands a merge must rewrite
    (plan v4 Phase 3b). Decoding is what enforces the modifier rules of
@@ -547,12 +575,13 @@ A codec is not "done" until all of these pass:
    byte-identical to direct `ctx.run(source)`.
 3. **Malformed-input suite** (each case → clean `Io` error, no crash, no
    partial out-param): truncated at every section boundary, bad magic,
-   version 8 (below `kQlcVersion`) and version 10 (above), opcode identity
+   version 9 (below `kQlcVersion`) and version 11 (above), opcode identity
    `>= kOpcodeUsedCount`, reserved modifier fields (left width 3, kind 3,
    immediate forms 12–15, unpermitted kind, unescaped `CALL`), truncated
    instruction, const-pool operand `>= poolCount` (§4.2), `callfn` operand
    `>= funcCount`, `getimport`/`callimport` operand `>= importCount` (§4.6),
    dangling closure index, duplicate native slot, negative count,
+   out-of-range §4.1a signature type tag,
    100-deep nested array, 70 Mi value count, and every §4.6 tail violation
    (empty module name, invalid kind, empty entry name, negative ref, an export
    ref past the function table or the register range, duplicate export name, a
@@ -567,9 +596,9 @@ A codec is not "done" until all of these pass:
 | Item | Status |
 |---|---|
 | Value codec (`serializeValue`/`deserializeValue`) | done — matches §3 |
-| Program writer (`writeQlc`, §4 incl. module pool + native-slot table + module tail) | done — v9, explicit little-endian, escape-byte code stream + offset table, loc side table, program-level constant pool, module name + export/import tables (§4.6) |
+| Program writer (`writeQlc`, §4 incl. module pool + native-slot table + module tail) | done — v10, explicit little-endian, escape-byte code stream + offset table, loc side table, §4.1a declared signature, program-level constant pool, module name + export/import tables (§4.6) |
 | `QLangErrorKind::Io` | done |
-| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v9 only, pool-index, `callfn`-index and import-index range checks (all three from `operandRole()`), §4.6 tail validation |
+| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v10 only, pool-index, `callfn`-index and import-index range checks (all three from `operandRole()`), §4.1a tag validation, §4.6 tail validation |
 | Writer refuses a linked program (§4, "A linked program is not an image") | done — `initSequence` present → `writeQlc` returns false |
 | App writer (POC `QlcWriter` in `qlcc.cpp`) | deleted — replaced by `writeQlc` |
 | Tests (`codec_check`: §9 items 1, 3) | done |

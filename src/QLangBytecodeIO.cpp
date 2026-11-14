@@ -67,6 +67,21 @@ void putStr(std::ostream &os, const std::string &s) {
   putBytes(os, s.data(), s.size());
 }
 
+// The strict-typing annotation encoding (v10 function records; SPEC §strict
+// typing): tag 0 = undeclared, tag n (2..23) = the QLangValue::Type ordinal
+// n-1 (Nil, ordinal 0, is never declared), tag 255 = class annotation with
+// its length-prefixed name.
+void putAnnotation(std::ostream &os, const TypeAnnotation &a) {
+  if (!a.className.empty()) {
+    putU8(os, 255);
+    putStr(os, a.className);
+    return;
+  }
+  putU8(os, a.type == QLangValue::Type::Nil
+                ? 0
+                : static_cast<uint8_t>(static_cast<int>(a.type) + 1));
+}
+
 // ---------------------------------------------------------------------------
 // Bounds-checked reader over an in-memory buffer. Every failure throws
 // QLangError(Io) naming the 0-based byte offset where the read failed.
@@ -132,6 +147,24 @@ struct Reader {
 std::vector<uint8_t> buf_copy(Reader &r, uint32_t len) {
   const uint8_t *p = reinterpret_cast<const uint8_t *>(r.buf.data() + r.pos);
   return std::vector<uint8_t>(p, p + len);
+}
+
+// Counterpart of putAnnotation; an out-of-range tag is the file's fault, not
+// a program's, and is refused like every other malformed section.
+TypeAnnotation getAnnotation(Reader &r) {
+  uint8_t tag = r.u8();
+  TypeAnnotation a;
+  if (tag == 0)
+    return a;
+  if (tag == 255) {
+    a.className = r.str();
+    return a;
+  }
+  constexpr int kMaxTag = static_cast<int>(QLangValue::Type::TypeRef) + 1;
+  if (tag < 2 || tag > kMaxTag)
+    r.fail("bad signature type tag");
+  a.type = static_cast<QLangValue::Type>(tag - 1);
+  return a;
 }
 
 // Decode one value. Enforces the §8 depth/size limits and rejects the
@@ -388,9 +421,9 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
   // Header.
   putBytes(os, "QLC1", 4);
   // Format version (F1): written from the single shared constant
-  // kQlcVersion (docs/SERIALIZATION.md §4). v9 is the v8 image plus the module
-  // identity and export/import tables appended at the tail; the reader accepts
-  // v9 only.
+  // kQlcVersion (docs/SERIALIZATION.md §4). v10 is the v9 image plus the
+  // declared signature block at the end of every function record; the
+  // reader accepts v10 only.
   putU32(os, kQlcVersion); // format version
 
   // Functions (functions[0] is the implicit "main"; the compiler emits it
@@ -421,6 +454,18 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
       putU16(os, lc.first);
       putU16(os, lc.second);
     }
+    // Declared signature (v10, SPEC §strict typing): one entry per declared
+    // parameter slot — an annotation plus its name — then the return
+    // annotation, appended after the v9 record so every earlier byte keeps
+    // its place. Parameter names ride along because the strict-typing
+    // diagnostics quote them verbatim (a hidden self/anchor entry keeps its
+    // name with tag 0).
+    putU32(os, static_cast<uint32_t>(f.paramTypes.size()));
+    for (size_t k = 0; k < f.paramTypes.size(); k++) {
+      putAnnotation(os, f.paramTypes[k]);
+      putStr(os, k < f.paramNames.size() ? f.paramNames[k] : "");
+    }
+    putAnnotation(os, f.returnType);
   }
 
   // §4.2 module constant pool: the one table every function's pool operands
@@ -495,10 +540,11 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       r.fail("bad magic");
     r.pos = 4;
     uint32_t version = r.u32();
-    // v9 only: legacy files (v1-v4 fixed 8-byte instructions, v5 the
+    // v10 only: legacy files (v1-v4 fixed 8-byte instructions, v5 the
     // two-nibble modifier byte, v6 the pre-Phase-3 identity table, v7 the
     // per-function constant pool, v8 the image that ends at registerCount
-    // and carries no module tail) and anything newer are rejected (F1).
+    // and carries no module tail, v9 the signature-less image) and anything
+    // newer are rejected (F1).
     if (version != kQlcVersion)
       r.fail("unsupported version");
 
@@ -567,6 +613,18 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       fn.loc.reserve(locCount);
       for (uint32_t j = 0; j < locCount; j++)
         fn.loc.emplace_back(r.u16(), r.u16());
+      // Declared signature (v10): per-parameter annotation + name entries,
+      // then the return annotation. Entries may exceed paramCount only in a
+      // hand-made file; the VM's call-boundary loop is bounded by argc and
+      // the frame registers, so nothing trusts this length.
+      uint32_t sigCount = r.u32();
+      fn.paramTypes.reserve(sigCount);
+      fn.paramNames.reserve(sigCount);
+      for (uint32_t j = 0; j < sigCount; j++) {
+        fn.paramTypes.push_back(getAnnotation(r));
+        fn.paramNames.push_back(r.str());
+      }
+      fn.returnType = getAnnotation(r);
       // Decode every instruction: catches truncation, invalid escape
       // modifiers, and unknown opcode identities; the stream must be
       // exactly tiled by the decoded instructions.

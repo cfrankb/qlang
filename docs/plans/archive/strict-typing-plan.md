@@ -7,10 +7,8 @@ implemented"; overview item **C1**, folded items **B1** warning emission and
 Phase 3 items 1–2). Per the overview convention this plan opens by closing the
 **Q#**s C1 points at (§Decisions); implementation follows the milestones.
 
-Status: **planned, unimplemented.** The `qlcc --strict <0-2>` flag already
-parses and deliberately rejects (`examples/qlcc.cpp:1949-1969`, its comment
-waits for exactly this API: "Wire ctx here when the engine grows
-setStrictTypingLevel()").
+Status: **complete — M0–M5 landed 2026-11-14** (archive candidate). The
+`qlcc --strict <0-2>` flag parses, range-checks and configures every context.
 
 ## Scope
 
@@ -270,7 +268,18 @@ existing unannotated programs at any level.
    superseded by the spec's pinned forms. The spec's §example blocks assert
    verbatim. `strict_typing` 41 → 65 checks, `qlcc_cli` 88 → 91
    (`strictcalls.ql` fixture); ctest 67/67 (Round 89).
-6. **M5 — codec v10 + SERIALIZATION + `codec_check` (1 d).** §6.
+6. **M5 — codec v10 + SERIALIZATION + `codec_check` (1 d).** ✅ **DONE
+   2026-11-14.** §6 shipped with one deliberate addition: `kQlcVersion` 9 →
+   10; every function record ends with `sigCount` × (annotation tag +
+   parameter name) plus the return annotation — tag `0` undeclared,
+   `2..23` = `QLangValue::Type` ordinal + 1 (Nil never declared), `255` =
+   class annotation + length-prefixed name. Parameter names ride along
+   because the pinned diagnostics quote them, so a **loaded** module image
+   enforces the exact spec messages at the call boundary (v9 images did not;
+   the §5 risk below is closed). Reader refuses out-of-range tags
+   (`bad signature type tag`); v1–v9 rejected at the version gate (clean
+   break, D5). `docs/SERIALIZATION.md` §4/§4.1/§4.1a/§5.1/§9/§10;
+   `codec_check` 358 → 366 checks; ctest 67/67 (Round 90).
 
 Each milestone: `cmake -B build && cmake --build build && ctest --test-dir
 build` green (out-of-source build; clang-format per `.clang-format`), suggested

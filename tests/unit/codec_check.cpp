@@ -409,22 +409,22 @@ static void testMovImmediate() {
     check(hasPoolRight(ps.functions[0], Opcode::MOV),
           "mov: string literal is a pool read");
 
-    // .qlc written at format version 9 (kQlcVersion); the reader accepts v9
-    // only (v1-v8 and v10+ are rejected).
+    // .qlc written at format version 10 (kQlcVersion); the reader accepts v10
+    // only (v1-v9 and v11+ are rejected).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "mov: writeQlc (v9)");
+    check(writeQlc(os, p, {}), "mov: writeQlc (v10)");
     std::string bytes = os.str();
     uint32_t version = static_cast<uint32_t>(static_cast<uint8_t>(bytes[4])) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[5])) << 8) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[6])) << 16) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[7])) << 24);
-    check(version == 9, "mov: format version 9");
+    check(version == 10, "mov: format version 10");
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
     check(readQlc(is, back, slots, err),
-          std::string("mov: readQlc v9 (") + err + ")");
+          std::string("mov: readQlc v10 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -1092,6 +1092,8 @@ static std::string minimalFileTailless(const char *topName = "main") {
   f.u32(0); // codeSize (empty code stream)
   f.u32(0); // offCount (no instructions)
   f.u32(0); // locCount
+  f.u32(0); // paramTypes (v10: no declared parameters)
+  f.u8(0);  // return annotation: undeclared
   f.u32(0); // module pool
   f.u32(0); // natives
   f.u32(0); // vars
@@ -1140,6 +1142,8 @@ static std::string fileWithOneInstr() {
   f.u32(1); // locCount
   f.u16(0); // line
   f.u16(0); // col
+  f.u32(0); // paramTypes (v10)
+  f.u8(0);  // return annotation
   f.u32(0); // module pool
   f.u32(0); // natives
   f.u32(0); // vars
@@ -1158,8 +1162,15 @@ static void testMalformed() {
   rejects("malformed: bad magic", badMagic);
 
   std::string badVersion = minimalFile();
-  badVersion[4] = 7; // v8 is current; the previous format must be rejected
+  badVersion[4] = 7; // v10 is current; a previous format must be rejected
   rejects("malformed: unsupported version", badVersion);
+
+  // §4.1a: an out-of-range signature type tag is refused like every other
+  // malformed section. In minimalFile the top-level function's sigCount
+  // (bytes 45..48) is 0, so byte 49 is its return annotation tag.
+  std::string badSig = minimalFile();
+  badSig[49] = 200;
+  rejects("malformed: bad signature type tag", badSig);
 
   rejects("malformed: truncated", minimalFile().substr(0, 10));
 
@@ -1199,6 +1210,8 @@ static void testMalformed() {
   truncInstr.u32(1); // locCount
   truncInstr.u16(0);
   truncInstr.u16(0);
+  truncInstr.u32(0); // paramTypes (v10)
+  truncInstr.u8(0);  // return annotation
   truncInstr.u32(0); // module pool
   truncInstr.u32(0); // natives
   truncInstr.u32(0); // vars
@@ -1220,6 +1233,8 @@ static void testMalformed() {
   dangling.u32(0); // codeSize
   dangling.u32(0); // offCount
   dangling.u32(0); // locCount
+  dangling.u32(0); // paramTypes (v10)
+  dangling.u8(0);  // return annotation
   dangling.u32(1); // one constant
   dangling.u8(11); // Function
   dangling.i32(5); // funcIndex (only 1 function exists)
@@ -1246,6 +1261,8 @@ static void testMalformed() {
     f.u32(0); // codeSize
     f.u32(0); // offCount
     f.u32(0); // locCount
+    f.u32(0); // paramTypes (v10)
+    f.u8(0);  // return annotation
     f.u32(0); // module pool
     f.u32(2); // natives
     f.i32(slotA);
@@ -1279,6 +1296,8 @@ static void testMalformed() {
     f.u32(0); // codeSize
     f.u32(0); // offCount
     f.u32(0); // locCount
+    f.u32(0); // paramTypes (v10)
+    f.u8(0);  // return annotation
     f.u32(1); // one constant
     emit(f);
     f.u32(0);
@@ -1750,8 +1769,8 @@ static void testV6LoadValidation() {
       (static_cast<uint32_t>(static_cast<uint8_t>(image[5])) << 8) |
       (static_cast<uint32_t>(static_cast<uint8_t>(image[6])) << 16) |
       (static_cast<uint32_t>(static_cast<uint8_t>(image[7])) << 24);
-  check(kQlcVersion == 9 && written == 9,
-        "v6-load: the image declares version 9");
+  check(kQlcVersion == 10 && written == 10,
+        "v6-load: the image declares version 10");
 
   CompiledProgram back;
   std::string err;
@@ -1760,11 +1779,10 @@ static void testV6LoadValidation() {
             back.functions[0].instrOffsets == offs,
         "v6-load: the code bytes and the offset table survived");
 
-  // The reader is single-version: v8 (the image Phase 3a extended with the
-  // module identity and its tables) and every other number are refused with a
-  // version error, no migration shim (decision D5: one case below the current
-  // version, one above).
-  for (uint32_t bad : {3u, 4u, 5u, 6u, 7u, 8u, 10u}) {
+  // The reader is single-version: v9 (the signature-less image) and every
+  // other number are refused with a version error, no migration shim
+  // (decision D5: one case below the current version, one above).
+  for (uint32_t bad : {3u, 4u, 5u, 6u, 7u, 8u, 9u, 11u}) {
     std::string m = image;
     for (int i = 0; i < 4; i++)
       m[4 + i] = static_cast<char>((bad >> (8 * i)) & 0xFF);
@@ -2224,6 +2242,47 @@ static void testScriptQlcRoundTrip() {
   }
 }
 
+// v10 §4.1a declared signature: annotated parameters, a class annotation and
+// a return type survive writeQlc -> readQlc (strict-typing plan §6).
+static void testSignatureRoundTrip() {
+  CompiledProgram p = compileSrc(
+      "def hello_world(name:str, age, who:Person) -> int {\n"
+      "  return 1\n"
+      "}\n");
+  std::ostringstream os(std::ios::binary);
+  check(writeQlc(os, p, {}), "sig: writeQlc");
+  CompiledProgram back;
+  std::vector<std::pair<int, std::string>> slots;
+  std::string err;
+  std::istringstream is(os.str(), std::ios::binary);
+  bool loaded = readQlc(is, back, slots, err);
+  check(loaded, "sig: readQlc (" + err + ")");
+  if (!loaded)
+    return;
+  const Function *a = nullptr;
+  const Function *b = nullptr;
+  for (size_t i = 0; i < p.functions.size() && !a; i++)
+    if (p.functions[i].name == "hello_world") {
+      a = &p.functions[i];
+      b = &back.functions[i];
+    }
+  check(a != nullptr, "sig: hello_world is in the function table");
+  if (!a)
+    return;
+  check(a->paramTypes.size() == 3 && b->paramTypes.size() == 3 &&
+            b->paramTypes[0].type == QLangValue::Type::String &&
+            b->paramTypes[1].type == QLangValue::Type::Nil &&
+            !b->paramTypes[1].declared() && b->paramTypes[2].className ==
+                "Person",
+        "sig: parameter annotations survive (str / undeclared / Person)");
+  check(b->paramNames.size() == 3 && b->paramNames[0] == "name" &&
+            b->paramNames[1] == "age" && b->paramNames[2] == "who",
+        "sig: parameter names survive");
+  check(b->returnType.declared() &&
+            b->returnType.type == QLangValue::Type::Int,
+        "sig: return annotation survives (-> int)");
+}
+
 int main() {
   testValues();
   testProgram();
@@ -2242,6 +2301,7 @@ int main() {
   testV6LoadValidation();
   testMalformed();
   testScriptQlcRoundTrip();
+  testSignatureRoundTrip();
   std::cout << (fails == 0 ? "all codec checks passed\n"
                            : "codec checks FAILED\n");
   return fails == 0 ? 0 : 1;

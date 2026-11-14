@@ -1,4 +1,32 @@
-## Round 89 — 2026-11-14 — strict typing M4: the VM enforces declared signatures at the call boundary and at return (plan `docs/plans/strict-typing-plan.md` M4, `docs/spec/16-strict_typing.md`; impl `QLangVM.h`/`.cpp` + `Function::paramNames`, tests `strict_typing_test.cpp` 41 → 64, `qlcc_cli` 88 → 91)
+## Round 90 — 2026-11-14 — strict typing M5: `.qlc` v10 carries the declared signature (plan `docs/plans/archive/strict-typing-plan.md` M5, `docs/spec/16-strict_typing.md`; impl `QLangBytecodeIO.h`/`.cpp`, docs `SERIALIZATION.md` §4/§4.1a, tests `codec_check.cpp` 358 → 366)
+
+- **Why.** With M4 the VM enforced signatures, but only for freshly compiled
+  programs: a v9 image carried none, so a **loaded** module checked nothing
+  and `qlcc --strict` was half a feature. v10 closes the plan's §5 risk.
+- **Encoding.** Each function record gains a tail block after the loc table
+  (every earlier byte keeps its place): `sigCount` entries of
+  annotation + parameter-name `String`, then the return annotation. An
+  annotation is one tag byte — `0` undeclared, `n` = `QLangValue::Type`
+  ordinal `n-1` (`2..23`; tag 1/Nil is never written because Nil is not a
+  declared type), `255` = class annotation followed by the name. Parameter
+  **names** ride along — a deviation from plan §6, which predates
+  `paramNames` — because the pinned diagnostics quote them, and a hidden
+  `self`/`__anchor__` entry keeps its name at tag 0. `QLangLinker` copies
+  whole `Function` structs, so merged programs carry signatures for free.
+- **Reader.** An out-of-range tag is the file's fault and is refused like
+  every malformed section (`bad signature type tag`); `sigCount` is not
+  cross-checked against `paramCount` (the VM's call-boundary loop is bounded
+  by `argc`). `kQlcVersion` 9 → 10; the reader stays single-version —
+  v1–v9 refused (the Round 37/56 clean-break precedent).
+- **Verified.** `codec_check` 358 → **366**: the `sig:` six (a compiled
+  `str`/undeclared/`Person` parameter set plus names plus `-> int` survives
+  the round trip field for field), the out-of-range-tag rejection, and the
+  version matrix moved to reject **3/4/5/6/7/8/9/11**. All seven hand-built
+  fixtures gained the record tail so the deliberate-fault files still fail at
+  their intended check. ctest 67/67. `docs/SERIALIZATION.md` gained §4.1a;
+  the plan is complete and archived at `docs/plans/archive/`.
+
+## Round 89 — 2026-11-14 — strict typing M4: the VM enforces declared signatures at the call boundary and at return (plan `docs/plans/archive/strict-typing-plan.md` M4, `docs/spec/16-strict_typing.md`; impl `QLangVM.h`/`.cpp` + `Function::paramNames`, tests `strict_typing_test.cpp` 41 → 64, `qlcc_cli` 88 → 91)
 
 - **Why.** M3 put signatures on the `Function`; M4 reads them. The spec's
   `## example of regular functions` (`hello_world` parameter mismatches,
@@ -30,7 +58,7 @@
   `qlcc_cli` gained the `strictcalls.ql` fixture (silent at 0, pinned
   message + exit 3 at 1 and 2). ctest 67/67.
 
-## Round 88 — 2026-11-14 — strict typing M3: declared signatures ride the `Function` record, and level 2 refuses undeclared types (plan `docs/plans/strict-typing-plan.md` M3, `docs/spec/16-strict_typing.md`; impl `QLangBytecode.h` + `QLangCompiler.h`/`.cpp`, tests `strict_typing_test.cpp` 27 → 41)
+## Round 88 — 2026-11-14 — strict typing M3: declared signatures ride the `Function` record, and level 2 refuses undeclared types (plan `docs/plans/archive/strict-typing-plan.md` M3, `docs/spec/16-strict_typing.md`; impl `QLangBytecode.h` + `QLangCompiler.h`/`.cpp`, tests `strict_typing_test.cpp` 27 → 41)
 
 - **Why.** M2 made annotations writable; nothing *read* them. M3 carries each
   callable's declared signature into the compiled `Function` (the record M4's
@@ -65,7 +93,7 @@
   method compiling *and running* at level 2; diagnostics thrown, never
   warned) + a level-0 behavior-neutral smoke. ctest **67/67**.
 
-## Round 87 — 2026-11-14 — strict typing M2: the annotation grammar — typed parameters, `-> type` returns, annotated assignments (plan `docs/plans/strict-typing-plan.md` M2, `docs/spec/16-strict_typing.md`; impl `QLangLexer.h`/`.cpp` + `QLangValue.h` + `QLangParser.h`/`.cpp` + `QLangCompiler.cpp`, tests `strict_typing_test.cpp` 15 → 27)
+## Round 87 — 2026-11-14 — strict typing M2: the annotation grammar — typed parameters, `-> type` returns, annotated assignments (plan `docs/plans/archive/strict-typing-plan.md` M2, `docs/spec/16-strict_typing.md`; impl `QLangLexer.h`/`.cpp` + `QLangValue.h` + `QLangParser.h`/`.cpp` + `QLangCompiler.cpp`, tests `strict_typing_test.cpp` 15 → 27)
 
 - **Why.** M3/M4 enforce at signatures and call sites, but a signature could
   not be *written*: parameters were bare `Ident` lists and `->` was not a
@@ -113,7 +141,7 @@
   errors, label regression. ctest **67/67** — legacy corpus and `qlcc`
   guard suites unchanged.
 
-## Round 86 — 2026-11-14 — strict typing M1: the enforcement level lands on the context, and the duplicate-declaration diagnostic returns as a level-dependent warning/error (plan `docs/plans/strict-typing-plan.md` M1, `docs/spec/16-strict_typing.md`; impl `QLangContext.h`/`.cpp` + `QLangCompiler.h`/`.cpp` + `examples/qlcc.cpp`, tests `strict_typing_test.cpp` + `check_qlcc_cli.cmake`, docs `README.md` flag row + compliance `status.md`/`tests.md` re-hashed)
+## Round 86 — 2026-11-14 — strict typing M1: the enforcement level lands on the context, and the duplicate-declaration diagnostic returns as a level-dependent warning/error (plan `docs/plans/archive/strict-typing-plan.md` M1, `docs/spec/16-strict_typing.md`; impl `QLangContext.h`/`.cpp` + `QLangCompiler.h`/`.cpp` + `examples/qlcc.cpp`, tests `strict_typing_test.cpp` + `check_qlcc_cli.cmake`, docs `README.md` flag row + compliance `status.md`/`tests.md` re-hashed)
 
 - **Why.** `docs/spec/16-strict_typing.md` was finalized (M0, same day) but the
   engine had no place to *hold* a level and no warning channel: the reverted

@@ -13,7 +13,7 @@
 
 namespace qlang {
 
-// QLC1 v9 .qlc codec (docs/SERIALIZATION.md).
+// QLC1 v10 .qlc codec (docs/SERIALIZATION.md).
 //
 // Values are serialized with a 1-byte tag (QLangValue::Type in declaration
 // order, fixed) plus an explicit little-endian payload. Non-durable types
@@ -30,11 +30,12 @@ namespace qlang {
 
 // .qlc format version (docs/SERIALIZATION.md §4). Written by writeQlc and
 // validated (strictly) by readQlc; the docs reference this constant.
-// v9 appends the module identity and the export/import tables at the tail
-// (SPEC §bytecodes "keyword export", "export table (lookup)", "import table
-// (lookup)"; external-modules plan Phase 3a); the instruction encoding and
-// every earlier section are unchanged from v8. v1-v8 files are NOT accepted.
-constexpr uint32_t kQlcVersion = 9;
+// v10 appends the declared signature block (SPEC §strict typing) at the end
+// of every function record — per-parameter type tags with names, and a
+// return annotation — so imported modules enforce types at the call
+// boundary. The instruction encoding and every earlier section are unchanged
+// from v9. v1-v9 files are NOT accepted.
+constexpr uint32_t kQlcVersion = 10;
 
 // Serialize one value. Throws QLangError(Io) on stream failure.
 void serializeValue(std::ostream &os, const QLangValue &v);
@@ -43,7 +44,7 @@ void serializeValue(std::ostream &os, const QLangValue &v);
 // tag, or nesting deeper than 64 levels (docs/SERIALIZATION.md §8).
 QLangValue deserializeValue(std::istream &is);
 
-// Write a full program as QLC1 v9. `nativeIds` maps native function name ->
+// Write a full program as QLC1 v10. `nativeIds` maps native function name ->
 // slot index (from QLangCompiler::nativeFuncIds). Returns false on stream
 // failure, when the constant pool holds a non-durable value (F1), or when the
 // program is a LINKED one (`initSequence` is link-time information the format
