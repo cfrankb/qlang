@@ -91,14 +91,15 @@ struct RegisterReport {
 };
 
 // A QLang literal the v6 encoding can carry as an inline right operand
-// (plan decision D3): `Int` within int32 (forms i8/i16/i32), `Float`, `Bool`
-// and `nil` (the zero-byte forms). The value tag has to survive the trip
-// exactly — a 64-bit literal is a Qword/Long and a container is shared, so
-// those stay in the constant pool.
+// (decision D3 as widened by encoding-codegen-followups Phase 2): `Int` within
+// int32 (forms i8/i16/i32), `Unsigned` (forms u8/u16/u32), `Qword` (form u64),
+// `Float`, `Bool` and `nil` (the zero-byte forms). The value tag has to survive
+// the trip exactly — the VM materializes the immediate from the form alone.
+// `Long` and the container tags stay in the constant pool.
 struct LiteralImm {
   ImmForm form = ImmForm::Reserved;
   ImmPayload payload = ImmPayload::None;
-  int64_t value = 0;
+  int64_t value = 0;   // Signed payload; Unsigned payloads ride the same bits
   double dbl = 0;
 };
 
@@ -410,6 +411,9 @@ private:
   // Separate names rather than overloads: a trailing `int` parameter would be
   // ambiguous with emit()'s defaulted b/c.
   void emitImmI(Opcode op, int a, int32_t imm);   // narrowest signed form
+  // Explicit unsigned form (0-3): the tag (Unsigned vs Qword) picks which
+  // forms fit, so there is no narrowest-by-value fallback here.
+  void emitImmU(Opcode op, int a, ImmForm form, uint64_t value);
   void emitImmF(Opcode op, int a, double value);  // form 8
   void emitImmB(Opcode op, int a, bool value);    // forms 10 / 9
   void emitImmNil(Opcode op, int a);              // form 11, no pool entry
@@ -425,17 +429,31 @@ private:
   // Returns the index of the j* instruction. `rel` must be a comparison
   // opcode (EQ/NE/LT/GT/LE/GE).
   int emitCmpJumpFalse(Opcode rel, int ra, int rb);
-  // Expression form for if/while conditions: a binary comparison
-  // (==,!=,<,>,<=,>=) lowers to a compare that sets the frame flags plus the
-  // "jump if the relation is FALSE" flag jump, and returns that jump's index
-  // (target 0, patched by the caller). Both operands compile-time Int -> CMP;
-  // anything else -> the EQF/LTF/GTF/LTEF/GTEF family, picking the *dual*
-  // comparator (flagCompareIfFalse) so the same jump map fires exactly on the
-  // false branch. Neither path builds a boolean temporary
-  // (plan docs/plans/m3-flag-flow-plan.md D2). Returns -1 when `cond` is not a
-  // comparison (truthiness, && / ||, calls, ...); the caller then lowers the
-  // condition with `tst` + a flag jump (emitJumpIfFalse below).
-  int emitCmpJumpFalseExpr(const ExprPtr &cond);
+  // Expression form for branch conditions: a binary comparison
+  // (==,!=,<,>,<=,>=) lowers to a compare that sets the frame flags plus a
+  // flag jump, and returns that jump's index (target 0, patched by the
+  // caller). Both operands compile-time Int -> CMP; anything else -> the
+  // EQF/LTF/GTF/LTEF/GTEF family. With `jumpIfFalse` the *dual* comparator
+  // (flagCompareIfFalse) pairs with the negative jump map (cmpJumpIfFalse)
+  // so the jump fires exactly when the relation is FALSE; with `jumpIfTrue`
+  // the same-relation comparator (flagCompareIfTrue) pairs with the
+  // canonical jump (cmpJumpIfTrue) and fires exactly when it holds. Neither
+  // path builds a boolean temporary (plan docs/plans/m3-flag-flow-plan.md
+  // D2, docs/plans/encoding-codegen-followups-plan.md P1). Returns -1 when
+  // `cond` is not a comparison (truthiness, calls, ...); the caller then
+  // lowers the condition with `tst` + a flag jump (emitJumpIf* below).
+  int emitCmpJumpExpr(const ExprPtr &cond, bool jumpIfFalse);
+  // Short-circuit control lowering for && / || / ! (SPEC §operators
+  // "operators && and ||"): emits branch code for `cond` such that control
+  // falls through to the next instruction when the value is
+  // `fallthroughOnTrue`, and every emitted jump reaches the value-elsewhere
+  // exit. Returns the indices of the still-unpatched jumps (targets 0) that
+  // share that one exit; internal chain jumps (a short-circuited operand
+  // skipping its sibling) are patched here to the point just past the whole
+  // condition. Comparisons fuse through emitCmpJumpExpr; anything else
+  // materializes into a temp + `tst` + flag jump.
+  std::vector<int> compileCondBranch(const ExprPtr &cond,
+                                     bool fallthroughOnTrue);
   // Bare-truthiness lowering (SPEC §bytecodes "OpCode tst"; plan
   // docs/plans/phase3-opcode-retirement-plan.md D1): `tst r[a]` puts
   // truth(r[a]) into the flags (eq set, the other two clear), so `je` takes

@@ -72,10 +72,10 @@ struct Budget {
 };
 
 static const Budget kBudgets[] = {
-    {"hello.ql", 217},
+    {"hello.ql", 214},   // P3 (Round 101): 217 -> 214, literal RHSs ride in-place ALU
     {"money.ql", 151},
     {"cast.ql", 189},
-    {"perf_stress.ql", 565},
+    {"perf_stress.ql", 563},  // P3 (Round 101): 565 -> 563
 };
 
 static std::string readScript(const std::string &path) {

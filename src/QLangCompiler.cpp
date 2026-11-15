@@ -22,15 +22,25 @@ OperandWidth indexWidth(int32_t index, const char *message) {
   return (index <= 255) ? OperandWidth::Byte : OperandWidth::Word;
 }
 
-// Narrowest signed immediate form holding `v`. The emitter never produces a
-// 64-bit literal (plan decision D3), so anything past the 4-byte form is an
-// error rather than a widening.
+// Narrowest signed immediate form holding `v`. Signed immediates stay `Int`
+// (decision D3 as amended by encoding-codegen-followups Phase 2), so anything
+// past the 4-byte form is an error rather than a widening to `I64`.
 ImmForm narrowestSignedForm(int64_t v) {
   if (v >= -128 && v <= 127) return ImmForm::I8;
   if (v >= -32768 && v <= 32767) return ImmForm::I16;
   if (v >= INT32_MIN && v <= INT32_MAX) return ImmForm::I32;
   throw QLangError(QLangErrorKind::Runtime, 0, 0,
                    "immediate out of int32 range");
+}
+
+// Narrowest unsigned immediate form holding `v`. Forms 0-2 all materialize as
+// `Unsigned`, so they cover a `Unsigned` literal at its narrowest width; the
+// `Qword` tag needs the 8-byte `U64` form (only that one round-trips the tag)
+// and never routes through here.
+ImmForm narrowestUnsignedForm(uint64_t v) {
+  if (v <= UINT8_MAX) return ImmForm::U8;
+  if (v <= UINT16_MAX) return ImmForm::U16;
+  return ImmForm::U32;
 }
 
 } // namespace
@@ -1201,6 +1211,16 @@ void QLangCompiler::emitImmI(Opcode op, int a, int32_t imm) {
                       static_cast<uint16_t>(m_curCol));
 }
 
+void QLangCompiler::emitImmU(Opcode op, int a, ImmForm form, uint64_t value) {
+  RawInstr r;
+  r.kind = RightKind::Immediate;
+  r.form = form; // explicit: the tag picks the form, not the value's width
+  r.payload = ImmPayload::Unsigned;
+  r.immUnsigned = value;
+  m_emitter.emitRight(op, a, r, static_cast<uint16_t>(m_curLine),
+                      static_cast<uint16_t>(m_curCol));
+}
+
 void QLangCompiler::emitImmF(Opcode op, int a, double value) {
   RawInstr r;
   r.kind = RightKind::Immediate;
@@ -1251,9 +1271,12 @@ void QLangCompiler::emitLiteralImm(Opcode op, int a, const LiteralImm &imm) {
   case ImmPayload::Nil:
     emitImmNil(op, a);
     return;
-  case ImmPayload::None:
   case ImmPayload::Unsigned:
-    break; // never produced by literalImmOf / foldNegLiteral
+    emitImmU(op, a, imm.form, static_cast<uint64_t>(imm.value));
+    return;
+  case ImmPayload::Signed:
+  case ImmPayload::None:
+    break; // Signed falls through to emitImmI; None is never produced here
   }
   emitImmI(op, a, static_cast<int32_t>(imm.value)); // ImmPayload::Signed
 }
@@ -1266,12 +1289,13 @@ void QLangCompiler::emitLiteral(Opcode op, int a, const QLangValue &value) {
 }
 
 // The immediate a literal is encoded as, or nullopt when it has to stay in the
-// constant pool (plan decision D3). The QLangValue type tag must survive the
-// trip exactly, because the VM materializes the immediate from the form alone:
-// `Int` stays Int for the signed 1/2/4-byte forms, `Float`/`Bool`/`Nil` map to
-// their zero- or fixed-width forms, and everything else (String, Blob, Array,
-// Table, Set, closures, and the 64-bit/unsigned tags whose type depends on how
-// the value was produced) is a pool read.
+// constant pool. The QLangValue type tag must survive the trip exactly, because
+// the VM materializes the immediate from the form alone: `Int` stays Int for
+// the signed 1/2/4-byte forms, `Unsigned` takes the narrowest of forms 0-2 and
+// `Qword` the 8-byte `U64` form (Phase 2: the literal's type, not just its
+// value, picks sign and width), `Float`/`Bool`/`Nil` map to their zero- or
+// fixed-width forms, and everything else (String, Blob, Array, Table, Set,
+// closures) is a pool read.
 static std::optional<LiteralImm> literalImmOf(const QLangValue &v) {
   using Type = QLangValue::Type;
   LiteralImm out;
@@ -1285,6 +1309,18 @@ static std::optional<LiteralImm> literalImmOf(const QLangValue &v) {
     out.value = n;
     return out;
   }
+  case Type::Unsigned:
+    out.form = narrowestUnsignedForm(v.asUnsigned());
+    out.payload = ImmPayload::Unsigned;
+    out.value = static_cast<int64_t>(v.asUnsigned());
+    return out;
+  case Type::Qword:
+    // Forms 0-2 materialize as `Unsigned`; only the 8-byte form round-trips
+    // the `Qword` tag, so a Qword literal never takes a narrower unsigned one.
+    out.form = ImmForm::U64;
+    out.payload = ImmPayload::Unsigned;
+    out.value = static_cast<int64_t>(v.asQword());
+    return out;
   case Type::Float:
     out.form = ImmForm::Float;
     out.payload = ImmPayload::Float;
@@ -1406,6 +1442,48 @@ static Opcode flagCompareIfFalse(Opcode rel) {
   }
 }
 
+// The true-side pair (SPEC §bytecodes "## alternate conditional jump OpCode",
+// "### extended OpCode eq, lt, gt, lte, gte"; plan
+// docs/plans/encoding-codegen-followups-plan.md P1): the flag compare whose
+// set bits include exactly the states in which `rel` is TRUE, so the
+// canonical jump of the same relation fires precisely on the positive branch.
+// Each one-hot comparator sets its own bits when its relation holds and no
+// bits otherwise (QLangVM::computeFlags), and no predicate tests the
+// none-set state, so `==`-true uses eqf + je and `!=`-true uses eqf + jne
+// (jne is `(f & eq) == 0`, which after eqf only the none state satisfies).
+//   a == b true : eqf  f = eq | none    je   f == eq
+//   a != b true : eqf  f = eq | none    jne  (f & eq) == 0
+//   a <  b true : ltf  f = lt | none    jl   f == lt
+//   a >  b true : gtf  f = gr | none    jg   f == gr
+//   a <= b true : ltef f = lt | eq | none  jle  (f & (lt|eq)) != 0
+//   a >= b true : gtef f = gr | eq | none  jge  (f & (gr|eq)) != 0
+// On the CMP path the three-way bits make the canonical map sound directly.
+static Opcode flagCompareIfTrue(Opcode rel) {
+  switch (rel) {
+  case Opcode::EQ:
+  case Opcode::NE: return Opcode::EQF;
+  case Opcode::LT: return Opcode::LTF;
+  case Opcode::GT: return Opcode::GTF;
+  case Opcode::LE: return Opcode::LTEF;
+  case Opcode::GE: return Opcode::GTEF;
+  default: return Opcode::Nop; // not a comparison; caller handles
+  }
+}
+
+// The conditional jump that fires when `rel` HOLDS (the canonical relation
+// jump; sound after CMP's total order and after flagCompareIfTrue's bits).
+static Opcode cmpJumpIfTrue(Opcode rel) {
+  switch (rel) {
+  case Opcode::EQ: return Opcode::JE;
+  case Opcode::NE: return Opcode::JNE;
+  case Opcode::LT: return Opcode::JL;
+  case Opcode::GT: return Opcode::JG;
+  case Opcode::LE: return Opcode::JLE;
+  case Opcode::GE: return Opcode::JGE;
+  default: return Opcode::Nop; // not a comparison; caller handles
+  }
+}
+
 int QLangCompiler::emitCmpJumpFalse(Opcode rel, int ra, int rb) {
   emit(Opcode::CMP, ra, rb);
   // Flag jump (JE/JNE/JG/JGE/JL/JLE): target in `a`, patched by caller.
@@ -1430,7 +1508,7 @@ int QLangCompiler::emitJumpIfFalse(int condReg) {
   return static_cast<int>(m_emitter.size()) - 1;
 }
 
-int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
+int QLangCompiler::emitCmpJumpExpr(const ExprPtr &cond, bool jumpIfFalse) {
   if (!cond || cond->kind != ExprKind::Binary)
     return -1;
   const std::string &t = cond->op.text;
@@ -1445,16 +1523,18 @@ int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
   // Two lowerings of the same condition (plan M3 D2). Both operands statically
   // Int -> `cmp`: the bytes are unchanged from before M3 and cmp's total order
   // keeps the flags reusable for a second jump. Everything else -> a flag
-  // compare over general values, picked by flagCompareIfFalse so that the one
-  // jump map below fires exactly when the condition is false (SPEC §bytecodes
+  // compare over general values, picked by flagCompareIfFalse/IfTrue so that
+  // the one jump map below fires exactly on the taken branch (SPEC §bytecodes
   // "extended OpCode eq, lt, gt, lte, gte"). The gate used to be "both Int or
   // no fusion at all", so every guard inferType cannot pin down — i.e. every
   // guard with a variable operand — paid for a boolean temp plus a truthiness
   // test; that domain is exactly what the flag compares cover.
   const bool intPath = inferType(cond->left) == QLangValue::Type::Int &&
                        inferType(cond->right) == QLangValue::Type::Int;
-  const Opcode cmpOp = intPath ? Opcode::CMP : flagCompareIfFalse(rel);
-  const Opcode jump = cmpJumpIfFalse(rel);
+  const Opcode cmpOp =
+      intPath ? Opcode::CMP
+              : (jumpIfFalse ? flagCompareIfFalse(rel) : flagCompareIfTrue(rel));
+  const Opcode jump = jumpIfFalse ? cmpJumpIfFalse(rel) : cmpJumpIfTrue(rel);
   // Plain-variable operands are compared in place (no mov into a temp).
   int ra = inPlaceReg(cond->left);
   bool raTmp = false;
@@ -1491,6 +1571,65 @@ int QLangCompiler::emitCmpJumpFalseExpr(const ExprPtr &cond) {
   if (raTmp)
     freeRegister(ra);
   return jumpIdx;
+}
+
+std::vector<int> QLangCompiler::compileCondBranch(const ExprPtr &cond,
+                                                  bool fallthroughOnTrue) {
+  std::vector<int> jumps;
+  if (!cond)
+    return jumps;
+  // `!A`: control falls through when A is false.
+  if (cond->kind == ExprKind::Unary && cond->op.text == "!")
+    return compileCondBranch(cond->operand, !fallthroughOnTrue);
+  if (cond->kind == ExprKind::Binary) {
+    const std::string &t = cond->op.text;
+    if (t == "&&" || t == "||") {
+      if ((t == "&&") == fallthroughOnTrue) {
+        // The left operand decides alone exactly when the whole does: its
+        // short-circuit exit IS the shared exit, and its continuing side
+        // falls through into the right operand.
+        for (int j : compileCondBranch(cond->left, fallthroughOnTrue))
+          jumps.push_back(j);
+        for (int j : compileCondBranch(cond->right, fallthroughOnTrue))
+          jumps.push_back(j);
+      } else {
+        // The left operand decides against the whole (a true `||` left, a
+        // false `&&` left): its jump must skip the right operand and reach
+        // the fall-through point just past the entire condition, so it is
+        // patched here once the right operand's code is out.
+        auto leftJumps =
+            compileCondBranch(cond->left, !fallthroughOnTrue);
+        for (int j : compileCondBranch(cond->right, fallthroughOnTrue))
+          jumps.push_back(j);
+        const int after = static_cast<int>(m_emitter.size());
+        for (int j : leftJumps)
+          m_emitter.patchJump(j, after);
+      }
+      return jumps;
+    }
+    // The shared jump fires when the relation does NOT hold exactly when
+    // holding is the fall-through side: `fallthroughOnTrue` asks for a
+    // jump-if-false pair, `fallthroughOnFalse` for the true-side pair.
+    int j = emitCmpJumpExpr(cond, fallthroughOnTrue);
+    if (j >= 0) {
+      jumps.push_back(j);
+      return jumps;
+    }
+  }
+  // Bare-truthiness leaf: `tst` reads a plain variable in place (no mov);
+  // anything else materializes into a temp first.
+  int condReg = inPlaceReg(cond);
+  bool condTmp = false;
+  if (condReg < 0) {
+    condReg = tmpRegister();
+    condTmp = true;
+    compileExpr(cond, condReg);
+  }
+  jumps.push_back(fallthroughOnTrue ? emitJumpIfFalse(condReg)
+                                    : emitJumpIfTrue(condReg));
+  if (condTmp)
+    freeRegister(condReg);
+  return jumps;
 }
 
 CompiledProgram QLangCompiler::compile() {
@@ -2948,16 +3087,11 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
 
 void QLangCompiler::compileWhile(const StmtPtr &s) {
   int testLabel = static_cast<int>(m_emitter.size());
-  // Fused compare+j* for any comparison condition (SPEC §bytecodes: alternate
-  // conditional jump): cmp+j* when both operands are statically Int, otherwise
-  // the dual flag compare + the same j*. Everything that is not a comparison
-  // (truthiness, && / ||, !, calls) lowers to `tst` + `jne`.
-  int jumpFalseIdx = emitCmpJumpFalseExpr(s->cond);
-  if (jumpFalseIdx < 0) {
-    int condReg = tmpRegister();
-    compileExpr(s->cond, condReg);
-    jumpFalseIdx = emitJumpIfFalse(condReg);
-  }
+  // Short-circuit branch lowering for the condition (SPEC §operators
+  // "operators && and ||"): comparisons fuse to compare+flag-jump, && / || / !
+  // chain the jumps, everything else lowers to `tst` + `jne`. The body is the
+  // true fall-through; every returned jump goes to the exit.
+  std::vector<int> exitJumps = compileCondBranch(s->cond, true);
 
   // continue -> re-evaluate the condition (testLabel is known before the body);
   // break -> exit (post-body), so patch BREAK instructions after the body.
@@ -2971,7 +3105,8 @@ void QLangCompiler::compileWhile(const StmtPtr &s) {
 
   emit(Opcode::JMP, testLabel);
   int exitLabel = static_cast<int>(m_emitter.size());
-  m_emitter.patchJump(jumpFalseIdx, exitLabel);
+  for (int jumpFalseIdx : exitJumps)
+    m_emitter.patchJump(jumpFalseIdx, exitLabel);
   for (int j = bodyStart; j < bodyEnd; j++)
     if (m_emitter.raw[j].op == Opcode::BREAK)
       m_emitter.patchJump(j, exitLabel);
@@ -2979,16 +3114,11 @@ void QLangCompiler::compileWhile(const StmtPtr &s) {
 }
 
 void QLangCompiler::compileIf(const StmtPtr &s) {
-  // Fused compare+j* for any comparison condition (SPEC §bytecodes: alternate
-  // conditional jump): cmp+j* when both operands are statically Int, otherwise
-  // the dual flag compare + the same j*. Everything that is not a comparison
-  // (truthiness, && / ||, !, calls) lowers to `tst` + `jne`.
-  int jumpFalseIdx = emitCmpJumpFalseExpr(s->ifCond);
-  if (jumpFalseIdx < 0) {
-    int condReg = tmpRegister();
-    compileExpr(s->ifCond, condReg);
-    jumpFalseIdx = emitJumpIfFalse(condReg);
-  }
+  // Short-circuit branch lowering for the condition (SPEC §operators
+  // "operators && and ||"): comparisons fuse to compare+flag-jump, && / || / !
+  // chain the jumps, everything else lowers to `tst` + `jne`. The if body is
+  // the true fall-through; every returned jump goes to the else side.
+  std::vector<int> exitJumps = compileCondBranch(s->ifCond, true);
 
   m_blockScopes.emplace_back(); // if body is a block scope (SPEC # block scope)
   for (auto &body : s->ifBody)
@@ -3005,21 +3135,24 @@ void QLangCompiler::compileIf(const StmtPtr &s) {
       compileStmt(body);
     popBlockScope();
     m_emitter.patchJump(jumpPastIdx, static_cast<int>(m_emitter.size()));
-    m_emitter.patchJump(jumpFalseIdx, elseBodyStart);
+    for (int jumpFalseIdx : exitJumps)
+      m_emitter.patchJump(jumpFalseIdx, elseBodyStart);
   } else {
-    m_emitter.patchJump(jumpFalseIdx, static_cast<int>(m_emitter.size()));
+    for (int jumpFalseIdx : exitJumps)
+      m_emitter.patchJump(jumpFalseIdx, static_cast<int>(m_emitter.size()));
   }
 }
 
 void QLangCompiler::compileGotoIf(const StmtPtr &s) {
-  int condReg = tmpRegister();
-  compileExpr(s->gotoIfCond, condReg);
   auto lit = m_labels.find(s->gotoIfLabel);
   if (lit == m_labels.end())
     throw QLangError(QLangErrorKind::Parse, 0, 0,
                      "undefined label '" + s->gotoIfLabel + "'");
-  int jumpTrueIdx = emitJumpIfTrue(condReg);
-  m_emitter.patchJump(jumpTrueIdx, lit->second);
+  // True-side branch lowering (plan encoding-followups P1): a comparison
+  // condition becomes one compare + one relation jump to the label, && / || / !
+  // chain their jumps, a bare value keeps `tst` + `je`.
+  for (int jumpTrueIdx : compileCondBranch(s->gotoIfCond, false))
+    m_emitter.patchJump(jumpTrueIdx, lit->second);
 }
 
 // Shared ++/-- lowering for the statement form (valueReg < 0) and the
@@ -4321,19 +4454,35 @@ void QLangCompiler::compileSwitch(const StmtPtr &s) {
     const auto &sc = s->cases[i];
     int matchCheckIdx = static_cast<int>(m_emitter.size());
     caseMatchStarts.push_back(matchCheckIdx);
-    // Emit the match check for this case.
-    int cmpReg = tmpRegister();
+    // Match check (plan encoding-followups P1): a non-`in` case is ONE
+    // equality compare plus `je` to the body — `cmp` when the switch value
+    // and the case value are both statically Int (a literal right rides
+    // inside the compare, M3 D5), otherwise `eqf` over general values. The
+    // old EQ-into-temp + `tst` pair is gone. `in` cases keep INx-into-temp
+    // + `tst`: membership is truthiness, not a flag relation.
     if (sc.isIn) {
+      int cmpReg = tmpRegister();
       int exprReg = tmpRegister();
       compileExpr(sc.value, exprReg);
       emit(Opcode::INx, cmpReg, valReg, exprReg);
+      caseJeIdx.push_back(emitJumpIfTrue(cmpReg));
     } else {
-      int exprReg = tmpRegister();
-      compileExpr(sc.value, exprReg);
-      emit(Opcode::EQ, cmpReg, valReg, exprReg);
+      const bool intPath =
+          inferType(s->switchExpr) == QLangValue::Type::Int &&
+          inferType(sc.value) == QLangValue::Type::Int;
+      const Opcode match = intPath ? Opcode::CMP : Opcode::EQF;
+      if (sc.value->kind == ExprKind::Literal &&
+          (!intPath || isIntLiteral(sc.value))) {
+        emitLiteral(match, valReg, sc.value->literal);
+      } else {
+        int exprReg = tmpRegister();
+        compileExpr(sc.value, exprReg);
+        emit(match, valReg, exprReg);
+        freeRegister(exprReg);
+      }
+      caseJeIdx.push_back(static_cast<int>(m_emitter.size()));
+      emit(Opcode::JE, 0); // patched below to the case body start
     }
-    // tst + je; the target is patched below to the case body start.
-    caseJeIdx.push_back(emitJumpIfTrue(cmpReg));
     // Emit JMP to skip this case body (patched to next case or switchEnd).
     int skipJmpIdx = static_cast<int>(m_emitter.size());
     emit(Opcode::JMP, 0);
@@ -4542,6 +4691,47 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
           break;
         }
       }
+      // `&&` / `||` in value position short-circuit too (SPEC §operators
+      // "operators && and ||", plan encoding-followups P1): the branch
+      // lowering decides, and the side that runs writes the boolean into
+      // `dest` — the write comes after the condition, so a condition that
+      // reads `dest`'s variable (a = (a > 0) && …) sees its old value. The
+      // eager `LAND`/`LOR` materialization is gone; its VM cases stay
+      // decodable for old images.
+      if (e->op.text == "&&" || e->op.text == "||") {
+        const bool isAnd = e->op.text == "&&";
+        std::vector<int> jumps = compileCondBranch(e, isAnd);
+        // Fall-through = the short-circuit did NOT fire: && survived (true)
+        // or || failed (false).
+        emitLiteral(Opcode::MOV, dest, QLangValue::Bool(isAnd ? 1 : 0));
+        emit(Opcode::JMP, 0);
+        const int endIdx = static_cast<int>(m_emitter.size()) - 1;
+        const int fired = static_cast<int>(m_emitter.size());
+        for (int j : jumps)
+          m_emitter.patchJump(j, fired);
+        emitLiteral(Opcode::MOV, dest, QLangValue::Bool(isAnd ? 0 : 1));
+        m_emitter.patchJump(endIdx, static_cast<int>(m_emitter.size()));
+        break;
+      }
+      // A literal right operand rides the in-place 2-operand ALU/flag-compare
+      // form: `r[dest] = r[dest] op literal`, the literal inline as an
+      // immediate when its type has a form (Phase 2 signs) or a constant-pool
+      // read otherwise (SPEC §bytecodes: the in-place arity rule; plan
+      // encoding-followups P3 — the temp `mov` of the literal is gone, and
+      // the left lands in `dest` for free when it already lives there). The
+      // pool reads are the read-only kind (`.qlc` D6): the VM never copies a
+      // pool container out through an ALU right operand.
+      const Opcode bop = binOp(e->op.text);
+      if (e->right && e->right->kind == ExprKind::Literal &&
+          isInPlaceForm(bop, RightKind::Immediate)) {
+        int l = inPlaceReg(e->left);
+        if (l < 0)
+          compileExpr(e->left, dest);
+        else if (l != dest)
+          emit(Opcode::MOV, dest, l);
+        emitLiteral(bop, dest, e->right->literal);
+        break;
+      }
       // Plain-variable operands are used in place (no mov); anything else
       // is compiled into a temp (SPEC §bytecodes: encoding guidelines —
       // avoid temporary registers when possible).
@@ -4559,7 +4749,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
         rrTmp = true;
         compileExpr(e->right, rr);
       }
-      emit(binOp(e->op.text), dest, l, rr);
+      emit(bop, dest, l, rr);
       if (lTmp)
         freeRegister(l);
       if (rrTmp)

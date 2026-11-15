@@ -291,6 +291,29 @@ int main() {
   expectStr("qword max u32", "local d:qword = 4294967295\nlocal s = toStr(d);", "s", "4294967295");
   expectRun("qword const", "const big:qword = 10000000000");
   expectVal("qword arithmetic", "local a:qword = 100\nlocal b:qword = 200\nlocal r = a + b;", "r", 300);
+  // -- Phase 2 (encoding-followups): Unsigned/Qword literals materialize as
+  // inline immediates (forms 0-3); the tag must survive the trip. --
+  expectStr("qword tag survives u64 form", "local x = 4294967295\nlocal s = type(x);", "s", "qword");
+  expectStr("qword mask immediate", "local x = 0x7FFFFFFFFFFFFFFF\nlocal s = toStr(x);", "s", "9223372036854775807");
+  expectStr("unsigned literal immediate tag", "local x = 4294967295u\nlocal s = type(x);", "s", "unsigned");
+  expectStr("unsigned narrow immediate value", "local x = 200u\nlocal s = toStr(x);", "s", "200");
+  // -- Phase 3 (encoding-followups): literal RHSs ride the in-place ALU
+  // forms; every family's result must be untouched. --
+  expectVal("alu mul imm", "local x = 6\nlocal r = x * 7;", "r", 42);
+  expectVal("alu div imm", "local x = 42\nlocal r = x / 6;", "r", 7);
+  expectVal("alu mod imm", "local x = 17\nlocal r = x % 5;", "r", 2);
+  expectVal("alu and imm", "local x = 12\nlocal r = x & 10;", "r", 8);
+  expectVal("alu or imm", "local x = 12\nlocal r = x | 3;", "r", 15);
+  expectVal("alu xor imm", "local x = 12\nlocal r = x ^ 10;", "r", 6);
+  expectVal("alu shl imm", "local x = 3\nlocal r = x << 4;", "r", 48);
+  expectVal("alu shr imm", "local x = 48\nlocal r = x >> 2;", "r", 12);
+  expectVal("alu pow imm", "local x = 3\nlocal r = x ** 3;", "r", 27);
+  expectVal("alu eq imm", "local x = 5\nlocal r = (x == 5);", "r", 1);
+  expectVal("alu lt imm", "local x = 5\nlocal r = (x < 4);", "r", 0);
+  expectStr("alu string pool rhs", "local s = \"ab\"\nlocal r = s + \"cd\";", "r", "abcd");
+  expectVal("alu self-mul alias", "local x = 5\nx = x * 2\nlocal r = x;", "r", 10);
+  expectVal("alu nested dest alias", "local x = 2\nlocal y = (x + 1) * 3\nlocal r = y;", "r", 9);
+  expectVal("alu float imm rhs", "local f = 1.5\nlocal r = (f * 2.0 == 3.0);", "r", 1);
 
   // -- NEW: dword is an alias for unsigned (spec errata: 4 bytes, uint32_t) --
   expectStr("dword alias typed", "local d:dword = 4294967295\nlocal s = toStr(d);", "s", "4294967295");
@@ -1336,6 +1359,86 @@ int main() {
   expectStr("ternary nested block",
             "local a = 2\nlocal r = a == 1 ? \"one\" : a == 2 ? {\n  return \"two\"\n} : \"other\";",
             "r", "two");
+
+  // --- SPEC §operators "operators && and ||" (short-circuit, Phase 0/1 of
+  // docs/plans/encoding-codegen-followups-plan.md): the right operand must
+  // NOT be evaluated when the left operand decides — pinned with `boom()`
+  // (evaluating it throws). Where the right operand must run to produce the
+  // result, `bump()` (always 7) distinguishes evaluated from skipped.
+  // Control position (if/while/gotoIf/!) and value position share the rule.
+  const char *PRE =
+      "local side = 0\ndef bump()\n  return 7\nend\ndef boom()\n"
+      "  return 1/0\nend\nlocal a = 5\n";
+  expectVal("sc-if && skips right",
+            std::string(PRE) +
+            "if (a > 10) && (boom() > 0) {\n  side += 100\n}",
+            "side", 0);
+  expectVal("sc-if && runs right when left true",
+            std::string(PRE) +
+            "if (a > 0) && (bump() > 0) {\n  side += 10\n} else {\n  side += 20\n}",
+            "side", 10);
+  expectVal("sc-if || skips right when left true",
+            std::string(PRE) +
+            "if (a > 0) || (boom() > 0) {\n  side += 1\n} else {\n  side += 2\n}",
+            "side", 1);
+  expectVal("sc-if || runs right when left false",
+            std::string(PRE) +
+            "if (a > 10) || (bump() > 0) {\n  side += 1\n} else {\n  side += 2\n}",
+            "side", 1);
+  expectVal("sc-if negated && keeps short-circuit",
+            std::string(PRE) +
+            "if !((a > 10) && (boom() > 0)) {\n  side += 5\n}",
+            "side", 5);
+  expectVal("sc-while guard skips right",
+            std::string(PRE) +
+            "local i = 0\nwhile (i > 0) && (boom() >= 0) {\n  i += 1\n}",
+            "side", 0);
+  expectVal("sc-gotoIf && chain loops across the back-edge",
+            std::string(PRE) +
+            "local n = 3\n:start\nn -= 1\nif (n > 0) && (n < 10) goto start\n"
+            "local r = n;",
+            "r", 0);
+  expectVal("sc-gotoIf || chain loops across the back-edge",
+            std::string(PRE) +
+            "local n = 3\n:start\nn -= 1\nif (n > 2) || (n > 0) goto start\n"
+            "local r = n;",
+            "r", 0);
+  expectVal("sc-gotoIf && skips right",
+            std::string(PRE) +
+            ":done\nif (a > 10) && (boom() > 0) goto done\n",
+            "side", 0);
+  expectVal("sc-value && skips right",
+            std::string(PRE) +
+            "local x = (a > 10) && (boom() > 0)\nlocal r = x ? 1 : 0;",
+            "r", 0);
+  expectVal("sc-value || skips right when left true",
+            std::string(PRE) +
+            "local x = (a > 0) || (boom() > 0)\nlocal r = x ? 1 : 0;",
+            "r", 1);
+  expectVal("sc-value && runs right",
+            std::string(PRE) +
+            "local x = (a > 0) && (bump() > 0)\nlocal r = x ? 1 : 0;",
+            "r", 1);
+  expectVal("sc-value || runs right to true",
+            std::string(PRE) +
+            "local x = (a > 10) || (bump() > 0)\nlocal r = x ? 1 : 0;",
+            "r", 1);
+  expectVal("sc-value || runs right to false",
+            std::string(PRE) +
+            "local x = (a > 10) || (bump() > 7)\nlocal r = x ? 1 : 0;",
+            "r", 0);
+  expectVal("sc-value nested || of &&",
+            std::string(PRE) +
+            "local x = (a > 10) || ((a > 0) && (bump() > 0))\nlocal r = x ? 1 : 0;",
+            "r", 1);
+  expectVal("sc-value result overwrites its own operand",
+            std::string(PRE) +
+            "a = (a > 0) && (a < 10)\nlocal r = a ? 1 : 0;",
+            "r", 1);
+  expectVal("sc-value false overwrites its own operand",
+            std::string(PRE) +
+            "a = (a > 10) && (a < 10)\nlocal r = a ? 1 : 0;",
+            "r", 0);
 
   // -- deepcopy (Phase 1: Opcode::DEEPCOPY 70, Builtin::Deepcopy) --
   // SPEC 01 value semantics, 06 ### deepcopy, 10 ## deepcopy, 13 ## OpCode deepcopy.

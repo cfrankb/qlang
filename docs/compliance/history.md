@@ -1,3 +1,94 @@
+## Round 101 — 2026-11-15 — every ALU/compare family takes the literal right inline: the in-place 2-operand form replaces the literal→temp `mov` (encoding-followups **Phase 3**; plan `docs/plans/encoding-codegen-followups-plan.md`; impl `QLangCompiler.cpp` Binary lowering; tests `spec_check2.cpp` 577 → 592, `codec_check.cpp` 369 → 374)
+
+- **Why.** `MUL`/`DIV`/`MOD`/`AND`/`OR`/`XOR`/`SHL`/`SHR`/`POW`/comparisons already
+  *decode* immediate and pool rights (`isAluOrFlagCompare` admits kinds 0/2 since v6,
+  and the in-place arity rule drops the third operand for them), but the Binary
+  lowering still materialized every literal right into a temp register and paid the
+  3-operand register form — only `ADD`/`SUB` via `foldSelfArith` rode the inline form.
+- **What.** One gate in the Binary lowering: a `ExprKind::Literal` right and
+  `isInPlaceForm(bop, Immediate)` → put the left in `dest` for free (it already
+  lives there / one `MOV` / compiled straight in) and `emitLiteral(bop, dest, lit)`
+  — inline immediate with the Phase-2 sign rules, or a kind-2 pool read when the
+  type has no form (String etc.). No swap ever: the left always lands left, so the
+  relations keep their direction. `&&`/`||` intercept earlier, so `LAND`/`LOR` are
+  unreachable here. Safety stated per plan: constant array/table literals do reach
+  the pool (Round: `mov` clones on store), but the ALU's pool right is read-only —
+  `operandValue(cloneContainers=false)` and `doBinaryVm` never returns its `b` —
+  the same D6 rule the flag-compare pool rights have run on since M3; no per-execution
+  container identity can alias out of the fold.
+- **Verified.** `cmake --build build`; `ctest --test-dir build` **67/67**. `spec_check2`
+  577 → **592** (15 per-family result cases incl. the self-assign `x = x * 2` and
+  nested-dest `(x + 1) * 3` alias shapes, string pool right, float immediate).
+  `codec_check` 369 → **374** (`alu:` section: `MUL` in-place `i8` + pool-free, the
+  AND/OR/XOR/SHL/SHR/MOD/EQ immediate chain, String right as the in-place *pool*
+  form, `x + 66000u` riding the `U32` form). Corpus **32/32 byte-identical** stdout +
+  exit codes against an HEAD build. `codegen_size` re-recorded **as measured**:
+  `hello` 217 → **214**, `perf_stress` 565 → **563**, `money`/`cast` unchanged —
+  the visible shrink the plan predicted for this phase. Release `perf` gate green:
+  `perf_stress` execute 11.269 ms vs 11.171 ms baseline (+0.9 %, no re-baseline).
+
+## Round 100 — 2026-11-15 — compiler emits immediate forms 0–3: `Unsigned` literals ride the narrowest of `U8`/`U16`/`U32`, `Qword` literals the 8-byte `U64` form (encoding-followups **Phase 2**; plan `docs/plans/encoding-codegen-followups-plan.md`; impl `QLangCompiler.h/.cpp` `literalImmOf` + `narrowestUnsignedForm` + `emitImmU`, tests `spec_check2.cpp` 573 → 577, `codec_check.cpp` 366 → 369)
+
+- **Why.** The v6 codec has shipped unsigned forms 0–3 since Round 55 (`codec_check`
+  covers them), but the compiler's literal→form selector emitted only signed forms:
+  every `Unsigned`/`Qword`-typed literal (the parser's `44u` tokens and integers above
+  `INT32_MAX`, e.g. masks) paid a constant-pool entry plus a kind-2 `mov`. Plan
+  decision D3 excluded them because "the value type of a 64-bit literal is ambiguous"
+  — in the *parser's AST* it is not: the tag is fixed by the token, so the literal's
+  type, not just its value, can pick sign and width.
+- **What.** `literalImmOf` grew two cases: `Type::Unsigned` → `narrowestUnsignedForm`
+  (`U8`/`U16`/`U32`, all of which the VM materializes back as `Unsigned`), `Type::Qword`
+  → always `U64` (the only form that round-trips the `Qword` tag — narrowing a
+  `4294967295` literal to `U32` would silently retype it to `unsigned`, so the tag,
+  not the width, gates the choice). `emitImmU` carries the explicit form +
+  `ImmPayload::Unsigned`; `emitLiteralImm` dispatches it. No codec/VM/linker change —
+  the unsigned payload path was fully covered already. Pool fallback stays for
+  strings/blobs/containers and `Long`. Signed emission is unchanged (`Int` stays
+  `I8`/`I16`/`I32`, still refusing past int32).
+- **Verified.** `cmake --build build`; `ctest --test-dir build` **67/67**. `spec_check2`
+  573 → **577** (4 cases: tag survival of a `qword` immediate, `INT64_MAX` mask
+  immediate, `unsigned` tag survival, narrow unsigned value round-trip — literals
+  above `INT64_MAX` are unreachable as literals: the parser reads decimals/hex with
+  `std::stoll` and the `u` suffix truncates to `uint32_t`). `codec_check` 366 → **369**
+  (the pinned "`mov`: 64-bit literal stays a pool read — D3" flips to a `U64`-form +
+  pool-free pair, plus the `U8` + pool-free pair for `44u`). Corpus **32/32 scripts
+  byte-identical** stdout + exit codes against an HEAD build. `codegen_size` budgets
+  re-recorded **as measured**: all four unchanged (`hello` 217 / `money` 151 / `cast`
+  189 / `perf_stress` 565 — the budgets count instructions, and immediate vs pool
+  `mov` is the same instruction count). Release `perf` gate green inside `ctest`.
+
+## Round 99 — 2026-11-15 — short-circuit `&&`/`||`/`!` lowered as branches (control + value position); fused `switch` / `gotoIf` compares (encoding-followups **Phase 1**; plan `docs/plans/encoding-codegen-followups-plan.md`; impl `QLangCompiler.h/.cpp` `compileCondBranch` + `emitCmpJumpExpr`, tests `spec_check2.cpp` 556 → 573)
+
+- **Why.** Phase 0 committed the spec sentence (short-circuit everywhere, Round 98's
+  sibling commit `eb55240`); the compiler still evaluated eagerly: `&&`/`||` materialized
+  through the dead-but-registered `LAND`/`LOR` pair, `compileSwitch` paid an `EQ`-into-temp
+  + `tst` per case, and `compileGotoIf` never fused its comparison condition.
+- **What.** `compileCondBranch(cond, fallthroughOnTrue)` — recursive branch lowering
+  (SPEC `05-operators.md` "operators && and ||"): comparisons fuse through the renamed
+  `emitCmpJumpExpr(cond, jumpIfFalse)` (the old `emitCmpJumpFalseExpr` with the new
+  true-side half — `flagCompareIfTrue` pairs the same-relation comparator with the
+  canonical jump, `cmpJumpIfTrue`), `!` swaps the contract, `&&`/`||` chains the jumps:
+  a deciding operand's jump reaches the caller's shared exit directly when its own
+  contract matches, and is patched to the point just past the whole condition when the
+  operand decides *against* it (a true `||` left, a false `&&` left skipping its sibling).
+  `compileIf`/`compileWhile` now patch a **list** of exit jumps; `compileGotoIf` routes
+  through the same machinery (one compare + one relation jump to the label);
+  `compileSwitch` non-`in` cases are one `cmp` (statically-Int pair, literal right rides
+  inside) or `eqf` + `je` to the body — the temp is gone (`in` cases keep `INx` + `tst`).
+  Value position short-circuits in the same round (Phase 0 recommendation): `dest` is
+  written only **after** the branch so `a = (a > 0) && …` sees `a`'s old value; the
+  compiler no longer emits `LAND`/`LOR` (VM cases stay decodable for old images).
+- **Verified.** `cmake --build build`; `ctest --test-dir build` **67/67**. `spec_check2`
+  556 → **573** (17 `sc-` cases: control-position skips pinned with a `boom()` that
+  throws if evaluated, runs pinned with `bump()`; if/while/gotoIf (back-edge `&&` and
+  `||` chains)/`!`; value-position skips/runs/nesting; the dest-clobber regression —
+  the first draft pre-set `dest` and `a = (a > 0) && (a < 10)` returned 0). Corpus
+  **32/32 scripts byte-identical** stdout + exit codes against an HEAD build.
+  `codegen_size` budgets re-recorded **as measured**: all four unchanged (`hello` 217 /
+  `money` 151 / `cast` 189 / `perf_stress` 565 — the corpus sites are comparison
+  conditions whose fused shape is unchanged). Release `perf` gate **12/12**
+  (`perf_stress` execute 11.283 ms vs 11.171 ms baseline, **+1.0 %, no re-baseline**).
+
 ## Round 98 — 2026-11-15 — CALL arg-slot clobber fixed: a lowering whose dest is an old low register re-homes to a fresh temp (bug found Round 97; plan `docs/plans/archive/call-arg-slot-clobber-plan.md`; impl `QLangCompiler.h/.cpp` `compileCallExpr` + `slotsWindowBusy`, tests `spec_check2.cpp` 549 → 556, `gen_test.cpp` 7 → 9)
 
 - **Why.** The CALL layout requires `dest+1..dest+N` to be fresh registers

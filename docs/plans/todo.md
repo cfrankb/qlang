@@ -293,11 +293,20 @@ closing the **Q#**s its item points at:
 
 - [ ] Hoist the `for` loop's direction re-test out of the back-edge (see §6 perf; recovers the
       Round 60 +8.7 % A/B cost)
-- [ ] `switch` case checks (`EQ` + `JMPIFTRUE`, `src/QLangCompiler.cpp:2941`) and `compileGotoIf`
+- [x] `switch` case checks (`EQ` + `JMPIFTRUE`, `src/QLangCompiler.cpp:2941`) and `compileGotoIf`
       (`:2208`) → `eqf` + `je` / `tst` + `je`; each frees a temp but changes corpus shapes
-- [ ] `&&` / `||` short-circuits in control position via flags (`tst` covers them; no emission)
-- [ ] Genuinely unsigned relations, and the compiler emitting immediate forms 0–3
-- [ ] Widening the remaining ALU families to kinds 0/2 beyond `mov`/`add`/`sub`/`cmp`
+      (landed with encoding-followups **P1**, Round 99: non-`in` cases and `gotoIf` comparisons
+      are one compare + one relation jump)
+- [x] `&&` / `||` short-circuits in control position via flags (`tst` covers them; no emission)
+      (landed with encoding-followups P0 + **P1**, Round 99: `compileCondBranch`, value
+      position rides along per the Phase 0 decision)
+- [x] The compiler emitting immediate forms 0–3 (landed with encoding-followups **P2**,
+      Round 100: `literalImmOf` signs by literal type — `Unsigned` → narrowest
+      `U8`/`U16`/`U32`, `Qword` → `U64`; `Long` and containers stay pooled)
+- [ ] Genuinely unsigned relations
+- [x] Widening the remaining ALU families to kinds 0/2 beyond `mov`/`add`/`sub`/`cmp`
+      (landed with encoding-followups **P3**, Round 101: Binary lowering routes literal
+      rights through the in-place 2-operand form — immediate or pool right, no temp `mov`)
 - [ ] An assembler (`qlang_run --assemble`?) is the prerequisite for `ja`/`jae`/`jb`/`jbe` to be
       more than spec/disassembly aliases (M3 D6)
 

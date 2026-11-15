@@ -3,6 +3,16 @@
 Proposed: 2026-11-14 (post-Round 94). Status: **in progress** — Phase 0 landed 2026-11-15
 (`05-operators.md` short-circuit + exact-integer relation sentences, `13-bytecodes.md` alias
 paragraph restated to the decided rule; hashes re-recorded on green `ctest` 67/67).
+Phase 1 landed 2026-11-15 (Round 99: `compileCondBranch` short-circuit lowering for
+`&&`/`||`/`!` in control **and** value position, fused `switch`/`compileGotoIf` compares,
+`emitCmpJumpExpr(cond, jumpIfFalse)` two-direction fold; corpus 32/32 byte-identical,
+budgets unchanged as measured).
+Phase 2 landed 2026-11-15 (Round 100: literal→form selector signs by literal type —
+`Unsigned` literals ride the narrowest of forms 0–2, `Qword` literals form 3; corpus
+32/32 byte-identical, budgets unchanged as measured, `codec_check`'s D3 pin flipped).
+Phase 3 landed 2026-11-15 (Round 101: every `isAluOrFlagCompare` family takes a literal
+right inline — the in-place 2-operand form replaces the literal→temp `mov`; budgets
+re-recorded `hello` 217→214, `perf_stress` 565→563, corpus 32/32 byte-identical).
 
 Provenance: `todo.md` §7 "Codegen follow-ups recorded by M3 / Phase 3 (no plan yet)" — the six
 rows below are that list, in dependency order; design record is

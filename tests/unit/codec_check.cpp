@@ -327,6 +327,18 @@ static bool hasFloatImm(const Function &fn, Opcode op, double value) {
   return false;
 }
 
+// An immediate carrying the unsigned payload (forms 0-3, encoding-followups
+// Phase 2): the form is fixed by the literal's tag, so match it exactly.
+static bool hasUnsignedImm(const Function &fn, Opcode op, ImmForm form,
+                           uint64_t value) {
+  for (const auto &i : decodeAll(fn))
+    if (i.op == op && i.rightKind == RightKind::Immediate &&
+        i.immPayload == ImmPayload::Unsigned && i.immForm == form &&
+        i.immUnsigned == value)
+      return true;
+  return false;
+}
+
 // True when `fn` contains `op` with a constant-pool right operand (kind 2).
 static bool hasPoolRight(const Function &fn, Opcode op) {
   for (const auto &i : decodeAll(fn))
@@ -398,11 +410,20 @@ static void testMovImmediate() {
     check(hasImm(pt.functions[0], Opcode::MOV, ImmForm::I8, 0),
           "mov: typed decl emits a signed immediate");
 
-    // 64-bit literal (Qword) -> pool read: the immediate forms must not change
-    // the value's type tag (D3).
+    // Unsigned/Qword literal -> inline immediate (encoding-followups Phase 2,
+    // widening D3): the tag picks the form — Qword takes the 8-byte U64 form,
+    // Unsigned the narrowest of U8/U16/U32 — and leaves the pool.
     CompiledProgram pq = compileSrc("local q = 9223372036854775807\n");
-    check(hasPoolRight(pq.functions[0], Opcode::MOV),
-          "mov: 64-bit literal stays a pool read");
+    check(hasUnsignedImm(pq.functions[0], Opcode::MOV, ImmForm::U64,
+                         9223372036854775807ULL),
+          "mov: Qword literal emits the U64 form");
+    check(poolCountType(pq.constants, QLangValue::Type::Qword) == 0,
+          "mov: Qword literal leaves the pool");
+    CompiledProgram pu = compileSrc("local u = 44u\n");
+    check(hasUnsignedImm(pu.functions[0], Opcode::MOV, ImmForm::U8, 44),
+          "mov: Unsigned literal emits the narrow U8 form");
+    check(poolCountType(pu.constants, QLangValue::Type::Unsigned) == 0,
+          "mov: Unsigned literal leaves the pool");
 
     // String literal -> pool read (strings never become immediates).
     CompiledProgram ps = compileSrc("local s = \"abc\"\n");
@@ -494,9 +515,9 @@ static void testAddInPlace() {
           "add: immediate RHS is the in-place form (4 bytes)");
     check(!poolHasInt(p.constants, 12), "add: no Int pool slot");
 
-    // Float literal RHS: the in-place fold stays Int-only, so the literal is
-    // loaded as an inline float immediate and the add keeps its 3-operand form.
-    // What matters for S5 is that the float never reaches the pool.
+    // Float literal RHS: no longer Int-only (encoding-followups P3) — the
+    // in-place add carries the inline float immediate and the float never
+    // reaches the pool.
     CompiledProgram pf = compileSrc("local f = 1.5\nf += 1.5\n");
     check(hasFloatImm(pf.functions[0], Opcode::MOV, 1.5),
           "add: float literal RHS loads as the float form");
@@ -543,8 +564,8 @@ static void testSubInPlace() {
           "sub: immediate RHS is the in-place form (4 bytes)");
     check(!poolHasInt(p.constants, 12), "sub: no Int pool slot");
 
-    // Float literal RHS: Int-only fold, so an inline float immediate plus the
-    // 3-operand sub — and no pool entry.
+    // Float literal RHS: the in-place sub carries the inline float
+    // immediate (P3), and no pool entry is made.
     CompiledProgram pf = compileSrc("local f = 1.5\nf -= 1.5\n");
     check(hasFloatImm(pf.functions[0], Opcode::MOV, 1.5),
           "sub: float literal RHS loads as the float form");
@@ -572,6 +593,60 @@ static void testSubInPlace() {
     }
   } catch (const QLangError &e) {
     check(false, std::string("sub: ") + e.what());
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The remaining ALU families (encoding-followups P3): a Binary with a literal
+// right lowers to the in-place 2-operand form with the literal inline
+// (immediate or pool right, never a `mov` into a temp), for every family
+// `isAluOrFlagCompare` admits.
+// ---------------------------------------------------------------------------
+static void testAluLiteralRhs() {
+  try {
+    // `local z = x * 3`: MUL carries i8 3 in place after a MOV of the left
+    // into the dest — the literal's own MOV into a temp is gone.
+    CompiledProgram p = compileSrc("local x = 2\nlocal z = x * 3\n");
+    DecodedInstruction d;
+    check(findImm(p.functions[0], Opcode::MUL, ImmForm::I8, 3, d) &&
+              isInPlaceForm(d.op, d.rightKind),
+          "alu: MUL literal RHS is the in-place immediate form");
+    check(!poolHasInt(p.constants, 3), "alu: MUL literal leaves the pool");
+
+    // Bit/shift family and value-position comparisons join ADD/SUB.
+    CompiledProgram q = compileSrc(
+        "local x = 4\n"
+        "local a = x & 6\n"
+        "local b = x | 1\n"
+        "local c = x ^ 5\n"
+        "local s = x << 2\n"
+        "local t = x >> 1\n"
+        "local m = x % 3\n"
+        "local e = (x == 4)\n");
+    check(hasImm(q.functions[0], Opcode::AND, ImmForm::I8, 6) &&
+              hasImm(q.functions[0], Opcode::OR, ImmForm::I8, 1) &&
+              hasImm(q.functions[0], Opcode::XOR, ImmForm::I8, 5) &&
+              hasImm(q.functions[0], Opcode::SHL, ImmForm::I8, 2) &&
+              hasImm(q.functions[0], Opcode::SHR, ImmForm::I8, 1) &&
+              hasImm(q.functions[0], Opcode::MOD, ImmForm::I8, 3) &&
+              hasImm(q.functions[0], Opcode::EQ, ImmForm::I8, 4),
+          "alu: AND/OR/XOR/SHL/SHR/MOD/EQ literal RHSs are immediates");
+
+    // A literal with no immediate form (String) rides the pool kind instead
+    // — still no temp MOV: `s + "!"` is ADD with a kind-2 right.
+    CompiledProgram g = compileSrc("local s = \"ab\"\nlocal t = s + \"!\"\n");
+    bool poolAdd = false;
+    for (const auto &i : decodeAll(g.functions[0]))
+      if (i.op == Opcode::ADD && i.rightKind == RightKind::ConstPool)
+        poolAdd = true;
+    check(poolAdd, "alu: string literal RHS is an in-place pool read");
+
+    // Unsigned literal RHS signs by type (Phase 2 forms in an ALU right):
+    CompiledProgram u = compileSrc("local x = 1\nlocal z = x + 66000u\n");
+    check(hasUnsignedImm(u.functions[0], Opcode::ADD, ImmForm::U32, 66000),
+          "alu: Unsigned literal RHS rides the u32 form");
+  } catch (const QLangError &e) {
+    check(false, std::string("alu: ") + e.what());
   }
 }
 
@@ -2290,6 +2365,7 @@ int main() {
   testCompilerMov();
   testAddInPlace();
   testSubInPlace();
+  testAluLiteralRhs();
   testCmpJump();
   testPoolDedup();
   testNop();

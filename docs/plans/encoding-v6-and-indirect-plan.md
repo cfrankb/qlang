@@ -422,6 +422,9 @@ Six decisions M2 settled before coding (full rationale in §2 of `docs/plans/arc
    ±2³¹ (`i8`/`i16`/`i32`), `Float` (form 8), `Bool` (9/10), `nil` (11). `Long`/`Qword`/
    `Unsigned` stay in the pool — the codec supports `i64`/`u64`, but the value type of a
    64-bit literal is ambiguous; widening is a measurable follow-up.
+   *(Amended 2026-11-15: encoding-followups Phase 2, Round 100 — the tag of a parser
+   literal is fixed by its token, so `Unsigned` (forms 0–2) and `Qword` (form 3) do
+   round-trip and are now emitted inline; `Long` and containers stay pooled.)*
 4. **D4 — `.qlc` v6 ships without the declaration table.** M4 adds it as an optional section
    inside v6 (§8 annotated); Phase 3 bumps v7.
 5. **D5 — the v5 harness `tests/unit/encoding_test.cpp` is retired** (its ctest target
