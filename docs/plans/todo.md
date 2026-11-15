@@ -189,6 +189,18 @@ closing the **Q#**s its item points at:
 
 ## 6. Defects and drift with no plan of their own
 
+- [x] **value-context `++`/`--` never worked (found + fixed 2026-11-15, Round 96)**: every
+      expression-form `a++` / `++a` / `--` compiled to `emit(INC, dest, operand)`, but VM
+      `INC`/`DEC` step `r[a]` in place (`13-bytecodes.md` line 64) — the form stepped its own
+      result register: nil → bogus `operator '+' operand must be numeric, got nil`, leftover
+      garbage → a silently wrong number; `++t.n` was a silent no-op and a dangling `t.n++`
+      (postfix binds bare variables only) swallowed the *next* statement as its prefix operand
+      and exited 0. Fixed: `compileExpr` refuses `++`/`--` in value contexts
+      (`operator '++' is a statement: it has no value …`); the AST has no prefix/postfix flag
+      and the spec shows statement use only, so copy semantics stay a spec question. Legal
+      `t.n++`/`a[i]++` stays deferred to the value-semantics round (Round 68) — now a clear
+      parse error instead of silent corruption. `spec_check2` 538 → 542.
+      `docs/bugs/resolved/incdec-value-context-result-register.md`
 - [x] **C3 guard defect (small, unblocks "verified")**: `hasMethod` accepts `BoundMethod`
       (`src/QLangContext.cpp:635`) but the table `ObjectOps::callMethod` requires `Function`
       (`src/QLangObjects.cpp:187`) — `hasMethod` says yes, `callMethod` then throws

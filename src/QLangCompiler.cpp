@@ -4533,6 +4533,19 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       if (rrTmp)
         freeRegister(rr);
     } else {
+      // ++/-- are statement operators: the VM's INC/DEC step the operand
+      // register in place (SPEC §13-bytecodes: INC takes a dest reg only),
+      // so a value-context `a++` would step its own result register — nil
+      // (a bogus "operand must be numeric, got nil") or leftover garbage.
+      // The AST carries no prefix/postfix flag, so copy semantics were never
+      // implementable here; report instead (Round 96).
+      if (e->uop.type == TokenType::Increment ||
+          e->uop.type == TokenType::Decrement)
+        throw QLangError(QLangErrorKind::Parse, m_curLine, m_curCol,
+                         "operator '" + e->uop.text +
+                             "' is a statement: it has no value "
+                             "(use it on its own line, or 'x + 1' as an "
+                             "expression)");
       // Constant folding: `-(literal)` -> one store of a negative immediate
       // instead of a load plus NEG (and a MOV) (SPEC §bytecodes: encoding
       // guidelines — avoid temporary registers when possible).

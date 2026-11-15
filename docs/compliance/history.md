@@ -1,3 +1,25 @@
+## Round 96 — 2026-11-15 — value-context `++`/`--` refused: the expression form stepped its own result register (bug `docs/bugs/resolved/incdec-value-context-result-register.md`; impl `QLangCompiler.cpp` `compileExpr`, tests `spec_check2.cpp` 538 → 542)
+
+- **Why.** Round 95's untouched sibling, undocumented and never working: `let z = a++` (any
+  operand, prefix or postfix, either operator) compiled to `emit(INC, dest, operandReg)`, but
+  VM `INC`/`DEC` step `r[a]` in place (`13-bytecodes.md` line 64 — a dest reg only), so the
+  form read its **own result register**: nil → bogus `operator '+' operand must be numeric,
+  got nil`, leftover garbage → a silently wrong number. Same path made `++t.n` a silent
+  no-op, and a dangling `t.n++` (postfix binds bare variables only) had its `++` parsed as a
+  prefix on the *next* statement — `++println(…)` printed, stepped a garbage register, exit 0.
+- **Fix.** `compileExpr` Unary branch throws:
+  `operator '++' is a statement: it has no value (use it on its own line, or 'x + 1' as an
+  expression)`. The AST has no prefix/postfix flag (both parse to the same `Unary` node) and
+  the spec shows only statement use, so copy semantics are a spec question, not a compiler
+  gap — the refusal makes every value context honest, and the dangling-`++` swallow reports
+  at the stray token. Statement form (`compileExprStmt`, Round 95) untouched.
+- **Left alone.** Legal member/index increment (`t.n++`, `a[i]++`) stays with the
+  value-semantics round (Round 68) — it moves from silent corruption to a clear error here.
+- **Verified.** `cmake --build build`; `ctest --test-dir build` 67/67 (perf, doc_hashes
+  skipped). `spec_check2` 538 → 542 (expression-form `a++`/`++a`/`--a` refused; `++t.n`
+  refused). Manual repros against `build/qlcc`: value forms report with correct line:col,
+  `t.n++` reports at the `++` (3:4) with nothing executed, statement-form `--a` loop intact.
+
 ## Round 95 — 2026-11-15 — statement-form `++`/`--` reports names as themselves and writes through cells (audit F5's deferred sibling, `docs/bugs/module-export-import-audit.md` F5; impl `QLangCompiler.cpp` `compileExprStmt` + `moduleNameError`, tests `spec_check2.cpp` 532 → 538, `module_search_test.cpp` 128 → 129)
 
 - **Why.** The deferred row "library-mode assignment to a module const" was stale: `C = 7`

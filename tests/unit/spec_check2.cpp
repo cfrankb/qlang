@@ -414,6 +414,19 @@ int main() {
   expectMsg("inc target must still be declared", "zz++",
     "use of undeclared variable 'zz'");
 
+  // -- NEW: value-context ++/-- are refused (Round 96): the VM's INC/DEC
+  // step their operand register in place, so an expression-form `a++` read
+  // its own (nil or garbage) result register — a bogus type error or a
+  // silent wrong value. Statement form is unchanged (pinned above).
+  expectMsg("a++ as a value is refused",
+    "local a = 1\nlet z = a++\nlocal r = z;", "has no value");
+  expectMsg("++a as a value is refused",
+    "local a = 1\nlet z = ++a\nlocal r = z;", "has no value");
+  expectMsg("--a as a value is refused",
+    "local a = 1\nlet z = --a\nlocal r = z;", "has no value");
+  expectMsg("++t.n is refused, not a silent no-op",
+    "let t = {n=1}\n++t.n", "has no value");
+
   // -- NEW: assert() builtin (spec §397) --
   expectRun("assert true", "assert(true, \"should not fail\")");
   expectThrow("assert false", "assert(false, \"assertion failed\")");
