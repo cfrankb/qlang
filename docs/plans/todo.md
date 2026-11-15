@@ -253,6 +253,7 @@ closing the **Q#**s its item points at:
       was re-recorded with `--update-baseline` (own commit); record in `docs/compliance/tests.md`.
       The loop-direction hoist (`archive/phase3-opcode-retirement-plan.md` §8: 8 → 7 instructions
       in the inner loop) stays **parked** — land it as a codegen round of its own, not for a number
+      (**plan written 2026-11-15, not started**: [for-direction-hoist-plan.md](for-direction-hoist-plan.md))
 - [ ] **`t.n++` / `a[i]++` on member/index targets** (Round 96/97 deferral to
       the value-semantics round) — **plan written 2026-11-15, not started**:
       [member-index-incdec-plan.md](member-index-incdec-plan.md)
@@ -303,7 +304,10 @@ closing the **Q#**s its item points at:
 ## 7. Codegen follow-ups recorded by M3 / Phase 3 (no plan yet)
 
 - [ ] Hoist the `for` loop's direction re-test out of the back-edge (see §6 perf; recovers the
-      Round 60 +8.7 % A/B cost)
+      Round 60 +8.7 % A/B cost) — **plan written 2026-11-15, not started**:
+      [for-direction-hoist-plan.md](for-direction-hoist-plan.md)
+      (direction-specialized loop copies replace the run-once + shared-guard pair —
+      no body-copy growth; no opcode/`.qlc` change)
 - [x] `switch` case checks (`EQ` + `JMPIFTRUE`, `src/QLangCompiler.cpp:2941`) and `compileGotoIf`
       (`:2208`) → `eqf` + `je` / `tst` + `je`; each frees a temp but changes corpus shapes
       (landed with encoding-followups **P1**, Round 99: non-`in` cases and `gotoIf` comparisons
