@@ -1,6 +1,6 @@
 # Plan: encoding-plan codegen follow-ups (todo §7)
 
-Proposed: 2026-11-14 (post-Round 94). Status: **in progress** — Phase 0 landed 2026-11-15
+Proposed: 2026-11-14 (post-Round 94). Status: **complete** — Phase 0 landed 2026-11-15
 (`05-operators.md` short-circuit + exact-integer relation sentences, `13-bytecodes.md` alias
 paragraph restated to the decided rule; hashes re-recorded on green `ctest` 67/67).
 Phase 1 landed 2026-11-15 (Round 99: `compileCondBranch` short-circuit lowering for
@@ -17,10 +17,14 @@ Phase 4 landed 2026-11-15 (Round 102: `cmpIntValues` — `cmp`/`isEqual`/set-ded
 exact mathematical-integer rule, `Qword` above `INT64_MAX` no longer throws in relations;
 no `JA`/`JAE`/`JB`/`JBE` identities per §4.4/D6; corpus 32/32 byte-identical, budgets
 unchanged — VM-runtime-only).
+Phase 5 landed 2026-11-15 (Round 103: `qlcc --assemble` rebuilds an image from a v1 listing,
+the printed `e=0x..` + jump target authoritative, `ja`/`jae`/`jb`/`jbe` encode as D6 aliases,
+`qla_roundtrip` byte-guards the round trip — 28/32 scripts, 4 module programs deferred with
+reason; ctest 67 → 68).
 
 Provenance: `todo.md` §7 "Codegen follow-ups recorded by M3 / Phase 3 (no plan yet)" — the six
 rows below are that list, in dependency order; design record is
-[`encoding-v6-and-indirect-plan.md`](encoding-v6-and-indirect-plan.md) (D3 immediate policy,
+[`encoding-v6-and-indirect-plan.md`](../encoding-v6-and-indirect-plan.md) (D3 immediate policy,
 D5 escaped compare immediates, D6 + §4.4 unsigned jumps, §5 forms 0–3).
 
 | todo row | phase |
@@ -133,6 +137,18 @@ Both code-change phases below are blocked on semantics the spec never fixed:
   Int-vs-unsigned; script regression for the error-message paths unchanged.
 
 ## Phase 5 — assembler (largest item; lands last, own multi-round option)
+
+**LANDED Round 103.** As designed, with two print-side closes the guard required:
+`valueText` prints pool closure capture registers (`function<2 r3 r7>`) and nested
+containers in full (pool literals are acyclic; the `[...]` depth guard printed what
+the assembler could not reassemble). The guard (`qla_roundtrip`) compares pool tags +
+payloads, function metadata, instruction-stream bytes and instrOffsets for every
+script: 28 byte-round-trip, 4 module programs DEFERRED with the reason printed
+(`getimport` refused; linked programs, where `-a` lists the merged program while `-c`
+wrote the entry image). Recorded v1 deviations: loc table rides parallel `(0,0)`
+placeholders; vars/constVars maps, signature block, module name and native-slot
+names are absent; a `Set`/`Blob`/`Long`/negative-below-`int32` pool entry cannot
+round-trip (the print carries no tag to restore it) — the corpus holds none.
 
 - Host: **`qlcc --assemble <file>.qla -o <out>.qlc`** — qlcc owns the `.qla` format, the
   codecs and the writer. (Todo's `qlang_run --assemble?` rejected: qlang_run runs programs.)

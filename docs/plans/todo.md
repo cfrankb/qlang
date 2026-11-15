@@ -309,8 +309,12 @@ closing the **Q#**s its item points at:
 - [x] Widening the remaining ALU families to kinds 0/2 beyond `mov`/`add`/`sub`/`cmp`
       (landed with encoding-followups **P3**, Round 101: Binary lowering routes literal
       rights through the in-place 2-operand form — immediate or pool right, no temp `mov`)
-- [ ] An assembler (`qlang_run --assemble`?) is the prerequisite for `ja`/`jae`/`jb`/`jbe` to be
-      more than spec/disassembly aliases (M3 D6)
+- [x] An assembler (`qlang_run --assemble?` — landed as **`qlcc --assemble`**, the plan's
+      host decision) is the prerequisite for `ja`/`jae`/`jb`/`jbe` to be
+      more than spec/disassembly aliases (M3 D6) — landed with encoding-followups **P5**,
+      Round 103: v1-listing → image through `encodeInstruction`, D6 aliases encode to the
+      canonical jumps, `qla_roundtrip` guards the byte round-trip (module-image listings
+      deferred with the module story)
 
 ## 8. Housekeeping
 

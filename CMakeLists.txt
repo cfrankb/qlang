@@ -391,6 +391,19 @@ target_compile_definitions(codegen_size_check PRIVATE
 )
 add_test(NAME codegen_size COMMAND codegen_size_check)
 
+# .qla v1 assembler round-trip guard (encoding-followups plan Phase 5):
+# qlcc --assemble must rebuild, from each script's own -a listing, an image
+# whose constant pool, function metadata and instruction streams match the
+# -c image byte-for-byte (what v1 prints is what it preserves; see
+# tests/unit/qla_roundtrip.cpp for the compared set and the recorded
+# deviations). Drives the real qlcc binary twice per script.
+add_executable(qla_roundtrip tests/unit/qla_roundtrip.cpp)
+target_link_libraries(qla_roundtrip PRIVATE qlang)
+target_compile_definitions(qla_roundtrip PRIVATE
+  QLANG_TEST_SCRIPTS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/scripts"
+)
+add_test(NAME qla_roundtrip COMMAND qla_roundtrip $<TARGET_FILE:qlcc>)
+
 # Script-level regression suite (tests/scripts/). Each .ql script is driven
 # by qlcc --run (the smoke-test app); a non-zero exit code fails the suite.
 # Explicit list (Phase 5, F7) — no file(GLOB), so a new script is a deliberate

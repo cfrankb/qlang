@@ -8,6 +8,7 @@
 //        [--module-path <dir>]... [--no-module-search]
 //        [--import <lib>]... file.ql | file.qlc [lib]...
 //   qlcc --qlmeta-dump <file.qlm>
+//   qlcc --assemble <file.qla> [-o <out.qlc>]
 //
 // qlcc is a compiler: without --run nothing of the program executes — the -c/-a
 // artifacts (and the --import compile-and-cache) are all it does. The short
@@ -108,6 +109,8 @@ namespace
               << " --qlmeta <file.qlm> [options] <file.ql> [-c]\n"
               << "       " << prog
               << " [options] <file.ql> --package <file.qpm>\n"
+              << "       " << prog
+              << " --assemble <file.qla> [-o <out.qlc>]\n"
               << "\n"
               << "options:\n"
               << "  --trace-level <n>   diagnostic verbosity (stderr):\n"
@@ -129,6 +132,11 @@ namespace
               << "                         -car == -c -a -r, -ar == -a -r)\n"
               << "  --output-path <dir> directory the -c/-a artifacts are written to (created\n"
               << "                        when missing); defaults to the entry file's directory\n"
+              << "  --assemble <file>   rebuild a .qlc image from a .qla v1 listing (the -a\n"
+              << "                        format); the listing is the whole input, no script is\n"
+              << "                        compiled, and no other mode combines with it\n"
+              << "  -o <file>           output image for --assemble (default: <stem>.qlc\n"
+              << "                        beside the listing)\n"
               << "  --asm-level <n>     disassembly detail (default 1):\n"
               << "                        0 = instructions only\n"
               << "                        1 = instructions + constants + function info\n"
@@ -1048,8 +1056,10 @@ namespace
     case T::Array:
     case T::Set:
     {
-      if (depth)
-        return "[...]";
+      // No depth guard: a constant pool only ever holds compile-time
+      // literals (and function closures), so no value here can contain
+      // itself — and the .qla assembler needs nested containers printed in
+      // full to round-trip them.
       std::string s = "[";
       const auto &a = *v.asArray();
       for (size_t i = 0; i < a.size(); i++)
@@ -1062,8 +1072,6 @@ namespace
     }
     case T::Table:
     {
-      if (depth)
-        return "{...}";
       std::string s = "{";
       const auto &t = v.asTable();
       bool first = true;
@@ -1077,7 +1085,15 @@ namespace
       return s + "}";
     }
     case T::Function:
-      return "function<" + std::to_string(v.asFunction().funcIndex) + ">";
+    {
+      // The pool closure carries its capture registers (MAKEFUNC seeds the
+      // cells from them at runtime and the .qlc writer serializes them), so
+      // they print here for the listing to round-trip: function<2 r3 r7>.
+      std::string s = "function<" + std::to_string(v.asFunction().funcIndex);
+      for (const auto &cap : v.asFunction().captures)
+        s += " r" + std::to_string(cap.reg);
+      return s + ">";
+    }
     case T::Generator:
       return "generator";
     case T::Object:
@@ -1839,6 +1855,766 @@ namespace
     return mod;
   }
 
+  // ---------------------------------------------------------------------------
+  // The .qla assembler: `--assemble <file>.qla -o <out>.qlc` (encoding-
+  // followups plan Phase 5). It reads back a v1 listing as written by
+  // `disassemble` above and rebuilds the image.
+  //
+  // The listing carries everything the instruction streams need verbatim: the
+  // one constant pool (printed values, so pool indices are taken literally),
+  // the modifier byte of every escaped instruction (the `e=0x..` token — the
+  // printed form's bytes are the bytes encoded, no form re-selection), the
+  // operands in the printed fmt() shape (hex when non-negative, decimal when
+  // negative) and the jump targets as absolute addresses. The `-> target` is
+  // authoritative: the offset is recomputed as target - (address + encoded
+  // size), and a printed offset that disagrees is a parse error. The printed
+  // addresses are checked against the encoded sizes, so any disagreement with
+  // the size table surfaces at the line that caused it.
+  //
+  // `ja`/`jae`/`jb`/`jbe` are accepted as aliases of `jg`/`jge`/`jl`/`jle`
+  // (design decision D6: relations are signness-exact, so the unsigned
+  // identities share the flag tests) — accepting them here is what makes
+  // them real; disassembly stays canonical.
+  //
+  // What v1 does not print is not assembled: the per-instruction loc table,
+  // the vars/constVars maps, the parameter signature block, the module name
+  // and the native-slot names are written empty, and an image with an import
+  // table (getimport/callimport, the --asm-level 5 module story) is rejected
+  // up front. These are the recorded deviations of the round-trip guard
+  // (qla_roundtrip), not silent losses.
+  // ---------------------------------------------------------------------------
+
+  // Mnemonic -> Opcode: the disassembler's own source (Bytecode::name over
+  // the valid opcodes) plus the D6 unsigned-relation aliases.
+  const std::map<std::string, Opcode> &mnemonicMap()
+  {
+    static const std::map<std::string, Opcode> map = []
+    {
+      std::map<std::string, Opcode> m;
+      for (int v = 0; v <= 255; v++)
+      {
+        const Opcode op = static_cast<Opcode>(v);
+        if (isValidOpcode(op))
+          m[Bytecode::name(op)] = op;
+      }
+      m["ja"] = Opcode::JG;
+      m["jae"] = Opcode::JGE;
+      m["jb"] = Opcode::JL;
+      m["jbe"] = Opcode::JLE;
+      return m;
+    }();
+    return map;
+  }
+
+  // ';' and '#' start a comment — except inside a quoted string, which the
+  // pool prints with both characters raw (a table KEY holding '#' is beyond
+  // what v1 can express; recorded with the other v1 limits).
+  std::string stripQlaComment(const std::string &line)
+  {
+    std::string out;
+    bool inStr = false;
+    for (size_t i = 0; i < line.size(); i++)
+    {
+      const char ch = line[i];
+      if (inStr)
+      {
+        out += ch;
+        if (ch == '\\' && i + 1 < line.size())
+          out += line[++i];
+        else if (ch == '"')
+          inStr = false;
+      }
+      else if (ch == '"')
+      {
+        inStr = true;
+        out += ch;
+      }
+      else if (ch == ';' ||
+               (ch == '#' &&
+                !(i + 1 < line.size() && std::isdigit(
+                        static_cast<unsigned char>(line[i + 1])))))
+        break; // '#' + digit is the "function #N" header, not a comment
+      else
+        out += ch;
+    }
+    return out;
+  }
+
+  // Inverse of the disassembler's fmt(): non-negative text is hex, a leading
+  // '-' is decimal.
+  bool parsePrintedNumber(const std::string &tok, int64_t &out)
+  {
+    char *end = nullptr;
+    if (!tok.empty() && tok[0] == '-')
+    {
+      const long long v = std::strtoll(tok.c_str(), &end, 10);
+      if (end != tok.c_str() + tok.size())
+        return false;
+      out = v;
+      return true;
+    }
+    const unsigned long long v = std::strtoull(tok.c_str(), &end, 16);
+    if (end != tok.c_str() + tok.size())
+      return false;
+    out = static_cast<int64_t>(v);
+    return true;
+  }
+
+  // One pool entry (or immediate value) as printed by valueText: nil / eof /
+  // true / false / decimal integer / %.17g float / quoted string / flat
+  // array / string-keyed table / function<N r...>. Integer tag follows the
+  // parser's own rule — int32-wide is Int, wider is Qword (after Phase 2 a
+  // literal Unsigned is an immediate form, never a pool entry; a Long or
+  // negative-below-int32 pool entry does not exist today, and printing has
+  // no tag to restore one with).
+  bool parsePoolValue(const std::string &s, size_t &pos, QLangValue &out,
+                      std::string &err)
+  {
+    auto skip = [&s, &pos]
+    {
+      while (pos < s.size() && s[pos] == ' ')
+        pos++;
+    };
+    skip();
+    if (pos >= s.size())
+    {
+      err = "empty value";
+      return false;
+    }
+    const char c = s[pos];
+    if (c == '"')
+    {
+      // The unescape partner of quoteString: \n \r \t \" \\ \xNN.
+      std::string v;
+      pos++;
+      while (pos < s.size() && s[pos] != '"')
+      {
+        if (s[pos] != '\\')
+        {
+          v += s[pos++];
+          continue;
+        }
+        pos++;
+        if (pos >= s.size())
+          break;
+        switch (s[pos])
+        {
+        case 'n':
+          v += '\n';
+          break;
+        case 'r':
+          v += '\r';
+          break;
+        case 't':
+          v += '\t';
+          break;
+        case '"':
+          v += '"';
+          break;
+        case '\\':
+          v += '\\';
+          break;
+        case 'x':
+        {
+          const std::string hex = s.substr(pos + 1, 2);
+          char *end = nullptr;
+          const unsigned long b = std::strtoul(hex.c_str(), &end, 16);
+          if (end != hex.c_str() + 2)
+          {
+            err = "bad \\x escape in string";
+            return false;
+          }
+          v += static_cast<char>(b);
+          pos += 2;
+          break;
+        }
+        default:
+          err = std::string("unknown escape '\\") + s[pos] + "' in string";
+          return false;
+        }
+        pos++;
+      }
+      if (pos >= s.size())
+      {
+        err = "unterminated string";
+        return false;
+      }
+      pos++; // the closing quote
+      out = QLangValue::String(std::move(v));
+      return true;
+    }
+    if (c == '[')
+    {
+      pos++;
+      std::vector<QLangValue> elems;
+      skip();
+      if (pos < s.size() && s[pos] == ']')
+      {
+        pos++;
+        out = QLangValue::Array(std::move(elems));
+        return true;
+      }
+      for (;;)
+      {
+        QLangValue e;
+        if (!parsePoolValue(s, pos, e, err))
+          return false;
+        elems.push_back(std::move(e));
+        skip();
+        if (pos < s.size() && s[pos] == ',')
+        {
+          pos++;
+          continue;
+        }
+        if (pos < s.size() && s[pos] == ']')
+        {
+          pos++;
+          break;
+        }
+        err = "expected ',' or ']' in array";
+        return false;
+      }
+      out = QLangValue::Array(std::move(elems));
+      return true;
+    }
+    if (c == '{')
+    {
+      pos++;
+      auto table = std::make_shared<std::map<std::string, QLangValue>>();
+      skip();
+      if (pos < s.size() && s[pos] == '}')
+      {
+        pos++;
+        out = QLangValue::Table(table);
+        return true;
+      }
+      for (;;)
+      {
+        const size_t colon = s.find(": ", pos);
+        if (colon == std::string::npos)
+        {
+          err = "malformed table entry";
+          return false;
+        }
+        const std::string key = s.substr(pos, colon - pos);
+        pos = colon + 2;
+        QLangValue v;
+        if (!parsePoolValue(s, pos, v, err))
+          return false;
+        (*table)[key] = std::move(v);
+        skip();
+        if (pos < s.size() && s[pos] == ',')
+        {
+          pos++;
+          skip(); // the key after a comma starts past the space
+          continue;
+        }
+        if (pos < s.size() && s[pos] == '}')
+        {
+          pos++;
+          break;
+        }
+        err = "expected ',' or '}' in table";
+        return false;
+      }
+      out = QLangValue::Table(table);
+      return true;
+    }
+    if (s.compare(pos, 9, "function<") == 0)
+    {
+      pos += 9;
+      char *end = nullptr;
+      const long idx = std::strtol(s.c_str() + pos, &end, 10);
+      pos = static_cast<size_t>(end - s.c_str());
+      auto closure = std::make_shared<Closure>();
+      closure->funcIndex = static_cast<int>(idx);
+      for (;;)
+      {
+        size_t p = pos;
+        while (p < s.size() && s[p] == ' ')
+          p++;
+        if (p >= s.size() || s[p] != 'r')
+          break;
+        const long reg = std::strtol(s.c_str() + p + 1, &end, 10);
+        if (end == s.c_str() + p + 1)
+          break;
+        CaptureRef cr;
+        cr.reg = static_cast<int>(reg);
+        closure->captures.push_back(cr);
+        pos = static_cast<size_t>(end - s.c_str());
+      }
+      if (pos >= s.size() || s[pos] != '>')
+      {
+        err = "malformed function value";
+        return false;
+      }
+      pos++;
+      out = QLangValue::Function(closure);
+      return true;
+    }
+    if (c == '<')
+    {
+      err = "a blob constant is printed as a size only; it cannot be reassembled";
+      return false;
+    }
+    if (s.compare(pos, 3, "nil") == 0)
+    {
+      pos += 3;
+      out = QLangValue();
+      return true;
+    }
+    if (s.compare(pos, 3, "eof") == 0)
+    {
+      pos += 3;
+      out = QLangValue(QLangValue::Type::Eof);
+      return true;
+    }
+    if (s.compare(pos, 4, "true") == 0)
+    {
+      pos += 4;
+      out = QLangValue::Bool(1);
+      return true;
+    }
+    if (s.compare(pos, 5, "false") == 0)
+    {
+      pos += 5;
+      out = QLangValue::Bool(0);
+      return true;
+    }
+    // A number: valueText prints decimals (%.17g floats carry a '.', 'e' or
+    // 'E'; inf/nan print as words).
+    const size_t start = pos;
+    size_t p = pos;
+    if (p < s.size() && (s[p] == '-' || s[p] == '+'))
+      p++;
+    if (s.compare(p, 3, "inf") == 0)
+    {
+      pos = p + 3;
+      out = QLangValue::Float(std::strtod(s.substr(start, pos - start).c_str(), nullptr));
+      return true;
+    }
+    if (s.compare(p, 3, "nan") == 0)
+    {
+      pos = p + 3;
+      out = QLangValue::Float(std::strtod(s.substr(start, pos - start).c_str(), nullptr));
+      return true;
+    }
+    while (pos < s.size() && std::strchr("0123456789+-.eE", s[pos]))
+      pos++;
+    const std::string tok = s.substr(start, pos - start);
+    if (tok.empty() || tok == "-" || tok == "+" || tok == "." ||
+        tok.find_first_not_of("0123456789+-.eE") != std::string::npos)
+    {
+      err = "malformed value '" + (tok.empty() ? std::string(1, c) : tok) + "'";
+      return false;
+    }
+    char *end = nullptr;
+    if (tok.find_first_of(".eE") != std::string::npos)
+    {
+      const double d = std::strtod(tok.c_str(), &end);
+      if (end != tok.c_str() + tok.size())
+      {
+        err = "malformed float '" + tok + "'";
+        return false;
+      }
+      out = QLangValue::Float(d);
+      return true;
+    }
+    const long long v = std::strtoll(tok.c_str(), &end, 10);
+    if (end != tok.c_str() + tok.size())
+    {
+      err = "malformed integer '" + tok + "'";
+      return false;
+    }
+    if (v >= INT32_MIN && v <= INT32_MAX)
+      out = QLangValue::Int(static_cast<int32_t>(v));
+    else
+      out = QLangValue::Qword(static_cast<uint64_t>(v));
+    return true;
+  }
+
+  // One code line's tokens (address and mnemonic already separated) into a
+  // DecodedInstruction the encoder can rebuild the printed bytes from.
+  bool parseCodeInstr(const std::vector<std::string> &toks, uint64_t addr,
+                      DecodedInstruction &ins, std::string &msg)
+  {
+    auto fail = [&msg](const std::string &m)
+    {
+      msg = m;
+      return false;
+    };
+    auto num = [&fail](const std::string &tok, const char *what, int64_t &out)
+    {
+      if (!parsePrintedNumber(tok, out))
+        return fail(std::string("bad ") + what + " '" + tok + "'");
+      return true;
+    };
+    auto it = mnemonicMap().find(toks[1]);
+    if (it == mnemonicMap().end())
+      return fail("unknown mnemonic '" + toks[1] + "'");
+    ins = DecodedInstruction();
+    ins.op = it->second;
+    if (ins.op == Opcode::GETIMPORT || ins.op == Opcode::CALLIMPORT)
+      return fail(std::string(Bytecode::name(ins.op)) +
+                  " refers to the module import table, which a v1 listing "
+                  "does not carry (deferred with the module story)");
+    std::vector<std::string> ops(toks.begin() + 2, toks.end());
+    if (!ops.empty() && ops[0].rfind("e=0x", 0) == 0)
+    {
+      char *end = nullptr;
+      const unsigned long m = std::strtoul(ops[0].c_str() + 4, &end, 16);
+      if (end != ops[0].c_str() + ops[0].size() || m > 0xFF)
+        return fail("bad escape modifier '" + ops[0] + "'");
+      ins.escaped = true;
+      ins.modifier = static_cast<uint8_t>(m);
+      ops.erase(ops.begin());
+    }
+    if (isJumpOpcode(ins.op))
+    {
+      if (ops.size() != 3 || ops[1] != "->")
+        return fail("a jump prints as '<offset> -> <target>'");
+      int64_t off = 0;
+      if (!num(ops[0], "jump offset", off))
+        return false;
+      char *end = nullptr;
+      const unsigned long target = std::strtoul(ops[2].c_str(), &end, 16);
+      if (*end || end == ops[2].c_str())
+        return fail("bad jump target '" + ops[2] + "'");
+      size_t size = 2; // base form: opcode + 1-byte offset
+      if (ins.escaped)
+      {
+        if (ins.modifier > 1)
+          return fail("invalid jump escape modifier");
+        size = ins.modifier == 0 ? 4 : 6; // jmp16 / jmp32
+      }
+      const long long recomputed =
+          static_cast<long long>(target) -
+          static_cast<long long>(addr + size);
+      if (recomputed != off)
+        return fail("printed jump offset " + std::to_string(off) +
+                    " disagrees with the target (recomputed " +
+                    std::to_string(recomputed) + ")");
+      ins.jumpOffset = static_cast<int32_t>(recomputed);
+      return true;
+    }
+    if (ins.op == Opcode::CALL)
+    {
+      // Always escaped (plan §2.8): a, the signed function id, and the count.
+      if (!ins.escaped)
+        return fail("call must be escaped (e=... token missing)");
+      if (ops.size() != 3)
+        return fail("call takes 3 operands");
+      int64_t a = 0, b = 0, c = 0;
+      if (!num(ops[0], "call operand", a) || !num(ops[1], "call operand", b) ||
+          !num(ops[2], "call operand", c))
+        return false;
+      ins.a = static_cast<int32_t>(a);
+      ins.b = static_cast<int32_t>(b);
+      ins.c = static_cast<int32_t>(c);
+      return true;
+    }
+    const size_t nOps = baseOperandCount(ins.op);
+    if (nOps == 0)
+      return ops.empty() ? true : fail("this instruction takes no operands");
+    const RightKind kind =
+        ins.escaped ? modifierRightKind(ins.modifier) : defaultRightKind(ins.op);
+    const size_t want =
+        1 + (nOps >= 2 ? 1 : 0) +
+        (nOps == 3 && !isInPlaceForm(ins.op, kind) ? 1 : 0);
+    if (ops.size() != want)
+      return fail("expected " + std::to_string(want) + " operand(s), got " +
+                  std::to_string(ops.size()));
+    int64_t a = 0, b = 0, c = 0;
+    if (!num(ops[0], "left operand", a))
+      return false;
+    ins.a = static_cast<int32_t>(a);
+    if (nOps >= 2)
+    {
+      const std::string &rt = ops[1];
+      switch (kind)
+      {
+      case RightKind::ConstPool:
+      {
+        if (rt.rfind("pool[", 0) != 0 || rt.back() != ']')
+          return fail("expected a pool[N] right operand");
+        if (!num(rt.substr(5, rt.size() - 6), "pool index", b))
+          return false;
+        ins.b = static_cast<int32_t>(b);
+        break;
+      }
+      case RightKind::Register:
+      {
+        if (rt.rfind("pool[", 0) == 0)
+          return fail("a pool operand requires an escaped (e=...) form");
+        if (!num(rt, "right operand", b))
+          return false;
+        ins.b = static_cast<int32_t>(b);
+        break;
+      }
+      case RightKind::Immediate:
+      {
+        const uint8_t form = modifierRightForm(ins.modifier);
+        ins.immForm = static_cast<ImmForm>(form);
+        char *end = nullptr;
+        switch (immediateFormType(form))
+        {
+        case ImmType::Int:
+        case ImmType::Long:
+        {
+          const long long v = std::strtoll(rt.c_str(), &end, 10);
+          if (end != rt.c_str() + rt.size())
+            return fail("bad signed immediate '" + rt + "'");
+          ins.imm = v;
+          ins.immPayload = ImmPayload::Signed;
+          break;
+        }
+        case ImmType::Unsigned:
+        case ImmType::Qword:
+        {
+          const unsigned long long v = std::strtoull(rt.c_str(), &end, 10);
+          if (end != rt.c_str() + rt.size())
+            return fail("bad unsigned immediate '" + rt + "'");
+          ins.immUnsigned = v;
+          ins.immPayload = ImmPayload::Unsigned;
+          break;
+        }
+        case ImmType::Float:
+        {
+          const double d = std::strtod(rt.c_str(), &end);
+          if (end != rt.c_str() + rt.size())
+            return fail("bad float immediate '" + rt + "'");
+          ins.immFloat = d;
+          ins.immPayload = ImmPayload::Float;
+          break;
+        }
+        case ImmType::Bool:
+          if (rt == "true")
+            ins.immPayload = ImmPayload::True;
+          else if (rt == "false")
+            ins.immPayload = ImmPayload::False;
+          else
+            return fail("bad bool immediate '" + rt + "'");
+          break;
+        case ImmType::Nil:
+          if (rt != "nil")
+            return fail("bad nil immediate '" + rt + "'");
+          ins.immPayload = ImmPayload::Nil;
+          break;
+        }
+        break;
+      }
+      case RightKind::Reserved:
+        return fail("reserved right-operand kind in the modifier");
+      }
+    }
+    if (want == 3)
+    {
+      if (!num(ops[2], "third operand", c))
+        return false;
+      ins.c = static_cast<int32_t>(c);
+    }
+    return true;
+  }
+
+  // Parse a whole v1 listing into `prog`. Diagnostics are line-numbered
+  // ("<file>:<line>: ...") — the only user-facing surface of this mode.
+  bool assembleQla(const std::string &file, const std::string &text,
+                   CompiledProgram &prog, std::string &err)
+  {
+    auto fail = [&file, &err](int lineNo, const std::string &m)
+    {
+      err = file + ":" + std::to_string(lineNo) + ": " + m;
+      return false;
+    };
+    prog = CompiledProgram();
+    enum Mode
+    {
+      Top,
+      Constants,
+      Function,
+      Code
+    } mode = Top;
+    bool sawHeader = false;
+    int lineNo = 0;
+    std::istringstream ls(text);
+    std::string raw;
+    while (std::getline(ls, raw))
+    {
+      lineNo++;
+      const std::string stripped = stripQlaComment(raw);
+      const size_t b = stripped.find_first_not_of(" \t\r");
+      if (b == std::string::npos)
+        continue;
+      const std::string s = stripped.substr(b);
+      if (s.rfind("QLang disassembly", 0) == 0)
+      {
+        if (s != "QLang disassembly (v1)")
+          return fail(lineNo, "only a v1 listing can be assembled");
+        sawHeader = true;
+        continue;
+      }
+      if (!sawHeader)
+        return fail(lineNo, "missing the 'QLang disassembly (v1)' header");
+      if (s == "constants:")
+      {
+        mode = Constants;
+        continue;
+      }
+      if (s.rfind("function #", 0) == 0)
+      {
+        char *end = nullptr;
+        const long idx = std::strtol(s.c_str() + 10, &end, 10);
+        if (end == s.c_str() + 10 || idx != static_cast<long>(prog.functions.size()))
+          return fail(lineNo, "function blocks must appear in order from #0");
+        const size_t q1 = s.find('\'');
+        const size_t q2 = s.rfind('\'');
+        if (q1 == std::string::npos || q2 == q1)
+          return fail(lineNo, "function header names the function in quotes");
+        prog.functions.emplace_back();
+        prog.functions.back().name = s.substr(q1 + 1, q2 - q1 - 1);
+        mode = Function;
+        continue;
+      }
+      if (mode == Constants && s[0] == '[')
+      {
+        const size_t close = s.find(']');
+        char *end = nullptr;
+        const long idx =
+            close == std::string::npos
+                ? -1
+                : std::strtol(s.c_str() + 1, &end, 10);
+        if (idx != static_cast<long>(prog.constants.size()) ||
+            end != s.c_str() + close)
+          return fail(lineNo, "constant indices must run 0, 1, 2, ... in order");
+        size_t pos = close + 1;
+        QLangValue v;
+        std::string verr;
+        if (!parsePoolValue(s, pos, v, verr))
+          return fail(lineNo, "constant [" + std::to_string(idx) + "]: " + verr);
+        while (pos < s.size() && s[pos] == ' ')
+          pos++;
+        if (pos != s.size())
+          return fail(lineNo, "trailing text after the constant value");
+        prog.constants.push_back(std::move(v));
+        continue;
+      }
+      if (s.rfind("registers: ", 0) == 0 && mode == Top)
+      {
+        char *end = nullptr;
+        const long n = std::strtol(s.c_str() + 11, &end, 10);
+        if (*end || end == s.c_str() + 11)
+          return fail(lineNo, "bad program register count");
+        prog.registerCount = static_cast<int>(n);
+        continue;
+      }
+      if (s.rfind("params: ", 0) == 0)
+      {
+        if (mode != Function)
+          return fail(lineNo, "params line outside a function block");
+        int p = 0, r = 0;
+        char tail[16] = {0};
+        if (std::sscanf(s.c_str(), "params: %d registers: %d%15s", &p, &r, tail) < 2)
+          return fail(lineNo, "malformed params/registers line");
+        prog.functions.back().paramCount = p;
+        prog.functions.back().registerCount = r;
+        prog.functions.back().isGenerator = s.find("generator") != std::string::npos;
+        continue;
+      }
+      if (s.rfind("captures:", 0) == 0)
+      {
+        if (mode != Function)
+          return fail(lineNo, "captures line outside a function block");
+        std::istringstream cs(s.substr(9));
+        std::string tok;
+        while (cs >> tok)
+        {
+          if (tok.empty() || tok[0] != 'r')
+            return fail(lineNo, "captures list must be r<reg> entries");
+          char *end = nullptr;
+          const long reg = std::strtol(tok.c_str() + 1, &end, 10);
+          if (*end || end == tok.c_str() + 1)
+            return fail(lineNo, "bad capture register '" + tok + "'");
+          CaptureRef cr;
+          cr.reg = static_cast<int>(reg);
+          prog.functions.back().captures.push_back(cr);
+        }
+        continue;
+      }
+      if (s == "code:")
+      {
+        mode = Code;
+        continue;
+      }
+      if (mode != Code)
+        return fail(lineNo, "unexpected line '" + s + "'");
+      std::vector<std::string> toks;
+      {
+        std::istringstream ws(s);
+        std::string w;
+        while (ws >> w)
+          toks.push_back(w);
+      }
+      // Operand text separates with ", ": the comma rides on the token after
+      // the whitespace split. (Jump lines print '<off> -> <target>' without
+      // commas, and no operand ever ends in a comma of its own.)
+      for (size_t k = 2; k < toks.size(); k++)
+        if (!toks[k].empty() && toks[k].back() == ',')
+          toks[k].pop_back();
+      if (toks.size() < 2)
+        return fail(lineNo, "malformed code line");
+      char *end = nullptr;
+      const unsigned long addr = std::strtoul(toks[0].c_str(), &end, 16);
+      if (*end || end == toks[0].c_str())
+        return fail(lineNo, "bad instruction address '" + toks[0] + "'");
+      auto &fn = prog.functions.back();
+      if (addr != fn.code.size())
+        return fail(lineNo, "instruction address " + toks[0] +
+                                " is not contiguous with the encoded stream "
+                                "(expected " +
+                                std::to_string(fn.code.size()) + ")");
+      DecodedInstruction ins;
+      std::string msg;
+      if (!parseCodeInstr(toks, addr, ins, msg))
+        return fail(lineNo, msg);
+      fn.instrOffsets.push_back(addr);
+      // The loc table must stay parallel to the instruction stream (the
+      // .qlc reader enforces it); v1 prints no locations, so the assembled
+      // image carries the documented "no source location" placeholder.
+      fn.loc.emplace_back(0, 0);
+      try
+      {
+        encodeInstruction(fn.code, ins);
+      }
+      catch (const QLangError &e)
+      {
+        return fail(lineNo, e.message());
+      }
+    }
+    if (!sawHeader)
+    {
+      err = file + ": not a .qla listing (no 'QLang disassembly (v1)' header)";
+      return false;
+    }
+    if (prog.functions.empty())
+    {
+      err = file + ": the listing holds no functions";
+      return false;
+    }
+    const size_t codeBytes = [&prog]
+    {
+      size_t n = 0;
+      for (const auto &f : prog.functions)
+        n += f.code.size();
+      return n;
+    }();
+    if (codeBytes == 0)
+    {
+      err = file + ": the listing holds no instructions";
+      return false;
+    }
+    return true;
+  }
+
   // Profile report as plain text — the same lines the --profile flag prints
   // to stderr — so the block can also be appended to the .qla listing when
   // both --profile and --asm are given.
@@ -1880,6 +2656,11 @@ int main(int argc, char **argv)
   bool saveImage = false;
   bool saveListing = false;
   std::string outputPath;
+  // --assemble: rebuild a .qlc image from a .qla v1 listing (encoding-
+  // followups plan Phase 5) — standalone mode, see assembleQla; -o names the
+  // image to write.
+  std::string assembleFile;
+  std::string assembleOut;
   // --qlmeta-dump: standalone manifest extraction mode (portable-module-plan
   // P3) — writes this binary's QL_OBJECT registry and exits; see --help.
   std::string qlmetaDump;
@@ -2001,6 +2782,42 @@ int main(int argc, char **argv)
     if (arg.rfind("--output-path=", 0) == 0)
     {
       outputPath = arg.substr(14);
+      continue;
+    }
+
+    // --assemble: standalone .qla v1 -> .qlc mode (see assembleQla). -o names
+    // its output; without it, <stem>.qlc beside the listing.
+    if (arg == "--assemble")
+    {
+      if (i + 1 >= argc)
+      {
+        std::fprintf(stderr, "%s: --assemble requires a .qla file\n", kAppName);
+        return 1;
+      }
+      assembleFile = argv[++i];
+      continue;
+    }
+
+    if (arg.rfind("--assemble=", 0) == 0)
+    {
+      assembleFile = arg.substr(11);
+      continue;
+    }
+
+    if (arg == "-o")
+    {
+      if (i + 1 >= argc)
+      {
+        std::fprintf(stderr, "%s: -o requires an output file\n", kAppName);
+        return 1;
+      }
+      assembleOut = argv[++i];
+      continue;
+    }
+
+    if (arg.rfind("-o=", 0) == 0)
+    {
+      assembleOut = arg.substr(3);
       continue;
     }
 
@@ -2173,6 +2990,62 @@ int main(int argc, char **argv)
     }
     std::cout << "wrote " << metaRegistry().size() << " type(s) to "
               << qlmetaDump << "\n";
+    return 0;
+  }
+
+  // --- --assemble: standalone .qla v1 -> .qlc rebuild (encoding-followups
+  // plan Phase 5). No script is compiled, no context is created: the listing
+  // is the whole input. Deviations from the compiled image are those of the
+  // v1 format (loc table, vars maps, signatures, module name, native slot
+  // names) — see assembleQla and the qla_roundtrip gate.
+  if (!assembleFile.empty())
+  {
+    if (!file.empty() || !moduleFiles.empty() || saveImage || saveListing ||
+        !qlmetaFile.empty() || !packageFile.empty())
+    {
+      std::fprintf(stderr,
+                   "%s: --assemble does not combine with script/compile modes\n",
+                   kAppName);
+      return 1;
+    }
+    std::ifstream ain(assembleFile, std::ios::binary);
+    if (!ain)
+    {
+      std::fprintf(stderr, "%s: cannot open listing file '%s'\n", kAppName,
+                   assembleFile.c_str());
+      return 2;
+    }
+    std::ostringstream ass;
+    ass << ain.rdbuf();
+    CompiledProgram aprog;
+    std::string aerr;
+    if (!assembleQla(assembleFile, ass.str(), aprog, aerr))
+    {
+      std::fprintf(stderr, "%s: %s\n", kAppName, aerr.c_str());
+      return 3;
+    }
+    std::string outPath = assembleOut;
+    if (outPath.empty())
+    {
+      outPath = (std::filesystem::path(moduleDirectory(assembleFile)) /
+                 (moduleStem(assembleFile) + ".qlc"))
+                    .string();
+    }
+    std::ostringstream os(std::ios::binary);
+    if (!writeQlc(os, aprog, {}))
+    {
+      std::fprintf(stderr, "%s: cannot build a .qlc image from '%s'\n", kAppName,
+                   assembleFile.c_str());
+      return 4;
+    }
+    std::string werr;
+    if (!writeBinaryFile(outPath, os.str(), werr))
+    {
+      std::fprintf(stderr, "%s: %s\n", kAppName, werr.c_str());
+      return 4;
+    }
+    std::fprintf(stderr, "assembly written: %s (%zu functions)\n", outPath.c_str(),
+                 aprog.functions.size());
     return 0;
   }
 

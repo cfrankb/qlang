@@ -1,4 +1,53 @@
-## Round 102 — 2026-11-15 — genuinely unsigned relations: `cmp`/`isEqual`/set-dedup share one exact-integer helper, a `Qword` above `INT64_MAX` stops throwing in relations (encoding-followups **Phase 4**; plan `docs/plans/encoding-codegen-followups-plan.md`; impl `QLangVM.cpp` `cmpIntValues`; tests `spec_check2.cpp` 592 → 602)
+## Round 103 — 2026-11-15 — the `.qla` v1 assembler: `qlcc --assemble` rebuilds an image from its own listing, and a round-trip guard makes the claim byte-exact (encoding-followups **Phase 5**, closing `todo.md` §7; plan `docs/plans/archive/encoding-codegen-followups-plan.md`; impl `examples/qlcc.cpp` `assembleQla`; new gate `qla_roundtrip`, ctest 67 → 68)
+
+- **Why.** `todo.md` §7's last open row: `ja`/`jae`/`jb`/`jbe` were spec/disassembly
+  aliases with no assembler to make them real (M3 D6), and the `.qla` listing had no
+  way back into an image. The plan's host decision: qlcc owns the `.qla` format, the
+  codecs and the writer — `qlcc --assemble <file>.qla [-o <out.qlc>]` (todo's
+  `qlang_run --assemble?` was rejected: qlang_run runs programs).
+- **CLI.** `--assemble` is a standalone mode (no script compiled, no context created,
+  does not combine with the compile/run modes; exit 1 usage, 2 unreadable listing,
+  3 line-numbered parse diagnostic, 4 unwritable image). Without `-o` the image is
+  `<stem>.qlc` beside the listing. `--help` and the usage block document it.
+- **What.** `assembleQla` parses the v1 print format (`disassemble()` at level 1 *is*
+  the format): quote-aware `;`/`#` comment stripping (a `#` before a digit is the
+  `function #N` header, not a comment); the registers/constants sections (pool indices
+  literal — the values print verbatim); per-function headers (`params`/`registers`/
+  `generator`/`captures`); code lines = address + mnemonic + the verbatim `e=0x..`
+  modifier + operands in the printed `fmt()` shape (hex when non-negative, decimal
+  when negative), inverse-tagged: decimal pool numbers re-tag `Int`-fits-int32 else
+  `Qword` (the parser's own literal rule), `.17g` floats by their `. e E inf nan`
+  markers, strings through the `quoteString` unescape. The printed modifier byte is
+  authoritative for form/width — **no form re-selection** — and every instruction
+  re-encodes through `encodeInstruction`; the printed addresses are checked against
+  the encoded sizes, so a size-table disagreement surfaces at its line. Jump targets
+  are authoritative: the offset is recomputed as `target − (address + encoded size)`
+  and a printed offset that disagrees is a parse error. `ja`/`jae`/`jb`/`jbe` are
+  accepted as D6 aliases encoding to `jg`/`jge`/`jl`/`jle`; disassembly stays
+  canonical. `getimport`/`callimport` are refused up front (the import table is not
+  in the v1 print; deferred with the module story).
+- **Two print losses had to close for the guard to be honest** (both are print-side,
+  driver-only): `valueText` now prints a pool closure's capture registers
+  (`function<2 r3 r7>` — the `.qlc` writer serializes them, so a bare `function<2>`
+  could never round-trip) and nested arrays/tables in full (a constant pool only ever
+  holds acyclic compile-time literals, so the old `[...]` depth guard was protecting
+  nothing the listing could recover anyway).
+- **Recorded deviations (v1's contract, compared-out of the guard, not waved):** an
+  assembled image has no real loc table (it rides parallel `(0,0)` "no source
+  location" placeholders — the reader requires parallelism), no vars/constVars maps,
+  no parameter signature block, no module name, no native-slot names, and no
+  import/export tables. A `Set`, a `Blob`, a `Long` or negative-below-`int32` pool
+  entry cannot round-trip (the print carries no tag to restore them with); the corpus
+  holds none.
+- **Tests.** `qla_roundtrip` (new ctest entry, drives `$<TARGET_FILE:qlcc>` like the
+  other CLI gates): 28/32 scripts byte-round-trip (pool tag+payload, function
+  metadata, instruction-stream bytes, instrOffsets); 4 DEFERRED with reason printed
+  (`neo`, `ql_module`: linked programs — `-a` lists the merged program, `-c` wrote
+  the entry image; `ql_module_const`, `ql_star_import`: `getimport` refused).
+  `ctest` 68/68; `codegen_size` budgets unchanged (no compiler change); corpus stdout
+  untouched (driver-only change, `qlcc_cli` 91 checks green).
+
+## Round 102 — 2026-11-15 — genuinely unsigned relations: `cmp`/`isEqual`/set-dedup share one exact-integer helper, a `Qword` above `INT64_MAX` stops throwing in relations (encoding-followups **Phase 4**; plan `docs/plans/archive/encoding-codegen-followups-plan.md`; impl `QLangVM.cpp` `cmpIntValues`; tests `spec_check2.cpp` 592 → 602)
 
 - **Why.** The Phase 0 spec sentence (`05-operators.md`: integer-to-integer
   comparisons are exact mathematical-integer comparisons, a `qword` above
@@ -26,7 +75,7 @@
   VM-runtime-only, no emission). Release `perf` gate green: `perf_stress`
   execute 11.151 ms vs 11.171 ms baseline (−0.2 %, no re-baseline).
 
-## Round 101 — 2026-11-15 — every ALU/compare family takes the literal right inline: the in-place 2-operand form replaces the literal→temp `mov` (encoding-followups **Phase 3**; plan `docs/plans/encoding-codegen-followups-plan.md`; impl `QLangCompiler.cpp` Binary lowering; tests `spec_check2.cpp` 577 → 592, `codec_check.cpp` 369 → 374)
+## Round 101 — 2026-11-15 — every ALU/compare family takes the literal right inline: the in-place 2-operand form replaces the literal→temp `mov` (encoding-followups **Phase 3**; plan `docs/plans/archive/encoding-codegen-followups-plan.md`; impl `QLangCompiler.cpp` Binary lowering; tests `spec_check2.cpp` 577 → 592, `codec_check.cpp` 369 → 374)
 
 - **Why.** `MUL`/`DIV`/`MOD`/`AND`/`OR`/`XOR`/`SHL`/`SHR`/`POW`/comparisons already
   *decode* immediate and pool rights (`isAluOrFlagCompare` admits kinds 0/2 since v6,
@@ -55,7 +104,7 @@
   the visible shrink the plan predicted for this phase. Release `perf` gate green:
   `perf_stress` execute 11.269 ms vs 11.171 ms baseline (+0.9 %, no re-baseline).
 
-## Round 100 — 2026-11-15 — compiler emits immediate forms 0–3: `Unsigned` literals ride the narrowest of `U8`/`U16`/`U32`, `Qword` literals the 8-byte `U64` form (encoding-followups **Phase 2**; plan `docs/plans/encoding-codegen-followups-plan.md`; impl `QLangCompiler.h/.cpp` `literalImmOf` + `narrowestUnsignedForm` + `emitImmU`, tests `spec_check2.cpp` 573 → 577, `codec_check.cpp` 366 → 369)
+## Round 100 — 2026-11-15 — compiler emits immediate forms 0–3: `Unsigned` literals ride the narrowest of `U8`/`U16`/`U32`, `Qword` literals the 8-byte `U64` form (encoding-followups **Phase 2**; plan `docs/plans/archive/encoding-codegen-followups-plan.md`; impl `QLangCompiler.h/.cpp` `literalImmOf` + `narrowestUnsignedForm` + `emitImmU`, tests `spec_check2.cpp` 573 → 577, `codec_check.cpp` 366 → 369)
 
 - **Why.** The v6 codec has shipped unsigned forms 0–3 since Round 55 (`codec_check`
   covers them), but the compiler's literal→form selector emitted only signed forms:
@@ -85,7 +134,7 @@
   189 / `perf_stress` 565 — the budgets count instructions, and immediate vs pool
   `mov` is the same instruction count). Release `perf` gate green inside `ctest`.
 
-## Round 99 — 2026-11-15 — short-circuit `&&`/`||`/`!` lowered as branches (control + value position); fused `switch` / `gotoIf` compares (encoding-followups **Phase 1**; plan `docs/plans/encoding-codegen-followups-plan.md`; impl `QLangCompiler.h/.cpp` `compileCondBranch` + `emitCmpJumpExpr`, tests `spec_check2.cpp` 556 → 573)
+## Round 99 — 2026-11-15 — short-circuit `&&`/`||`/`!` lowered as branches (control + value position); fused `switch` / `gotoIf` compares (encoding-followups **Phase 1**; plan `docs/plans/archive/encoding-codegen-followups-plan.md`; impl `QLangCompiler.h/.cpp` `compileCondBranch` + `emitCmpJumpExpr`, tests `spec_check2.cpp` 556 → 573)
 
 - **Why.** Phase 0 committed the spec sentence (short-circuit everywhere, Round 98's
   sibling commit `eb55240`); the compiler still evaluated eagerly: `&&`/`||` materialized

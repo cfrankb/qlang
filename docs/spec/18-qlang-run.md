@@ -33,3 +33,24 @@ MODIFIED
 if `-a` flag is specified then a disassembly listing is generated for all generated `qlc` files.
 
 only run the bytecodes if `--run` is added to the command line (original qlang_run behavior).
+
+```
+--assemble <file>   rebuild a qlc image from a qla v1 listing   --> flag
+-o <file>           output image for --assemble                 --> option
+```
+
+`--assemble` is a standalone mode: no script is compiled and no other mode flag
+combines with it. The listing (the `-a` print format) is the whole input — the
+constant pool values, the printed `e=0x..` modifier bytes, the operands and the
+jump targets (`-> target`, authoritative: the offset is recomputed from the
+target and the encoded size) are re-encoded verbatim through the instruction
+codec, and the printed addresses are checked against the encoded sizes. The
+mnemonics `ja`/`jae`/`jb`/`jbe` are accepted as aliases of `jg`/`jge`/`jl`/`jle`
+(see `docs/spec/13-bytecodes.md`, D6); disassembly stays canonical. What the v1
+listing does not print is not assembled (location values, the vars maps, the
+signature block, the module name, native-slot names, and the import/export
+tables — a listing containing `getimport`/`callimport` is rejected). Parse
+diagnostics are line-numbered; exit 1 usage, 2 unreadable listing, 3 parse
+error, 4 image could not be written. Without `-o` the image is written as
+`<stem>.qlc` beside the listing.
+
