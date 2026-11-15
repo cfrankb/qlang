@@ -231,6 +231,31 @@ int64_t num(const QLangValue &v, const char *op, QLangVM *vm = nullptr) {
   return (long long)toInt64(v);
 }
 
+// Exact integer-to-integer comparison (SPEC §operators "< and >" — the exact
+// mathematical-integer rule; plan encoding-followups Phase 4). Every integer
+// type but Qword fits int64 and toInt64 sign/zero-extends it faithfully, so a
+// negative Int already compares below any Unsigned/Qword and no operand is
+// reinterpreted through another signedness. The only case int64 cannot hold is
+// a Qword above INT64_MAX: it is greater than every other integer value, and
+// two such Qwords compare by their raw bits — instead of throwing out of
+// toInt64. cmp(), isEqual and setElementEq all route numeric compares here.
+// The cmp opcode itself (cmpFlags) stays Int-only per SPEC §bytecodes.
+static int cmpIntValues(const QLangValue &a, const QLangValue &b) {
+  auto bigQ = [](const QLangValue &v) {
+    return v.type() == QLangValue::Type::Qword &&
+           v.asQword() > static_cast<uint64_t>(INT64_MAX);
+  };
+  if (bigQ(a) || bigQ(b)) {
+    if (bigQ(a) && bigQ(b)) {
+      uint64_t x = a.asQword(), y = b.asQword();
+      return (x < y) ? -1 : (x > y) ? 1 : 0;
+    }
+    return bigQ(a) ? 1 : -1; // the other operand fits int64, so it is below
+  }
+  int64_t x = toInt64(a), y = toInt64(b);
+  return (x < y) ? -1 : (x > y) ? 1 : 0;
+}
+
 // `vm` (optional) enables the object-aware ordering rules of SPEC
 // `## operators < and >`: string vs table/array compares against the
 // object's display form (__str__ / class name / implicit collection
@@ -243,11 +268,17 @@ int cmp(const QLangValue &a, const QLangValue &b, const char *op,
   if (numA && numB) {
     if (a.type() == QLangValue::Type::Float ||
         b.type() == QLangValue::Type::Float) {
-      double x = toDouble(a), y = toDouble(b);
+      // A Qword must render from its raw bits, never through toInt64 (which
+      // throws above INT64_MAX).
+      auto asDouble = [](const QLangValue &v) {
+        return v.type() == QLangValue::Type::Qword
+                   ? static_cast<double>(v.asQword())
+                   : toDouble(v);
+      };
+      double x = asDouble(a), y = asDouble(b);
       return (x < y) ? -1 : (x > y) ? 1 : 0;
     }
-    int64_t x = (long long)toInt64(a), y = (long long)toInt64(b);
-    return (x < y) ? -1 : (x > y) ? 1 : 0;
+    return cmpIntValues(a, b);
   }
   if (a.type() == QLangValue::Type::String &&
       b.type() == QLangValue::Type::String) {
@@ -316,10 +347,10 @@ bool isEqual(const QLangValue &a, const QLangValue &b) {
     return a.type() == b.type();
   // bool compared as int64 (bool stored as Int 1/0 at runtime).
   if (a.type() == QLangValue::Type::Bool || b.type() == QLangValue::Type::Bool)
-    return toInt64(a) == toInt64(b);
+    return cmpIntValues(a, b) == 0;
   // number types compare equal when their int64 values match.
   if (isNumeric(a) && isNumeric(b))
-    return toInt64(a) == toInt64(b);
+    return cmpIntValues(a, b) == 0;
   // otherwise: same type and same value.
   if (a.type() != b.type())
     return false;
@@ -378,7 +409,7 @@ static bool setElementEq(const QLangValue &a, const QLangValue &b) {
   case QLangValue::Type::Unsigned:
   case QLangValue::Type::Qword:
   case QLangValue::Type::Long:
-    return toInt64(a) == toInt64(b);
+    return cmpIntValues(a, b) == 0; // Qword above INT64_MAX must not throw
   default: return false;
   }
 }

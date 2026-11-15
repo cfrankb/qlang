@@ -303,7 +303,9 @@ closing the **Q#**s its item points at:
 - [x] The compiler emitting immediate forms 0–3 (landed with encoding-followups **P2**,
       Round 100: `literalImmOf` signs by literal type — `Unsigned` → narrowest
       `U8`/`U16`/`U32`, `Qword` → `U64`; `Long` and containers stay pooled)
-- [ ] Genuinely unsigned relations
+- [x] Genuinely unsigned relations (landed with encoding-followups **P4**,
+      Round 102: `cmpIntValues` shared by `cmp`/`isEqual`/set-dedup — the exact
+      mathematical-integer rule, `Qword` above `INT64_MAX` no longer throws)
 - [x] Widening the remaining ALU families to kinds 0/2 beyond `mov`/`add`/`sub`/`cmp`
       (landed with encoding-followups **P3**, Round 101: Binary lowering routes literal
       rights through the in-place 2-operand form — immediate or pool right, no temp `mov`)

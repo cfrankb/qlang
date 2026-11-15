@@ -13,6 +13,10 @@ Phase 2 landed 2026-11-15 (Round 100: literal→form selector signs by literal t
 Phase 3 landed 2026-11-15 (Round 101: every `isAluOrFlagCompare` family takes a literal
 right inline — the in-place 2-operand form replaces the literal→temp `mov`; budgets
 re-recorded `hello` 217→214, `perf_stress` 565→563, corpus 32/32 byte-identical).
+Phase 4 landed 2026-11-15 (Round 102: `cmpIntValues` — `cmp`/`isEqual`/set-dedup share the
+exact mathematical-integer rule, `Qword` above `INT64_MAX` no longer throws in relations;
+no `JA`/`JAE`/`JB`/`JBE` identities per §4.4/D6; corpus 32/32 byte-identical, budgets
+unchanged — VM-runtime-only).
 
 Provenance: `todo.md` §7 "Codegen follow-ups recorded by M3 / Phase 3 (no plan yet)" — the six
 rows below are that list, in dependency order; design record is

@@ -295,6 +295,19 @@ int main() {
   // inline immediates (forms 0-3); the tag must survive the trip. --
   expectStr("qword tag survives u64 form", "local x = 4294967295\nlocal s = type(x);", "s", "qword");
   expectStr("qword mask immediate", "local x = 0x7FFFFFFFFFFFFFFF\nlocal s = toStr(x);", "s", "9223372036854775807");
+  // -- Phase 4 (encoding-followups): mixed-signness relations are exact
+  // mathematical-integer comparisons; a Qword above INT64_MAX no longer
+  // throws in a relation (cmp/isEqual/set-dedup share cmpIntValues). --
+  expectVal("neg int below unsigned", "local u = 4294967295u\nlocal r = (-1 < u);", "r", 1);
+  expectVal("neg int below qword", "local d:qword = 5\nlocal r = (-1 < d);", "r", 1);
+  expectVal("neg int not equal qword", "local b:qword = -1\nlocal r = (-1 == b);", "r", 0);
+  expectVal("qword above int64max beats int64max", "local b:qword = -1\nlocal r = (b > 9223372036854775807);", "r", 1);
+  expectVal("qword above int64max beats small int", "local b:qword = -1\nlocal r = (b > 5);", "r", 1);
+  expectVal("qword above int64max beats unsigned", "local b:qword = -1\nlocal r = (b > 4294967295u);", "r", 1);
+  expectVal("qword above int64max beats float", "local b:qword = -1\nlocal r = (1.5 < b);", "r", 1);
+  expectVal("big qwords compare by bits", "local a:qword = -1\nlocal b:qword = -2\nlocal r = (a > b);", "r", 1);
+  expectVal("big qword self relations", "local b:qword = -1\nlocal r = (b >= b) + (b <= b)*10 + (b < b)*100;", "r", 11);
+  expectVal("big qword set dedup", "local b:qword = -1\nlocal s = set(b, b)\nlocal r = len(s);", "r", 1);
   expectStr("unsigned literal immediate tag", "local x = 4294967295u\nlocal s = type(x);", "s", "unsigned");
   expectStr("unsigned narrow immediate value", "local x = 200u\nlocal s = toStr(x);", "s", "200");
   // -- Phase 3 (encoding-followups): literal RHSs ride the in-place ALU

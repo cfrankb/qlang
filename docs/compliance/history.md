@@ -1,3 +1,31 @@
+## Round 102 — 2026-11-15 — genuinely unsigned relations: `cmp`/`isEqual`/set-dedup share one exact-integer helper, a `Qword` above `INT64_MAX` stops throwing in relations (encoding-followups **Phase 4**; plan `docs/plans/encoding-codegen-followups-plan.md`; impl `QLangVM.cpp` `cmpIntValues`; tests `spec_check2.cpp` 592 → 602)
+
+- **Why.** The Phase 0 spec sentence (`05-operators.md`: integer-to-integer
+  comparisons are exact mathematical-integer comparisons, a `qword` above
+  `INT64_MAX` is greater than any signed integer) had no runtime behind it:
+  `cmp()` and `isEqual()` compared through `toInt64`, which *throws*
+  `Qword value exceeds int64_t range` before any relation could form.
+- **What.** One file-local helper `cmpIntValues(a, b)` in `QLangVM.cpp`: every
+  integer type but `Qword` fits `int64` and `toInt64` sign/zero-extends
+  faithfully (a negative `Int` already sits below any `Unsigned`), so the only
+  special case is `Qword > INT64_MAX` — greater than every other integer value,
+  two such `Qword`s by raw bits. `cmp()`'s int branch, its Float branch (the
+  `Qword` renders from raw bits, never through `toInt64`), `isEqual()`'s
+  Bool/numeric branches and `setElementEq`'s numeric case all route through it.
+  `cmpFlags` (the `cmp` opcode) stays Int-only per SPEC §bytecodes — no
+  `JA`/`JAE`/`JB`/`JBE` identities, no flag change (§4.4 + D6 stand, per plan).
+  Grep for `toInt64` in comparison contexts found exactly these sites; there
+  are no VM sort/min/max comparators to convert.
+- **Verified.** `cmake --build build`; `ctest --test-dir build` **67/67**
+  (incl. `value_semantics`, `flag_flow`, `strict_typing`). `spec_check2`
+  592 → **602** (negative-Int-vs-`unsigned`/`qword`, big-qword vs INT64_MAX
+  literal/small-int/unsigned/float, big-qword-vs-big-qword bit order,
+  self-relations, set-dedup of two big qwords; `local b:qword = -1` wraps via
+  the typed-decl `CONV`). Corpus **32/32 byte-identical** stdout + exit codes
+  against a HEAD build; `codegen_size` budgets unchanged as measured (P4 is
+  VM-runtime-only, no emission). Release `perf` gate green: `perf_stress`
+  execute 11.151 ms vs 11.171 ms baseline (−0.2 %, no re-baseline).
+
 ## Round 101 — 2026-11-15 — every ALU/compare family takes the literal right inline: the in-place 2-operand form replaces the literal→temp `mov` (encoding-followups **Phase 3**; plan `docs/plans/encoding-codegen-followups-plan.md`; impl `QLangCompiler.cpp` Binary lowering; tests `spec_check2.cpp` 577 → 592, `codec_check.cpp` 369 → 374)
 
 - **Why.** `MUL`/`DIV`/`MOD`/`AND`/`OR`/`XOR`/`SHL`/`SHR`/`POW`/comparisons already
