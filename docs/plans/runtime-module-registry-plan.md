@@ -1,6 +1,10 @@
 # Runtime module registry + name-based module discovery — implementation plan
 
-- **Status:** DRAFT — not started. Prepared 2026-11-14.
+- **Status:** M0 + M1 done 2026-11-14 (spec section in `07-api.md`;
+  `run()`/`runProgram()` link at the run boundary, resolved through
+  `findModule`; `module_search` suite 117 → 128 checks, ctest 67/67).
+  M2 (harness dedup + compliance round) remains.
+  Prepared 2026-11-14.
 - **Backlog id:** the C8 remainder (`docs/plans/missing-features-plan.md` §C8: the
   search-pair C8a/C8b landed Round 67/69; what was deferred is the *registry*
   half — running without the `qlcc` driver), listed in

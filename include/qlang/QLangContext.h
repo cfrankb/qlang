@@ -90,8 +90,21 @@ namespace qlang
 
     // Parse, compile to bytecode, and execute. Final variable state is written
     // back into this context's scope. Throws QLangError on lex/parse/compile/run
-    // failure.
+    // failure. A program that imports `.ql` modules runs merged (see
+    // runProgram).
     void run(const std::string &source);
+
+    // Execute a host-supplied program — typically one taken in by
+    // loadProgramFile, or one the host's own driver compiled. The run boundary
+    // is the same as run()'s (SPEC §api "running programs with modules"; plan
+    // C8): when the program's import table is non-empty, every import the
+    // registry does not hold yet is resolved through the module lookup, and
+    // the program is then linked with those modules, because only the merged
+    // program is runnable. The (merged) program becomes the context's live
+    // program, so call() binds against it afterwards. Throws QLangError(Io)
+    // when a module the import table names resolves nowhere. Running a
+    // program never registers it as a module.
+    void runProgram(const CompiledProgram &entry);
 
     // Variable scope access. All top-level variables live in the context's
     // global table (Phase 2); these accessors operate on it directly.

@@ -328,6 +328,14 @@ return `nullptr` if module not found and loading. `error` contains the cause if 
 
 The callback is consulted **after** the native-module and registry lookups and **before** the search paths, so it can supply or shadow a file module but not a C++ module the host registered deliberately. It must not throw — a failure is reported through `error`. Assigning `nullptr` restores the default behaviour.
 
+## running programs with modules
+
+`run(source)` compiles a program in this context and runs it; `runProgram(const CompiledProgram &entry)` runs a host-supplied program — typically one taken in by `loadProgramFile`, or one the host's own driver compiled. Both share one run boundary (plan C8): when the program's import table is non-empty — it imports `.ql` modules — it is first **linked** with the modules the context's module registry holds, the same `QLangLinker` merge the `qlcc` driver performs.
+
+Resolution itself happens at the run boundary: before the merge, every import module the registry does not hold yet is resolved once through the lookup order of `## module search paths` — for a compiling source the compiler has already done exactly that, so this only confirms what is in place; for a host-supplied image it means the image's dependencies arrive from the search paths at `runProgram` time. A module that resolves nowhere is a `QLangError(Io)` naming it, with nothing left half-taken-in.
+
+The merge is not an optimization: a program that imports `.ql` modules carries `getimport`/`callimport` operands whose `ref`s index the **defining** module's tables, so only the merged program is runnable — running the unlinked one reads the wrong cell or calls the wrong function. After either call it is the merged program that is live: `call()` and `liveProgram()` bind against it. Running a program does not register it as a module — running is not importing. The merged program is not re-serializable (`.qlc` has no init-sequence section, [SERIALIZATION.md](../SERIALIZATION.md) §4); `runProgram` only runs.
+
 ## output callback (universal)
 
 output callback allows to redirect outputs (stdout, stderr, log, info, warning, errors) to an outside message manager. for example, this could be a Qt6 widget.

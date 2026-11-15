@@ -35,7 +35,11 @@
 //     chain instead of recursing, and a source that fails to compile names the
 //     file it came from;
 //   * the end to end: an entry compiled with nothing pre-loaded resolves, links
-//     and runs, and a C++ module of the same name still beats the file.
+//     and runs, and a C++ module of the same name still beats the file;
+//   * the run boundary (plan C8): run() and runProgram() link the `.ql` imports
+//     the registry holds before executing, an imported function never runs as
+//     some other function, call() binds against the merged program, and
+//     running never registers the entry as a module.
 //
 // The images are built the way the driver builds them (compile in library mode,
 // `writeQlc`), written into a temporary tree, and removed again.
@@ -1096,6 +1100,150 @@ void testCompiledSource() {
 
 } // namespace
 
+// The run boundary (SPEC §api "running programs with modules"; plan C8):
+// run() and runProgram() link whatever imports the registry holds before the
+// VM starts. Unlinked, an import table's getimport/callimport refs index the
+// DEFINING module's function table, so an imported `who()` silently runs as
+// whichever entry function sits at the same index — the misfire this seam
+// exists to prevent.
+void testRunBoundary() {
+  TempTree tree("runb");
+  const std::string libs = tree.dir("libs");
+  std::string err;
+
+  // greeter.ql imports helper.ql, so running anything through this tree
+  // exercises transitive discovery all the way into the link.
+  tree.write("libs/helper.ql",
+             "export const MODULE_NAME = \"helper\"\n"
+             "export def greet()\n"
+             "  return \"found\"\n"
+             "end\n");
+  tree.write("libs/greeter.ql",
+             "export const MODULE_NAME = \"greeter\"\n"
+             "from helper import greet\n"
+             "export def who()\n"
+             "  return greet()\n"
+             "end\n");
+
+  // ctx.run(): the entry defines g() and greeter exports who(); with no
+  // link the callimport of who() runs g() instead (both sit at index 1 of
+  // their own module's function table).
+  {
+    QLangContext ctx;
+    ctx.setModuleSearchPaths({libs});
+    std::string out;
+    const std::string runErr = errorOf([&] {
+      StdoutCapture cap;
+      ctx.run("def g()\n"
+              "  return 99\n"
+              "end\n"
+              "from greeter import who\n"
+              "println(g())\n"
+              "println(who())\n");
+      out = cap.text();
+    });
+    check(runErr.empty() && out == "99\nfound\n",
+          "run: ctx.run links its imports — who() runs as greeter's, not g()"
+          + (runErr.empty() ? " got '" + out + "'" : ": " + runErr));
+  }
+
+  // A program importing only C++ modules has an empty import table and
+  // links nothing: it runs with discovery switched off entirely.
+  {
+    QLangContext ctx;
+    ctx.setModuleSearchPaths({});
+    std::string out;
+    const std::string runErr = errorOf([&] {
+      StdoutCapture cap;
+      ctx.run("from math import min\n"
+              "println(min(2, 3))\n");
+      out = cap.text();
+    });
+    check(runErr.empty() && out == "2\n",
+          "run: a C++-module-only program bypasses the link" +
+          (runErr.empty() ? " got '" + out + "'" : ": " + runErr));
+  }
+
+  // runProgram() on a host-compiled program: the compile filled the host's
+  // registry (greeter, and greeter's helper), so the link has everything it
+  // needs — and running the entry does not put the ENTRY in that registry.
+  {
+    QLangContext host;
+    host.setModuleSearchPaths({libs});
+    CompiledProgram entry;
+    std::map<std::string, int> ids;
+    if (!check(compile(host,
+                       "from greeter import who\n"
+                       "println(who())\n",
+                       entry, ids, err, "app"),
+               "runProgram: the entry compiles" + (err.empty() ? "" : ": " + err)))
+      return;
+    std::string out;
+    const std::string runErr = errorOf([&] {
+      StdoutCapture cap;
+      host.runProgram(entry);
+      out = cap.text();
+    });
+    check(runErr.empty() && out == "found\n",
+          "runProgram: runs merged, transitively" +
+          (runErr.empty() ? " got '" + out + "'" : ": " + runErr));
+    check(host.loadedModule("app") == nullptr,
+          "runProgram: running is not importing — the entry stays out of the "
+          "registry");
+
+    // call() binds against the live merged program, module functions included.
+    std::string callErr;
+    QLangValue got;
+    try {
+      got = host.call("who");
+    } catch (const QLangError &e) {
+      callErr = e.what();
+    }
+    check(callErr.empty() && got.type() == QLangValue::Type::String &&
+              got.asString() == "found",
+          "runProgram: call() reaches the merged program's module function" +
+          (callErr.empty() ? "" : ": " + callErr));
+  }
+
+  // runProgram() on a loaded image: the entry .qlc is the driver's pre-link
+  // snapshot; loadProgramFile pulls in greeter and greeter's helper by
+  // search, and runProgram merges the three.
+  {
+    QLangContext scratch;
+    scratch.setModuleSearchPaths({libs});
+    CompiledProgram entry;
+    std::map<std::string, int> ids;
+    if (!check(compile(scratch,
+                       "from greeter import who\n"
+                       "println(who())\n",
+                       entry, ids, err, "app"),
+               "runProgram: the image's entry compiles" +
+               (err.empty() ? "" : ": " + err)))
+      return;
+    std::ostringstream os(std::ios::binary);
+    if (!check(writeQlc(os, entry, ids), "runProgram: the image writes")) return;
+    const std::string image = tree.write("app.qlc", os.str());
+
+    QLangContext ctx;
+    ctx.setModuleSearchPaths({libs});
+    auto mod = ctx.loadProgramFile(image);
+    if (!check(mod != nullptr, "runProgram: the image loads")) return;
+    std::string out;
+    const std::string runErr = errorOf([&] {
+      StdoutCapture cap;
+      ctx.runProgram(mod->program);
+      out = cap.text();
+    });
+    check(runErr.empty() && out == "found\n",
+          "runProgram: a loaded image runs merged" +
+          (runErr.empty() ? " got '" + out + "'" : ": " + runErr));
+    // The image arrived with nothing but itself in the registry; the run
+    // boundary resolved greeter — and greeter's helper — through the paths.
+    check(ctx.loadedModule("helper") != nullptr,
+          "runProgram: the run boundary resolved the transitive dependency");
+  }
+}
+
 int main() {
   testPathApi();
   testSearchOrder();
@@ -1109,6 +1257,7 @@ int main() {
   testNotImportedModule();
   testNativeBeatsFile();
   testCompiledSource();
+  testRunBoundary();
 
   std::cout << (fails == 0 ? "ALL PASS" : "FAILURES") << ": " << passes
             << " passed, " << fails << " failed\n";

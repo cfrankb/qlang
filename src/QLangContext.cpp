@@ -8,12 +8,14 @@
 #include <iostream>
 #include <map>
 #include <sstream>
+#include <unordered_set>
 #include <utility>
 
 #include "qlang/QLangBytecodeIO.h"
 #include "qlang/QLangCompiler.h"
 #include "qlang/QLangErrors.h"
 #include "qlang/QLangLexer.h"
+#include "qlang/QLangLinker.h"
 #include "qlang/QLangManifest.h"
 #include "qlang/QLangObjects.h"
 #include "qlang/QLangVM.h"
@@ -318,6 +320,31 @@ namespace {
     return parser.parseProgram();
   }
 
+  // The run-boundary seam run() and runProgram() share (SPEC §api "running
+  // programs with modules"; plan C8 — the link the qlcc driver has always
+  // done before --run). A program whose import table is empty imports no
+  // `.ql` modules and is untouched; anything else runs only as a merged
+  // image: its getimport/callimport refs index the DEFINING module's tables,
+  // so unlinked they alias this program's own cells and functions. Imports
+  // the registry does not hold yet go through findModule first — a compiling
+  // source has already resolved all of them there, but a host handing over
+  // its own image may not have, and findModule owns the lookup order and the
+  // clean failure (a module that resolves nowhere is reported naming both
+  // sides, and nothing is left half-taken-in).
+  static void linkImports(QLangContext &ctx, CompiledProgram &prog,
+                          const std::map<std::string, int> &entryNativeIds)
+  {
+    if (prog.imports.empty())
+      return;
+    std::unordered_set<std::string> seen;
+    for (const ImportEntry &imp : prog.imports)
+      if (!imp.module.empty() && seen.insert(imp.module).second &&
+          !ctx.loadedModule(imp.module))
+        ctx.findModule(imp.module);
+    QLangLinker linker(ctx.loadedModules());
+    prog = linker.link(prog, entryNativeIds);
+  }
+
   void QLangContext::run(const std::string &source)
   {
     bindThread();
@@ -373,7 +400,9 @@ namespace {
     }
     // Cache the compiled program for subsequent call() invocations, and keep
     // it alive in the program cache so instance finalizers can dispatch
-    // against it later (Phase 7).
+    // against it later (Phase 7). Imports run merged (SPEC §api "running
+    // programs with modules"; plan C8).
+    linkImports(*this, compiled, compiler.nativeSlotIds());
     m_pimpl->programs.store(std::move(compiled));
     QLangVM vm(m_pimpl->programs.compiled(), *this);
     vm.run();
@@ -383,6 +412,23 @@ namespace {
       // reporting).
       throw QLangError::report(e);
     }
+  }
+
+  void QLangContext::runProgram(const CompiledProgram &entry)
+  {
+    bindThread();
+    // Safe point, as in run().
+    processFinalizers();
+    // The same run boundary as run()'s (SPEC §api "running programs with
+    // modules"; plan C8): link if there is anything to import, then run the
+    // merged program as this context's live one. A decoded image carries no
+    // native name->id map, so the entry's native slots are not deduped
+    // against the modules' — the linker's documented default.
+    CompiledProgram prog = entry;
+    linkImports(*this, prog, {});
+    m_pimpl->programs.store(std::move(prog));
+    QLangVM vm(m_pimpl->programs.compiled(), *this);
+    vm.run();
   }
 
   // The host function an image's native-slot name asks for
