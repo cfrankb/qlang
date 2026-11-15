@@ -391,12 +391,12 @@ target_compile_definitions(codegen_size_check PRIVATE
 )
 add_test(NAME codegen_size COMMAND codegen_size_check)
 
-# .qla v1 assembler round-trip guard (encoding-followups plan Phase 5):
-# qlcc --assemble must rebuild, from each script's own -a listing, an image
-# whose constant pool, function metadata and instruction streams match the
-# -c image byte-for-byte (what v1 prints is what it preserves; see
-# tests/unit/qla_roundtrip.cpp for the compared set and the recorded
-# deviations). Drives the real qlcc binary twice per script.
+# .qla v1 assembler round-trip guard (encoding-followups plan Phase 5,
+# whole-byte mode since qla-assembler-followups M1): each script's own -a
+# listing must rebuild, via qlcc --assemble, an image BYTE-IDENTICAL to the
+# -c image — the listing carries every image section (see
+# tests/unit/qla_roundtrip.cpp for the recorded module deferrals). Drives
+# the real qlcc binary twice per script.
 add_executable(qla_roundtrip tests/unit/qla_roundtrip.cpp)
 target_link_libraries(qla_roundtrip PRIVATE qlang)
 target_compile_definitions(qla_roundtrip PRIVATE

@@ -46,10 +46,21 @@ jump targets (`-> target`, authoritative: the offset is recomputed from the
 target and the encoded size) are re-encoded verbatim through the instruction
 codec, and the printed addresses are checked against the encoded sizes. The
 mnemonics `ja`/`jae`/`jb`/`jbe` are accepted as aliases of `jg`/`jge`/`jl`/`jle`
-(see `docs/spec/13-bytecodes.md`, D6); disassembly stays canonical. What the v1
-listing does not print is not assembled (location values, the vars maps, the
-signature block, the module name, native-slot names, and the import/export
-tables — a listing containing `getimport`/`callimport` is rejected). Parse
+(see `docs/spec/13-bytecodes.md`, D6); disassembly stays canonical. The v1
+listing carries every image section — besides the constants block it prints
+`module: <name>`, `globals:` entries (`<name> r<reg> [const]`), `natives:`
+entries (`<slot> <name>`), `exports:` entries (`<kind> <name> <ref>
+[init-arity]`, kind one of `var` `const` `fn` `class`) and, per function, a
+`locs:` list (parallel `<line>:<col>` decimals) and a `sigs:` line
+(`name:annotation` per parameter, ` -> annotation` return; an annotation is
+`-` for undeclared, a builtin type name, `@Class`, or `t<ordinal>`).
+Assembling a compiler-written listing therefore rebuilds a byte-identical
+`.qlc` image for a program without an import table (the `qla_roundtrip` guard
+compares whole files). The sections are additive: a hand-written listing may
+omit them and assembles with the documented defaults (module `main`, `(0,0)`
+locations, undeclared signatures, empty maps). What v1 still does not print
+is the import table — a listing containing `getimport`/`callimport` is
+rejected. Parse
 diagnostics are line-numbered; exit 1 usage, 2 unreadable listing, 3 parse
 error, 4 image could not be written. Without `-o` the image is written as
 `<stem>.qlc` beside the listing.

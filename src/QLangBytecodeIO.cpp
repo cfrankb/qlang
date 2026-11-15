@@ -489,14 +489,22 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
     putStr(os, *name);
   }
 
-  // Variable map (order unspecified; readers must not depend on it).
-  putU32(os, static_cast<uint32_t>(prog.vars.size()));
-  for (const auto &[name, reg] : prog.vars) {
+  // Variable map (section order is unspecified to readers, SPEC §4.4 —
+  // serialized sorted by name so two equivalent images encode to identical
+  // bytes; the qla_roundtrip whole-byte guard depends on it).
+  std::vector<std::pair<std::string, int>> varEntries(prog.vars.begin(), prog.vars.end());
+  std::sort(varEntries.begin(), varEntries.end(),
+            [](const std::pair<std::string, int> &a,
+               const std::pair<std::string, int> &b) { return a.first < b.first; });
+  putU32(os, static_cast<uint32_t>(varEntries.size()));
+  for (const auto &[name, reg] : varEntries) {
     putStr(os, name);
     putI32(os, reg);
   }
-  putU32(os, static_cast<uint32_t>(prog.constVars.size()));
-  for (const auto &name : prog.constVars)
+  std::vector<std::string> constNames(prog.constVars.begin(), prog.constVars.end());
+  std::sort(constNames.begin(), constNames.end());
+  putU32(os, static_cast<uint32_t>(constNames.size()));
+  for (const auto &name : constNames)
     putStr(os, name);
   putI32(os, prog.registerCount);
 

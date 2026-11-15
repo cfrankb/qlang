@@ -13,6 +13,15 @@ back from is the plan's original promise: **full `.qlc` byte-equality** for
 
 ## M1 — machine sections: close the metadata losses (highest value, smallest delta)
 
+**LANDED 2026-11-15 (Round 108).** All five sections print in the level-1 listing and
+parse back (`module:`, `globals:`, `natives:`, `exports:` — included because module
+scripts' export tables must round-trip — plus per-function `locs:`/`sigs:`); `writeQlc`
+serializes vars/constVars sorted so a compiled image and its rebuild encode identically;
+`qla_roundtrip` is in whole-byte mode (29/34 byte-identical, the same 5 module scripts
+DEFERRED). The trigger check was moot: whole-byte equality makes `locs`/`sigs` print
+mandatory regardless of their run-time impact. M2–M4 below; concrete build plan for the
+remainder: `docs/plans/qla-assembler-followups/README.md`.
+
 Makes non-linked scripts round-trip to **whole-file byte equality**, letting `qla_roundtrip`
 graduate from "compared set" to `cmp(1)`-style equality.
 

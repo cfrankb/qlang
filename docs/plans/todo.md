@@ -316,7 +316,10 @@ closing the **Q#**s its item points at:
       more than spec/disassembly aliases (M3 D6) — landed with encoding-followups **P5**,
       Round 103: v1-listing → image through `encodeInstruction`, D6 aliases encode to the
       canonical jumps, `qla_roundtrip` guards the byte round-trip (module-image listings
-      deferred with the module story)
+      deferred with the module story). The recorded print losses closed with
+      qla-assembler-followups **M1** (Round 108): the listing carries module/globals/
+      natives/exports/locs/sigs and the guard compares whole files (non-linked scripts
+      rebuild byte-identical; the import table stays deferred with M2)
 
 ## 8. Housekeeping
 

@@ -1105,6 +1105,69 @@ namespace
     return "?";
   }
 
+  // Text forms of the `.qlc` sections the level-1 listing carries for the
+  // assembler (qla-assembler-followups plan M1) and their inverses. An
+  // annotation prints as `-` (undeclared), `@Class` (a class type) or the
+  // builtin type name; a type name containing a space (e.g. "bound method")
+  // rides its enum ordinal as `t<ordinal>` so the entry stays one token.
+  static std::string annotationText(const TypeAnnotation &a)
+  {
+    if (!a.declared())
+      return "-";
+    if (!a.className.empty())
+      return "@" + a.className;
+    const std::string tn =
+        QLangValue(static_cast<QLangValue::Type>(a.type)).typeName();
+    if (tn.find(' ') != std::string::npos)
+      return "t" + std::to_string(static_cast<int>(a.type));
+    return tn;
+  }
+  static bool parseAnnotationText(const std::string &tok, TypeAnnotation &a)
+  {
+    a = TypeAnnotation();
+    if (tok.empty() || tok == "-")
+      return true;
+    if (tok[0] == '@')
+    {
+      if (tok.size() < 2)
+        return false;
+      a.className = tok.substr(1);
+      return true;
+    }
+    const int kMax = static_cast<int>(QLangValue::Type::TypeRef);
+    if (tok.size() > 1 && tok[0] == 't')
+    {
+      char *end = nullptr;
+      const long ord = std::strtol(tok.c_str() + 1, &end, 10);
+      if (*end || ord < 0 || ord > kMax)
+        return false;
+      a.type = static_cast<QLangValue::Type>(ord);
+      return true;
+    }
+    for (int i = 0; i <= kMax; i++)
+    {
+      const QLangValue::Type t = static_cast<QLangValue::Type>(i);
+      if (QLangValue(t).typeName() == tok)
+      {
+        a.type = t;
+        return true;
+      }
+    }
+    return false;
+  }
+  // The §4.6 export kind words used by the `exports:` section.
+  static const char *exportKindText(ExportKind k)
+  {
+    switch (k)
+    {
+    case ExportKind::Var: return "var";
+    case ExportKind::Const: return "const";
+    case ExportKind::Func: return "fn";
+    case ExportKind::Class: return "class";
+    }
+    return "var";
+  }
+
   // `libs` are the library images a linked program was merged from: level 5
   // prints one block per module of `prog.initSequence`, which needs each
   // image's own export table (its refs are module-local, the merged ones come
@@ -1112,13 +1175,17 @@ namespace
   std::string disassemble(const CompiledProgram &prog, const std::vector<std::string> &srcLines,
                           int level, const RegisterReport *report = nullptr,
                           const std::vector<ModuleImport> &imports = {},
-                          const std::vector<std::shared_ptr<LoadedModule>> &libs = {})
+                          const std::vector<std::shared_ptr<LoadedModule>> &libs = {},
+                          const std::map<std::string, int> *nativeIds = nullptr)
   {
     std::ostringstream ss;
     if (level >= 1)
     {
       ss << "QLang disassembly (v1)\n";
-      ss << "registers: " << prog.registerCount << "\n\n";
+      ss << "registers: " << prog.registerCount << "\n";
+      // Module identity (§4.6) — additive to the v1 header; a hand-written
+      // listing that omits it keeps the "main" default (qla-followups M1).
+      ss << "module: " << prog.moduleName << "\n\n";
       // The module constant pool (SPEC §bytecodes "unified constant table"):
       // one table shared by every function, so it is printed once for the
       // program rather than once per function.
@@ -1126,6 +1193,43 @@ namespace
       for (size_t j = 0; j < prog.constants.size(); j++)
         ss << "    [" << j << "] " << valueText(prog.constants[j]) << "\n";
       ss << "\n";
+      // The vars map with its const markers (§4.4 "variable map"), sorted by
+      // name so the listing is stable; the image section itself is unordered.
+      if (!prog.vars.empty())
+      {
+        std::vector<std::pair<std::string, int>> globals(prog.vars.begin(), prog.vars.end());
+        std::sort(globals.begin(), globals.end());
+        ss << "globals:\n";
+        for (const auto &[name, reg] : globals)
+          ss << "    " << name << " r" << reg
+             << (prog.constVars.count(name) ? " const" : "") << "\n";
+        ss << "\n";
+      }
+      // The native-slot table (§4.3): `slot name` pairs, slot ascending.
+      // Slots are meaningless without the names — a `call -id` operand is
+      // resolved by the driver, and by the listing here.
+      if (nativeIds && !nativeIds->empty())
+      {
+        std::vector<std::pair<int, std::string>> slots;
+        for (const auto &[name, id] : *nativeIds)
+          slots.emplace_back(-1 - id, name);
+        std::sort(slots.begin(), slots.end());
+        ss << "natives:\n";
+        for (const auto &[slot, name] : slots)
+          ss << "    " << slot << " " << name << "\n";
+        ss << "\n";
+      }
+      // The export table (§4.6) in table order: `kind name ref`, a class
+      // entry followed by its declared `__init__` arity (SPEC §bytecodes
+      // "export table", Q42).
+      if (!prog.exports.empty())
+      {
+        ss << "exports:\n";
+        for (const auto &e : prog.exports)
+          ss << "    " << exportKindText(e.kind) << " " << e.name << " " << e.ref
+             << (e.kind == ExportKind::Class ? " " + std::to_string(e.initArity) : "") << "\n";
+        ss << "\n";
+      }
     }
     // Widest operand text and (level 4) pseudo-mnemonic in the whole
     // listing, so the operand, "; ...", and "# ..." columns align on
@@ -1168,6 +1272,28 @@ namespace
           ss << "  vars:\n";
           for (const auto &[reg, name] : regs)
             ss << "    r" << reg << "  " << name << "\n";
+        }
+        // Declared signature (§4.1 v10): `<name>:<annotation>` per parameter
+        // slot plus the return annotation after " -> ". Omitted when empty;
+        // an assembled image without it carries undeclared types.
+        if (!f.paramTypes.empty() || f.returnType.declared())
+        {
+          ss << "  sigs:";
+          for (size_t k = 0; k < f.paramTypes.size(); k++)
+            ss << (k ? "," : "") << " "
+               << (k < f.paramNames.size() ? f.paramNames[k] : std::string()) << ":"
+               << annotationText(f.paramTypes[k]);
+          ss << " -> " << annotationText(f.returnType) << "\n";
+        }
+        // Per-instruction source locations (§4.1) as a parallel indexed
+        // list; the assembler checks the count against the code block and
+        // fills (0,0) placeholders when the section is absent.
+        if (!f.loc.empty())
+        {
+          ss << "  locs:";
+          for (const auto &lc : f.loc)
+            ss << " " << lc.first << ":" << lc.second;
+          ss << "\n";
         }
         ss << "  code:\n";
       }
@@ -1784,7 +1910,7 @@ namespace
       const std::string text =
           disassemble(prog, srcLines, loader.asmLevel,
                       &compiler.registerReport(), imports,
-                      scratch.loadedModules());
+                      scratch.loadedModules(), &nativeIds);
       const std::string listingPath =
           (std::filesystem::path(moduleDirectory(qlcPath)) /
            (moduleStem(qlcPath) + ".qla"))
@@ -2432,8 +2558,11 @@ namespace
 
   // Parse a whole v1 listing into `prog`. Diagnostics are line-numbered
   // ("<file>:<line>: ...") — the only user-facing surface of this mode.
+  // `nativeIds` receives the listing's `natives:` section (name -> negative
+  // opcode id, the map `writeQlc` serializes as the §4.3 slot table).
   bool assembleQla(const std::string &file, const std::string &text,
-                   CompiledProgram &prog, std::string &err)
+                   CompiledProgram &prog, std::string &err,
+                   std::map<std::string, int> &nativeIds)
   {
     auto fail = [&file, &err](int lineNo, const std::string &m)
     {
@@ -2441,12 +2570,16 @@ namespace
       return false;
     };
     prog = CompiledProgram();
+    nativeIds.clear();
     enum Mode
     {
       Top,
       Constants,
       Function,
-      Code
+      Code,
+      Globals,
+      Natives,
+      Exports
     } mode = Top;
     bool sawHeader = false;
     int lineNo = 0;
@@ -2472,6 +2605,32 @@ namespace
       if (s == "constants:")
       {
         mode = Constants;
+        continue;
+      }
+      // M1 machine sections (qla-assembler-followups plan): the three
+      // indexed sections are siblings of `constants:`; any recognized
+      // header ends the section it interrupts.
+      if (s == "globals:")
+      {
+        mode = Globals;
+        continue;
+      }
+      if (s == "natives:")
+      {
+        mode = Natives;
+        continue;
+      }
+      if (s == "exports:")
+      {
+        mode = Exports;
+        continue;
+      }
+      if (s.rfind("module:", 0) == 0 && mode != Code && mode != Function)
+      {
+        std::string name = s.substr(7);
+        const size_t p = name.find_first_not_of(" \t");
+        prog.moduleName = p == std::string::npos ? std::string() : name.substr(p);
+        mode = Top;
         continue;
       }
       if (s.rfind("function #", 0) == 0)
@@ -2554,6 +2713,131 @@ namespace
         }
         continue;
       }
+      if (mode == Globals)
+      {
+        // `<name> r<register> [const]` (qla-followups M1).
+        std::istringstream ws(s);
+        std::string name, regTok, mark;
+        if (!(ws >> name >> regTok) || regTok.empty() || regTok[0] != 'r')
+          return fail(lineNo, "globals entry is '<name> r<register> [const]'");
+        char *end = nullptr;
+        const long reg = std::strtol(regTok.c_str() + 1, &end, 10);
+        if (*end || end == regTok.c_str() + 1)
+          return fail(lineNo, "bad global register '" + regTok + "'");
+        if (ws >> mark && mark != "const")
+          return fail(lineNo, "trailing text in globals entry '" + s + "'");
+        prog.vars[name] = static_cast<int>(reg);
+        if (mark == "const")
+          prog.constVars.insert(name);
+        continue;
+      }
+      if (mode == Natives)
+      {
+        // `<slot> <name>` — slot is the §4.3 table index; the `call` operand
+        // is its negation -1-slot, the value nativeIds stores.
+        std::istringstream ws(s);
+        std::string slotTok, name;
+        if (!(ws >> slotTok >> name))
+          return fail(lineNo, "natives entry is '<slot> <name>'");
+        char *end = nullptr;
+        const long slot = std::strtol(slotTok.c_str(), &end, 10);
+        if (*end || end == slotTok.c_str() || slot < 0)
+          return fail(lineNo, "native slot must be a non-negative decimal, got '" + slotTok + "'");
+        nativeIds[name] = static_cast<int>(-1 - slot);
+        continue;
+      }
+      if (mode == Exports)
+      {
+        // `<kind> <name> <ref> [init-arity]` (§4.6; arity only for `class`).
+        std::istringstream ws(s);
+        std::string kindTok, name, refTok, arityTok;
+        if (!(ws >> kindTok >> name >> refTok))
+          return fail(lineNo, "exports entry is '<kind> <name> <ref> [init-arity]'");
+        ExportEntry e;
+        if (kindTok == "var")
+          e.kind = ExportKind::Var;
+        else if (kindTok == "const")
+          e.kind = ExportKind::Const;
+        else if (kindTok == "fn")
+          e.kind = ExportKind::Func;
+        else if (kindTok == "class")
+          e.kind = ExportKind::Class;
+        else
+          return fail(lineNo, "unknown export kind '" + kindTok + "'");
+        char *end = nullptr;
+        const long ref = std::strtol(refTok.c_str(), &end, 10);
+        if (*end || end == refTok.c_str())
+          return fail(lineNo, "bad export ref '" + refTok + "'");
+        e.name = name;
+        e.ref = static_cast<int32_t>(ref);
+        if (ws >> arityTok)
+        {
+          char *end2 = nullptr;
+          const long ar = std::strtol(arityTok.c_str(), &end2, 10);
+          if (*end2 || end2 == arityTok.c_str())
+            return fail(lineNo, "bad export init-arity '" + arityTok + "'");
+          e.initArity = static_cast<int32_t>(ar);
+        }
+        prog.exports.push_back(std::move(e));
+        continue;
+      }
+      if (s.rfind("sigs:", 0) == 0)
+      {
+        if (mode != Function)
+          return fail(lineNo, "sigs line outside a function block");
+        auto &fn = prog.functions.back();
+        const std::string body = s.substr(5);
+        const size_t arrow = body.rfind(" -> ");
+        if (arrow == std::string::npos)
+          return fail(lineNo, "sigs line needs the ' -> <return>' part");
+        std::string retTok = body.substr(arrow + 4);
+        const size_t rp = retTok.find_first_not_of(" \t");
+        const size_t re = retTok.find_last_not_of(" \t\r");
+        retTok = rp == std::string::npos ? std::string() : retTok.substr(rp, re - rp + 1);
+        if (!parseAnnotationText(retTok, fn.returnType))
+          return fail(lineNo, "bad return type annotation '" + retTok + "'");
+        std::istringstream ps(body.substr(0, arrow));
+        std::string seg;
+        while (std::getline(ps, seg, ','))
+        {
+          const size_t sp = seg.find_first_not_of(" \t");
+          if (sp == std::string::npos)
+            continue;
+          seg = seg.substr(sp);
+          const size_t colon = seg.find(':');
+          if (colon == std::string::npos)
+            return fail(lineNo, "sigs parameter is '<name>:<annotation>'");
+          TypeAnnotation a;
+          if (!parseAnnotationText(seg.substr(colon + 1), a))
+            return fail(lineNo, "bad parameter annotation '" + seg.substr(colon + 1) + "'");
+          fn.paramNames.push_back(seg.substr(0, colon));
+          fn.paramTypes.push_back(a);
+        }
+        continue;
+      }
+      if (s.rfind("locs:", 0) == 0)
+      {
+        if (mode != Function)
+          return fail(lineNo, "locs line outside a function block");
+        auto &fn = prog.functions.back();
+        std::istringstream ws(s.substr(5));
+        std::string tok;
+        while (ws >> tok)
+        {
+          const size_t colon = tok.find(':');
+          const char *colTok = colon == std::string::npos ? nullptr : tok.c_str() + colon + 1;
+          char *end = nullptr;
+          char *end2 = nullptr;
+          const long ln = colon == std::string::npos ? -1 : std::strtol(tok.c_str(), &end, 10);
+          const long col = colTok ? std::strtol(colTok, &end2, 10) : -1;
+          if (ln < 0 || col < 0 || ln > 65535 || col > 65535 ||
+              end != tok.c_str() + colon || *end2 ||
+              end2 != tok.c_str() + tok.size())
+            return fail(lineNo, "bad location '" + tok + "' (expected <line>:<column>)");
+          fn.loc.emplace_back(static_cast<int>(ln), static_cast<int>(col));
+        }
+        continue;
+      }
       if (s == "code:")
       {
         mode = Code;
@@ -2591,10 +2875,6 @@ namespace
       if (!parseCodeInstr(toks, addr, ins, msg))
         return fail(lineNo, msg);
       fn.instrOffsets.push_back(addr);
-      // The loc table must stay parallel to the instruction stream (the
-      // .qlc reader enforces it); v1 prints no locations, so the assembled
-      // image carries the documented "no source location" placeholder.
-      fn.loc.emplace_back(0, 0);
       try
       {
         encodeInstruction(fn.code, ins);
@@ -2613,6 +2893,20 @@ namespace
     {
       err = file + ": the listing holds no functions";
       return false;
+    }
+    // The loc table must stay parallel to the instruction stream (the .qlc
+    // reader enforces it). A function whose listing carried a `locs:`
+    // section must match its instruction count; one without rides the
+    // documented "no source location" placeholders.
+    for (auto &f : prog.functions)
+    {
+      if (f.loc.empty())
+        f.loc.assign(f.instrOffsets.size(), {0, 0});
+      else if (f.loc.size() != f.instrOffsets.size())
+      {
+        err = file + ": a function's locs section is not parallel to its instruction stream";
+        return false;
+      }
     }
     const size_t codeBytes = [&prog]
     {
@@ -3009,9 +3303,11 @@ int main(int argc, char **argv)
 
   // --- --assemble: standalone .qla v1 -> .qlc rebuild (encoding-followups
   // plan Phase 5). No script is compiled, no context is created: the listing
-  // is the whole input. Deviations from the compiled image are those of the
-  // v1 format (loc table, vars maps, signatures, module name, native slot
-  // names) — see assembleQla and the qla_roundtrip gate.
+  // is the whole input. The v1 listing now carries every image section
+  // (module name, vars/constVars, native slots, exports, locations,
+  // signatures — qla-assembler-followups plan M1), so a listing the compiler
+  // wrote rebuilds its image byte for byte; only module images with an
+  // import table stay deferred with the module story.
   if (!assembleFile.empty())
   {
     if (!file.empty() || !moduleFiles.empty() || saveImage || saveListing ||
@@ -3033,7 +3329,8 @@ int main(int argc, char **argv)
     ass << ain.rdbuf();
     CompiledProgram aprog;
     std::string aerr;
-    if (!assembleQla(assembleFile, ass.str(), aprog, aerr))
+    std::map<std::string, int> aNativeIds;
+    if (!assembleQla(assembleFile, ass.str(), aprog, aerr, aNativeIds))
     {
       std::fprintf(stderr, "%s: %s\n", kAppName, aerr.c_str());
       return 3;
@@ -3046,7 +3343,7 @@ int main(int argc, char **argv)
                     .string();
     }
     std::ostringstream os(std::ios::binary);
-    if (!writeQlc(os, aprog, {}))
+    if (!writeQlc(os, aprog, aNativeIds))
     {
       std::fprintf(stderr, "%s: cannot build a .qlc image from '%s'\n", kAppName,
                    assembleFile.c_str());
@@ -3498,7 +3795,7 @@ int main(int argc, char **argv)
     }
     const std::string text =
         disassemble(compiled, srcLines, asmLevel, report, moduleImports,
-                    ctx.loadedModules());
+                    ctx.loadedModules(), &nativeIds);
     std::string err;
     if (!writeBinaryFile(listingOut, text, err))
     {

@@ -265,7 +265,9 @@ constVars: u32 nameLen, name bytes
 ```
 
 Backing containers are `std::unordered_map` / `std::unordered_set`: **order
-within both sections is unspecified**. Readers MUST NOT depend on it.
+within both sections is unspecified**. Readers MUST NOT depend on it. The
+writer serializes both sorted by name, so equivalent programs encode to
+identical bytes (the `qla_roundtrip` whole-byte guard relies on this).
 
 ### 4.5 Instruction stream (v6 layout, current in v11)
 

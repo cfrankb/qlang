@@ -1,3 +1,32 @@
+## Round 108 — 2026-11-15 — the `.qla` v1 listing carries its metadata sections: whole-`.qlc` byte equality for non-linked scripts (qla-assembler-followups **M1**; plan `docs/plans/qla-assembler-followups-plan.md`; spec `docs/spec/18-qlang-run.md` `--assemble`; docs `docs/SERIALIZATION.md` §4.4)
+
+- **Why.** Round 103's assembler compared only what the level-1 listing printed: the loc
+  table, the vars/constVars maps, the declared signatures, the module name, the native-slot
+  names and the export table were the format's recorded losses, and `qla_roundtrip` compared
+  around them. M1 closes the losses so the guard can graduate to `cmp(1)`-style equality.
+- **Listing (additive to `(v1)`, printed at level ≥ 1).** Program level: `module: <name>`,
+  `globals:` entries (`<name> r<reg> [const]`, sorted by name), `natives:` entries
+  (`<slot> <name>`, slot ascending — the §4.3 pair list), `exports:` entries
+  (`<kind> <name> <ref>` plus `init-arity` for kind `class`, table order). Per function:
+  `sigs:` (`name:annotation` per parameter, ` -> annotation` return; annotation `-` /
+  builtin type name / `@Class` / `t<ordinal>` for a type name containing a space) and
+  `locs:` (parallel `<line>:<col>` decimals). Every section is optional: a hand-written
+  listing without them assembles the documented defaults (`main`, `(0,0)` placeholders,
+  undeclared signatures, empty maps).
+- **Assembler.** Parses each section straight onto the `CompiledProgram` fields; the
+  `natives:` section now feeds `writeQlc` (previously `{}`), and the locs placeholder that
+  code lines carried moved to an end-of-parse padding + parallelism check. `getimport`/
+  `callimport` stay the only refusal — the import table is M2.
+- **Writer canonicalization** (`src/QLangBytecodeIO.cpp` `writeQlc`): the vars section is
+  serialized sorted by name and constVars sorted (the section order is unspecified to
+  readers, SERIALIZATION §4.4; unordered-container iteration otherwise broke byte equality
+  between a compiled image and its rebuild). No reader change, no version bump.
+- **Guard graduates.** `qla_roundtrip` now compares the two `.qlc` files **byte for byte**
+  (field compares remain as post-FAIL localization). Result: **29/34 scripts byte-
+  identical**; the same 5 module scripts DEFERRED with the recorded reasons (M2 scope).
+- **Not done (recorded):** the import table (M2), `--asm-level >1` input symmetry (M4:
+  never build it). Suite: **ctest 69/69 green**.
+
 ## Round 107 — 2026-11-15 — construct an imported class from the exported prototype cell (F4 **P3b**; plan `docs/plans/class-export-plan.md`, now fully landed and archived; spec `docs/spec/09-modules.md` `## QLang (.ql) modules`, `docs/spec/13-bytecodes.md` `## export table (lookup)`)
 
 - **Why.** The import half of the plan: P3a (Round 106) put the class into the table and the
