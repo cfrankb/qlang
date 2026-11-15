@@ -53,6 +53,10 @@ struct Expr {
   // Unary: single operand and the op token (e.g. --x).
   Token uop;
   std::shared_ptr<Expr> operand;
+  // True when the ++/-- token trailed its operand (a++), false when it led
+  // (++a). Only meaningful on Unary inc/dec nodes; drives old/new value
+  // selection in the expression form.
+  bool isPostfix = false;
 
   // Call: callee(name) with positional args.
   std::string callee;

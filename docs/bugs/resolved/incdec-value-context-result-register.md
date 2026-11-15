@@ -39,20 +39,22 @@ The AST carries no prefix/postfix distinction — both shapes parse to the same 
 were never implementable on this path, and the spec never shows `++`/`--` inside a value
 context (spec `04-control-flow.md`: `yield i; ++i` — statements only).
 
-## Fix (Round 96)
+## Fix
 
-`compileExpr`, Unary branch: `++`/`--` throw at compile time —
-
-> `operator '++' is a statement: it has no value (use it on its own line, or 'x + 1' as an expression)`
-
-Every value context becomes honest instead of corrupt. Side effects in the good direction:
-`++t.n` reports instead of no-op'ing, and the dangling `t.n++` swallow reports at the stray
-`++` token instead of silently stepping a garbage register. Whether `t.n++` / `a[i]++` should
+Round 96 refused the form outright (throw in `compileExpr`). **Superseded by Round 97:**
+the expression form is now implemented with C-style semantics — `Expr` carries an
+`isPostfix` flag, a shared `emitIncDec` helper (statement form + expression form) steps the
+variable's register or capture cell in place, and `MOV`s around the step yield the old value
+(postfix) or the new value (prefix). Documented in `docs/spec/05-operators.md`
+`## operators ++ and --`. A non-variable operand (`++t.n`, the dangling `t.n++`) reports
+`operator '++' can only be applied to a variable name`; whether `t.n++` / `a[i]++` should
 *legally* mutate stays with the value-semantics round (Round 68 deferral, unchanged).
 
 ## Verification
 
-- `spec_check2` 538 → 542: expression-form `a++`, `++a`, `--a` and `++t.n` each refused.
+- Round 96: `spec_check2` 538 → 542 refusals; **Round 97 replaced them with 11 value checks,
+  542 → 549** (old/new values, capture cells, `global`, loop-condition sequencing,
+  const/undeclared guards).
 - Repros against `build/qlcc`: `let z = a++` / `let z = --a` → parse error with correct
   line:col; `t.n++` → parse error at the `++` (3:4), nothing executes; statement-form
   `--a` while-loop still counts to 0; `a + 1` unaffected.

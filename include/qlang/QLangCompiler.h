@@ -484,6 +484,12 @@ private:
   // Reports a module name reached as a value (always throws): shared by the
   // read path and the statement inc/dec target path.
   void moduleNameError(const std::string &name) const;
+  // Lowers ++/-- on a named variable: applies `step` to its register (or
+  // capture cell) in place. Shared by the statement form (valueReg < 0) and
+  // the expression form, which gets the old value (postfix) or the new value
+  // (prefix) in valueReg.
+  void emitIncDec(const std::string &name, Opcode step, int valueReg,
+                  bool isPostfix);
   // Rejects writing through (or rebinding) a name imported from a loaded `.ql`
   // module: the defining module owns the cell, so a write here would either be
   // lost or silently detach the import (SPEC §bytecodes "technical

@@ -3003,6 +3003,47 @@ void QLangCompiler::compileGotoIf(const StmtPtr &s) {
   m_emitter.patchJump(jumpTrueIdx, lit->second);
 }
 
+// Shared ++/-- lowering for the statement form (valueReg < 0) and the
+// expression form: step the name's register (or capture cell) in place and,
+// when a value is wanted, leave the old value (postfix) or the new value
+// (prefix) in valueReg. The guards see only the name, so they run before the
+// register lookup: imported names and module-level consts have no register
+// in this scope, and the undeclared-variable error would say the opposite of
+// the truth about a name the program did bind.
+void QLangCompiler::emitIncDec(const std::string &name, Opcode step,
+                               int valueReg, bool isPostfix) {
+  guardNotImported(name, "increment/decrement");
+  guardNotConst(name, "increment/decrement");
+  // A captured name (closure capture or `global` import) has no register:
+  // it is read and written through its capture cell, as in
+  // compileAssignment.
+  auto cit = m_captureRegs.find(name);
+  const bool captured = cit != m_captureRegs.end();
+  int r = captured ? -1 : regOf(name);
+  if (!captured && r < 0) {
+    // A module name reached as a target gets the read path's report.
+    if (cppModule(name) || qlModule(name)) moduleNameError(name);
+    throw QLangError(QLangErrorKind::Parse, 0, 0,
+                     "use of undeclared variable '" + name + "'");
+  }
+  guardNotExportedFunc(name, "increment/decrement");
+  const bool wantOld = isPostfix && valueReg >= 0;
+  const bool wantNew = !isPostfix && valueReg >= 0;
+  if (captured) {
+    int t = tmpRegister();
+    emit(Opcode::REFLOAD, t, cit->second, 0);
+    if (wantOld) emit(Opcode::MOV, valueReg, t);
+    emit(step, t, t);
+    if (wantNew) emit(Opcode::MOV, valueReg, t);
+    emit(Opcode::REFSTORE, t, cit->second, 0);
+    releaseTemp(t);
+    return;
+  }
+  if (wantOld) emit(Opcode::MOV, valueReg, r);
+  emit(step, r, r);
+  if (wantNew) emit(Opcode::MOV, valueReg, r);
+}
+
 void QLangCompiler::compileExprStmt(const StmtPtr &s) {
   // Statement-form prefix/postfix inc/dec on a variable must write back to
   // that variable's register (e.g. --a, a++). Otherwise the inc/dec result
@@ -3011,37 +3052,9 @@ void QLangCompiler::compileExprStmt(const StmtPtr &s) {
       (s->value->uop.text == "++" || s->value->uop.text == "--")) {
     const ExprPtr &opnd = s->value->operand;
     if (opnd && opnd->kind == ExprKind::Variable) {
-      const std::string &name = opnd->name;
-      const Opcode step =
-          s->value->uop.text == "++" ? Opcode::INC : Opcode::DEC;
-      // The guards see only the name, so they run before the register lookup:
-      // imported names and module-level consts have no register in this scope,
-      // and the undeclared-variable error would say the opposite of the truth
-      // about a name the program did bind.
-      guardNotImported(name, "increment/decrement");
-      guardNotConst(name, "increment/decrement");
-      // A captured name (closure capture or `global` import) has no register:
-      // it is read and written through its capture cell, as in
-      // compileAssignment.
-      auto cit = m_captureRegs.find(name);
-      const bool captured = cit != m_captureRegs.end();
-      int r = captured ? -1 : regOf(name);
-      if (!captured && r < 0) {
-        // A module name reached as a target gets the read path's report.
-        if (cppModule(name) || qlModule(name)) moduleNameError(name);
-        throw QLangError(QLangErrorKind::Parse, 0, 0,
-                         "use of undeclared variable '" + name + "'");
-      }
-      guardNotExportedFunc(name, "increment/decrement");
-      if (captured) {
-        int t = tmpRegister();
-        emit(Opcode::REFLOAD, t, cit->second, 0);
-        emit(step, t, t);
-        emit(Opcode::REFSTORE, t, cit->second, 0);
-        releaseTemp(t);
-        return;
-      }
-      emit(step, r, r);
+      emitIncDec(opnd->name,
+                 s->value->uop.text == "++" ? Opcode::INC : Opcode::DEC, -1,
+                 /*isPostfix=*/false);
       return;
     }
   }
@@ -4533,19 +4546,26 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
       if (rrTmp)
         freeRegister(rr);
     } else {
-      // ++/-- are statement operators: the VM's INC/DEC step the operand
-      // register in place (SPEC §13-bytecodes: INC takes a dest reg only),
-      // so a value-context `a++` would step its own result register — nil
-      // (a bogus "operand must be numeric, got nil") or leftover garbage.
-      // The AST carries no prefix/postfix flag, so copy semantics were never
-      // implementable here; report instead (Round 96).
+      // Expression-form ++/-- (SPEC §05-operators: `++`/`--`): the named
+      // variable is stepped in place by the same lowering the statement form
+      // uses, and this expression evaluates to the old value (postfix, e.g.
+      // `let z = a++`) or the new value (prefix, e.g. `let z = ++a`). The
+      // VM's INC/DEC step a register in place (SPEC §13-bytecodes: INC takes
+      // a dest reg only); the MOVs around the step select which value this
+      // expression yields.
       if (e->uop.type == TokenType::Increment ||
-          e->uop.type == TokenType::Decrement)
-        throw QLangError(QLangErrorKind::Parse, m_curLine, m_curCol,
-                         "operator '" + e->uop.text +
-                             "' is a statement: it has no value "
-                             "(use it on its own line, or 'x + 1' as an "
-                             "expression)");
+          e->uop.type == TokenType::Decrement) {
+        if (!e->operand || e->operand->kind != ExprKind::Variable)
+          throw QLangError(
+              QLangErrorKind::Parse, m_curLine, m_curCol,
+              "operator '" + e->uop.text +
+                  "' can only be applied to a variable name");
+        emitIncDec(
+            e->operand->name,
+            e->uop.type == TokenType::Increment ? Opcode::INC : Opcode::DEC,
+            dest, e->isPostfix);
+        break;
+      }
       // Constant folding: `-(literal)` -> one store of a negative immediate
       // instead of a load plus NEG (and a MOV) (SPEC §bytecodes: encoding
       // guidelines — avoid temporary registers when possible).

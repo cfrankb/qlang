@@ -15,7 +15,7 @@ defined against C++20.
 | [02-lexical.md](02-lexical.md) | reserved words, constants, enum, comments | `0e746264958922212c10368a5f8085f520c39e1712b46694f8ea92a8c218c46a` |
 | [03-declarations.md](03-declarations.md) | boolean evaluation, declarations and assignments | `b574e9fba63221df31582ba5ced416982d7438a66a5421f27b36df5a5b21741a` |
 | [04-control-flow.md](04-control-flow.md) | conditions, range, switch, loops, label/goto | `b531d6356ea43f7b470c3e22f4f58af887926b8987533b419ce91602c0e0d0e2` |
-| [05-operators.md](05-operators.md) | operators incl. `?`, `<`/`>`, `**`, cast, `==`/`!=`, `$`, `$$` | `3e5f6af9fe4bab4dcd275e2d9e1c8e0262371ffcda314cac0ea9a23746590e01` |
+| [05-operators.md](05-operators.md) | operators incl. `?`, `<`/`>`, `**`, cast, `==`/`!=`, `$`, `$$` | `80e87fe37cde8965cbcf21381b8432f519bccb9273f32b7cd36f4007ab51018f` |
 | [06-functions.md](06-functions.md) | built-in functions incl. `deepcopy`, qlang native functions, C++ API | `8e7ac79a3f42b0e91bab2578551ef66d40b437e9a46683522f1e63cc1de3fe8c` |
 | [07-api.md](07-api.md) | module registration, QLang import syntax, `ctx.clear()`, verbose level, step budget, threading contract, module search paths, external search callback, output callback (universal) | `0c49122c4c21b63bd2e77d1291de1fb302e1979b51e1251d73d9b97f43b35144` |
 | [08-generators.md](08-generators.md) | generators, PROTOTYPE 1, Syntax, EOF sentinel | `a99107445f3850d8b600e84cf5d0e5860babc4173cda0e2a183debab0123200d` |

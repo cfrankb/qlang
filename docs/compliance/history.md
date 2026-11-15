@@ -1,3 +1,31 @@
+## Round 97 — 2026-11-15 — expression-form `++`/`--` implemented: postfix yields the old value, prefix the new (supersedes Round 96's refusal; spec `docs/spec/05-operators.md` `## operators ++ and --`; impl `QLangParser.h/.cpp` `isPostfix`, `QLangCompiler.cpp` `emitIncDec` + `compileExpr`, tests `spec_check2.cpp` 542 → 549)
+
+- **Why.** Round 96 refused value-context `++`/`--` because the VM's `INC`/`DEC` step `r[a]`
+  in place (`13-bytecodes.md` line 64) and the AST could not tell `a++` from `++a`. Requested
+  scope: the C-style semantics themselves — old/new value with a correct in-place update.
+- **What.** The `Expr` node gains `isPostfix` (set by both postfix parse sites; prefix
+  defaults false). The Round 95 statement-form block moved verbatim into a shared
+  `emitIncDec(name, step, valueReg, isPostfix)`: guards (`guardNotImported`, `guardNotConst`
+  before the lookup; module name → `moduleNameError`; undeclared; `guardNotExportedFunc`
+  after), then the in-place step on the register or — for a capture/`global` name — through
+  the cell (REFLOAD → step → REFSTORE). With a `valueReg`, a `MOV` before the step yields the
+  old value (postfix) or after it the new (prefix); the statement form passes −1 and emits
+  byte-identically to Round 95. `compileExpr`'s Unary branch now lowers `++`/`--` through the
+  helper; a non-variable operand (`++t.n`, `f()++`, the dangling `t.n++`) reports
+  `operator '++' can only be applied to a variable name`. No VM, opcode or `.qlc` change.
+- **Spec.** `05-operators.md` gains `## operators ++ and --`: statement equivalence, old/new
+  expression values, name-only operand, assignment-equivalent guards, member/subscript
+  targets deferred. `t.n++` / `a[i]++` legality stays with the value-semantics round.
+- **Verified.** `cmake --build build`; `ctest --test-dir build` 67/67 (perf, doc_hashes
+  skipped); `update-doc-hashes.sh` re-recorded. `spec_check2` 542 → **549**: the three
+  Round 96 refusal checks become value checks (`r = value*10 + after`: 12/22/54/44), plus
+  captured postfix/prefix through the cell (12/22), `global` write-through (12), const in a
+  def → `cannot increment/decrement to constant`, `zz++` → undeclared, `while (a++ < 3)` →
+  a=4, `++t.n` → new refusal message. Manual: `z=1 a=3 p=3` / `y=5 b=3 q=3`, closure-cell
+  repro `z * 10 + n` → **12**, dangling `t.n++` reports at the `++` (2:4) with nothing
+  executed. Statement-form
+  pins (Round 95) unchanged and green.
+
 ## Round 96 — 2026-11-15 — value-context `++`/`--` refused: the expression form stepped its own result register (bug `docs/bugs/resolved/incdec-value-context-result-register.md`; impl `QLangCompiler.cpp` `compileExpr`, tests `spec_check2.cpp` 538 → 542)
 
 - **Why.** Round 95's untouched sibling, undocumented and never working: `let z = a++` (any

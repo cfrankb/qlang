@@ -32,6 +32,25 @@ type coersion between numbers is always guided by the left operand.
 |?|short-hand if operator
 
 
+## operators ++ and --
+
+`++` and `--` update their operand — a plain variable name — in place. As a
+statement, `a++` and `++a` are equivalent. As an expression, the postfix form
+(`a++`) evaluates to the value **before** the update and the prefix form
+(`++a`) to the value **after** it.
+
+```
+local a = 1
+let z = a++   # z = 1, a = 2
+let p = ++a   # p = 3, a = 3
+```
+
+The update obeys the same guards as assignment: constants, imported names and
+exported functions are refused, and a module name is not a valid target.
+Member and subscript targets (`t.n++`, `a[i]++`) are not yet bound by the
+parser; they report `operator '++' can only be applied to a variable name`
+until the value-semantics round lands.
+
 ## operator ?
 
 short-hand if (pseudo-code)

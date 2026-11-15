@@ -189,6 +189,14 @@ closing the **Q#**s its item points at:
 
 ## 6. Defects and drift with no plan of their own
 
+- [x] **expression-form `++`/`--` implemented with C-style semantics (2026-11-15, Round 97)**:
+      supersedes the Round 96 refusal below — `Expr` gains `isPostfix` (both postfix parse
+      sites set it), a shared `emitIncDec` lowers statement and value forms through one
+      guarded path (register or capture-cell in-place step), and `MOV`s around the step make
+      `a++` yield the old value and `++a` the new. Spec'd in `05-operators.md`
+      `## operators ++ and --`. Non-variable operands (`++t.n`, dangling `t.n++`) report
+      `operator '++' can only be applied to a variable name`; legal `t.n++`/`a[i]++` stays
+      with the value-semantics round. `spec_check2` 542 → 549. No VM/opcode/`.qlc` change.
 - [x] **value-context `++`/`--` never worked (found + fixed 2026-11-15, Round 96)**: every
       expression-form `a++` / `++a` / `--` compiled to `emit(INC, dest, operand)`, but VM
       `INC`/`DEC` step `r[a]` in place (`13-bytecodes.md` line 64) — the form stepped its own

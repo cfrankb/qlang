@@ -414,18 +414,37 @@ int main() {
   expectMsg("inc target must still be declared", "zz++",
     "use of undeclared variable 'zz'");
 
-  // -- NEW: value-context ++/-- are refused (Round 96): the VM's INC/DEC
-  // step their operand register in place, so an expression-form `a++` read
-  // its own (nil or garbage) result register — a bogus type error or a
-  // silent wrong value. Statement form is unchanged (pinned above).
-  expectMsg("a++ as a value is refused",
-    "local a = 1\nlet z = a++\nlocal r = z;", "has no value");
-  expectMsg("++a as a value is refused",
-    "local a = 1\nlet z = ++a\nlocal r = z;", "has no value");
-  expectMsg("--a as a value is refused",
-    "local a = 1\nlet z = --a\nlocal r = z;", "has no value");
-  expectMsg("++t.n is refused, not a silent no-op",
-    "let t = {n=1}\n++t.n", "has no value");
+  // -- NEW: expression-form ++/-- (Round 97): postfix evaluates to the old
+  // value and prefix to the new, both stepping the variable (locals, capture
+  // cells, `global` names); r encodes `value * 10 + variable_after`. Guards
+  // are the statement form's (shared emitIncDec). Member/index targets stay
+  // refused (value-semantics round).
+  expectVal("postfix ++ yields old, updates",
+    "local a = 1\nlet z = a++\nlocal r = z * 10 + a;", "r", 12);
+  expectVal("prefix ++ yields new, updates",
+    "local a = 1\nlet z = ++a\nlocal r = z * 10 + a;", "r", 22);
+  expectVal("postfix -- yields old, updates",
+    "local a = 5\nlet z = a--\nlocal r = z * 10 + a;", "r", 54);
+  expectVal("prefix -- yields new, updates",
+    "local a = 5\nlet z = --a\nlocal r = z * 10 + a;", "r", 44);
+  expectVal("captured postfix steps the cell",
+    "def outer()\nlet n = 1\nlocal f = ()[n] {\n  return n++\n}\nlet z = f()\nreturn z * 10 + n\nend\nlocal r = outer();",
+    "r", 12);
+  expectVal("captured prefix steps the cell",
+    "def outer()\nlet n = 1\nlocal f = ()[n] {\n  return ++n\n}\nlet z = f()\nreturn z * 10 + n\nend\nlocal r = outer();",
+    "r", 22);
+  expectVal("global postfix writes through",
+    "m = 1\ndef f() { global m; return m++ }\nlocal z = f()\nlocal r = z * 10 + m;",
+    "r", 12);
+  expectMsg("const ++ as a value reports const",
+    "const C = 5\ndef f()\nlet z = C++\nend\nr = f()",
+    "cannot increment/decrement to constant 'C'");
+  expectMsg("value inc target must be declared", "let z = zz++",
+    "use of undeclared variable 'zz'");
+  expectVal("postfix ++ in a loop condition",
+    "local a = 0\nwhile (a++ < 3)\nlocal x = 1\nend\nlocal r = a;", "r", 4);
+  expectMsg("++t.n stays refused (member round)",
+    "let t = {n=1}\n++t.n", "can only be applied to a variable name");
 
   // -- NEW: assert() builtin (spec §397) --
   expectRun("assert true", "assert(true, \"should not fail\")");

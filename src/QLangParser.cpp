@@ -336,6 +336,7 @@ StmtPtr QLangParser::parseStatementImpl() {
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Unary;
       node->uop = op;
+      node->isPostfix = true;
       auto var = std::make_shared<Expr>();
       var->kind = ExprKind::Variable;
       var->name = idt.value;
@@ -1326,6 +1327,7 @@ ExprPtr QLangParser::parsePostfixChain() {
     auto node = std::make_shared<Expr>();
     node->kind = ExprKind::Unary;
     node->uop = op;
+    node->isPostfix = true;
     node->operand = e;
     e = std::move(node);
   }
