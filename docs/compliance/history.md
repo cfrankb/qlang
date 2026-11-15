@@ -1,3 +1,31 @@
+## Round 98 — 2026-11-15 — CALL arg-slot clobber fixed: a lowering whose dest is an old low register re-homes to a fresh temp (bug found Round 97; plan `docs/plans/archive/call-arg-slot-clobber-plan.md`; impl `QLangCompiler.h/.cpp` `compileCallExpr` + `slotsWindowBusy`, tests `spec_check2.cpp` 549 → 556, `gen_test.cpp` 7 → 9)
+
+- **Why.** The CALL layout requires `dest+1..dest+N` to be fresh registers
+  (`13-bytecodes.md` CALL convention). `compileReturn`/`compileYield` land
+  expressions in r0 and `x = <call>` lands in `x`'s (possibly old) home, so the
+  arg-staging / f-string template MOVs wrote **over live locals inside the
+  window** before the call read them: `return h(b, a)` returned 606 not 605,
+  `x = f"a{n}"` printed `aa%s`, `yield f"v{n}"` printed `vv%s`.
+- **What.** The ~580-line `ExprKind::Call` case moved out of `compileExpr`
+  into `compileCallExpr(e, dest)` so one guard at its top — `home = dest`;
+  `if (slotsWindowBusy(dest+1, dest+2+argCount)) dest = tmpRegister()` — and a
+  `finishCall()` fixup (`MOV home, dest` + `releaseTemp(dest)`, the nil-clear
+  keeping Phase 7 finalizer timing) cover every exit; the FString lowering
+  carries the same guard inline (window `dest+1..dest+totalArgs`). The
+  `deepcopy` exit returns before the guard (it uses no slots). New helper
+  `slotsWindowBusy(lo, hi)` tests true occupancy against `m_namedRegs` +
+  `m_liveTmps` — the plan's original `dest + 1 < m_nextReg` form churned the
+  codegen budgets (cast.ql +60 %); this realizes the refinement the plan
+  deferred in §3.
+- **Verified.** `cmake --build build`; `ctest --test-dir build` **67/67**.
+  `spec_check2` 549 → **556** (return / reassignment × 2-arg / 3-arg /
+  f-string, plus declaration-order and `return h(a)` controls) and `gen_test`
+  7 → **9** (`yield` + 2-arg call → 605, `yield` + f-string → `v7`).
+  `codegen_size` budgets re-recorded: `hello.ql` 215 → **217**, `cast.ql`
+  163 → **189** (13 re-homed f-string CALLs at +2 instructions each — the old
+  stream demonstrably clobbered a staged arg register), `money` /
+  `perf_stress` unchanged.
+
 ## Round 97 — 2026-11-15 — expression-form `++`/`--` implemented: postfix yields the old value, prefix the new (supersedes Round 96's refusal; spec `docs/spec/05-operators.md` `## operators ++ and --`; impl `QLangParser.h/.cpp` `isPostfix`, `QLangCompiler.cpp` `emitIncDec` + `compileExpr`, tests `spec_check2.cpp` 542 → 549)
 
 - **Why.** Round 96 refused value-context `++`/`--` because the VM's `INC`/`DEC` step `r[a]`

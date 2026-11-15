@@ -189,6 +189,14 @@ closing the **Q#**s its item points at:
 
 ## 6. Defects and drift with no plan of their own
 
+- [x] **CALL arg-slot clobber with a low `dest` (found 2026-11-15 during Round 97,
+      implemented Round 98)**: the
+      CALL layout needs `dest+1..dest+N` fresh; `compileReturn`/`compileYield` land
+      expressions in r0 and `x = <call>` lands in `x`'s (possibly old) home, so live
+      locals inside the window are clobbered — `return h(b, a)` returns 606 not 605,
+      `x = f"a{n}"` prints `aa%s`, `yield f"v{n}"` prints `vv%s`. Has its own plan:
+      `docs/plans/archive/call-arg-slot-clobber-plan.md` (re-home guard in the two
+      CALL lowerings; `compileCallExpr` + `slotsWindowBusy`, Round 98).
 - [x] **expression-form `++`/`--` implemented with C-style semantics (2026-11-15, Round 97)**:
       supersedes the Round 96 refusal below — `Expr` gains `isPostfix` (both postfix parse
       sites set it), a shared `emitIncDec` lowers statement and value forms through one

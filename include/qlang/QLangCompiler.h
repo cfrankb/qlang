@@ -387,6 +387,9 @@ private:
   // tmpRegister() can't alias a slot with a live temp. Ranges nest (f(g(x)))
   // and are all restored at the statement boundary (endOfStatement).
   void beginArgSlots(int dest, int nSlots);
+  // True if a live value (named home / live temp) sits in [lo, hi): the
+  // CALL slot window must be fresh registers — see compileCallExpr.
+  bool slotsWindowBusy(int lo, int hi) const;
   void endArgSlots();
   // Highest live temp, or -1. The free pool must stay strictly above this:
   // a call's arg slots (dest+1..dest+n, dest = temp) must never alias a
@@ -550,6 +553,11 @@ private:
   // import a library (Phase 3c).
   void checkImportCycles() const;
   void compileExpr(const ExprPtr &e, int dest);
+  // Lower a call-shaped expression (CALL/CALLFN/CALLCLOS/MAKEGEN/
+  // emitImportCall). The slot window dest+1.. must be fresh registers
+  // (SPEC §bytecodes CALL layout): an old dest is re-homed to a temp and
+  // the result moved back after the call.
+  void compileCallExpr(const ExprPtr &e, int dest);
   // Lower a ternary block branch ({ ... return v ... }) to a closure call:
   // the block's `return` yields the ternary's value (SPEC §operators
   // "operator ?"). Free variables are captured by buildFunction.

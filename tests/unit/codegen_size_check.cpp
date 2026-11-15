@@ -59,15 +59,22 @@ static void check(bool ok, const std::string &name) {
 // one more instruction (4 sites in hello.ql, 44 in perf_stress.ql — plan
 // docs/plans/phase3-opcode-retirement-plan.md S1). money.ql and cast.ql have no
 // truthiness test and are unchanged.
+// hello.ql 215 -> 217 and cast.ql 163 -> 189: a CALL whose dest is an old low
+// register (return/yield's r0, a reassigned variable's home) is re-homed to a
+// fresh temp when its slot window dest+1..dest+N would land on live values,
+// then MOV'd back (fix for the call-arg slot clobber, plan
+// docs/plans/archive/call-arg-slot-clobber-plan.md). cast.ql's f-strings cost 13
+// re-homed calls at +2 instructions each; money.ql and perf_stress.ql are
+// unchanged.
 struct Budget {
   const char *script;
   size_t entry;
 };
 
 static const Budget kBudgets[] = {
-    {"hello.ql", 215},
+    {"hello.ql", 217},
     {"money.ql", 151},
-    {"cast.ql", 163},
+    {"cast.ql", 189},
     {"perf_stress.ql", 565},
 };
 

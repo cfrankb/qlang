@@ -131,6 +131,26 @@ int main() {
     "local g = gen_range(1, 3)\n",
     "gen_range", 0);
 
+  // CALL arg-slot clobber (docs/plans/archive/call-arg-slot-clobber-plan.md): yield
+  // compiles its value into r0, so the CALL slot window used to cover the
+  // generator's live locals and the staged args clobbered each other.
+  expectVal("yield + 2-arg call: slots don't clobber the args",
+    "def h(a, b) { return a * 100 + b }\n"
+    "def gen() { local a = 5\n local b = 6\n yield h(b, a) }\n"
+    "local g = gen()\nlocal r = g();",
+    "r", 605);
+  {
+    // String result of the yield needs a string check (expectVal is int-only).
+    QLangContext ctx;
+    try {
+      ctx.run("def gen() { local n = 7\n yield f\"v{n}\" }\n"
+              "local g = gen()\nlocal r = g();");
+      std::string got = ctx.get("r").asString();
+      if (got == "v7") { std::cout << "[PASS] str:  yield + f-string (r=\"" << got << "\")\n"; passes++; }
+      else { std::cout << "[FAIL] str:  yield + f-string (r=\"" << got << "\" exp \"v7\")\n"; fails++; }
+    } catch (const QLangError &e) { std::cout << "[FAIL] str:  yield + f-string -> " << e.what() << "\n"; fails++; }
+  }
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }

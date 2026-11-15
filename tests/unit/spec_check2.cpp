@@ -1592,6 +1592,43 @@ local ab = [1,2]
 local v = ab[5]
 )", "array index out of range");
 
+  // -- CALL arg-slot clobber (docs/plans/archive/call-arg-slot-clobber-plan.md): an
+  // old low dest (return/yield's r0, a reassigned variable's home) used to
+  // leave live registers inside the CALL slot window dest+1.., so the
+  // template/arg staging MOVs clobbered values before the call read them.
+  // The compiler now re-homes such lowerings to a fresh temp.
+  expectVal("return + 2-arg call: slots don't clobber the args",
+            "def h(a, b)\n  return a * 100 + b\nend\n"
+            "def k()\n  local a = 5\n  local b = 6\n  return h(b, a)\nend\n"
+            "r = k()",
+            "r", 605);
+  expectStr("return + f-string: template MOV doesn't clobber the local",
+            "def g()\n  local n = 7\n  return f\"x{n}\"\nend\nr = g()",
+            "r", "x7");
+  expectVal("reassignment + 2-arg call: window off other live homes",
+            "def h(a, b)\n  return a * 100 + b\nend\n"
+            "def k()\n  local x = 0\n  local n = 5\n  local m = 6\n"
+            "  x = h(m, n)\n  return x\nend\nr = k()",
+            "r", 605);
+  expectStr("reassignment + f-string",
+            "def k()\n  local x = 0\n  local n = 7\n  x = f\"a{n}\"\n"
+            "  return x\nend\nr = k()",
+            "r", "a7");
+  expectVal("return + 3-arg call",
+            "def h(a, b, c)\n  return a * 10000 + b * 100 + c\nend\n"
+            "def k()\n  local a = 1\n  local b = 2\n  local c = 3\n"
+            "  return h(c, b, a)\nend\nr = k()",
+            "r", 30201);
+  // Controls: the direct-landing paths must keep working (dest is already
+  // fresh — a declaration home, or an arg slot that IS the value's home).
+  expectStr("declaration + f-string stays direct",
+            "local n = 7\nlocal s = f\"x{n}\"\nr = s",
+            "r", "x7");
+  expectVal("single-arg return call stays direct",
+            "def h(a)\n  return a * 10\nend\n"
+            "def k()\n  local a = 5\n  return h(a)\nend\nr = k()",
+            "r", 50);
+
   std::cout << "\n==== " << passes << " passed, " << fails << " failed ====\n";
   return fails ? 1 : 0;
 }
