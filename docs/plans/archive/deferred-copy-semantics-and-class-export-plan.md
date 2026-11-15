@@ -1,18 +1,21 @@
 # Plan: shallowcopy, `copy` parameter specifier, class exports (F4 / Q42)
 
-Adopted: 2026-11-14 (post-Round 94). Status: **Phase 0 landed (Round 104, Q42 + the class-export
-spec sentences); Phase 1 landed (Round 105, `shallowcopy`); Phase 3 superseded by
-[class-export-plan.md](archive/class-export-plan.md) and landed with it (Rounds 104–107, F4
-closed)** — Phase 2 (`copy` specifier) remains open; its Phase 0 gate landed for the class-export
-half only.
+Adopted: 2026-11-14 (post-Round 94). Status: **plan fully landed — archived (Round 112,
+2026-11-15)**. Phase 0 landed (Round 104, Q42 + the class-export
+spec sentences, plus the `copy` spec sentence in `docs/spec/06-functions.md` `### copy
+parameters` with Phase 2); Phase 1 landed (Round 105, `shallowcopy`); Phase 3 superseded by
+[class-export-plan.md](class-export-plan.md) and landed with it (Rounds 104–107, F4
+closed); Phase 2 (`copy` specifier) **landed Round 112** — contextual keyword in
+`parseParamList`, in-place `DEEPCOPY p, p` prologue in `buildFunction` (no new opcode, no
+`.qlc` change), spec `### copy parameters`, guards `spec_check2` +14 + `copy_param.ql`.
 
 Provenance of the four items (all *explicitly deferred by decision*, never by omission):
 
 | item | deferred by | promotion trigger that fired |
 |---|---|---|
-| `shallowcopy` | `archive/deepcopy-plan.md` open decision #5 — "cheap and useful; still deferred" | the copy-semantics round (this plan) |
-| `copy` param specifier (Option D) | `archive/deepcopy-plan.md` #6 — "natural later sugar" over the shipped `deepcopy` builtin | same; also the module plan's deferred row "**by-value arguments across a module boundary** — promote when: the value-semantics round" (`archive/module-export-import-plan.md`) |
-| class exports (audit **F4**) | `docs/bugs/module-export-import-audit.md` F4, `archive/module-export-import-plan.md` deferred table | this plan (Phase 3) |
+| `shallowcopy` | `deepcopy-plan.md` open decision #5 — "cheap and useful; still deferred" | the copy-semantics round (this plan) |
+| `copy` param specifier (Option D) | `deepcopy-plan.md` #6 — "natural later sugar" over the shipped `deepcopy` builtin | same; also the module plan's deferred row "**by-value arguments across a module boundary** — promote when: the value-semantics round" (`module-export-import-plan.md`) |
+| class exports (audit **F4**) | `docs/bugs/module-export-import-audit.md` F4, `module-export-import-plan.md` deferred table | this plan (Phase 3) |
 | **Q42** (may a `.ql` module export a class? "Default: no, unanswered — needs a spec sentence first") | same records; `todo.md` §"owned Q39–Q43 (all resolved except Q42)" | Q42 **is** F4's spec decision — Phase 0 answers it, Phase 3 lands it |
 
 ## Baseline facts (verified Round 94, 2026-11-14)
@@ -124,7 +127,7 @@ record in this plan's table below.
 ## Phase 4 — tracking (with the phase that closes each)
 
 Flip: `missing-features-plan.md` F4 row + Q42; `todo.md` Q42 clause ("all resolved except
-Q42"); `archive/deepcopy-plan.md` stays archived (its #5/#6 pointer now leads to a landed
+Q42"); `deepcopy-plan.md` stays archived (its #5/#6 pointer now leads to a landed
 plan — note it here, not there); `status.md` value-semantics bullet gains the follow-ups;
 `history.md` entries; `tests.md`/`harness.md` tallies re-recorded **as measured**;
 `update-doc-hashes.sh` after green, never before. Editors config check per AGENTS rule.

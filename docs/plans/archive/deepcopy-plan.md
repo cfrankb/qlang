@@ -467,10 +467,12 @@ longer open work. Remaining:
    (`unsupported operator ''`). This unblocked the plan's independence tests.
 5. **`shallowcopy(x)` companion** — copy the top container, share elements.
    Cheap and useful; **still deferred** to a follow-up round (explicitly out of
-   scope for this plan; not required by it).
+   scope for this plan; not required by it). **Landed later:** Round 105,
+   `deferred-copy-semantics-and-class-export-plan.md` Phase 1.
 6. **`copy` parameter specifier (Option D)** — `def f(copy x)` to deep-copy a
    param on entry. **Still deferred:** Option A (`deepcopy` builtin) was chosen;
-   the specifier is a natural later sugar over it.
+   the specifier is a natural later sugar over it. **Landed later:** Round 112,
+   same plan Phase 2 (`docs/spec/06-functions.md` `### copy parameters`).
 7. **Rollout of the breaking change** — **✓ RESOLVED 2026-11-05: clean break.**
    No version bump, no compat flag, no copy-semantics shim for old images. The
    `.qlc` **durable layout did not change** (the writer stores payloads, the

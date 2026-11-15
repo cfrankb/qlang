@@ -301,12 +301,13 @@ StmtPtr QLangParser::parseStatementImpl() {
       stmt->kind = StmtKind::Arrow;
       stmt->name = idt.value;
       consume(TokenType::LParen, "'(' after method name");
-      parseParamList(stmt->params, stmt->paramTypes);
+      parseParamList(stmt->params, stmt->paramTypes, &stmt->paramCopy);
       consume(TokenType::RParen, "')' after method params");
       // Mandatory explicit capture list: [x, y, ...]
       consume(TokenType::LBracket, "'[' to open capture list");
       if (!check(TokenType::RBracket)) {
         do {
+          rejectCopySpec();
           stmt->captures.push_back(
             consume(TokenType::Ident, "captured variable").value);
         } while (match(TokenType::Comma));
@@ -1118,7 +1119,7 @@ StmtPtr QLangParser::parseFunction() {
   stmt->kind = StmtKind::Def;
   stmt->funcName = consume(TokenType::Ident, "function name").value;
   consume(TokenType::LParen, "'(' after function name");
-  parseParamList(stmt->params, stmt->paramTypes);
+  parseParamList(stmt->params, stmt->paramTypes, &stmt->paramCopy);
   consume(TokenType::RParen, "')'");
   if (match(TokenType::RArrow))
     parseTypeAnnotation(stmt->returnType, "return type after '->'");
@@ -1143,11 +1144,31 @@ StmtPtr QLangParser::parseFunction() {
 // Parameter list with optional annotations: `a, b:int, p:Person` (SPEC
 // §strict typing "type annotations"). Every parameter gets an entry in
 // `types` (undeclared = default TypeAnnotation) so the vectors stay parallel.
+// The contextual `copy` specifier (SPEC §functions "copy parameters"; the
+// import alias `as` is the contextual-keyword precedent): identifier `copy`
+// directly followed by an identifier reads as the specifier, in every other
+// position `copy` is a plain name. `copy self` is a parse error.
 void QLangParser::parseParamList(std::vector<std::string> &params,
-                                 std::vector<TypeAnnotation> &types) {
+                                 std::vector<TypeAnnotation> &types,
+                                 std::vector<bool> *paramCopy,
+                                 bool allowCopy) {
   if (check(TokenType::RParen)) return;
   do {
-    params.push_back(consume(TokenType::Ident, "parameter name").value);
+    bool isCopy = false;
+    if (check(TokenType::Ident) && current().value == "copy" &&
+        peek(1).type == TokenType::Ident) {
+      if (!allowCopy)
+        throw QLangError(QLangErrorKind::Parse, current().line, current().col,
+                         "copy is not allowed here");
+      m_pos++;
+      isCopy = true;
+    }
+    const Token &nameTok = consume(TokenType::Ident, "parameter name");
+    if (isCopy && nameTok.value == "self")
+      throw QLangError(QLangErrorKind::Parse, nameTok.line, nameTok.col,
+                       "copy is not allowed here");
+    params.push_back(nameTok.value);
+    if (paramCopy) paramCopy->push_back(isCopy);
     if (match(TokenType::Colon)) {
       TypeAnnotation ann;
       parseTypeAnnotation(ann, "parameter type after ':'");
@@ -1156,6 +1177,15 @@ void QLangParser::parseParamList(std::vector<std::string> &params,
       types.emplace_back();
     }
   } while (match(TokenType::Comma));
+}
+
+// A `copy` specifier where none is allowed (capture lists are plain name
+// lists; SPEC §functions "copy parameters" excludes captures).
+void QLangParser::rejectCopySpec() {
+  if (check(TokenType::Ident) && current().value == "copy" &&
+      peek(1).type == TokenType::Ident)
+    throw QLangError(QLangErrorKind::Parse, current().line, current().col,
+                     "copy is not allowed here");
 }
 
 // A type annotation: a built-in type keyword or a class/external name
@@ -1205,13 +1235,16 @@ StmtPtr QLangParser::parseArrowClosure(const std::string &varName) {
   auto stmt = std::make_shared<Stmt>();
   stmt->kind = StmtKind::Arrow;
   stmt->name = varName;
-  parseParamList(stmt->params, stmt->paramTypes);
+  // The `copy` specifier is not allowed on arrow-closure params (SPEC
+  // §functions "copy parameters").
+  parseParamList(stmt->params, stmt->paramTypes, nullptr, /*allowCopy=*/false);
   consume(TokenType::RParen, "')' of arrow function");
 
   // Mandatory explicit capture list: [x, y, ...]
   consume(TokenType::LBracket, "'[' to open capture list");
   if (!check(TokenType::RBracket)) {
     do {
+      rejectCopySpec();
       stmt->captures.push_back(
         consume(TokenType::Ident, "captured variable").value);
     } while (match(TokenType::Comma));
@@ -1625,12 +1658,16 @@ return node;
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Closure;
       consume(TokenType::LParen, "'(' of arrow function");
-      parseParamList(node->params, node->paramTypes);
+      // The `copy` specifier is not allowed on arrow-closure params (SPEC
+      // §functions "copy parameters").
+      parseParamList(node->params, node->paramTypes, nullptr,
+                     /*allowCopy=*/false);
       consume(TokenType::RParen, "')' of arrow function");
       // Mandatory explicit capture list: [x, y, ...]
       consume(TokenType::LBracket, "'[' to open capture list");
       if (!check(TokenType::RBracket)) {
         do {
+          rejectCopySpec();
           node->captures.push_back(consume(TokenType::Ident, "capture name").value);
         } while (match(TokenType::Comma));
       }

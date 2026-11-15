@@ -1,3 +1,33 @@
+## Round 112 — 2026-11-15 — `copy` parameter specifier: `def f(copy x)` deep-copies the argument at call entry (deferred-copy plan **Phase 2** — the last open phase, plan now fully landed and archived; spec `docs/spec/06-functions.md` `### copy parameters`)
+
+- **Language.** A contextual keyword in a parameter list — the identifier `copy` followed
+  by an identifier — marks the parameter by-value: `def f(copy x)`, `def f(copy x:array)`,
+  method params (`m(self, copy arr)`), static-method params (the hidden `__anchor__` takes
+  an implicit unflagged slot). At call entry the compiler emits in-place `DEEPCOPY p, p`
+  in the function prologue (the shipped `deepcopy` opcode — **no new opcode, no `.qlc`
+  version change, nothing serialized**: the specifier never enters the export table or the
+  v10 signature records). The copy follows the `deepcopy` rules (recursive, `__deepcopy__`
+  hooks honoured, primitives/strings a no-op), so caller-visible state never changes —
+  in place or by rebind. Because the opcode lives in the callee's own bytecode,
+  `export def f(copy x)` is the by-value answer across a module boundary (the module
+  plan's deferred row, closed here).
+- **Parse errors.** `rejectCopySpec` refuses the specifier on `self`, on arrow-closure /
+  closure-literal params and inside a capture list — the spec's "copy is not allowed
+  here" — while `copy` alone stays an ordinary identifier (a param literally named
+  `copy` still parses). `Stmt` grows `paramCopy` parallel to `params`;
+  `buildFunction` takes a defaulted trailing flag list; `StaticMethodDecl` carries its own.
+- **Spec.** `06-functions.md` `### copy parameters` lands with the implementation (the
+  plan's Phase 0 gate had shipped only the class-export half); the plan moved to
+  `docs/plans/archive/deferred-copy-semantics-and-class-export-plan.md` and live-doc
+  references repointed.
+- **Guards.** `spec_check2` 602 → **616** (+14: mutation-invisible and rebind-invisible
+  caller arrays, nested-payload deep-not-shallow, an unmarked param still shares,
+  primitive/string no-op parity, method param, mixed typed list `def f(n, copy bag:array)`,
+  `copy` as a plain param name, four refusals — `copy self`, method `copy self`,
+  arrow-closure params, capture list — plus the `copy is not allowed here` message pin);
+  new script regression `tests/scripts/copy_param.ql` (29th). ctest **71/71** green,
+  `build/spec_check2` **616 passed, 0 failed**.
+
 ## Round 111 — 2026-11-15 — `--asm-level >1` input symmetry closed as never-build; the `.qla` follow-ups plan is fully landed and archived (qla-assembler-followups **M4**; no code)
 
 - **Decision (record, not code):** `--assemble` accepts only the level-1 print plus the

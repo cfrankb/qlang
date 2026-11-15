@@ -413,6 +413,7 @@ add_test(NAME qla_roundtrip COMMAND qla_roundtrip $<TARGET_FILE:qlcc>)
 set(QL_SCRIPTS
   class_export.ql
   cmp.ql
+  copy_param.ql
   cast.ql
   encode_repro.ql
   ext_consts.ql

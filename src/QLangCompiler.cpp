@@ -2109,7 +2109,8 @@ int QLangCompiler::buildFunction(const std::string &name,
                                  std::vector<std::string> captures,
                                  const std::vector<StmtPtr> &body,
                                  const std::vector<TypeAnnotation> &paramTypes,
-                                 const TypeAnnotation &returnType, int line) {
+                                 const TypeAnnotation &returnType, int line,
+                                 const std::vector<bool> &paramCopy) {
   // STRICT_ALL (SPEC §strict typing "level 2 — undeclared types"): every
   // callable parameter needs a declared type; the exact diagnostic is
   // `undeclared type for '<name>'`. Hidden receivers are exempt: a method's
@@ -2207,6 +2208,14 @@ int QLangCompiler::buildFunction(const std::string &name,
     if (r >= m_nextReg)
       m_nextReg = r + 1;
   }
+  // `copy x` parameter specifier (SPEC §functions "copy parameters"): the
+  // argument is deep-copied into its parameter register right after binding.
+  // Pure sugar over the shipped DEEPCOPY (the plan's framing of decision #6):
+  // no new opcode, no call-site or signature change, so `export def f(copy x)`
+  // passes by value across a module boundary for free.
+  for (size_t i = 0; i < params.size() && i < paramCopy.size(); ++i)
+    if (paramCopy[i])
+      emit(Opcode::DEEPCOPY, static_cast<int>(i), static_cast<int>(i), 0);
   // Register 0 is always live (the frame's return register, read by the
   // implicit final `return regs[0]`): even a parameterless function must
   // not hand it out as a temp, or the frame would be sized too small.
@@ -3271,7 +3280,7 @@ void QLangCompiler::compileDef(const StmtPtr &s) {
   trace(TRACE_FULL, " }, m_functions.size=%d\n", (int)m_functions.size());
   int funcIndex =
       buildFunction(s->funcName, s->params, {}, s->body, s->paramTypes,
-                    s->returnType, s->line);
+                    s->returnType, s->line, s->paramCopy);
   m_userFuncs[s->funcName] = funcIndex;
   // Track generator functions at the outer scope so assignments from them
   // are recognized as producing generator values.
@@ -4192,6 +4201,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
     int line = 0;
     std::vector<std::string> captures;
     std::vector<StmtPtr> body;
+    std::vector<bool> paramCopy; // parallel to params (copy specifier flags)
     int funcIndex = -1; // filled in the post-loop statics build
   };
   std::vector<StaticMethodDecl> staticMethodDecls;
@@ -4247,7 +4257,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
         // post-loop statics build, after all static names are known.
         staticMethodDecls.push_back({st->name, st->params, st->paramTypes,
                                      st->returnType, st->line, st->captures,
-                                     st->body});
+                                     st->body, st->paramCopy});
         continue;
       }
       // Instance method: compile now, with the class's static names visible
@@ -4256,7 +4266,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       m_inStaticMethod = false;
       int funcIndex = buildFunction(st->name, st->params, st->captures,
                                     st->body, st->paramTypes, st->returnType,
-                                    st->line);
+                                    st->line, st->paramCopy);
       m_classStaticNames.clear();
       // Record the class method's provenance so tools never list it as a
       // main-module export.
@@ -4315,10 +4325,14 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       std::vector<TypeAnnotation> ptypes = {TypeAnnotation{}};
       for (auto &pt : sm.paramTypes)
         ptypes.push_back(pt);
+      // Copy flags shift with the params; the hidden anchor is never copied.
+      std::vector<bool> pcopy = {false};
+      for (bool c : sm.paramCopy)
+        pcopy.push_back(c);
       m_classStaticNames = allStatics;
       m_inStaticMethod = true;
       int funcIndex = buildFunction(sm.name, params, sm.captures, sm.body,
-                                    ptypes, sm.returnType, sm.line);
+                                    ptypes, sm.returnType, sm.line, pcopy);
       m_inStaticMethod = false;
       m_classStaticNames.clear();
       // Record the static method's provenance (see the instance-method note).

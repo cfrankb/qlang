@@ -595,12 +595,16 @@ private:
   // Compile a function body (a `def` body or an arrow-closure body) into its
   // own instruction stream and constant pool, append it to the program, and
   // return its function index. `captures` is the explicit capture list.
+  // `paramCopy` (parallel to `params`) marks `copy`-specified parameters:
+  // the prologue deep-copies each flagged argument into its register (SPEC
+  // §functions "copy parameters").
   int buildFunction(const std::string &name,
                     const std::vector<std::string> &params,
                     std::vector<std::string> captures,
                     const std::vector<StmtPtr> &body,
                     const std::vector<TypeAnnotation> &paramTypes = {},
-                    const TypeAnnotation &returnType = {}, int line = 0);
+                    const TypeAnnotation &returnType = {}, int line = 0,
+                    const std::vector<bool> &paramCopy = {});
 
   // Compile a statement inside a function body (used by buildFunction for the
   // body and by compileStmt for the main program). The current function's

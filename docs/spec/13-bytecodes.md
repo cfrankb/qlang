@@ -517,7 +517,7 @@ defined in [06-functions.md](06-functions.md) `### deepcopy`.
 ## OpCode shallowcopy
 
 Implemented 2026-11-15 (Phase 1 of
-[../plans/deferred-copy-semantics-and-class-export-plan.md](../plans/deferred-copy-semantics-and-class-export-plan.md),
+[../plans/archive/deferred-copy-semantics-and-class-export-plan.md](../plans/archive/deferred-copy-semantics-and-class-export-plan.md),
 the F4 clone round).
 
 `shallowcopy a, b` — `r[a] = top-level copy of r[b]`. two register operands,

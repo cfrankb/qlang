@@ -9,9 +9,9 @@ Phases 0–5, not from the legacy monolith.
 
 | Requirement (15-tests.md) | Status | Evidence |
 |---|---|---|
-| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (32 C++ harnesses), `tests/scripts/` (34 `.ql`), `tests/perf/`; `examples/` holds demo only — `hello.cpp` (smoke app) + `qlcc.cpp` (compiler driver) |
+| All test sources and scripts reside in `tests/` | ✓ | `tests/unit/` (32 C++ harnesses), `tests/scripts/` (36 `.ql`), `tests/perf/`; `examples/` holds demo only — `hello.cpp` (smoke app) + `qlcc.cpp` (compiler driver) |
 | Tests run after every task (regression gate) | ✓ | ctest is the gate (AGENTS.md "Build & test"); CI on every push to `main` |
-| Regression tests exist | ✓ | 28 script regressions (`script_*`, driven by `qlcc --run`) + all 33 unit harnesses + the `qlcc_cli` driver gate |
+| Regression tests exist | ✓ | 29 script regressions (`script_*`, driven by `qlcc --run`) + all 33 unit harnesses + the `qlcc_cli` driver gate |
 | Unit tests exist (features + edge cases) | ✓ | 32 unit suites — see ctest matrix below |
 | Performance tests: immutable baseline for parser/compiler/execution time, logged and compared | ✓ | `tests/perf/perf_bench.cpp` + committed `tests/perf/baseline.json`; ctest `perf` gate (±20% / 0.5 ms) |
 | GitHub CI: library + smoke app + test suite against `msvc`, `g++`, `mingw`, `wasm`, `clang` | ✓ | three workflows, per the spec's "three separate ci/cd yaml" — see CI matrix |
@@ -46,7 +46,7 @@ tests/
 `examples/` retains only real demos: `hello.cpp` (smoke app) and `qlcc.cpp`
 (script runner / smoke-test app).
 
-### ctest matrix — 70 entries (70/70 green, 2026-11-15)
+### ctest matrix — 71 entries (71/71 green, 2026-11-15)
 
 Unit (33 harnesses + `smoke`):
 
@@ -54,7 +54,7 @@ Unit (33 harnesses + `smoke`):
 |---|---|---|---|
 | `smoke` | `qlang_example` | `examples/hello.cpp` | `VM result: OK` |
 | `spec_check` | `spec_check` | `tests/unit/spec_check.cpp` | 33 passed |
-| `spec_check2` | `spec_check2` | `tests/unit/spec_check2.cpp` | 602 passed (incl. 20 `deepcopy` cases added Round 42 + 13 `__deepcopy__` hook cases added Round 44 + 17 `t[key]`/`a[i]` subscript cases added Round 51 + 3 Round 93: a top-level `const` read through an f-string / a `cast` / an f-string over a cast inside a def — the capture-scan fix, `docs/bugs/resolved/const-fstring-cast-capture-miss.md` + 6 Round 95: statement-form `++`/`--` guards — const in a def reports `cannot increment/decrement to constant`, `global`/captured names write back through the capture cell, an undeclared target still reports undeclared, audit F5's sibling + 11 Round 97 (replacing Round 96's 4 refusal checks): expression-form `++`/`--` — postfix yields the old value, prefix the new (locals, capture cells, `global` write-through, `while (a++ < 3)` sequencing), const/undeclared guards shared with the statement form, non-variable operand refused — `docs/bugs/resolved/incdec-value-context-result-register.md` + 7 Round 98: CALL arg-slot clobber — `return`/assignment with a 2-/3-arg call and an f-string into `return`/variable (`return h(b, a)` → 605, `x = f"a{n}"` → `a7`), declaration-order and `return h(a)` controls + 17 Round 99: `sc-` short-circuit cases — the right operand of `&&`/`||`/`!` must not be evaluated when the left decides (boom throws if evaluated; runs pinned with bump), control position (if/while/gotoIf back-edge chains/`!`) and value position (skips, runs, nesting, the result-overwrites-its-own-operand regression) + 4 Round 100: Unsigned/Qword literal immediates — tag survival of a qword immediate (`4294967295` stays `qword` through the `U64` form), `INT64_MAX` hex mask, `unsigned` tag survival (`4294967295u`), narrow unsigned value (`200u`)) + 15 Round 101: per-family literal-RHS ALU results — `*` `/` `%` `&` `|` `^` `<<` `>>` `**`, value-position `==`/`<`, string pool-right concat, the self-assign (`x = x * 2`) and nested-dest (`(x + 1) * 3`) alias shapes, float immediate RHS) + 10 Round 102: exact mixed-signness relations — negative `Int` below `unsigned`/`qword`, big `Qword` (via `local b:qword = -1` CONV wrap) above the `INT64_MAX` literal/small-int/unsigned/float, big-qword bit order + self-relations, big-qword set-dedup) |
+| `spec_check2` | `spec_check2` | `tests/unit/spec_check2.cpp` | 616 passed (incl. 20 `deepcopy` cases added Round 42 + 13 `__deepcopy__` hook cases added Round 44 + 17 `t[key]`/`a[i]` subscript cases added Round 51 + 3 Round 93: a top-level `const` read through an f-string / a `cast` / an f-string over a cast inside a def — the capture-scan fix, `docs/bugs/resolved/const-fstring-cast-capture-miss.md` + 6 Round 95: statement-form `++`/`--` guards — const in a def reports `cannot increment/decrement to constant`, `global`/captured names write back through the capture cell, an undeclared target still reports undeclared, audit F5's sibling + 11 Round 97 (replacing Round 96's 4 refusal checks): expression-form `++`/`--` — postfix yields the old value, prefix the new (locals, capture cells, `global` write-through, `while (a++ < 3)` sequencing), const/undeclared guards shared with the statement form, non-variable operand refused — `docs/bugs/resolved/incdec-value-context-result-register.md` + 7 Round 98: CALL arg-slot clobber — `return`/assignment with a 2-/3-arg call and an f-string into `return`/variable (`return h(b, a)` → 605, `x = f"a{n}"` → `a7`), declaration-order and `return h(a)` controls + 17 Round 99: `sc-` short-circuit cases — the right operand of `&&`/`||`/`!` must not be evaluated when the left decides (boom throws if evaluated; runs pinned with bump), control position (if/while/gotoIf back-edge chains/`!`) and value position (skips, runs, nesting, the result-overwrites-its-own-operand regression) + 4 Round 100: Unsigned/Qword literal immediates — tag survival of a qword immediate (`4294967295` stays `qword` through the `U64` form), `INT64_MAX` hex mask, `unsigned` tag survival (`4294967295u`), narrow unsigned value (`200u`)) + 15 Round 101: per-family literal-RHS ALU results — `*` `/` `%` `&` `|` `^` `<<` `>>` `**`, value-position `==`/`<`, string pool-right concat, the self-assign (`x = x * 2`) and nested-dest (`(x + 1) * 3`) alias shapes, float immediate RHS) + 10 Round 102: exact mixed-signness relations — negative `Int` below `unsigned`/`qword`, big `Qword` (via `local b:qword = -1` CONV wrap) above the `INT64_MAX` literal/small-int/unsigned/float, big-qword bit order + self-relations, big-qword set-dedup) + 14 Round 112: `copy` parameter specifier (deferred-copy plan Phase 2) — caller array mutation-invisible + rebind-invisible, nested payload detached (deep not shallow), unmarked param still shares, primitive/string identical with/without, method param, mixed typed list (`copy bag:array`), `copy` still a plain param name, 4 refusals (`copy self` def/method/arrow-closure/capture list) + the `copy is not allowed here` message pin) |
 | `spec_cast_test` | `spec_cast_test` | `tests/unit/spec_cast_test.cpp` | 20 passed |
 | `test_module` | `test_module` | `tests/unit/test_module.cpp` | 7 tests OK |
 | `gen_test` | `gen_test` | `tests/unit/gen_test.cpp` | 9 passed (+2 Round 65: the `buildFunction` capture-spec fix — a generator's pool closure keeps `fn.captures` across the move into the function table — pinned with a global capture and a capture-free generator; +2 Round 98: `yield` with a 2-arg call and with an f-string into the yield — `yield h(600, n)` → 605, `yield f"v{n}"` → `v7`, the call-arg-slot clobber fix) |
@@ -92,8 +92,8 @@ Counted unit cases: **39388** (549+33+20+7+7+25+13+17+18+85+8+358+36127+1324+151
 the three `ALL PASS` gate suites (`test_native`, `test_call`, `test_inject`). (The written sum had
 omitted `module_search` since its Round 67 addition; its checks are included from Round 72.)
 
-Script (28): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
-`qlcc --run` (non-zero exit = fail): `cast`, `class_export`, `cmp`, `encode_repro`,
+Script (29): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
+`qlcc --run` (non-zero exit = fail): `cast`, `class_export`, `cmp`, `copy_param`, `encode_repro`,
 `ext_consts`, `ext_regs`, `flags`, `hello`, `helpers`, `imm_kinds`, `jump_widths`, `len`, `money`,
 `moneyv2`, `perf_stress`, `pool_constants`, `ql_module`, `ql_module_const`, `ql_star_import`, `table_subscript`, `test_assert`, `test_assert2`,
 `test_cast`, `test_cast2`, `test_minmax`, `test_minmax2`, `type`, `value_share`.
@@ -101,6 +101,9 @@ Script (28): one `script_<name>` ctest entry per `tests/scripts/*.ql`, driven by
 class — both spellings, the method through a receiver variable, `type()`, the captured-const
 `__init__`, field defaults shared by handle, the zero-`__init__` class (fixture
 `class_export_leaf.ql`, not an entry of its own).
+`copy_param` (Round 112, deferred-copy plan Phase 2) runs `def f(copy x)` end to end — the
+caller's array/table survive in-place mutation and rebind through a `copy` param, an
+unmarked param still shares, and `copy` still parses as a plain identifier.
 `pool_constants` (qla-assembler-followups M3) puts ambiguously-printable values in the
 constant pool — folded `enum` members of `byte`/`unsigned`/`long`/`qword` base types and an
 integral float inside a table literal — the producers for the `qla_roundtrip` tag fidelity.

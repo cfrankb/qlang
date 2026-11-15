@@ -1618,6 +1618,97 @@ int main() {
     fails++;
   }
 
+  // -- `copy` parameter specifier (deferred-copy plan Phase 2, SPEC 06
+  // "copy parameters"): def f(copy x) deep-copies the argument into the
+  // parameter at call entry; contextual keyword; rejected on self, captures
+  // and arrow-closure params. --
+  expectVal("copy param: caller array mutation-invisible", R"(
+def push_it(copy bag)
+  bag[] = 99
+end
+local a = [1]
+push_it(a)
+local r = len(a);
+)", "r", 1);
+  expectVal("copy param: rebind-invisible", R"(
+def rebind_it(copy v)
+  v = [9]
+end
+local b = [1]
+rebind_it(b)
+local r = b[0];
+)", "r", 1);
+  expectVal("copy param: nested payload detached (deep, not shallow)", R"(
+def deep_touch(copy t)
+  local w = t.inner
+  w.n = 2
+end
+local tbl = {inner = {n = 1}}
+deep_touch(tbl)
+local r = tbl.inner.n;
+)", "r", 1);
+  expectVal("copy param: unmarked param still shares", R"(
+def no_copy(bag)
+  bag[] = 99
+end
+local a = [1]
+no_copy(a)
+local r = len(a);
+)", "r", 2);
+  expectVal("copy param: primitive identical with/without", R"(
+def bump(copy n)
+  n = n + 1
+end
+local a = 7
+bump(a)
+local b = 7
+bump2 = 0
+local r = a;
+)", "r", 7);
+  expectStr("copy param: string param identical", R"(
+def shout(copy s)
+  s = s + "!"
+end
+local s = "hi"
+shout(s)
+local r = s;
+)", "r", "hi");
+  expectVal("copy param: method param", R"(
+class P {
+  x = 0
+  mutate(self, copy arr)[] {
+    arr[] = 7
+  }
+}
+local m = [1]
+local p = P()
+p.mutate(m)
+local r = len(m);
+)", "r", 1);
+  expectVal("copy param: mixed list, typed", R"(
+def f(n, copy bag:array)
+  bag[] = n
+end
+local a = []
+f(5, a)
+local r = len(a);
+)", "r", 0);
+  expectVal("copy param: `copy` still a plain param name", R"(
+def g(copy)
+  return copy + 1
+end
+local r = g(41);
+)", "r", 42);
+  expectThrow("copy param rejected on self", "def f(copy self)\nend\nf(1)");
+  expectThrow("copy param rejected on class method self",
+              "class C {\n  m(copy self)[] { return 0 }\n}");
+  expectThrow("copy param rejected on arrow-closure params",
+              "local f = (copy x)[] { return 0 }\nlocal r = f(1)");
+  expectThrow("copy spec rejected in capture list",
+              "local y = 1\nlocal f = (x)[copy y] { return 0 }\nlocal r = f(1)");
+  expectMsg("copy param negative parse names the rule",
+            "local f = (copy x)[] { return 0 }", "copy is not allowed here");
+
   // -- polymorphic subscript: INDEXGET / INDEXPUT (spec 13-bytecodes
   // "indexget"/"indexput"). SPEC §declarations: `t["age"] = 33  # valid;
   // equivalent to t.age`, `t[] = 44  # error`. The base kind is resolved at

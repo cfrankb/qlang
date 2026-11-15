@@ -16,14 +16,14 @@ defined against C++20.
 | [03-declarations.md](03-declarations.md) | boolean evaluation, declarations and assignments | `b574e9fba63221df31582ba5ced416982d7438a66a5421f27b36df5a5b21741a` |
 | [04-control-flow.md](04-control-flow.md) | conditions, range, switch, loops, label/goto | `b531d6356ea43f7b470c3e22f4f58af887926b8987533b419ce91602c0e0d0e2` |
 | [05-operators.md](05-operators.md) | operators incl. `?`, `<`/`>`, `**`, cast, `==`/`!=`, `$`, `$$` | `2fe11c30cdd2d4b425ec2d7dce7008799d2db6b58d4972ad9f8eb43b4e539c8d` |
-| [06-functions.md](06-functions.md) | built-in functions incl. `deepcopy`, qlang native functions, C++ API | `75517b33d6b33870e7ae0d5aef5bb5a3acf9db69483e3241a5bbe4a1d5425704` |
+| [06-functions.md](06-functions.md) | built-in functions incl. `deepcopy`, qlang native functions, C++ API | `667fc32dd7656b4c8e579b6bbcb0f143b9f1e9ed03795dce6906d1f5836f7b59` |
 | [07-api.md](07-api.md) | module registration, QLang import syntax, `ctx.clear()`, verbose level, step budget, threading contract, module search paths, external search callback, output callback (universal) | `0c49122c4c21b63bd2e77d1291de1fb302e1979b51e1251d73d9b97f43b35144` |
 | [08-generators.md](08-generators.md) | generators, PROTOTYPE 1, Syntax, EOF sentinel | `a99107445f3850d8b600e84cf5d0e5860babc4173cda0e2a183debab0123200d` |
 | [09-modules.md](09-modules.md) | internal modules, import statement, math module | `85e8f087963439902c329941875a2ba4b6383180a5925bb8ea45df76217ea313` |
 | [10-classes.md](10-classes.md) | user-defined classes, `static`, `::`, `deepcopy`, restrictions | `28cea15de8cad0370765c3e553128726fe9c3ad54f4251820db83dddb740427d` |
 | [11-external-types.md](11-external-types.md) | conformance with external (C++) types | `380952dbb96bbe054adaf8ac948de683b4dbb778e28751bf49ce36135b12096e` |
 | [12-errors-trace.md](12-errors-trace.md) | error reporting, requirements, execution trace, format | `f0814e4811e60570546d4771c048ecb1e903e6737ad388ee752d9699b9e68ff8` |
-| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `c62a8d50dc7cec27a1c9a35f572bc9468a9470736a24786a775a30f1fee60e31` |
+| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `a6e0fc0c36d7a0711ebc1f829b455fe5cc509c4a500b01bad271244ac6e3118b` |
 | [14-scope.md](14-scope.md) | visibility scope. execution context | `ec1eadb21c4716b94590261fec12a16b1f11a715a5bfed53b5ca46232b6a0999` |
 | [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
 | [16-strict_typing.md](16-strict_typing.md) | strict typing | `81084dcccd977ebcdd7bdad5c3b815971fb25852f3f1bc2808f88a0dbfac4324` |

@@ -207,6 +207,10 @@ struct Stmt {
   std::string funcName;
   std::vector<std::string> params;
   std::vector<TypeAnnotation> paramTypes;  // parallel to params (Nil = none)
+  // `copy` parameter-specifier flags, parallel to params (SPEC §functions
+  // "copy parameters"). Only defs and class methods carry them; arrow
+  // closures never do (the parser rejects the specifier there).
+  std::vector<bool> paramCopy;
   TypeAnnotation returnType;               // `-> type` after the signature
   // `body` (shared with For) holds the function's statements.
 
@@ -334,8 +338,18 @@ private:
   bool looksLikeArrow() const;
   // Full parameter list `name[:type], ...` (annotations optional; a bare
   // Ident in type position names a class). types stays parallel to params.
+  // The contextual `copy` specifier (`copy x`, `copy x:type`; SPEC §functions
+  // "copy parameters") flags deep-copy-at-entry parameters: `paramCopy` (when
+  // given) stays parallel to params. allowCopy is false for arrow-closure
+  // parameter lists, where the specifier is a parse error.
   void parseParamList(std::vector<std::string> &params,
-                      std::vector<TypeAnnotation> &types);
+                      std::vector<TypeAnnotation> &types,
+                      std::vector<bool> *paramCopy = nullptr,
+                      bool allowCopy = true);
+  // Throw "copy is not allowed here" when the current tokens read a `copy`
+  // specifier (identifier `copy` followed by an identifier) in a position
+  // that takes none (capture lists).
+  void rejectCopySpec();
   // Parse a type after ':' / '->' into `ann` (builtin keyword or class name).
   // Throws a Parse error when the current token is not a type.
   void parseTypeAnnotation(TypeAnnotation &ann, const char *what);

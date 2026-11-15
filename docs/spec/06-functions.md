@@ -89,7 +89,7 @@ println(str(v.tags))   # expected: ["a"]          (nested value copied, not shar
 ### shallowcopy
 
 Implemented 2026-11-15 (Phase 1 of
-[../plans/deferred-copy-semantics-and-class-export-plan.md](../plans/deferred-copy-semantics-and-class-export-plan.md),
+[../plans/archive/deferred-copy-semantics-and-class-export-plan.md](../plans/archive/deferred-copy-semantics-and-class-export-plan.md),
 the F4 clone round).
 
 `shallowcopy(x)` copies the **top level only**: the result is a new array,
@@ -164,6 +164,36 @@ return value is optional. defaults to nil
 local always apply to the current scope.
 
 functions, lamdas and generators without a return statement will return nil (nil type)
+
+### copy parameters
+
+Implemented 2026-11-15 (Phase 2 of
+[../plans/archive/deferred-copy-semantics-and-class-export-plan.md](../plans/archive/deferred-copy-semantics-and-class-export-plan.md)).
+
+`def f(copy x)` deep-copies the argument into the parameter at call entry:
+the callee works on an independent copy, so caller-visible state never
+changes, in place or by rebind. The copy follows the `deepcopy` rules (see
+`### deepcopy`); for primitives and strings it is a no-op.
+
+```python
+def push_it(copy bag)
+   bag[] = 99
+end
+local a = [1]
+push_it(a)
+println(str(a))   # expected: [1]   (the caller's array is untouched)
+```
+
+- `copy` is a **contextual** keyword: it is the specifier only where an
+  identifier `copy` is followed by an identifier inside a parameter list;
+  anywhere else it is a plain identifier (precedent: the import alias `as`;
+  [02-lexical.md](02-lexical.md) reserves nothing new).
+- typed parameters read `copy x:type`.
+- not valid on `self`, on captures (`[x]` cells), or on arrow-closure
+  parameters: those uses are parse errors (`copy is not allowed here`).
+- it is call-entry sugar over `deepcopy`: call sites and signatures are
+  unchanged, so `export def f(copy x)` passes by value across a module
+  boundary.
 
 # C++ api
 

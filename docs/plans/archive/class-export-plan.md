@@ -5,7 +5,7 @@ P3a (Round 106, `.qlc` v11), P3b (Round 107, 2026-11-15, importer-side construct
 archived per AGENTS (fully implemented). Drafted in Plan mode
 2026-11-15; baseline HEAD `cc4744a`,
 Round 98). Supersedes the class-export sections (Phase 0 item 3, Phase 3) of
-`docs/plans/deferred-copy-semantics-and-class-export-plan.md`. Reference spec:
+`docs/plans/archive/deferred-copy-semantics-and-class-export-plan.md`. Reference spec:
 `docs/spec/09-modules.md` (`## keyword export`), `docs/spec/13-bytecodes.md`
 (`## export table (lookup)`), `docs/spec/10-classes.md` (`## construction`),
 `docs/SERIALIZATION.md` §4.6.
@@ -150,7 +150,7 @@ re-recorded **as measured**.
 - `docs/plans/missing-features-plan.md`: F4 row + Q42 → landed.
 - `docs/plans/todo.md`: Q42 clause ("all resolved except Q42") → all resolved;
   §5/§6 pointer to this plan closed.
-- `docs/plans/deferred-copy-semantics-and-class-export-plan.md`: its Phase 0
+- `docs/plans/archive/deferred-copy-semantics-and-class-export-plan.md`: its Phase 0
   item 3 / Phase 3 sections replaced by this plan (note in place; plan moves to
   `docs/plans/archive/` when its own remaining phases land).
 - `docs/compliance/status.md` / `history.md` / `tests.md` per round.
