@@ -9,6 +9,10 @@ Documentation is modular under `docs/` (migrated 2026-10-29 from the monolithic 
 plans that are fully implemented should be moved to `docs/plans/archive`.
 bugs that are fixed should be moved to `docs/bugs/resolved`.
 
+## editor configuration
+keep config up to date with the latest reserved words and keywords,
+`editors/vscode/language-configuration.json`
+
 ## Ponytail
 
 Follow the Ponytail rules in [ponytail/AGENTS.md](https://github.com/DietrichGebert/ponytail/blob/main/AGENTS.md) for all code changes.   
