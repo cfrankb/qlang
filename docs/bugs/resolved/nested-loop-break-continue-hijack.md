@@ -2,9 +2,16 @@
 
 **Date:** 2026-11-15
 **Severity:** high (correctness — a nested `break` exits *both* loops)
-**Status:** open — discovered while implementing the direction-hoist plan
-(`docs/plans/archive/for-direction-hoist-plan.md` M1); deliberately **not** fixed there
-(Q54: divergences found mid-plan are bug reports, not drive-by fixes).
+**Status:** fixed 2026-11-15 — every loop's body scan now goes through
+`QLangCompiler::patchLoopMarkers`, which claims only markers still holding the
+unpatched zero `jumpTarget` placeholder (an inner loop's markers are
+non-zero by the time any enclosing loop scans). The `jumpTarget == 0`
+sentinel is safe: every patch target is an instruction index ≥ 1 inside the
+scanning loop's own emitted range, and `while`'s `continue` carries its test
+address at emit time. The run-once pre-patch to 0 in the runtime-step `for`
+path (which also clobbered inner markers) was deleted as a no-op for its own
+markers. Tests: the `nest *` matrix in `tests/unit/spec_check2.cpp` (all
+loop-form pairs, two and three levels, break+continue) landed red-first.
 **Cited code at commit:** `b247fbf` (reproduces identically with the uncommitted
 M1 working tree — the behavior predates and is untouched by that change)
 

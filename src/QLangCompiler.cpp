@@ -2710,6 +2710,23 @@ void QLangCompiler::compileDelete(const StmtPtr &s) {
   emit(Opcode::DELETEx, r);
 }
 
+// Claim this loop's own BREAK/CONTINUE markers in [begin, end). Markers are
+// emitted with the loop context's zero placeholder as jump target, so a
+// marker with a non-zero target was already claimed by an inner loop and
+// belongs to it (docs/bugs/nested-loop-break-continue-hijack.md: keying only
+// on the opcode let the enclosing loop's scan re-patch the inner's jumps).
+void QLangCompiler::patchLoopMarkers(int begin, int end, int32_t contTarget,
+                                     int32_t breakTarget) {
+  for (int j = begin; j < end; j++) {
+    auto &ci = m_emitter.raw[j];
+    if (ci.jumpTarget != 0) continue; // already claimed by an inner loop
+    if (ci.op == Opcode::CONTINUE && contTarget >= 0)
+      m_emitter.patchJump(j, contTarget);
+    else if (ci.op == Opcode::BREAK)
+      m_emitter.patchJump(j, breakTarget);
+  }
+}
+
 void QLangCompiler::compileFor(const StmtPtr &s) {
   int x = declareVar(s->loopVar);
   m_blockScopes.emplace_back(); // body is a block scope (SPEC # block scope)
@@ -2749,11 +2766,7 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
       int incLabel = bodyEnd;
       emit(Opcode::JMP, bodyStart);
       int exitLabel = static_cast<int>(m_emitter.size());
-      for (int j = bodyStart; j < bodyEnd; j++) {
-        auto &ci = m_emitter.raw[j];
-        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, incLabel);
-        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
-      }
+      patchLoopMarkers(bodyStart, bodyEnd, incLabel, exitLabel);
       m_loops.pop_back();
     } else if ((sv > 0) != (correctDir > 0)) {
       // User step points the wrong way: run the body exactly once.
@@ -2763,11 +2776,7 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
         compileStmt(body);
       int bodyEnd = static_cast<int>(m_emitter.size());
       int exitLabel = static_cast<int>(m_emitter.size());
-      for (int j = bodyStart; j < bodyEnd; j++) {
-        auto &ci = m_emitter.raw[j];
-        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, exitLabel);
-        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
-      }
+      patchLoopMarkers(bodyStart, bodyEnd, exitLabel, exitLabel);
       m_loops.pop_back();
     } else {
       // Guard loop in the natural direction with the user's step.
@@ -2795,11 +2804,7 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
                  static_cast<int32_t>(sv)); // implicit step: ±1 in place
       emit(Opcode::JMP, guardLabel);
       int exitLabel = static_cast<int>(m_emitter.size());
-      for (int j = bodyStart; j < bodyEnd; j++) {
-        auto &ci = m_emitter.raw[j];
-        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, incLabel);
-        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
-      }
+      patchLoopMarkers(bodyStart, bodyEnd, incLabel, exitLabel);
       m_emitter.patchJump(jumpFalseIdx, exitLabel);
       m_loops.pop_back();
     }
@@ -2885,26 +2890,14 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     // sits at bodyEnd); in the run-once copy it leaves the loop.
     m_emitter.patchJump(entryIdx, guardLabel);
     m_emitter.patchJump(guardExitIdx, loopExit);
-    for (int j = bodyStart; j < bodyEnd; j++) {
-      auto &ci = m_emitter.raw[j];
-      if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, bodyEnd);
-      else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
-    }
+    patchLoopMarkers(bodyStart, bodyEnd, bodyEnd, loopExit);
     if (backGuard >= 0) {
       m_emitter.patchJump(backExitIdx, loopExit);
-      for (int j = backStart; j < backEnd; j++) {
-        auto &ci = m_emitter.raw[j];
-        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, backEnd);
-        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
-      }
+      patchLoopMarkers(backStart, backEnd, backEnd, loopExit);
     }
     if (runOnceJmp >= 0) {
       m_emitter.patchJump(runOnceJmp, loopExit);
-      for (int j = roStart; j < roEnd; j++) {
-        auto &ci = m_emitter.raw[j];
-        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, loopExit);
-        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
-      }
+      patchLoopMarkers(roStart, roEnd, loopExit, loopExit);
     }
     m_loops.pop_back();
   } else {
@@ -2976,11 +2969,9 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     int runOnceBodyEnd = static_cast<int>(m_emitter.size());
     int runOnceJmpIdx = static_cast<int>(m_emitter.size());
     emit(Opcode::JMP, 0);                 // patched to loopExit below
-    for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
-      auto &ci = m_emitter.raw[j];
-      if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, 0);   // patched below
-      else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, 0); // patched below
-    }
+    // (The run-once body's markers keep their zero placeholder until the
+    // final patch below; they used to be pre-patched to 0 here, which also
+    // clobbered any inner loop's claimed markers — the hijack bug.)
 
     // Guard loop (natural direction, bounded by a guard check). Direction is
     // fixed for the whole loop, so the direction branch is a one-time decision
@@ -3015,18 +3006,10 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     m_emitter.patchJump(guardGeIdx + 1, loopExit);     // backward exit
     m_emitter.patchJump(guardFwdIdx + 1, loopExit);    // forward exit
     m_emitter.patchJump(guardSkipIdx, guardLoopEntry); // backward -> body (JMP reads a)
-    for (int j = guardLoopEntry; j < guardBodyEnd; j++) {
-      auto &ci = m_emitter.raw[j];
-      if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, guardBodyEnd);   // -> ADD (still increment)
-      else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
-    }
+    patchLoopMarkers(guardLoopEntry, guardBodyEnd, guardBodyEnd, loopExit);
     // Patch the run-once body to exit (continue/break both leave the loop).
     m_emitter.patchJump(runOnceJmpIdx, loopExit);
-    for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
-      auto &ci = m_emitter.raw[j];
-      if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, loopExit);
-      else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
-    }
+    patchLoopMarkers(runOnceBodyStart, runOnceBodyEnd, loopExit, loopExit);
     // Patch the decision jump.
     m_emitter.patchJump(guardStepIdx, guardLoopStart);  // sameSign -> guard loop
     m_loops.pop_back();
@@ -3072,11 +3055,7 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
         int incLabel = bodyEnd;
         emit(Opcode::JMP, bodyStart);
         int exitLabel = static_cast<int>(m_emitter.size());
-        for (int j = bodyStart; j < bodyEnd; j++) {
-          auto &ci = m_emitter.raw[j];
-          if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, incLabel);
-          else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
-        }
+        patchLoopMarkers(bodyStart, bodyEnd, incLabel, exitLabel);
         m_loops.pop_back();
       } else if ((sv > 0) != (correctDir > 0)) {
         m_loops.push_back({0, 0});
@@ -3085,11 +3064,7 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
           compileStmt(body);
         int bodyEnd = static_cast<int>(m_emitter.size());
         int exitLabel = static_cast<int>(m_emitter.size());
-        for (int j = bodyStart; j < bodyEnd; j++) {
-          auto &ci = m_emitter.raw[j];
-          if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, exitLabel);
-          else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
-        }
+        patchLoopMarkers(bodyStart, bodyEnd, exitLabel, exitLabel);
         m_loops.pop_back();
       } else {
         m_loops.push_back({0, 0});
@@ -3114,11 +3089,7 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
           emitImmI(Opcode::ADD, x, 1); // implicit step: +1 in place
         emit(Opcode::JMP, guardLabel);           // loop back to the guard
         int exitLabel = static_cast<int>(m_emitter.size());
-        for (int j = bodyStart; j < bodyEnd; j++) {
-          auto &ci = m_emitter.raw[j];
-          if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, incLabel);
-          else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
-        }
+        patchLoopMarkers(bodyStart, bodyEnd, incLabel, exitLabel);
         m_emitter.patchJump(jumpFalseIdx, exitLabel);
         m_loops.pop_back();
       }
@@ -3148,11 +3119,7 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
         emit(Opcode::ADD, x, x, stepReg);
         emit(Opcode::JMP, bodyStart);
         int exitLabel = static_cast<int>(m_emitter.size());
-        for (int j = bodyStart; j < bodyEnd; j++) {
-          auto &ci = m_emitter.raw[j];
-          if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, bodyEnd);
-          else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
-        }
+        patchLoopMarkers(bodyStart, bodyEnd, bodyEnd, exitLabel);
         m_loops.pop_back();
         popBlockScope();
         return;
@@ -3187,17 +3154,9 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
       int loopExit = static_cast<int>(m_emitter.size());
       m_emitter.patchJump(entryIdx, guardLabel);
       m_emitter.patchJump(guardExitIdx, loopExit);
-      for (int j = bodyStart; j < bodyEnd; j++) {
-        auto &ci = m_emitter.raw[j];
-        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, bodyEnd);
-        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
-      }
+      patchLoopMarkers(bodyStart, bodyEnd, bodyEnd, loopExit);
       m_emitter.patchJump(runOnceJmp, loopExit);
-      for (int j = roStart; j < roEnd; j++) {
-        auto &ci = m_emitter.raw[j];
-        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, loopExit);
-        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
-      }
+      patchLoopMarkers(roStart, roEnd, loopExit, loopExit);
       m_loops.pop_back();
     } else {
       m_loops.push_back({0, 0});
@@ -3254,11 +3213,7 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
       int infBodyEnd = static_cast<int>(m_emitter.size());
       emit(Opcode::ADD, x, x, stepReg);
       emit(Opcode::JMP, infBodyStart);
-      for (int j = infBodyStart; j < infBodyEnd; j++) {
-        auto &ci = m_emitter.raw[j];
-        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, infBodyEnd);
-        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, infExitLabel);
-      }
+      patchLoopMarkers(infBodyStart, infBodyEnd, infBodyEnd, infExitLabel);
       // Guarded loop: init x once, then re-check the direction-selected guard
       // every pass (forward: x <= end; backward: x >= end).
       int guardInit = static_cast<int>(m_emitter.size());
@@ -3289,11 +3244,7 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
       emit(Opcode::ADD, x, x, stepReg);
       emit(Opcode::JMP, guardLabel);
       int guardExit = static_cast<int>(m_emitter.size());
-      for (int j = bodyStart; j < bodyEnd; j++) {
-        auto &ci = m_emitter.raw[j];
-        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, bodyEnd); // jump to increment
-        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, guardExit);
-      }
+      patchLoopMarkers(bodyStart, bodyEnd, bodyEnd, guardExit);
       m_emitter.patchJump(backExitIdx, guardExit);
       m_emitter.patchJump(fwdExitIdx, guardExit);
       // descending + in-range fell through the GE guard: enter the body
@@ -3301,11 +3252,7 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
       m_emitter.patchJump(zeroJumpIdx, infBodyStart);
       m_emitter.patchJump(ssJumpIdx, guardInit);
       m_emitter.patchJump(runOnceExitJmpIdx, guardExit);
-      for (int j = runOnceBodyStart; j < runOnceBodyEnd; j++) {
-        auto &ci = m_emitter.raw[j];
-        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, guardExit);
-        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, guardExit);
-      }
+      patchLoopMarkers(runOnceBodyStart, runOnceBodyEnd, guardExit, guardExit);
       m_loops.pop_back();
     }
     popBlockScope();
@@ -3344,11 +3291,7 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
   emit(Opcode::JMP, testLabel);
   int exitLabel = static_cast<int>(m_emitter.size());
   m_emitter.patchJump(jumpFalseIdx, exitLabel);
-  for (int j = bodyStart; j < bodyEnd; j++) {
-    auto &ci = m_emitter.raw[j];
-    if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, incLabel);
-    else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
-  }
+  patchLoopMarkers(bodyStart, bodyEnd, incLabel, exitLabel);
   m_loops.pop_back();
   popBlockScope();
 }
@@ -3375,9 +3318,8 @@ void QLangCompiler::compileWhile(const StmtPtr &s) {
   int exitLabel = static_cast<int>(m_emitter.size());
   for (int jumpFalseIdx : exitJumps)
     m_emitter.patchJump(jumpFalseIdx, exitLabel);
-  for (int j = bodyStart; j < bodyEnd; j++)
-    if (m_emitter.raw[j].op == Opcode::BREAK)
-      m_emitter.patchJump(j, exitLabel);
+  // continue already carries testLabel from emit time; claim the BREAKs.
+  patchLoopMarkers(bodyStart, bodyEnd, -1, exitLabel);
   m_loops.pop_back();
 }
 

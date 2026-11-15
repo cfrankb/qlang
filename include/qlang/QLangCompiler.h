@@ -474,6 +474,13 @@ private:
   void compileFor(const StmtPtr &s);
   void compileForIn(const StmtPtr &s);
   void compileWhile(const StmtPtr &s);
+  // Claim this loop's own BREAK/CONTINUE markers in [begin, end): only the
+  // markers still holding the unpatched zero placeholder are patched, so an
+  // inner loop's already-patched markers survive (nested-loop hijack fix,
+  // docs/bugs/nested-loop-break-continue-hijack.md). contTarget < 0 leaves
+  // CONTINUE alone (while bakes the test address in at emit time).
+  void patchLoopMarkers(int begin, int end, int32_t contTarget,
+                        int32_t breakTarget);
   void compileIf(const StmtPtr &s);
   void compileGotoIf(const StmtPtr &s);
   void compileExprStmt(const StmtPtr &s);

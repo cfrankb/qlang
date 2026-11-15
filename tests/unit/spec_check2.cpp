@@ -936,6 +936,102 @@ int main() {
                     __LINE__);
   }
 
+  // -- nested-loop break/continue (docs/bugs/nested-loop-break-continue-hijack.md):
+  // an inner loop's markers are claimed by the inner loop; an enclosing
+  // loop's scan must never re-patch them. --
+  {
+    struct NestCase {
+      const char *name;
+      const char *src;
+      const char *expect;
+    };
+    const NestCase kNest[] = {
+        {"nest for-for break",
+         "local s = \"\"\nfor i = 1 to 3 {\nfor j = 1 to 5 {\nif j == 3 { "
+         "break }\ns = s + toStr(i) + toStr(j) + \",\"\n}\n}\nlocal r = s;",
+         "11,12,21,22,31,32,"},
+        {"nest for-for continue",
+         "local s = \"\"\nfor i = 1 to 3 {\nfor j = 1 to 5 {\nif j == 3 { "
+         "continue }\ns = s + toStr(i) + toStr(j) + \",\"\n}\n}\nlocal r = s;",
+         "11,12,14,15,21,22,24,25,31,32,34,35,"},
+        {"nest for-for outer break after inner",
+         "local s = \"\"\nfor i = 1 to 3 {\nfor j = 1 to 5 {\nif j == 3 { "
+         "break }\ns = s + toStr(j) + \",\"\n}\nif i == 2 { break }\n}\nlocal "
+         "r = s;",
+         "1,2,1,2,"},
+        {"nest for-for outer continue",
+         "local s = \"\"\nfor i = 1 to 3 {\nfor j = 1 to 5 {\nif j == 3 { "
+         "break }\ns = s + toStr(i) + toStr(j) + \",\"\n}\nif i == 2 { "
+         "continue }\ns = s + \"|\"\n}\nlocal r = s;",
+         "11,12,|21,22,31,32,|"},
+        {"nest for-for-for break",
+         "local s = \"\"\nfor i = 1 to 2 {\nfor j = 1 to 2 {\nfor k = 1 to "
+         "3 {\nif k == 2 { break }\ns = s + toStr(i) + toStr(j) + toStr(k) + "
+         "\",\"\n}\n}\n}\nlocal r = s;",
+         "111,121,211,221,"},
+        {"nest for-while break",
+         "local s = \"\"\nfor i = 1 to 3 {\nlocal j = 3\nwhile (j > 0) "
+         "{\nif j == 2 { break }\ns = s + toStr(i) + toStr(j) + \",\"\nj -= "
+         "1\n}\n}\nlocal r = s;",
+         "13,23,33,"},
+        {"nest for-while continue",
+         "local s = \"\"\nfor i = 1 to 2 {\nlocal j = 0\nwhile (j < 3) "
+         "{\nj += 1\nif j == 2 { continue }\ns = s + toStr(i) + toStr(j) + "
+         "\",\"\n}\n}\nlocal r = s;",
+         "11,13,21,23,"},
+        {"nest while-for break",
+         "local i = 0\nlocal s = \"\"\nwhile (i < 2) {\ni += 1\nfor j = 1 "
+         "to 3 {\nif j == 2 { break }\ns = s + toStr(i) + toStr(j) + "
+         "\",\"\n}\n}\nlocal r = s;",
+         "11,21,"},
+        {"nest while-while break",
+         "local i = 3\nlocal s = \"\"\nwhile (i > 0) {\nlocal j = 3\nwhile "
+         "(j > 0) {\nif j == 2 { break }\ns = s + toStr(i) + toStr(j) + "
+         "\",\"\nj -= 1\n}\nif i == 2 { break }\ni -= 1\n}\nlocal r = s;",
+         "33,23,"},
+        {"nest for-forin-range break",
+         "local s = \"\"\nfor i = 1 to 3 {\nfor x in range(1, 3) {\nif x "
+         "== 2 { break }\ns = s + toStr(i) + toStr(x) + \",\"\n}\n}\nlocal r "
+         "= s;",
+         "11,21,31,"},
+        {"nest for-forin-range step0 break",
+         "local s = \"\"\nfor i = 1 to 2 {\nfor x in range(1, 5) step 0 "
+         "{\ns = s + toStr(i) + toStr(x) + \",\"\nif x == 1 { break }\n}\n}"
+         "\nlocal r = s;",
+         "11,21,"},
+        {"nest forin-array-for break",
+         // inside a function: at top level this shape instead trips the
+         // table-slot/temp alias (docs/bugs/
+         // toplevel-table-decl-aliases-live-loop-temp.md)
+         "def f() {\nlocal s = \"\"\nfor x in [1,2] {\nfor y = 1 to 3 {\nif "
+         "y == x { break }\ns = s + toStr(x) + toStr(y) + \",\"\n}\n}\nreturn "
+         "s\n}\nlocal r = f();",
+         "21,"},
+        {"nest while-forin-array continue",
+         "local c = 0\nlocal s = \"\"\nwhile (c < 2) {\nc += 1\nfor x in "
+         "[1,2,3] {\nif x == 2 { continue }\ns = s + toStr(c) + toStr(x) + "
+         "\",\"\n}\n}\nlocal r = s;",
+         "11,13,21,23,"},
+        {"nest for-runonce-for break",
+         "local s = \"\"\nfor i = 1 to 3 step -1 {\nfor j = 1 to 2 {\nif j "
+         "== 2 { break }\ns = s + toStr(i) + toStr(j) + \",\"\n}\n}\nlocal r "
+         "= s;",
+         "11,"},
+        {"nest for-rtbounds-for break",
+         "local lo = 1\nlocal hi = 3\nlocal s = \"\"\nfor i = lo to hi "
+         "{\nfor j = 1 to 5 {\nif j == 3 { break }\ns = s + toStr(i) + "
+         "toStr(j) + \",\"\n}\n}\nlocal r = s;",
+         "11,12,21,22,31,32,"},
+        {"nest for-rtvarstep-for break",
+         "local k = 1\nlocal lo = 1\nlocal hi = 2\nlocal s = \"\"\nfor i = "
+         "lo to hi step k {\nfor j = 1 to 3 {\nif j == 2 { break }\ns = s + "
+         "toStr(i) + toStr(j) + \",\"\n}\n}\nlocal r = s;",
+         "11,21,"},
+    };
+    for (const NestCase &c : kNest)
+      expectStrImpl(c.name, c.src, "r", c.expect, __LINE__);
+  }
+
   // Shape pins (plan docs/plans/archive/for-direction-hoist-plan.md M1): the
   // loop-invariant direction test must not live inside the loop. The
   // constant-bounds no-step loop is the fully-resolved tight shape: no
