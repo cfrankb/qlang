@@ -161,7 +161,8 @@ needs ([13-bytecodes.md](13-bytecodes.md) `## keyword export`,
   error (`class 'Name' must be constructed: Name(args)`). Construction across the boundary
   uses the class meta carried by the export entry (its `__init__` arity), so the constructor
   arity check stays **compile-time** and names the class. Imported-class **statics**
-  (`m.Name::counter`) are out of scope.
+  (`m.Name::counter`) are out of scope. The export side is implemented (Round 106, plan P3a);
+  the importer-side constructor lands with the plan's P3b.
 - **Imports** — resolved against a loaded image's export table at compile time. The importer's
   instruction names its **own** import table, never the defining module's handle
   (`getimport` / `callimport`, [13-bytecodes.md](13-bytecodes.md)

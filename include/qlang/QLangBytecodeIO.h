@@ -13,7 +13,7 @@
 
 namespace qlang {
 
-// QLC1 v10 .qlc codec (docs/SERIALIZATION.md).
+// QLC1 v11 .qlc codec (docs/SERIALIZATION.md).
 //
 // Values are serialized with a 1-byte tag (QLangValue::Type in declaration
 // order, fixed) plus an explicit little-endian payload. Non-durable types
@@ -30,12 +30,15 @@ namespace qlang {
 
 // .qlc format version (docs/SERIALIZATION.md §4). Written by writeQlc and
 // validated (strictly) by readQlc; the docs reference this constant.
-// v10 appends the declared signature block (SPEC §strict typing) at the end
+// v11 grows the §4.6 export record with the class meta `initArity` (one i32
+// per entry, -1 for every non-`Class` kind) and widens the export kind domain
+// to include `Class` = 3 (SPEC §bytecodes "export table (lookup)", Q42). v10
+// had appended the declared signature block (SPEC §strict typing) at the end
 // of every function record — per-parameter type tags with names, and a
 // return annotation — so imported modules enforce types at the call
 // boundary. The instruction encoding and every earlier section are unchanged
-// from v9. v1-v9 files are NOT accepted.
-constexpr uint32_t kQlcVersion = 10;
+// from v9. v1-v10 files are NOT accepted.
+constexpr uint32_t kQlcVersion = 11;
 
 // Serialize one value. Throws QLangError(Io) on stream failure.
 void serializeValue(std::ostream &os, const QLangValue &v);

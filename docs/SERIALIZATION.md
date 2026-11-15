@@ -1,7 +1,7 @@
 # QLang Serialization / Deserialization Spec
 
-Status: **implemented** — `.qlc` program image (v10)
-Covers: `.qlc` program image (v10) and state snapshot (v2, future)
+Status: **implemented** — `.qlc` program image (v11)
+Covers: `.qlc` program image (v11) and state snapshot (v2, future)
 Reference implementation: `src/QLangBytecodeIO.cpp` (library codec)
 Architecture assessment of this change: [qlc-codec-assessment.md](qlc-codec-assessment.md)
 
@@ -92,13 +92,13 @@ Rules:
   materialises **fresh** payloads — a decoded value
   never aliases another value's storage.
 
-## 4. Program image (magic `QLC1`, version 10)
+## 4. Program image (magic `QLC1`, version 11)
 
 ```
 offset  field            type   notes
 ──────  ───────────────  ─────  ──────────────────────────────────────────
 0       magic            4s     "QLC1"
-4       version          u32    = 10  (kQlcVersion; readers accept 10 only)
+4       version          u32    = 11  (kQlcVersion; readers accept 11 only)
 8       funcCount        u32
 …       functions        funcCount × Function
         poolCount        u32
@@ -132,7 +132,9 @@ transitively.
 is decided): **v8** = the module constant pool (§4.2, Round 62,
 [plans/archive/external-modules-plan-v4.md](plans/archive/external-modules-plan-v4.md) Phase 2) · **v9** = module
 identity + export/import tables (§4.6, Round 63, same plan Phase 3a) · **v10** = the declared
-signature block at the end of every function record (§4.1a, strict-typing plan §6) · the
+signature block at the end of every function record (§4.1a, strict-typing plan §6) · **v11** =
+the export record grows the class meta `initArity` and the kind domain gains `Class` (§4.6,
+Q42, [plans/class-export-plan.md](plans/class-export-plan.md) P3a) · the
 portable-module plan allocates **no** `.qlc` version — `QLM1` (§11) and `QPM1` (P5) carry their
 own magic+version · the next free number belongs
 to whoever lands next ([plans/offset-table-elimination-plan.md](plans/offset-table-elimination-plan.md)
@@ -157,7 +159,7 @@ u32   sigCount
 ```
 
 The instruction stream is the **escape-byte format** introduced in v6 and
-unchanged in v7 through v10 (see `include/qlang/QLangBytecode.h`, §4.5): a flat byte stream
+unchanged in v7 through v11 (see `include/qlang/QLangBytecode.h`, §4.5): a flat byte stream
 where each instruction starts with an opcode byte whose bit 7 is the escape flag
 and bits 0–6 are the opcode identity (128 base identities, 72 defined — v7
 retired `movc`, `movi`, `addi`, `subi`, `cmpi`, `jmpfalse` and `jmptrue` and
@@ -265,7 +267,7 @@ constVars: u32 nameLen, name bytes
 Backing containers are `std::unordered_map` / `std::unordered_set`: **order
 within both sections is unspecified**. Readers MUST NOT depend on it.
 
-### 4.5 Instruction stream (v6 layout, current in v10)
+### 4.5 Instruction stream (v6 layout, current in v11)
 
 Each instruction is `[opcode byte] [modifier byte] [operands…]`. In the opcode
 byte **bit 7 is the escape flag** and bits 0–6 are the opcode identity
@@ -349,7 +351,7 @@ u32     exportCount
 u32     importCount
         importCount × ImportEntry
 
-ExportEntry:  u8 kind, String name, i32 ref
+ExportEntry:  u8 kind, String name, i32 ref, i32 initArity  (initArity new in v11)
 ImportEntry:  String module, String name, u8 kind, i32 ref, String alias
 ```
 
@@ -361,11 +363,18 @@ entities it needs from others (SPEC §bytecodes `## keyword export`,
 [plans/archive/external-modules-plan-v4.md](plans/archive/external-modules-plan-v4.md)
 Phase 3a).
 
-`kind` is the `ExportKind` enum: **0** `Var`, **1** `Const`, **2** `Func`.
+`kind` is the `ExportKind` enum: **0** `Var`, **1** `Const`, **2** `Func`,
+**3** `Class` (v11, SPEC §bytecodes `## export table (lookup)` Q42).
 
 - `ref` is a handle into **this image**: for `Func` an index into the function
   array (§4.1), for `Var`/`Const` the global register — the "shared cell" an
-  importer will read (SPEC `## technical specifications` 3).
+  importer will read (SPEC `## technical specifications` 3); for `Class` the
+  cell holding the class prototype table (the module global `__proto_<Name>`).
+- `initArity` (v11) is the class meta of Q42: the declared `__init__` parameter
+  count **including** `self` (the same convention §4.1a's external-type
+  signatures use), or `-1` when the class declares no `__init__`. It is fixed
+  in the record for **every** kind — readers reject a value other than `-1` on
+  a non-`Class` entry.
 - `ImportEntry::ref` is the *defining* module's `ref`, resolved at compile time
   and rewritten by Phase 3b's linker. The trailing `String` is a **reserved
   alias slot: always empty** (Round 72) — the alias of `from m import f as g`
@@ -398,9 +407,9 @@ surviving `getimport`, so a merged program's table describes the merged program
 
 ### 5.1 Validation sequence
 
-1. At least 12 bytes present; magic == `QLC1`; `version == 10`
+1. At least 12 bytes present; magic == `QLC1`; `version == 11`
    (`kQlcVersion`; anything else → "unsupported version", never a parse
-   attempt). Legacy v1–v9 files (fixed 8-byte instructions through v4, the
+   attempt). Legacy v1–v10 files (fixed 8-byte instructions through v4, the
    two-nibble modifier byte in v5, v6 — same layout but the seven identities
    v7 retired — v7, whose constant pools live in the function records, v8,
    which simply ends at `registerCount` and carries no module tail, and v9,
@@ -575,7 +584,7 @@ A codec is not "done" until all of these pass:
    byte-identical to direct `ctx.run(source)`.
 3. **Malformed-input suite** (each case → clean `Io` error, no crash, no
    partial out-param): truncated at every section boundary, bad magic,
-   version 9 (below `kQlcVersion`) and version 11 (above), opcode identity
+   version 10 (below `kQlcVersion`) and version 12 (above), opcode identity
    `>= kOpcodeUsedCount`, reserved modifier fields (left width 3, kind 3,
    immediate forms 12–15, unpermitted kind, unescaped `CALL`), truncated
    instruction, const-pool operand `>= poolCount` (§4.2), `callfn` operand
@@ -596,9 +605,9 @@ A codec is not "done" until all of these pass:
 | Item | Status |
 |---|---|
 | Value codec (`serializeValue`/`deserializeValue`) | done — matches §3 |
-| Program writer (`writeQlc`, §4 incl. module pool + native-slot table + module tail) | done — v10, explicit little-endian, escape-byte code stream + offset table, loc side table, §4.1a declared signature, program-level constant pool, module name + export/import tables (§4.6) |
+| Program writer (`writeQlc`, §4 incl. module pool + native-slot table + module tail) | done — v11, explicit little-endian, escape-byte code stream + offset table, loc side table, §4.1a declared signature, program-level constant pool, module name + export/import tables (§4.6) |
 | `QLangErrorKind::Io` | done |
-| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v10 only, pool-index, `callfn`-index and import-index range checks (all three from `operandRole()`), §4.1a tag validation, §4.6 tail validation |
+| Reader (`readQlc`, §5.1 invariants) | done — explicit little-endian reads, accepts v11 only, pool-index, `callfn`-index and import-index range checks (all three from `operandRole()`), §4.1a tag validation, §4.6 tail validation |
 | Writer refuses a linked program (§4, "A linked program is not an image") | done — `initSequence` present → `writeQlc` returns false |
 | App writer (POC `QlcWriter` in `qlcc.cpp`) | deleted — replaced by `writeQlc` |
 | Tests (`codec_check`: §9 items 1, 3) | done |

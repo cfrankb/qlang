@@ -1747,6 +1747,10 @@ static bool exportableDecl(const StmtPtr &s, std::string &name,
     name = s->name;
     kind = ExportKind::Const;
     return !name.empty();
+  case StmtKind::Class:
+    name = s->className;
+    kind = ExportKind::Class;
+    return !name.empty();
   case StmtKind::Arrow:
     name = s->name;
     kind = ExportKind::Var;
@@ -1895,6 +1899,22 @@ void QLangCompiler::finishExports(CompiledProgram &out) {
         throw QLangError(QLangErrorKind::Parse, 0, 0,
                          "exported function '" + e.name + "' is not defined");
       e.ref = it->second;
+    } else if (e.kind == ExportKind::Class) {
+      // SPEC §bytecodes "export table (lookup)" (Q42): the ref is the hidden
+      // global cell caching the prototype table, and `initArity` is the
+      // declared `__init__` parameter count (INCLUDING `self`, the same
+      // convention as ClassRecord::methodArities), -1 when none is declared.
+      auto it = m_regs.find("__proto_" + e.name);
+      if (it == m_regs.end())
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "exported class '" + e.name + "' is not defined");
+      e.ref = it->second;
+      e.initArity = -1;
+      auto c = m_classes.find(e.name);
+      if (c != m_classes.end()) {
+        auto a = c->second.methodArities.find("__init__");
+        if (a != c->second.methodArities.end()) e.initArity = a->second;
+      }
     } else {
       auto it = m_regs.find(e.name);
       if (it == m_regs.end())

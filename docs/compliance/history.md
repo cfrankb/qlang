@@ -1,3 +1,37 @@
+## Round 106 — 2026-11-15 — `export class`: export table kind `Class` + `initArity` meta, `.qlc` v11 (F4 **P3a**; plan `docs/plans/class-export-plan.md`; spec `docs/spec/09-modules.md` `## keyword export` + `docs/spec/13-bytecodes.md` `## export table (lookup)`; docs `docs/SERIALIZATION.md` §4/§4.6)
+
+- **Why.** Q42 resolved in Round 104; this is the export half of the plan. A class was
+  compile-time-only to the module boundary: `export class Point` was a parse error and the
+  export kind domain stopped at `Func`. P3b (import-side construction) cannot start until the
+  table, the image and the linker carry the class.
+- **Language.** The prefix-export guard gains `StmtKind::Class` (message now names `class`);
+  `exportableDecl` gains the Class case (`name = s->className`), so both spec forms —
+  `export class Name` and standalone `export Name` on a class — enter the table as kind
+  `Class` (3). Negative rules unchanged: a class name is still not a value, `export class`
+  in a block is still rejected by the global-scope guard, a class cannot name `MODULE_NAME`
+  (the identity rule wants a `const`), and a second export of one name is still `already
+  exported` — the Round 103 rule "a class name is not exportable" **flips** to exportable.
+- **Image (v11).** `ExportEntry` gains `initArity` (one i32, fixed in the record for every
+  kind; `-1` for all non-`Class` entries and for a class without `__init__`, else the declared
+  `__init__` parameter count **including** `self` — the §4.1a external-signature convention).
+  `kQlcVersion` 10 → 11; the reader's export/import kind checks widen to `Class` (3) and it
+  rejects `initArity` on a non-class entry; a `Class` `ref` keeps the cell (register) range
+  rule. `SERIALIZATION.md` §4 (version allocation row records the bump), §4.6 (record layout +
+  the meta's rules) and §5.1/§9 land with this round.
+- **Compiler.** `finishExports` resolves a `Class` entry: `ref = m_regs["__proto_" + name]`
+  (the hidden prototype cell; a class never compiled is a clean `exported class ... is not
+  defined` error) and `initArity` from `ClassRecord::methodArities["__init__"]`. The linker
+  needed no change: its export rebase already routes every non-`Func` kind through the cell
+  path, so `Class` refs rebase for free (plan step 3).
+- **Tooling.** `qlcc`'s export/import listings print the `class` kind label.
+- **Guards.** `export_test` 88 → 102 (`testClassExports`: both forms land as `Class` with the
+  right cell `ref` and arity incl. `self` / `-1`, the names stay non-values, kind+ref+arity
+  survive `writeQlc`→`readQlc`, duplicate/scope/`MODULE_NAME` rejections; the flipped rule
+  check); `codec_check` 384 → 387 (version matrix moves to v11 — 3–10/12 rejected — the
+  hand-built streams grow the i32, a kind-`Class` entry round-trips with `initArity` 2, a
+  class `ref` past `registerCount` and an `initArity` on a `Var` are refused).
+  `ctest` 68/68 (no new suite).
+
 ## Round 105 — 2026-11-15 — `shallowcopy` builtin: top-level copy, elements shared (F4 **clone round**; plan `docs/plans/deferred-copy-semantics-and-class-export-plan.md` Phase 1, promoted by `docs/plans/class-export-plan.md` D2; spec `docs/spec/06-functions.md`, `docs/spec/01-types.md`, `docs/spec/13-bytecodes.md`)
 
 - **Why.** The clone class-export construction (P3b) needs `SHALLOWCOPY` + `GETIMPORT` for

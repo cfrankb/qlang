@@ -53,22 +53,30 @@ private:
 };
 
 // What one exported name binds to (SPEC §bytecodes "export table (lookup)":
-// the global `functions`, `variables` and `constants` a module exposes).
+// the global `functions`, `variables`, `constants` and `classes` a module
+// exposes).
 enum class ExportKind : uint8_t {
   Var = 0,   // a mutable global (register / shared cell)
   Const = 1, // a `const` global (register the importer may not write)
   Func = 2,  // a `def` function
+  Class = 3, // a class constructor; `ref` is the `__proto_<Name>` cell and
+             // `initArity` the declared `__init__` arity (-1 = none declared)
 };
 
 // One entry of a module's export table (SPEC §bytecodes "export table
 // (lookup)"). `ref` is what a loader resolves the name to: for Func the index
-// into the program's function table, for Var/Const the register (global slot)
-// holding the value — the shared cell of SPEC §bytecodes "technical
-// specifications" 3.
+// into the program's function table, for Var/Const/Class the register (global
+// slot) holding the value — the shared cell of SPEC §bytecodes "technical
+// specifications" 3; for Class that cell holds the class prototype table
+// (`__proto_<Name>`). `initArity` is the class meta of Q42 (plan
+// docs/plans/class-export-plan.md D1): the declared `__init__` parameter count
+// INCLUDING `self`, or -1 when the class declares no `__init__`; meaningless
+// (always -1) for the other kinds.
 struct ExportEntry {
   ExportKind kind = ExportKind::Var;
   std::string name;
   int32_t ref = -1;
+  int32_t initArity = -1;
 };
 
 // One entry of a module's import table (SPEC §bytecodes "import table

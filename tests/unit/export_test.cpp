@@ -109,10 +109,14 @@ const ExportEntry *findExport(const CompiledProgram &prog,
 std::vector<std::string> exportListing(const CompiledProgram &prog) {
   std::vector<std::string> out;
   for (const ExportEntry &e : prog.exports) {
-    const char *kind = e.kind == ExportKind::Func
-                           ? "fn"
-                           : (e.kind == ExportKind::Const ? "const" : "var");
-    out.push_back(std::string(kind) + " " + e.name + " " + std::to_string(e.ref));
+    const char *kind =
+        e.kind == ExportKind::Func
+            ? "fn"
+            : (e.kind == ExportKind::Const
+                   ? "const"
+                   : (e.kind == ExportKind::Class ? "class" : "var"));
+    out.push_back(std::string(kind) + " " + e.name + " " +
+                  std::to_string(e.ref) + " " + std::to_string(e.initArity));
   }
   return out;
 }
@@ -427,8 +431,15 @@ static void testExportRules() {
         "rules: a control statement cannot be exported");
   check(rejects("export nope\n", "export of undeclared name 'nope'"),
         "rules: an undeclared name is rejected");
-  check(rejects("class C {\n}\nexport C\n", "export of undeclared name"),
-        "rules: a class name is not exportable");
+  // F4 (Q42) resolved: a class name IS exportable now — kind `Class` joins
+  // the kind domain (testClassExports below pins the table it produces).
+  {
+    QLangContext flipCtx;
+    CompiledProgram flipProg;
+    std::string flipErr;
+    check(compile(flipCtx, "class C {\n}\nexport C\n", flipProg, flipErr),
+          "rules: a class name is exportable (F4)");
+  }
   check(rejects("enum E {\n  A\n}\nexport E\n", "export of undeclared name"),
         "rules: an enum name is not exportable");
   check(rejects("export def f()\n  return 1\nend\nexport def g()\n  return 2\nend\n"
@@ -542,6 +553,83 @@ println(greet(AUTHOR))
         "qlc: the loaded module runs with identical output");
 }
 
+// Q42 (plan docs/plans/class-export-plan.md P3a): `export class` is legal and
+// the entry carries the class meta. Construction across the boundary is P3b;
+// this round pins the table and the image only.
+static void testClassExports() {
+  QLangContext ctx;
+  CompiledProgram prog;
+  std::string err;
+  const std::string positive = R"(
+export class Point {
+  x = 0
+  y = 0
+  __init__(self, x, y) [ ] {
+    self.x = x
+    self.y = y
+  }
+}
+class Plain {
+  tag = 1
+}
+export Plain
+local p = Point(1, 2)
+println(p.x)
+)";
+  if (!check(compile(ctx, positive, prog, err),
+             "class: `export class` and standalone class export compile (" +
+                 err + ")"))
+    return;
+
+  const ExportEntry *point = findExport(prog, "Point");
+  if (check(point != nullptr && point->kind == ExportKind::Class,
+            "class: `export class Point` enters the table as a Class")) {
+    check(point->initArity == 3,
+          "class: Point's initArity is the declared arity incl. self (got " +
+              std::to_string(point->initArity) + ")");
+    auto it = prog.vars.find("__proto_Point");
+    check(it != prog.vars.end() && it->second == point->ref,
+          "class: Point's ref is the __proto_Point cell");
+  }
+  const ExportEntry *plain = findExport(prog, "Plain");
+  if (check(plain != nullptr && plain->kind == ExportKind::Class,
+            "class: standalone `export Plain` enters the table"))
+    check(plain->initArity == -1,
+          "class: a class without __init__ carries initArity -1");
+
+  // The class name stays a non-value even when exported.
+  check(rejects(positive + "\nlocal q = Point\n", "Point"),
+        "class: the exported class name is still not a value");
+
+  // v11 image: the kind and the meta survive writeQlc/readQlc.
+  std::ostringstream os(std::ios::binary);
+  if (check(writeQlc(os, prog, {}), "class: writeQlc accepts a Class export")) {
+    CompiledProgram back;
+    std::vector<std::pair<int, std::string>> slots;
+    std::string why;
+    std::istringstream is(os.str(), std::ios::binary);
+    if (check(readQlc(is, back, slots, why),
+              "class: readQlc accepts the Class export (" + why + ")")) {
+      const ExportEntry *p2 = findExport(back, "Point");
+      check(p2 && p2->kind == ExportKind::Class && p2->initArity == 3 &&
+                p2->ref == point->ref,
+            "class: kind, ref and initArity survive the image");
+      const ExportEntry *q2 = findExport(back, "Plain");
+      check(q2 && q2->initArity == -1,
+            "class: the -1 meta survives too");
+    }
+  }
+
+  // Rules unchanged around the new kind.
+  check(rejects("export class C { x = 1 }\nexport C\n", "already exported"),
+        "class: a class cannot be exported twice");
+  check(rejects("if 1 { export class C { x = 1 }\n}\n",
+                "export is only valid at global scope"),
+        "class: `export class` inside a block is rejected");
+  check(rejects("export class MODULE_NAME { v = 1 }\n", "MODULE_NAME"),
+        "class: a class cannot name the module");
+}
+
 int main() {
   testPrefixForms();
   testStandaloneForm();
@@ -550,6 +638,7 @@ int main() {
   testGlobalScopeOnly();
   testExportRules();
   testQlcRoundTrip();
+  testClassExports();
 
   std::cout << (fails == 0 ? "ALL PASS" : "FAILURES") << ": " << passes
             << " passed, " << fails << " failed\n";

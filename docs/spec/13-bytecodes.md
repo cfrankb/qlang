@@ -709,6 +709,9 @@ of a `Class` entry is the cell holding the class prototype table (the module glo
 only the constructor: the importer constructs with `Name(args)` and the compiler keeps the
 compile-time arity check because the meta is in the image. `.qlc` bumps to **v11** — the record
 layout genuinely grows (clean-break precedent). See `## keyword export` for the syntax rules.
+**Implemented on the export side (Round 106, 2026-11-15)** — plan P3a: both syntax forms enter
+the table as `Class`, the image carries the meta (v11), and the `ref` rebases like any cell;
+constructing from an imported class is the plan's P3b.
 
 **Implemented (Round 63, 2026-11-09)** — plan
 [../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phase 3a.

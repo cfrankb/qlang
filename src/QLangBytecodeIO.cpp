@@ -421,9 +421,9 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
   // Header.
   putBytes(os, "QLC1", 4);
   // Format version (F1): written from the single shared constant
-  // kQlcVersion (docs/SERIALIZATION.md §4). v10 is the v9 image plus the
-  // declared signature block at the end of every function record; the
-  // reader accepts v10 only.
+  // kQlcVersion (docs/SERIALIZATION.md §4). v11 grows the §4.6 export record
+  // with the class meta `initArity` (kind `Class`, Q42) and widens the export
+  // kind domain to 0..3; the reader accepts v11 only.
   putU32(os, kQlcVersion); // format version
 
   // Functions (functions[0] is the implicit "main"; the compiler emits it
@@ -509,6 +509,7 @@ bool writeQlc(std::ostream &os, const CompiledProgram &prog,
     putU8(os, static_cast<uint8_t>(e.kind));
     putStr(os, e.name);
     putI32(os, e.ref);
+    putI32(os, e.initArity); // v11 class meta (SPEC §bytecodes "export table")
   }
   putU32(os, static_cast<uint32_t>(prog.imports.size()));
   for (const auto &im : prog.imports) {
@@ -730,15 +731,18 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
     for (uint32_t i = 0; i < exportCount; i++) {
       ExportEntry e;
       uint8_t kind = r.u8();
-      if (kind > static_cast<uint8_t>(ExportKind::Func))
+      if (kind > static_cast<uint8_t>(ExportKind::Class))
         r.fail("invalid export kind");
       e.kind = static_cast<ExportKind>(kind);
       e.name = r.str();
       e.ref = r.i32();
+      e.initArity = r.i32(); // v11 class meta; -1 for the other kinds
       if (e.name.empty())
         r.fail("empty export name");
       if (e.ref < 0)
         r.fail("negative export reference");
+      if (e.kind != ExportKind::Class && e.initArity != -1)
+        r.fail("export initArity on a non-class entry");
       if (e.kind == ExportKind::Func) {
         if (static_cast<size_t>(e.ref) >= out.functions.size())
           r.fail("export function index out of range");
@@ -758,7 +762,7 @@ bool readQlc(std::istream &is, CompiledProgram &prog,
       im.module = r.str();
       im.name = r.str();
       uint8_t kind = r.u8();
-      if (kind > static_cast<uint8_t>(ExportKind::Func))
+      if (kind > static_cast<uint8_t>(ExportKind::Class))
         r.fail("invalid import kind");
       im.kind = static_cast<ExportKind>(kind);
       im.ref = r.i32();

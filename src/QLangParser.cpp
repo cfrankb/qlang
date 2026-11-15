@@ -957,9 +957,10 @@ StmtPtr QLangParser::parseExport() {
   StmtPtr inner = parseStatementImpl();
   if (inner->kind != StmtKind::Def && inner->kind != StmtKind::Const &&
       inner->kind != StmtKind::Declaration &&
-      inner->kind != StmtKind::Assignment && inner->kind != StmtKind::Arrow)
+      inner->kind != StmtKind::Assignment && inner->kind != StmtKind::Arrow &&
+      inner->kind != StmtKind::Class)
     throw QLangError(QLangErrorKind::Parse, kw.line, kw.col,
-                     "export can only prefix def, const or a variable "
+                     "export can only prefix def, const, class or a variable "
                      "assignment");
   inner->isExported = true;
   return inner;

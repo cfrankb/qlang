@@ -1432,7 +1432,10 @@ namespace
       {
         const char *kind = e.kind == ExportKind::Func
                                ? "fn"
-                               : (e.kind == ExportKind::Const ? "const" : "var");
+                               : (e.kind == ExportKind::Const
+                                      ? "const"
+                                      : (e.kind == ExportKind::Class ? "class"
+                                                                     : "var"));
         ss << "    " << std::left << std::setw(19) << e.name << std::setw(6)
            << kind;
         if (e.kind == ExportKind::Func)
@@ -1490,7 +1493,11 @@ namespace
         {
           const char *kind = im.kind == ExportKind::Func
                                  ? "fn"
-                                 : (im.kind == ExportKind::Const ? "const" : "var");
+                                 : (im.kind == ExportKind::Const
+                                        ? "const"
+                                        : (im.kind == ExportKind::Class
+                                               ? "class"
+                                               : "var"));
           ss << "    " << std::left << std::setw(19) << im.name << std::setw(6)
              << kind << im.module << "." << im.name << " -> ";
           if (im.kind == ExportKind::Func)
@@ -1540,7 +1547,11 @@ namespace
           {
             const char *kind = e.kind == ExportKind::Func
                                    ? "fn"
-                                   : (e.kind == ExportKind::Const ? "const" : "var");
+                                   : (e.kind == ExportKind::Const
+                                          ? "const"
+                                          : (e.kind == ExportKind::Class
+                                                 ? "class"
+                                                 : "var"));
             ss << "      " << std::left << std::setw(19) << e.name << std::setw(6) << kind
                << "r/f" << e.ref << " -> ";
             if (e.kind == ExportKind::Func)

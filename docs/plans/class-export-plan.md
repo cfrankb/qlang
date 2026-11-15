@@ -1,7 +1,7 @@
 # Plan: F4 — class exports (`export class`, Q42)
 
 Status: **Phase 0 landed (Round 104, 2026-11-15); clone round landed (Round 105, 2026-11-15,
-D2 `shallowcopy`)**; P3a/P3b proposed. Drafted in Plan mode
+D2 `shallowcopy`); P3a landed (Round 106, 2026-11-15, `.qlc` v11)**; P3b proposed. Drafted in Plan mode
 2026-11-15; baseline HEAD `cc4744a`,
 Round 98). Supersedes the class-export sections (Phase 0 item 3, Phase 3) of
 `docs/plans/deferred-copy-semantics-and-class-export-plan.md`. Reference spec:
@@ -156,7 +156,7 @@ re-recorded **as measured**.
 
 ## Suggested commit sequence
 
-1. `docs(spec): resolve Q42 — export class Name is legal (F4 Phase 0)`
+1. `docs(spec): resolve Q42 — export class Name is legal (F4 Phase 0)` — **landed Round 104**
 2. `feat(vm): shallowcopy builtin — top-level copy, elements shared (clone round)` *(D2)* — **landed Round 105**
-3. `feat(compiler): export class — export table kind Class + initArity meta, .qlc v11 (F4 P3a)`
+3. `feat(compiler): export class — export table kind Class + initArity meta, .qlc v11 (F4 P3a)` — **landed Round 106**
 4. `feat(compiler): construct imported classes from the exported prototype (F4 P3b)`

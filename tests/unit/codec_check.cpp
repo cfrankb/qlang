@@ -430,22 +430,22 @@ static void testMovImmediate() {
     check(hasPoolRight(ps.functions[0], Opcode::MOV),
           "mov: string literal is a pool read");
 
-    // .qlc written at format version 10 (kQlcVersion); the reader accepts v10
-    // only (v1-v9 and v11+ are rejected).
+    // .qlc written at format version 11 (kQlcVersion); the reader accepts v11
+    // only (v1-v10 and v12+ are rejected).
     std::ostringstream os(std::ios::binary);
-    check(writeQlc(os, p, {}), "mov: writeQlc (v10)");
+    check(writeQlc(os, p, {}), "mov: writeQlc (v11)");
     std::string bytes = os.str();
     uint32_t version = static_cast<uint32_t>(static_cast<uint8_t>(bytes[4])) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[5])) << 8) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[6])) << 16) |
                        (static_cast<uint32_t>(static_cast<uint8_t>(bytes[7])) << 24);
-    check(version == 10, "mov: format version 10");
+    check(version == 11, "mov: format version 11");
     CompiledProgram back;
     std::vector<std::pair<int, std::string>> slots;
     std::string err;
     std::istringstream is(bytes, std::ios::binary);
     check(readQlc(is, back, slots, err),
-          std::string("mov: readQlc v10 (") + err + ")");
+          std::string("mov: readQlc v11 (") + err + ")");
     if (err.empty()) {
       bool same = back.functions.size() == p.functions.size();
       if (same) {
@@ -1494,18 +1494,21 @@ static void testMalformed() {
   noName.u32(0);
   rejects("malformed: empty module name", minimalFileTailless() + noName.b);
 
-  // One export entry, described the way §4.6 spells it.
-  auto oneExport = [](uint8_t kind, const char *name, int32_t ref) {
+  // One export entry, described the way §4.6 spells it (v11: kind, name, ref,
+  // initArity).
+  auto oneExport = [](uint8_t kind, const char *name, int32_t ref,
+                      int32_t initArity = -1) {
     Bin t;
     t.str("main");
     t.u32(1); // one export
     t.u8(kind);
     t.str(name);
     t.i32(ref);
+    t.i32(initArity);
     t.u32(0); // no imports
     return minimalFileTailless() + t.b;
   };
-  rejects("malformed: invalid export kind", oneExport(3, "f", 0));
+  rejects("malformed: invalid export kind", oneExport(4, "f", 0));
   rejects("malformed: empty export name", oneExport(2, "", 0));
   rejects("malformed: negative export reference", oneExport(2, "f", -1));
   // The image has one function and one register, so index 1 is out of range
@@ -1514,6 +1517,12 @@ static void testMalformed() {
           oneExport(static_cast<uint8_t>(ExportKind::Func), "f", 1));
   rejects("malformed: export register out of range",
           oneExport(static_cast<uint8_t>(ExportKind::Var), "v", 1));
+  // v11 (Q42): `Class` (3) joins the kind domain; its ref is a cell, so the
+  // register range rule applies to it too, and initArity belongs to it alone.
+  rejects("malformed: class export register out of range",
+          oneExport(static_cast<uint8_t>(ExportKind::Class), "C", 1));
+  rejects("malformed: initArity on a non-class entry",
+          oneExport(static_cast<uint8_t>(ExportKind::Var), "v", 0, 2));
   {
     Bin t;
     t.str("main");
@@ -1521,9 +1530,11 @@ static void testMalformed() {
     t.u8(static_cast<uint8_t>(ExportKind::Var));
     t.str("v");
     t.i32(0);
+    t.i32(-1);
     t.u8(static_cast<uint8_t>(ExportKind::Const));
     t.str("v"); // the same name twice
     t.i32(0);
+    t.i32(-1);
     t.u32(0);
     rejects("malformed: duplicate export name", minimalFileTailless() + t.b);
   }
@@ -1541,7 +1552,7 @@ static void testMalformed() {
     t.str(""); // no alias
     return minimalFileTailless() + t.b;
   };
-  rejects("malformed: invalid import kind", oneImport(3, "m", "f", 0));
+  rejects("malformed: invalid import kind", oneImport(4, "m", "f", 0));
   rejects("malformed: empty import module", oneImport(2, "", "f", 0));
   rejects("malformed: empty import name", oneImport(2, "m", "", 0));
   rejects("malformed: negative import reference", oneImport(2, "m", "f", -1));
@@ -1550,13 +1561,19 @@ static void testMalformed() {
   {
     Bin t;
     t.str("my_module");
-    t.u32(2);
+    t.u32(3);
     t.u8(static_cast<uint8_t>(ExportKind::Func));
     t.str("greeter");
     t.i32(0);
+    t.i32(-1);
     t.u8(static_cast<uint8_t>(ExportKind::Const));
     t.str("AUTHOR");
     t.i32(0);
+    t.i32(-1);
+    t.u8(static_cast<uint8_t>(ExportKind::Class));
+    t.str("Point");
+    t.i32(0); // the prototype cell
+    t.i32(2); // initArity: __init__(self, x)
     t.u32(1);
     t.str("math");
     t.str("min");
@@ -1566,14 +1583,18 @@ static void testMalformed() {
     CompiledProgram prog;
     std::string why;
     bool ok = readTail(minimalFileTailless() + t.b, prog, why);
-    check(ok && prog.moduleName == "my_module" && prog.exports.size() == 2 &&
+    check(ok && prog.moduleName == "my_module" && prog.exports.size() == 3 &&
               prog.exports[0].kind == ExportKind::Func &&
               prog.exports[0].name == "greeter" && prog.exports[0].ref == 0 &&
+              prog.exports[0].initArity == -1 &&
               prog.exports[1].kind == ExportKind::Const &&
+              prog.exports[2].kind == ExportKind::Class &&
+              prog.exports[2].name == "Point" &&
+              prog.exports[2].initArity == 2 &&
               prog.imports.size() == 1 && prog.imports[0].module == "math" &&
               prog.imports[0].name == "min",
-          "v9: module name and the tables survive, reserved alias slot read "
-          "past (" +
+          "v11: module name, the tables (incl. the kind-Class export with its "
+          "initArity meta) survive, reserved alias slot read past (" +
               why + ")");
   }
 
@@ -1915,8 +1936,8 @@ static void testV6LoadValidation() {
       (static_cast<uint32_t>(static_cast<uint8_t>(image[5])) << 8) |
       (static_cast<uint32_t>(static_cast<uint8_t>(image[6])) << 16) |
       (static_cast<uint32_t>(static_cast<uint8_t>(image[7])) << 24);
-  check(kQlcVersion == 10 && written == 10,
-        "v6-load: the image declares version 10");
+  check(kQlcVersion == 11 && written == 11,
+        "v6-load: the image declares version 11");
 
   CompiledProgram back;
   std::string err;
@@ -1925,10 +1946,10 @@ static void testV6LoadValidation() {
             back.functions[0].instrOffsets == offs,
         "v6-load: the code bytes and the offset table survived");
 
-  // The reader is single-version: v9 (the signature-less image) and every
-  // other number are refused with a version error, no migration shim
-  // (decision D5: one case below the current version, one above).
-  for (uint32_t bad : {3u, 4u, 5u, 6u, 7u, 8u, 9u, 11u}) {
+  // The reader is single-version: v10 (the export record without initArity)
+  // and every other number are refused with a version error, no migration
+  // shim (decision D5: one case below the current version, one above).
+  for (uint32_t bad : {3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 12u}) {
     std::string m = image;
     for (int i = 0; i < 4; i++)
       m[4 + i] = static_cast<char>((bad >> (8 * i)) & 0xFF);
