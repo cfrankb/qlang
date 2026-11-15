@@ -446,7 +446,7 @@ linked:
 | program | `getimport` | `callimport` |
 |-|-|-|
 | merged (linker output) | survives; `b` is the merged table's index and `ref` the merged cell | **never present** — the linker resolves it to `callfn`, or to `makegen` with a synthesized pool closure for an exported generator |
-| module image run as-is | reads the cell its own table names | calls the function its own table names — the form a runtime module registry executes |
+| module image run as-is | reads the cell its own table names | calls the function its own table names — the form a host runs without linking; since Round 92 no host path does: the context links at the run boundary (`07-api.md` `## running programs with modules`) |
 
 A merged program therefore contains no instruction that names the import table for a *call*,
 but it does keep the reads; a module image keeps both, which is why a library may import another
@@ -659,10 +659,12 @@ runnable program (one function table, one folded constant pool, one global regis
 into per-module slices, **one import table**, module top levels run in dependency order).
 `GETIMPORT` / `CALLIMPORT` (`### OpCode getimport / callimport`) are the instructions that name
 the import table, so a module image is self-describing: it can import another module and still be
-written out and linked transitively. What is *not* implemented is the second link model of
-`## technical specifications` 1 as a *feature* — the two opcodes run, but nothing resolves a
-module by name and hands it over at run time (a runtime module registry), and nothing finds a
-module by name without a host loading it first (search paths, `07-api.md`).
+written out and linked transitively. The second link model of `## technical specifications` 1
+landed (Round 92) as a *run boundary*: `QLangContext::run` / `runProgram` resolve every imported
+module the registry does not already hold by name — registry, host callback, search paths
+(`07-api.md` `## running programs with modules`) — and merge it through the same `QLangLinker`
+before the VM starts. What the two opcodes above specify is what a never-linked image means: the
+suites still pin that a VM runs that form; no host path does.
 
 ## export table (lookup)
 
@@ -882,15 +884,16 @@ Status of each item as of Round 65 (2026-11-09) — plan
 [../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phases 1–3c:
 
 1. **Link model** — both `link-time merge` and `runtime module registry`. should share a reusable solution
-   — ◐ **merge implemented (Round 64, Phase 3b)**: `QLangLinker`
+   — ✓ **complete (merge Round 64, Phase 3b; registry Round 92)**: `QLangLinker`
    (`include/qlang/QLangLinker.h`) merges the loaded images an entry imports into one program.
    The reusable units the registry needs are in place and are what the merge consumes — the
    tables (`CompiledProgram::exports`/`imports`), the registry (`QLangContext::loadProgram`,
    `loadedModule`, `loadedModules`) and resolution against the export table (compile time). Since
    Round 65 the two opcodes a module needs to run unmerged exist and are implemented in the VM
-   (`### OpCode getimport / callimport`), so the registry's *execution* half is no longer missing
-   — what is missing is the feature around it: nothing resolves a module by name at run time and
-   hands its image over.
+   (`### OpCode getimport / callimport`). Since Round 92 the item is **complete**: `QLangContext::run`
+   and `runProgram` resolve every import the registry does not hold by name at the run boundary
+   (`07-api.md` `## running programs with modules`) and hand the images to this same linker —
+   one linker, one registry, both link models.
 2. **Entry point** — global scope script only at this point. no main function. single file qlang modules in this version only.
    — ✓ **implemented (Round 63/64)**: a library compiles its top level as `<init>`
    (`QLangCompiler::setLibraryMode`), and a merged program runs every module's `<init>` exactly

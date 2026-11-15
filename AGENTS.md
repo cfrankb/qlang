@@ -7,6 +7,7 @@ Documentation is modular under `docs/` (migrated 2026-10-29 from the monolithic 
 - **Instruction:** Do not append large blocks to the legacy root stubs. Create targeted `.md` files in `docs/` subdirectories. Consult directory `README.md` files as your entry points.
 
 plans that are fully implemented should be moved to `docs/plans/archive`.
+bugs that are fixed should be moved to `docs/bugs/resolved`.
 
 ## Ponytail
 

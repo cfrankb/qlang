@@ -167,9 +167,12 @@ needs ([13-bytecodes.md](13-bytecodes.md) `## keyword export`,
   libraries explicitly and keep the image beside the source.
 
 **Implemented (Round 65, 2026-11-09)** — plan
-[../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phases 1–3c:
-everything above except a runtime module registry (executing an image without merging it — the
-two opcodes run, the feature around them does not exist) and name-based discovery. A `.ql`
+[../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phases 1–3c.
+The two named exceptions followed: name-based discovery landed Rounds 67/69 (`## module search
+paths` above), and the runtime module registry landed Round 92 as the run boundary of
+[07-api.md](07-api.md) `## running programs with modules` — imports resolved by name and merged
+before the VM runs; the unmerged opcode form stays specified in `13-bytecodes.md` and pinned, but
+no host path runs it. A `.ql`
 module that imports a name whose captures belong to the defining module's frame is refused at
 compile time: the import table says *which* function, not which frame seeds its captures.
 

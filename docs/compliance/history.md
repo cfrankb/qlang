@@ -1,3 +1,36 @@
+## Round 92 — 2026-11-14 — runtime module registry: `run()` / `runProgram()` link imported modules at the run boundary (`docs/spec/07-api.md` `## running programs with modules`, `docs/spec/13-bytecodes.md` `## technical specifications` 1; impl `QLangContext.cpp` `linkImports`, tests `module_search_test.cpp` 117 → 128)
+
+- **Why.** Only the `qlcc` driver linked. `QLangContext::run()` executed a program
+  importing `.ql` modules **unlinked** — `callimport`'s `ref` indexes the
+  *defining* module's tables, so with one image loaded the imported `who()`
+  silently ran the entry's own `g()` (reproduced 2026-11-14 against
+  `build/libqlang.a`). This was the last open half of `13-bytecodes.md`
+  `## technical specifications` 1 (the runtime module registry) and the C8
+  remainder listed in `status.md`.
+- **What.** `run()` and the new `QLangContext::runProgram(const CompiledProgram &)`
+  share one boundary (`QLangContext.cpp` `linkImports`, `07-api.md`
+  `## running programs with modules`): every import module the registry does
+  not hold is resolved by name through `findModule` (C++ module → registry →
+  callback → paths — dependency walking stays `findModule`'s rollback-capable
+  job, not `loadProgram`'s), the entry and modules merge through the same
+  `QLangLinker` the driver uses, and the merged program runs and goes live
+  (`call()` / `liveProgram()` bind it). An unresolvable import is a
+  `QLangError(Io)` naming it with nothing half-taken-in; the entry is never
+  registered (running is not importing); merged programs are run-only
+  (`writeQlc` already refused them). `qlcc` unchanged — `-c`/packages need its
+  pre-link snapshot. Plan M2's harness dedup evaluated and declined: every
+  `buildLinked` site pins a compile/link stage the run boundary cannot
+  separate (import tables, pre-link entries, link errors).
+- **Verified.** `module_search` 117 → **128** (`testRunBoundary`: the misfire
+  repro, the C++-module-only bypass, host-compiled and pre-link-`.qlc`
+  `runProgram` runs merged transitively with dependencies from the search
+  paths, registry untouched by running, `call()` through the merged program).
+  Spec `07-api.md` gained the section (M0, hash recorded with this round);
+  `09-modules.md` / `13-bytecodes.md` stale "not implemented" claims retired —
+  spec 13 item 1 ◐ → ✓. `doc_hashes` gate re-recorded after the suites went
+  green. ctest **67/67**. Plan archived at
+  `docs/plans/archive/runtime-module-registry-plan.md`.
+
 ## Round 91 — 2026-11-14 — strict typing: generators always accept `nil` as a return (`docs/spec/16-strict_typing.md` `## implicit return types`; impl `QLangVM.cpp` `checkReturnValue`, tests `strict_typing_test.cpp` 64 → 68)
 
 - **Why.** The spec gained `## implicit return types`: "`generators` always

@@ -39,15 +39,14 @@ scripts behind `QLANG_WITH_QT`, spec draft `../spec/19-Qt6_integration.md` autho
       `CMakeLists.txt`, `include/qlang/QLangBytecode.h`, the three `tests/unit` headers).
       `docs/compliance/history.md` was **not** rewritten (append-only record).
 
-## 2. C8 remainder — runtime module registry + name-based discovery — NEXT MILESTONE
+## 2. C8 remainder — runtime module registry + name-based discovery — ✓ DONE (Round 92)
 
-Plan exists: [runtime-module-registry-plan.md](runtime-module-registry-plan.md) — written
-2026-11-14, **not started**; ~2–3 days. The registry, discovery and the linker all landed
-(C8a/C8b Round 67/69, merge Round 64/65); only the run boundary is missing: `qlcc` is the
-sole driver that links, so `QLangContext::run()` executes an imported program **unlinked** —
-reproduced 2026-11-14 against `build/libqlang.a`: `callimport` aliases the defining module's
-function index into the entry's own table, so `f()` silently runs `g()`. M1 = auto-link in
-`run()` + `QLangContext::runProgram(const CompiledProgram&)` + the misfire repro as a pin.
+Plan [archive/runtime-module-registry-plan.md](archive/runtime-module-registry-plan.md) —
+written and **completed** 2026-11-14 (M0 spec section in `07-api.md`; M1 the run boundary:
+`QLangContext::run()` / `runProgram()` resolve imports by name through `findModule` and merge
+through `QLangLinker` before the VM starts; M2 the compliance round = Round 92, harness dedup
+evaluated and declined). `module_search` 117 → 128, ctest 67/67. `qlcc` unchanged — `-c` and
+packages need its pre-link snapshot. Next milestone: **2b** below.
 
 ## 2b. M4 — `$$` indirect access (A3) — queued
 
@@ -106,7 +105,9 @@ closing the **Q#**s its item points at:
       Round 69 (2026-11-10); front end for `archive/external-modules-plan-v4.md`. What
       `export`/`import` still cannot do was planned in
       [archive/module-export-import-plan.md](archive/module-export-import-plan.md) (all phases
-      landed Rounds 70–73, archived)
+      landed Rounds 70–73, archived). C8's last half — the **runtime module
+      registry** as the run boundary (`run()`/`runProgram()` link imported
+      modules) — landed **Round 92** (`archive/runtime-module-registry-plan.md`)
 - [x] **`external-modules-plan-v3.md` re-audited → `docs/plans/archive/external-modules-plan-v4.md`**
       (2026-11-08): v4 adds the `Status:` header, the **Q29–Q35** open-question set and an
       implementation order, and re-bases the machine on the tree — `.qlc` **v7 → v8** (unified
@@ -179,7 +180,8 @@ closing the **Q#**s its item points at:
       byte-identical, ctest **53/53**. Docs: `13-bytecodes.md` new opcode section + status flips,
       `09-modules.md` rewritten as two module kinds, `07-api.md` quote scoped to C++ modules,
       `SERIALIZATION.md` refreshed. *Remaining for `# external modules`:* a runtime module registry
-      and name-based discovery — **C8**
+      and name-based discovery — **C8** — ✓ **both landed** (C8a/C8b Rounds 67/69; the registry
+      Round 92, `archive/runtime-module-registry-plan.md`)
 - [ ] `missing-features-plan.md` itself drifted after Rounds 56/59/60: the A5 row still says
       "pipeline still emits v5", Phase 2 still says "`kOpcodeUsedCount` is 73 … A5 raises it to
       80", Conventions still say "`.qlc` v5 stays the only supported format", and Dependencies

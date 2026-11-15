@@ -1,9 +1,11 @@
 # Runtime module registry + name-based module discovery — implementation plan
 
-- **Status:** M0 + M1 done 2026-11-14 (spec section in `07-api.md`;
+- **Status:** ✓ **complete 2026-11-14** — M0 + M1 (spec section in `07-api.md`;
   `run()`/`runProgram()` link at the run boundary, resolved through
-  `findModule`; `module_search` suite 117 → 128 checks, ctest 67/67).
-  M2 (harness dedup + compliance round) remains.
+  `findModule`; `module_search` suite 117 → 128 checks, ctest 67/67) + M2
+  (compliance round = Round 92; the harness dedup was evaluated and declined —
+  every `buildLinked` site pins a compile/link stage the run boundary cannot
+  separate, so the test harness stays as is). `qlcc` unchanged by design.
   Prepared 2026-11-14.
 - **Backlog id:** the C8 remainder (`docs/plans/missing-features-plan.md` §C8: the
   search-pair C8a/C8b landed Round 67/69; what was deferred is the *registry*
