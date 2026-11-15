@@ -106,6 +106,27 @@ let c = a == 5 ? {
 
 same rules apply to `operator <=` and `operator >=`
 
+Integer-to-integer comparisons (`byte`, `word`, `short`, `int`,
+`unsigned`/`dword`, `long`, `qword`) are **exact mathematical-integer
+comparisons**: an operand is never reinterpreted through another type's
+signedness. A negative `int` is less than any `unsigned` or `qword` value,
+and a `qword` above `INT64_MAX` is greater than any signed integer — no
+operand loses its sign or its range in a relation. The same rule governs
+`operator ==` and `operator !=` (see "operator == and !=" below).
+
+## operators && and ||
+
+`&&` and `||` **short-circuit**, in value position as well as in control
+position. `a && b` evaluates `b` only if `a` is true; `a || b` evaluates `b`
+only if `a` is false. The result is the boolean value of the last operand
+evaluated. Evaluation order is always left to right, and an operand that is
+never evaluated performs no side effects.
+
+```
+local found = false
+let z = found && boom()   # boom() is never called; z is false
+```
+
 ## operator **
 
 pow is only valid when left and right operands are numbers.

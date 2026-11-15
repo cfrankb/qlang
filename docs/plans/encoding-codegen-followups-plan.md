@@ -1,6 +1,8 @@
 # Plan: encoding-plan codegen follow-ups (todo §7)
 
-Proposed: 2026-11-14 (post-Round 94). Status: **proposed** — Phase 0 has not run.
+Proposed: 2026-11-14 (post-Round 94). Status: **in progress** — Phase 0 landed 2026-11-15
+(`05-operators.md` short-circuit + exact-integer relation sentences, `13-bytecodes.md` alias
+paragraph restated to the decided rule; hashes re-recorded on green `ctest` 67/67).
 
 Provenance: `todo.md` §7 "Codegen follow-ups recorded by M3 / Phase 3 (no plan yet)" — the six
 rows below are that list, in dependency order; design record is

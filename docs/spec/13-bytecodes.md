@@ -312,10 +312,11 @@ immediate is always `int`. The general (non-`int`) relations are the `*f` family
 |jbe|jump below equal|lt or eq|alias of `jle`|
 
 `ja`/`jae`/`jb`/`jbe` are **assembler-level aliases only**: the flags record the relation the
-comparator computed, and QLang compares `int`/`unsigned`/`qword` within their own types, so
-there is no unsigned-specific flag state for a distinct jump to test. They carry no distinct
-encoding and no opcode identity; disassembly prints the canonical `jg`/`jge`/`jl`/`jle`. A
-genuinely unsigned relation on mixed-signedness operands is deferred to a future version.
+comparator computed, and signedness is a property of the compare helper, not of the flag state
+or the jump encoding — relations on mixed-signedness integer operands are exact
+mathematical-integer comparisons (`05-operators.md`, "operators < and >"), so there is no
+unsigned-specific flag state for a distinct jump to test. They carry no distinct encoding and
+no opcode identity; disassembly prints the canonical `jg`/`jge`/`jl`/`jle`.
 
 **The negative branch of a `*f` compare (normative).** A partial comparator leaves **no bit
 set** when its relation does not hold, and **no jump predicate tests for the none-set state**
