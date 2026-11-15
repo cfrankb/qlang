@@ -189,6 +189,18 @@ gate or `./update-doc-hashes.sh --check` directly (Round 49).
 - `--update-baseline` regenerates `tests/perf/baseline.json` (a deliberate act,
   always a separate commit). `baseline.json` is the immutable reference
   (calibrated g++/Linux Release).
+- **Re-recorded Round 93 (2026-11-14)** — the deliberate act the Round 60 item below
+  left open (`docs/plans/todo.md`): `perf_stress` execute **10.382 → 11.171 ms
+  (+7.6 %)**. Not codegen — the instruction stream is unchanged since Round 60
+  (`perf_stress` still compiles to exactly **565** instructions, the `codegen_size`
+  budget held; the Round 93 defect fixes patch an existing JMP target and add no
+  corpus instructions). Three medians on this host before re-recording: 11.17 /
+  11.21 / 11.35 ms (the old baseline measures **+7.1 % to +9.4 %**), so the drift is
+  host/environment. The recorded recovery — the loop-direction hoist out of the
+  back-edge (`archive/phase3-opcode-retirement-plan.md` §8, 8 → 7 instructions in
+  that inner loop) — stays **parked**: it belongs in a codegen round of its own,
+  not in a baseline act. The other eleven medians re-recorded from the same run.
+  Regenerated with `--update-baseline`, own commit.
 - **Measured, not re-recorded, Round 60 (2026-11-08)** after Phase 3: `perf_stress`
   execute 10.91–10.97 ms against the 10.382 ms baseline (**+5.0 % to +5.7 %** across
   the runs of this round) — 44 extra instructions in that script's hot loop, one per

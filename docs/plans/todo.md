@@ -215,10 +215,12 @@ closing the **Q#**s its item points at:
       **Fixed 2026-11-14 (Round 93)**: `collectIds` gained the `FString`/`Cast` recursion cases;
       +3 `spec_check2` cases (f-string, cast, f-string-over-cast in a def).
       `docs/bugs/resolved/const-fstring-cast-capture-miss.md`
-- [ ] **perf**: `perf_stress` execute **10.974 ms** vs the committed baseline **10.382 ms**
-      (+5.7 %, deliberately not re-baselined in Round 60). Either land the loop-direction hoist
-      that recovers it (`archive/phase3-opcode-retirement-plan.md` §8: 8 → 7 instructions in the
-      inner loop) or re-baseline deliberately in its own commit
+- [x] **perf**: **deliberately re-baselined Round 93** (2026-11-14) — the Round 60
+      drift (+5.7 %) measured +7.6 % to +9.4 % across three host medians with the instruction
+      stream **unchanged** (565 instructions, `codegen_size` held), so `tests/perf/baseline.json`
+      was re-recorded with `--update-baseline` (own commit); record in `docs/compliance/tests.md`.
+      The loop-direction hoist (`archive/phase3-opcode-retirement-plan.md` §8: 8 → 7 instructions
+      in the inner loop) stays **parked** — land it as a codegen round of its own, not for a number
 - [ ] **Round 58 has no `history.md` entry** (Round 59 admits it: recorded in the `status.md`
       tally only) — the append-only record has a hole; backfill it
 - [ ] Spec-wording edits owed (each is a spec-module edit → rebuild, re-test, re-hash):
