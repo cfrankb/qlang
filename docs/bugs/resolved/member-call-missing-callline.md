@@ -2,7 +2,10 @@
 
 **Date:** 2026-11-15
 **Severity:** medium (diagnostics correctness — wrong locs in the image's `locs:` section and in the `-a` disassembly listing; error positions for member-call failures may also report 0:0)
-**Status:** open
+**Status:** fixed — `parsePostfix()` and the keyword-builtin Call sites now stamp
+`callLine`/`callCol` (member calls via new `Member::memberLine/memberCol`
+copied from the member-name token); regression test
+`tests/unit/member_call_loc_test.cpp` (`ctest -R member_call_loc`)
 **Cited code at commit:** `a8e7896`
 
 ## Symptom

@@ -1390,6 +1390,8 @@ ExprPtr QLangParser::parsePostfixChain() {
       node->memberBase = e;
       node->memberName = nameTok.value;
       node->scopeStatic = scopeRes; // `C::name` -> class static member
+      node->memberLine = nameTok.line;
+      node->memberCol = nameTok.col;
       e = std::move(node);
     } else {
       break;
@@ -1407,6 +1409,8 @@ ExprPtr QLangParser::parsePostfix() {
     node->kind = ExprKind::Call;
     node->callee = e->memberName;
     node->calleeMember = e;
+    node->callLine = e->memberLine;
+    node->callCol = e->memberCol;
     if (!check(TokenType::RParen)) {
       do {
         node->args.push_back(parseExpression());
@@ -1577,6 +1581,8 @@ return node;
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Call;
       node->callee = "str";
+      node->callLine = tok.line;
+      node->callCol = tok.col;
       if (!check(TokenType::RParen)) {
         do {
           node->args.push_back(parseExpression());
@@ -1596,6 +1602,8 @@ return node;
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Call;
       node->callee = "int";
+      node->callLine = tok.line;
+      node->callCol = tok.col;
       if (!check(TokenType::RParen)) {
         do {
           node->args.push_back(parseExpression());
@@ -1617,6 +1625,8 @@ return node;
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Call;
       node->callee = "set";
+      node->callLine = tok.line;
+      node->callCol = tok.col;
       if (!check(TokenType::RParen)) {
         do {
           node->args.push_back(parseExpression());
@@ -1700,6 +1710,8 @@ return node;
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Call;
       node->callee = "blob";
+      node->callLine = tok.line;
+      node->callCol = tok.col;
       if (!check(TokenType::RParen)) {
         do {
           node->args.push_back(parseExpression());
@@ -1719,6 +1731,8 @@ return node;
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Call;
       node->callee = "range";
+      node->callLine = tok.line;
+      node->callCol = tok.col;
       if (!check(TokenType::RParen)) {
         do {
           node->args.push_back(parseExpression());
@@ -1738,6 +1752,8 @@ return node;
       auto node = std::make_shared<Expr>();
       node->kind = ExprKind::Call;
       node->callee = "slice";
+      node->callLine = tok.line;
+      node->callCol = tok.col;
       if (!check(TokenType::RParen)) {
         do {
           node->args.push_back(parseExpression());

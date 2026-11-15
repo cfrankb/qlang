@@ -78,9 +78,14 @@ struct Expr {
 
   // Member: base.name  (table member access). With scopeStatic, the access
   // was written `base::name` (scope resolution to a class static member).
+  // memberLine/memberCol locate the member-name token; parsePostfix copies
+  // them into a method call's callLine/callCol (same position an identifier
+  // call stamps from its callee token).
   ExprPtr memberBase;
   std::string memberName;
   bool scopeStatic = false;
+  int memberLine = 0;
+  int memberCol = 0;
 
   // Closure: (params)[captures] { ... }  (anonymous arrow closure expression).
   std::vector<std::string> params;

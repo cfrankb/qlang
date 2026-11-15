@@ -391,6 +391,12 @@ target_compile_definitions(codegen_size_check PRIVATE
 )
 add_test(NAME codegen_size COMMAND codegen_size_check)
 
+# Member-call / keyword-builtin CALL source-location stamping
+# (docs/bugs/member-call-missing-callline.md).
+add_executable(member_call_loc_test tests/unit/member_call_loc_test.cpp)
+target_link_libraries(member_call_loc_test PRIVATE qlang)
+add_test(NAME member_call_loc COMMAND member_call_loc_test)
+
 # .qla v1 assembler round-trip guard (encoding-followups plan Phase 5,
 # whole-byte mode since qla-assembler-followups M1): each script's own -a
 # listing must rebuild, via qlcc --assemble, an image BYTE-IDENTICAL to the
