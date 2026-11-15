@@ -1,6 +1,10 @@
 # Plan: shallowcopy, `copy` parameter specifier, class exports (F4 / Q42)
 
-Adopted: 2026-11-14 (post-Round 94). Status: **proposed** — Phase 0 has not run.
+Adopted: 2026-11-14 (post-Round 94). Status: **Phase 0 landed (Round 104, Q42 + the class-export
+spec sentences); Phase 1 landed (Round 105, `shallowcopy`); Phase 3 superseded by
+[class-export-plan.md](archive/class-export-plan.md) and landed with it (Rounds 104–107, F4
+closed)** — Phase 2 (`copy` specifier) remains open; its Phase 0 gate landed for the class-export
+half only.
 
 Provenance of the four items (all *explicitly deferred by decision*, never by omission):
 

@@ -134,7 +134,7 @@ is decided): **v8** = the module constant pool (§4.2, Round 62,
 identity + export/import tables (§4.6, Round 63, same plan Phase 3a) · **v10** = the declared
 signature block at the end of every function record (§4.1a, strict-typing plan §6) · **v11** =
 the export record grows the class meta `initArity` and the kind domain gains `Class` (§4.6,
-Q42, [plans/class-export-plan.md](plans/class-export-plan.md) P3a) · the
+Q42, [plans/archive/class-export-plan.md](plans/archive/class-export-plan.md) P3a) · the
 portable-module plan allocates **no** `.qlc` version — `QLM1` (§11) and `QPM1` (P5) carry their
 own magic+version · the next free number belongs
 to whoever lands next ([plans/offset-table-elimination-plan.md](plans/offset-table-elimination-plan.md)

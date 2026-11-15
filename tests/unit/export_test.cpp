@@ -18,10 +18,12 @@
 //     holds its function index, so a rebind would silently detach the export),
 //     and the module name resolves source > driver > "main".
 //
-// The import table is deliberately not exercised: Phase 3a never populates it
-// (`import` still binds C++ module functions through the negative-slot space of
-// CALL), so the suite only pins that it stays empty.
+// The import side rides in through F4 (docs/plans/archive/class-export-plan.md):
+// `testClassConstruction` compiles an image, loads it, and links an app
+// against it to pin construction of an exported class.
 #include <iostream>
+#include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -32,6 +34,7 @@
 #include "qlang/QLangCompiler.h"
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
+#include "qlang/QLangLinker.h"
 #include "qlang/QLangVM.h"
 
 using namespace qlang;
@@ -96,6 +99,42 @@ std::string errorOf(const std::string &source) {
   std::string err;
   if (compile(ctx, source, prog, err)) return "";
   return err;
+}
+
+// `compile` plus the native-slot wiring a LINKED run needs (linker_test's
+// pattern): the name -> negative-slot map for the writer/linker, and the
+// slot functions materialized on the program.
+bool compileImage(QLangContext &ctx, const std::string &source,
+                  CompiledProgram &out, std::string &err,
+                  std::map<std::string, int> &nativeIds,
+                  const std::string &moduleName = "",
+                  bool libraryMode = false) {
+  try {
+    std::vector<StmtPtr> program = ctx.parse(source);
+    QLangCompiler compiler(std::move(program), &ctx);
+    compiler.addExternalConsts({});
+    std::unordered_set<std::string> nativeNames;
+    for (const auto &[name, _] : ctx.nativeFuncs()) nativeNames.insert(name);
+    compiler.addExternalFuncs(nativeNames);
+    compiler.addModules(ctx.modules());
+    if (!moduleName.empty()) compiler.setModuleName(moduleName);
+    compiler.setLibraryMode(libraryMode);
+    out = compiler.compile();
+    nativeIds = compiler.nativeSlotIds();
+    for (const auto &[name, func] : ctx.nativeFuncs()) {
+      auto it = nativeIds.find(name);
+      if (it == nativeIds.end()) continue;
+      const int idx = -1 - it->second;
+      while (out.nativeFuncs.size() <= static_cast<size_t>(idx))
+        out.nativeFuncs.push_back(nullptr);
+      out.nativeFuncs[static_cast<size_t>(idx)] = func;
+    }
+    err.clear();
+    return true;
+  } catch (const QLangError &e) {
+    err = e.what();
+    return false;
+  }
 }
 
 const ExportEntry *findExport(const CompiledProgram &prog,
@@ -553,7 +592,7 @@ println(greet(AUTHOR))
         "qlc: the loaded module runs with identical output");
 }
 
-// Q42 (plan docs/plans/class-export-plan.md P3a): `export class` is legal and
+// Q42 (plan docs/plans/archive/class-export-plan.md P3a): `export class` is legal and
 // the entry carries the class meta. Construction across the boundary is P3b;
 // this round pins the table and the image only.
 static void testClassExports() {
@@ -630,6 +669,126 @@ println(p.x)
         "class: a class cannot name the module");
 }
 
+// F4 P3b (plan docs/plans/archive/class-export-plan.md): CONSTRUCTION of an imported
+// class. The library is compiled to an image and loaded (the `qlcc app.ql
+// lib.qlc` path), the app is compiled against it and linked; the run pins
+// both spellings constructing, the method call through a receiver variable,
+// `type()`, a captured module constant inside `__init__` (the capture spec
+// must name the merged global slot, not a frame register), field defaults
+// shared by handle, and the zero-`__init__` rule. The rejects pin the
+// compile-time half: a class import is a constructor, never a value, and its
+// arity is checked against the defining image's `initArity`.
+static void testClassConstruction() {
+  const char *kLeaf = R"(
+export const MODULE_NAME = "leafc"
+export const GREET = "hi"
+export class Pt {
+  x = 0
+  hi = ""
+  shared = []
+  __init__(self, ax) [GREET] {
+    self.x = ax
+    self.hi = GREET
+  }
+  ax(self)[] { return self.x }
+}
+export class Zero {
+  flag = true
+}
+)";
+  QLangContext ctx;
+  std::string err;
+  {
+    CompiledProgram lib;
+    std::map<std::string, int> libIds;
+    if (!compileImage(ctx, kLeaf, lib, err, libIds)) {
+      check(false, "construct: the library compiled (" + err + ")");
+      return;
+    }
+    std::ostringstream os(std::ios::binary);
+    if (!check(writeQlc(os, lib, libIds),
+               "construct: the library image was written"))
+      return;
+    std::istringstream is(os.str(), std::ios::binary);
+    if (!check(ctx.loadProgram(is, "memory.qlc") != nullptr,
+               "construct: the library loaded"))
+      return;
+  }
+
+  // Compile-and-link helper (linker_test's pattern): entry `source`, module
+  // "app"; false with the error text when the compile or the link throws.
+  auto build = [&](const std::string &source, CompiledProgram &merged) {
+    CompiledProgram entry;
+    std::map<std::string, int> entryIds;
+    if (!compileImage(ctx, source, entry, err, entryIds, "app")) return false;
+    try {
+      QLangLinker linker(ctx.loadedModules());
+      merged = linker.link(entry, entryIds);
+      err.clear();
+      return true;
+    } catch (const QLangError &e) {
+      err = e.what();
+      return false;
+    }
+  };
+  // The compile-time rejects, against the loaded library.
+  auto rejectsLinked = [&](const std::string &source,
+                           const std::string &fragment) {
+    CompiledProgram merged;
+    if (build(source, merged)) return false;
+    return err.find(fragment) != std::string::npos;
+  };
+
+  check(rejectsLinked("from leafc import Pt\nlet f = Pt\n",
+                      "must be constructed"),
+        "construct: reading a flat class import is rejected");
+  check(
+      rejectsLinked("import leafc\nlet g = leafc.Pt\n", "must be constructed"),
+      "construct: reading a qualified class import is rejected");
+  check(rejectsLinked("from leafc import Pt\nlet p = Pt(1, 2)\n",
+                      "constructor of 'Pt' expects 1 argument, got 2"),
+        "construct: arity is checked against the image's initArity");
+  check(rejectsLinked("from leafc import Zero\nlet z = Zero(1)\n",
+                      "has no constructor"),
+        "construct: a zero-`__init__` class rejects arguments");
+
+  const std::string app = R"(
+from leafc import Pt, Zero
+let a = Pt(3)
+println(a.x)
+println(a.ax())
+println(a.hi)
+println(type(a))
+let b = Zero()
+println(b.flag)
+let sa = a.shared
+sa[] = 9
+let c = Pt(7)
+println(len(c.shared))
+)";
+  CompiledProgram merged;
+  if (!check(build(app, merged), "construct: the app linked (" + err + ")"))
+    return;
+  // The class-name read `Pt(7)` in the last line is the flat call form
+  // again; the shared default must show the earlier append (handle sharing).
+  check(runText(merged, ctx) == "3\n3\nhi\nPt\ntrue\n1\n",
+        "construct: the linked run constructs and dispatches");
+
+  const std::string qualified = R"(
+import leafc
+let b = leafc.Pt(4)
+println(b.ax())
+println(type(b))
+let z = leafc.Zero()
+println(z.flag)
+)";
+  CompiledProgram merged2;
+  if (check(build(qualified, merged2),
+            "construct: the qualified app linked (" + err + ")"))
+    check(runText(merged2, ctx) == "4\nPt\ntrue\n",
+          "construct: the qualified spelling constructs too");
+}
+
 int main() {
   testPrefixForms();
   testStandaloneForm();
@@ -639,6 +798,7 @@ int main() {
   testExportRules();
   testQlcRoundTrip();
   testClassExports();
+  testClassConstruction();
 
   std::cout << (fails == 0 ? "ALL PASS" : "FAILURES") << ": " << passes
             << " passed, " << fails << " failed\n";

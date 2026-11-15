@@ -1,7 +1,8 @@
 # Plan: F4 — class exports (`export class`, Q42)
 
-Status: **Phase 0 landed (Round 104, 2026-11-15); clone round landed (Round 105, 2026-11-15,
-D2 `shallowcopy`); P3a landed (Round 106, 2026-11-15, `.qlc` v11)**; P3b proposed. Drafted in Plan mode
+Status: **fully landed — Phase 0 (Round 104), clone round (Round 105, D2 `shallowcopy`),
+P3a (Round 106, `.qlc` v11), P3b (Round 107, 2026-11-15, importer-side construction)**;
+archived per AGENTS (fully implemented). Drafted in Plan mode
 2026-11-15; baseline HEAD `cc4744a`,
 Round 98). Supersedes the class-export sections (Phase 0 item 3, Phase 3) of
 `docs/plans/deferred-copy-semantics-and-class-export-plan.md`. Reference spec:

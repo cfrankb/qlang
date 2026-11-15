@@ -1,3 +1,53 @@
+## Round 107 — 2026-11-15 — construct an imported class from the exported prototype cell (F4 **P3b**; plan `docs/plans/class-export-plan.md`, now fully landed and archived; spec `docs/spec/09-modules.md` `## QLang (.ql) modules`, `docs/spec/13-bytecodes.md` `## export table (lookup)`)
+
+- **Why.** The import half of the plan: P3a (Round 106) put the class into the table and the
+  image; nothing could *use* it. With this round `from m import Point` + `Point(3, 4)` (and the
+  qualified `m.Point(3, 4)`) constructs across the boundary from the shared prototype cell, and
+  audit **F4 closes**.
+- **Language.** A class import is a constructor, never a value: the flat Variable-load site, the
+  qualified member-read site and the non-call import dispatch all throw
+  `class 'Name' must be constructed: Name(args)` (the spelled form in the message). Arity is
+  checked at **compile time** against the defining image's `initArity`:
+  `constructor of 'Name' expects N argument(s), got M`, and a class without `__init__` takes
+  exactly zero (`class 'Name' has no constructor; expected 0 arguments, got M`). Imported-class
+  **statics** stay out of scope (plan). Field defaults are shared by handle, `type()` keeps
+  naming the class — the same rules as local instances (Round 105's clone makes that free).
+- **Codegen.** No format change (still v11). Local class declarations now stamp `__class__` onto
+  the **prototype** table (before the const-fields block), so the shallow clone carries it — the
+  closed field set makes a post-clone `TABPUT __class__` impossible (the plan's step as written;
+  codegen-only correction). `emitImportedClassConstruction`: `GETIMPORT` → `SHALLOWCOPY` (the VM
+  finalizer-attaches the clone) → MOV dest ← instR → compile-time arity check → args shifted to
+  `dest+1..` with `self` at `dest+1` → `TABGET __init__` + `CALLCLOS fnR, dest, argCount+1` →
+  MOV dest ← newArgBase restore + nil-clear of the arg slots; no `__init__` takes the zero-arg
+  rule and skips the dispatch. Method calls: an AST pre-scan (`collectQlClassReceivers`, reusing
+  `ExtWriteScan`, run after the resolveImport loop in `compile()`) records variables initialized
+  from a class construction (`m_qlClassReceivers`); a member call on one prepends `self`.
+  `ponytail:` ceiling — the hook matches Variable bases only; `items[0].m()` on an imported
+  instance misses `self` (closing it needs `methodNames` in the class meta).
+- **Bug fixes (both pre-existing, reproduced at HEAD before the fix).** (1) The class-method
+  pool `Closure` constants carried only `funcIndex`, never `closure->captures`, so any
+  capture-referencing method reached through `CALLCLOS` ran with an empty `frame.captures` and
+  crashed in `GETCAP` (`QLangVM.cpp` `vector<CaptureRef>::operator[]`); the class-method and
+  static-method `MAKEFUNC` sites now copy `m_functions[funcIndex - 1].captures` (serialization
+  unaffected — the codec already round-trips captures). (2) A **top-level class method** whose
+  capture list names a module-level cell resolved to `callerReg = 0`: `compileClass` clears
+  `m_regs`, so none of `buildFunction`'s three resolution rules could answer, and the made
+  closure seeded the capture cell from register 0 of the prototype function — the instance then
+  held the proto TABLE where a string belonged. `compileClass` now hands `buildFunction` the
+  module map it cleared (`m_classOuterRegs`, top-level classes only) and an unresolved capture
+  resolves to the `-1 - slot` sentinel — the same frame-independent rule an exported top-level
+  `def` already used, so the linker rebases it for free. Recorded, not fixed (unrelated
+  lowering, reproduced identically at HEAD): calling a static method as `S::m()` from inside a
+  `def` throws `register index out of range` with or without captures.
+- **Guards.** `export_test` 102 → 112 (`testClassConstruction`: image loaded, app linked — both
+  spellings construct, the method through a receiver variable, `type()`, the captured-const
+  `__init__`, field defaults shared by handle, the zero-`__init__` rule; the four compile-time
+  rejects). New `tests/scripts/class_export.ql` + fixture `class_export_leaf.ql` (27th script
+  regression). `ctest` 69/69.
+- **Tracking.** Audit F4 → fixed (Rounds 104–107); the `missing-features-plan.md` "export a
+  class" row closed; `todo.md` Q42 clause → landed; the plan moved to
+  `docs/plans/archive/class-export-plan.md` and live references follow.
+
 ## Round 106 — 2026-11-15 — `export class`: export table kind `Class` + `initArity` meta, `.qlc` v11 (F4 **P3a**; plan `docs/plans/class-export-plan.md`; spec `docs/spec/09-modules.md` `## keyword export` + `docs/spec/13-bytecodes.md` `## export table (lookup)`; docs `docs/SERIALIZATION.md` §4/§4.6)
 
 - **Why.** Q42 resolved in Round 104; this is the export half of the plan. A class was

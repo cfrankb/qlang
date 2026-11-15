@@ -2,8 +2,9 @@
 
 Status: **F1 fixed 2026-11-10 (Round 70, plan P0); F2 fixed 2026-11-10 (Round 71, plan P1);
 F3 fixed 2026-11-10 (Round 72, plan P2); F5 closed 2026-11-10 (Round 73, plan P3); F5's
-deferred inc/dec sibling fixed 2026-11-15 (Round 95)** — findings
-record otherwise unchanged. F4 stays deferred (Q42); the deferred items live in
+deferred inc/dec sibling fixed 2026-11-15 (Round 95); **F4 fixed 2026-11-15 (Rounds 104–107,
+class-export plan)** — findings
+record otherwise unchanged. The remaining deferred items live in
 [../plans/missing-features-plan.md](../plans/missing-features-plan.md). Found while
 auditing what is still missing
 for `export`/`import` after **C8b** (Round 69, `.ql` discovery + nested compile). Everything here
@@ -160,14 +161,16 @@ its reserved, always-empty alias slot, and `ImportEntry::alias` was **deleted** 
 Guards: `module_search`'s `testPerNameAlias`. Still open beside it: `import m.f as g` — an
 unspecified form — silently ignores its alias (recorded, Round 72).
 
-## F4 — classes cannot be exported  **(unspecified)**
+## F4 — classes cannot be exported  **(fixed, Rounds 104–107)**
 
 `export class Point { … }` → `export can only prefix def, const or a variable assignment`.
 `## keyword export` lists functions, variables and constants only, so a module that wants to offer a
 type has no answer in the spec. Plan Q42 (default: out of scope until the spec says otherwise).
 **Q42 resolved 2026-11-15 (F4 Phase 0):** the spec now allows `export class` — see
-`docs/spec/09-modules.md` `## QLang (.ql) modules` and `docs/plans/class-export-plan.md` for the
-implementation rounds that close this item.
+`docs/spec/09-modules.md` `## QLang (.ql) modules` and `docs/plans/archive/class-export-plan.md` for the
+implementation rounds that close this item. **Landed Rounds 105–107** (clone round, P3a export
+side `.qlc` v11, P3b importer-side construction): both spellings construct, guard `export_test`'s
+`construct:` suite + `tests/scripts/class_export.ql`.
 
 ## F5 — diagnostics that mislead  **(closed, Round 73)**
 

@@ -69,7 +69,7 @@ enum class ExportKind : uint8_t {
 // slot) holding the value — the shared cell of SPEC §bytecodes "technical
 // specifications" 3; for Class that cell holds the class prototype table
 // (`__proto_<Name>`). `initArity` is the class meta of Q42 (plan
-// docs/plans/class-export-plan.md D1): the declared `__init__` parameter count
+// docs/plans/archive/class-export-plan.md D1): the declared `__init__` parameter count
 // INCLUDING `self`, or -1 when the class declares no `__init__`; meaningless
 // (always -1) for the other kinds.
 struct ExportEntry {

@@ -111,7 +111,7 @@ v1 classes have no static members (see `## v1 restrictions`).
    and the binding table knows it for external types).
 
 An **exported class** constructed in an importing module (Q42 resolved, plan
-[../plans/class-export-plan.md](../plans/class-export-plan.md) F4) follows the same rules:
+[../plans/archive/class-export-plan.md](../plans/archive/class-export-plan.md) F4) follows the same rules:
 the field defaults it carries are **shared by handle** — identical to what locally-constructed
 instances hold, *not* deep-copied — and `type()` of the result names the class. The constructor
 arity check (items 3–4) stays compile-time across the boundary: the class export entry carries

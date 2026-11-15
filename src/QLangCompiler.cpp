@@ -574,6 +574,29 @@ void QLangCompiler::collectKnownReceivers() {
   }
 }
 
+void QLangCompiler::collectQlClassReceivers() {
+  m_qlClassReceivers.clear();
+  if (m_qlImports.empty())
+    return;
+  ExtWriteScan scan;
+  scan.walk(m_program);
+  for (const auto &[name, s] : scan.single) {
+    if (!s || s->kind == StmtKind::Arrow || s->kind == StmtKind::Def)
+      continue;
+    const ExprPtr &init =
+        s->kind == StmtKind::Assignment ? s->assignValue : s->value;
+    if (!init || init->kind != ExprKind::Call)
+      continue;
+    // Both spellings: the flat `Point(...)` and the qualified
+    // `leaf.Point(...)` (callKey gives the qualified name its module prefix).
+    auto it = m_qlImports.find(callKey(init));
+    if (it == m_qlImports.end() ||
+        m_imports[static_cast<size_t>(it->second)].kind != ExportKind::Class)
+      continue;
+    m_qlClassReceivers.insert(name);
+  }
+}
+
 void QLangCompiler::checkExtArgTags(const std::vector<QTypeTag> &tags,
                                     const std::vector<ExprPtr> &args,
                                     const std::string &what) const {
@@ -1661,6 +1684,11 @@ CompiledProgram QLangCompiler::compile() {
     if (s->kind == StmtKind::Import)
       resolveImport(s);
   }
+  // Imported-class receivers for the method-call lowering (class-export plan
+  // F4 P3b): computed here, not beside collectKnownReceivers(), because the
+  // initializer's callee resolves through the import table the loop above
+  // fills.
+  collectQlClassReceivers();
 
   // Compile the top-level program into the main (scratch) function context.
   if (m_scope) {
@@ -2315,6 +2343,8 @@ int QLangCompiler::buildFunction(const std::string &name,
       callerReg = -1 - savedRegs[var];
     else if (savedRegs.count(var))
       callerReg = savedRegs[var];
+    else if (m_classOuterRegs && m_classOuterRegs->count(var))
+      callerReg = -1 - m_classOuterRegs->find(var)->second;
     fn.captures[i].reg = callerReg; // bound at call time by the VM
   }
 
@@ -3642,6 +3672,14 @@ void QLangCompiler::emitImportCall(int importIdx, const std::string &name,
                                    int argBase, int dest, int argCount,
                                    int line, int col) {
   const ImportEntry &im = m_imports[static_cast<size_t>(importIdx)];
+  // A class import is a PROTOTYPE cell, not a callable: construction is the
+  // only call form (the callers route Class to
+  // emitImportedClassConstruction; this refuses anything else that reaches the
+  // function-call lowering with a Class entry).
+  if (im.kind == ExportKind::Class)
+    throw QLangError(
+        QLangErrorKind::Parse, line, col,
+        "class '" + im.name + "' must be constructed: " + name + "(args)");
   const LoadedModule *dm =
       m_scope ? m_scope->loadedModule(im.module) : nullptr;
   if (!dm || im.ref < 0)
@@ -3702,6 +3740,91 @@ void QLangCompiler::emitImportCall(int importIdx, const std::string &name,
     for (int j = 0; j < argCount; j++)
       emitImmNil(Opcode::MOV, argBase + j);
   }
+}
+
+// Construction of a class exported by a loaded module (class-export plan F4
+// P3b, SPEC §classes "Construction"): the instance is a SHALLOW CLONE of the
+// defining module's prototype cell — the `__class__` stamp placed there by the
+// class declaration, the method values, field defaults, and the closed-schema
+// metadata all ride the copy, and the class-level handles (`__statics__`) stay
+// shared, exactly as the local path's by-reference metadata copies leave them.
+// `__init__` then runs through the clone's own method VALUE (`callclos`), so a
+// link only has to rebase the cell and the closure's function — no import-time
+// knowledge of the merged function index. The arity check reads the DEFINING
+// image's export table: the ImportEntry carries only the cell handle.
+void QLangCompiler::emitImportedClassConstruction(int importIdx,
+                                                  const std::string &spelling,
+                                                  int dest, int argCount,
+                                                  int line, int col) {
+  const ImportEntry &im = m_imports[static_cast<size_t>(importIdx)];
+  const LoadedModule *dm =
+      m_scope ? m_scope->loadedModule(im.module) : nullptr;
+  if (!dm)
+    throw QLangError(QLangErrorKind::Parse, line, col,
+                     "imported class '" + spelling +
+                         "' is not available: module '" + im.module +
+                         "' is not loaded");
+  int initArity = -1;
+  for (const ExportEntry &e : dm->program.exports)
+    if (e.name == im.name) {
+      initArity = e.initArity;
+      break;
+    }
+  // The local path's rules (Phase 4.3/4.4): no `__init__` takes zero
+  // arguments; a declared one is checked against its params (initArity
+  // INCLUDES `self`, the ClassRecord::methodArities convention).
+  if (initArity < 0) {
+    if (argCount != 0)
+      throw QLangError(
+          QLangErrorKind::Parse, line, col,
+          "class '" + im.name + "' has no constructor; expected 0 "
+          "argument" + (argCount == 1 ? "" : "s") + ", got " +
+              std::to_string(argCount));
+  } else if (argCount != initArity - 1) {
+    const int expected = initArity - 1;
+    throw QLangError(
+        QLangErrorKind::Parse, line, col,
+        "constructor of '" + im.name + "' expects " +
+            std::to_string(expected) + " argument" +
+            (expected == 1 ? "" : "s") + ", got " + std::to_string(argCount));
+  }
+  // Clone the prototype cell. The VM's `shallowcopy` attaches the
+  // `__destroy__` finalizer itself (the DEEPCOPY treatment), so no
+  // `tabfinalize` here, and `__class__` is already on the copy.
+  int protoR = tmpRegister();
+  emit(Opcode::GETIMPORT, protoR, importIdx);
+  int instR = tmpRegister();
+  emit(Opcode::SHALLOWCOPY, instR, protoR, 0);
+  freeRegister(protoR);
+  emit(Opcode::MOV, dest, instR);
+  releaseTemp(instR);
+  if (initArity < 0) {
+    // No `__init__`: dest holds the finalized instance, nothing was staged
+    // into the slots, so there is nothing to release (Phase 7 finalizer
+    // timing — same reason as the local path's early return).
+    return;
+  }
+  // Shift the staged args up by one and drop the instance into the vacated
+  // slot as `self` (the local construction path's layout), then dispatch the
+  // clone's `__init__` from a temp so `dest` is written only at RETURN.
+  const int newArgBase = dest + 1;
+  for (int i = argCount - 1; i >= 0; i--)
+    emit(Opcode::MOV, newArgBase + i + 1, newArgBase + i, 0);
+  emit(Opcode::MOV, newArgBase, dest, 0);
+  int keyR = tmpRegister();
+  emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String("__init__")));
+  int fnR = tmpRegister();
+  emit(Opcode::TABGET, fnR, dest, keyR);
+  freeRegister(keyR);
+  emit(Opcode::CALLCLOS, fnR, dest, argCount + 1);
+  freeRegister(fnR);
+  // `__init__`'s return value lands in dest; the construction value is the
+  // instance, which survived at newArgBase (the callee frame is separate).
+  emit(Opcode::MOV, dest, newArgBase);
+  // Clear the self+arg copies so they do not extend the instance's lifetime
+  // to frame end (Phase 7, same as the local path).
+  for (int j = 0; j < argCount + 1; j++)
+    emitImmNil(Opcode::MOV, newArgBase + j);
 }
 
 // The export names to bind for one `import` form, and whether they are bound
@@ -4033,6 +4156,10 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
   m_labels.clear();
   m_nextReg = 0;
   m_inFunction = false;
+  // Methods of a top-level class capture module cells; compileClass just
+  // cleared m_regs, so hand buildFunction the module map it cleared (see the
+  // capture-spec resolution in buildFunction).
+  m_classOuterRegs = savedInFunction ? nullptr : &savedRegs;
 
   // Emit: TABCREATE proto, then compile body, then RETURN proto.
   emit(Opcode::TABCREATE, 0);
@@ -4136,6 +4263,14 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       m_importedModuleFuncs.push_back({s->className, st->name, true});
       auto closure = std::make_shared<Closure>();
       closure->funcIndex = funcIndex;
+      // The pool constant is the def-time prototype: it carries the method's
+      // RESOLVED capture spec so `makefunc` binds the cells the body reads.
+      // A table-dispatched call (`p.m()`, and since F4 P3b an imported
+      // construction's `__init__`) seeds the frame from the CLOSURE VALUE,
+      // and the empty spec here used to leave that frame capture list empty
+      // — the local `callfn` path's fallback to the Function record hid it.
+      closure->captures =
+          m_functions[static_cast<size_t>(funcIndex) - 1].captures;
       int constIdx = emitConst(QLangValue::Function(closure));
       int keyR = tmpRegister();
       emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(st->name)));
@@ -4191,6 +4326,9 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
       sm.funcIndex = funcIndex;
       auto closure = std::make_shared<Closure>();
       closure->funcIndex = funcIndex;
+      // Same def-time capture spec as the instance-method site above.
+      closure->captures =
+          m_functions[static_cast<size_t>(funcIndex) - 1].captures;
       int constIdx = emitConst(QLangValue::Function(closure));
       int keyR = tmpRegister();
       emitPool(Opcode::MOV, keyR, emitConst(QLangValue::String(sm.name)));
@@ -4226,6 +4364,23 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
     emit(Opcode::TABPUT, 0, skeyR, staticsReg);
     freeRegister(skeyR);
     freeRegister(staticsReg);
+  }
+
+  // Class-name stamp (class-export plan F4 P3b): the prototype carries
+  // `__class__` so construction that shallow-clones an EXPORTED prototype cell
+  // (SPEC §classes "Construction") yields a proper instance without a
+  // post-clone TABPUT — the clone already carries `__fields__`, and setField
+  // refuses a `__class__` write once the closed set is installed. Written
+  // first for the same reason as the metadata below: enforcement is not yet
+  // active on the table.
+  {
+    int ckeyR = tmpRegister();
+    emitPool(Opcode::MOV, ckeyR, emitConst(QLangValue::String(kClassMetaKey)));
+    int cvalR = tmpRegister();
+    emitPool(Opcode::MOV, cvalR, emitConst(QLangValue::String(s->className)));
+    emit(Opcode::TABPUT, 0, ckeyR, cvalR);
+    freeRegister(ckeyR);
+    freeRegister(cvalR);
   }
 
   // Const fields (Phase 2): emit `__const_fields__` metadata (name -> 1) into
@@ -4311,6 +4466,7 @@ void QLangCompiler::compileClass(const StmtPtr &s) {
   // Record the prototype function's provenance (see the method notes).
   m_importedModuleFuncs.push_back(
       {s->className, s->className + "_prototype", true});
+  m_classOuterRegs = nullptr;
   m_emitter = std::move(savedEmitter);
   m_regs = std::move(savedRegs);
   m_paramNames = std::move(savedParamNames);
@@ -4634,6 +4790,13 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
             QLangErrorKind::Parse, 0, 0,
             "'" + e->name + "' is a function imported from module '" +
                 im.module + "': call it instead of reading it");
+      // A class is a constructor, not a value (class-export plan F4 P3b): the
+      // only use of a Class import is `Name(args)` (SPEC §classes
+      // "Construction"), so reading it never reaches a GETIMPORT.
+      if (im.kind == ExportKind::Class)
+        throw QLangError(QLangErrorKind::Parse, 0, 0,
+                         "class '" + im.name +
+                             "' must be constructed: " + e->name + "(args)");
       // An exported `const` is not folded to a literal here: its value exists
       // only once the defining module's top level has run, which the compiler
       // cannot know from an image.
@@ -4966,6 +5129,15 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     if (moduleQualified(e->memberBase)) {
       const std::string &q = e->memberBase->name;
       const int mb = moduleMember(q, e->memberName, m_curLine, m_curCol);
+      // A qualified class read is not a value read either (class-export plan
+      // F4 P3b): `m.Point` only has a meaning in the call position, where the
+      // call path lowers construction.
+      if (mb >= 0 &&
+          m_imports[static_cast<size_t>(mb)].kind == ExportKind::Class)
+        throw QLangError(QLangErrorKind::Parse, m_curLine, m_curCol,
+                         "class '" + m_imports[static_cast<size_t>(mb)].name +
+                             "' must be constructed: " + q + "." +
+                             e->memberName + "(args)");
       if (mb >= 0 &&
           m_imports[static_cast<size_t>(mb)].kind != ExportKind::Func) {
         emit(Opcode::GETIMPORT, dest, mb);
@@ -5399,6 +5571,10 @@ void QLangCompiler::compileCallExpr(const ExprPtr &e, int dest) {
       m_usedNativeIds.insert(mb);  // this call is what puts the slot in the image
       m_emitter.setLastLoc(static_cast<uint16_t>(e->callLine),
                            static_cast<uint16_t>(e->callCol));
+    } else if (m_imports[static_cast<size_t>(mb)].kind == ExportKind::Class) {
+      // `m.Point(...)` (class-export plan F4 P3b): a Class import constructs.
+      emitImportedClassConstruction(mb, q + "." + e->callee, dest, argCount,
+                                    e->callLine, e->callCol);
     } else {
       emitImportCall(mb, q + "." + e->callee, argBase, dest, argCount,
                      e->callLine, e->callCol);
@@ -5506,6 +5682,18 @@ void QLangCompiler::compileCallExpr(const ExprPtr &e, int dest) {
         break;
       }
     }
+    // Imported-class receivers (class-export plan F4 P3b): a variable bound
+    // to an imported class's instance carries its methods on the cloned class
+    // table, and those expect `self` — the importer's m_classes has no record
+    // to match the method name against, so the receiver binding stands in.
+    // Arity stays runtime-checked: methodArities are not in the export table.
+    // ponytail: Variable bases only; `items[0].m()` on an imported instance
+    // misses self (the local path's method-name heuristic has no imported
+    // method names to match). Needs methodNames in the class meta to close.
+    if (!prependSelf &&
+        e->calleeMember->memberBase->kind == ExprKind::Variable &&
+        m_qlClassReceivers.count(e->calleeMember->memberBase->name))
+      prependSelf = true;
     // Fixed arity (Phase 4.2): a known class method must be called with
     // exactly (declared params - 1) arguments.
     if (prependSelf && declaredArity > 0 &&
@@ -5719,6 +5907,13 @@ void QLangCompiler::compileCallExpr(const ExprPtr &e, int dest) {
   const std::string key = callKey(e);
   auto iit = m_qlImports.find(key);
   if (iit != m_qlImports.end()) {
+    if (m_imports[static_cast<size_t>(iit->second)].kind == ExportKind::Class) {
+      // A flat imported class name constructs (class-export plan F4 P3b).
+      emitImportedClassConstruction(iit->second, key, dest, argCount,
+                                    e->callLine, e->callCol);
+      finishCall();
+      return;
+    }
     emitImportCall(iit->second, key, argBase, dest, argCount, e->callLine,
                    e->callCol);
     finishCall();

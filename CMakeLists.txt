@@ -411,6 +411,7 @@ add_test(NAME qla_roundtrip COMMAND qla_roundtrip $<TARGET_FILE:qlcc>)
 # the rule: it imports `ql_module_dep.ql`, a sibling source module with no image
 # (plan C8b), which is a fixture and so is not listed here.
 set(QL_SCRIPTS
+  class_export.ql
   cmp.ql
   cast.ql
   encode_repro.ql

@@ -701,7 +701,7 @@ includes all the global `functions`, `variables`, `constants` and `classes` bein
 
 bytecode to reference the look up table.
 
-**Q42 resolved (plan [../plans/class-export-plan.md](../plans/class-export-plan.md) F4, F4 Phase 0)** —
+**Q42 resolved (plan [../plans/archive/class-export-plan.md](../plans/archive/class-export-plan.md) F4, F4 Phase 0)** —
 the kind domain gains `Class` (kind 3), and the `ExportEntry` record grows a fixed class meta:
 `initArity`, one int, the `__init__` arity of the class or `-1` when it declares none. The `ref`
 of a `Class` entry is the cell holding the class prototype table (the module global
@@ -709,9 +709,10 @@ of a `Class` entry is the cell holding the class prototype table (the module glo
 only the constructor: the importer constructs with `Name(args)` and the compiler keeps the
 compile-time arity check because the meta is in the image. `.qlc` bumps to **v11** — the record
 layout genuinely grows (clean-break precedent). See `## keyword export` for the syntax rules.
-**Implemented on the export side (Round 106, 2026-11-15)** — plan P3a: both syntax forms enter
-the table as `Class`, the image carries the meta (v11), and the `ref` rebases like any cell;
-constructing from an imported class is the plan's P3b.
+**Implemented (Rounds 106–107, 2026-11-15)** — plan P3a + P3b: both syntax forms enter
+the table as `Class`, the image carries the meta (v11), the `ref` rebases like any cell,
+and the importer constructs from the prototype cell (`getimport` + `shallowcopy`, the
+clone's `__init__` dispatched through `callclos`).
 
 **Implemented (Round 63, 2026-11-09)** — plan
 [../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phase 3a.
@@ -858,7 +859,7 @@ const-pool operand against it.
 - variables can be read but not modified
 - entities are shared and passed by pointer or reference.
 - a class export (`export class Name`, or standalone `export NAME`) exposes the **constructor**
-  only — **Q42 resolved**, plan [../plans/class-export-plan.md](../plans/class-export-plan.md)
+  only — **Q42 resolved**, plan [../plans/archive/class-export-plan.md](../plans/archive/class-export-plan.md)
   F4: `Name(args)` (also `m.Name(args)`) constructs in the importer exactly like locally
   ([10-classes.md](10-classes.md) `## construction`, field defaults **shared by handle**);
   the class name is **not a value** — reading it bare, passing it as an argument, or naming it

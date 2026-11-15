@@ -818,13 +818,12 @@ From [archive/module-export-import-plan.md](archive/module-export-import-plan.md
 F1–F6, Rounds 70–73) — its P0–P3 all landed; these items were explicitly deferred there with
 their promotion triggers and are tracked here so nothing is lost. **Q42** (may a `.ql` module
 export a class?) was **resolved** by F4 Phase 0 (2026-11-15): yes — `docs/spec/09-modules.md`
-and `docs/spec/13-bytecodes.md` now specify `export class`; implementation is tracked in
-[class-export-plan.md](class-export-plan.md).
+and `docs/spec/13-bytecodes.md` now specify `export class`; the implementation
+([class-export-plan.md](archive/class-export-plan.md)) landed Rounds 105–107.
 
 | item | why not now | promote when |
 |---|---|---|
 | **runtime module registry** (`13-bytecodes.md` `## technical specifications` 1, second link model): `QLangContext` has no reference to `QLangLinker`, `ctx.run()` never links | `getimport`/`callimport` already execute unmerged and the merge path is proven; the registry is a *host API* decision (who owns images, when they init), not a hole in `export`/`import` | a host needs to run images without `QLangLinker` (embedder request, or `qlang_run` gains `-r` for images) |
-| **export a class** (audit F4) | spec decided (Q42 resolved, F4 Phase 0); implementation pending | [class-export-plan.md](class-export-plan.md) P3a/P3b land it |
 | **cross-module captures** — an exported `def` whose sibling `def` has *local* captures is refused | refusal is correct and diagnosed; making it work means shipping the defining module's frame with the call | someone needs a module built around closures, and it should be its own design round |
 | **by-value arguments across a module boundary**, `m.x++` refused (`operator '++' can only be applied to a variable name` since Round 97; a silent no-op until Round 96) | both recorded in `history.md` (Round 68) as value-semantics questions, orthogonal to what an `import` binds | the value-semantics round |
 | **Q36 warn on `MODULE_NAME` ≠ file stem** | nothing warns for `.qlc` either; a warning-only feature with no diagnostic channel | a warnings channel exists (C1 owns strict-typing levels) |
@@ -832,7 +831,9 @@ and `docs/spec/13-bytecodes.md` now specify `export class`; implementation is tr
 
 Round 95 closed the former "library-mode assignment to a module const" row: `C = 7` was
 already reported correctly; the real sibling was statement-form `C++`/`C--` misreporting
-`use of undeclared variable 'C'` — fixed (audit F5, `history.md` Round 95).
+`use of undeclared variable 'C'` — fixed (audit F5, `history.md` Round 95). Rounds 104–107
+closed the former "export a class" row (audit F4): the plan's Phase 0/P3a/P3b plus the D2
+clone round all landed (`history.md` Rounds 104–107).
 
 ## Conventions (per AGENTS.md)
 

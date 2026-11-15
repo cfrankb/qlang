@@ -565,6 +565,15 @@ private:
   // (plan Phase 3c).
   void emitImportCall(int importIdx, const std::string &name, int argBase,
                       int dest, int argCount, int line, int col);
+  // Construct an instance of a class exported by a loaded module (F4 P3b):
+  // shallow-clone the exported prototype cell (its `__class__` stamp rides
+  // along), check the call against the defining image's `initArity`, then run
+  // `__init__` through the clone's own method value. The args are already
+  // staged at dest+1.. and get the self-shift the local construction path
+  // applies (SPEC §classes "Construction").
+  void emitImportedClassConstruction(int importIdx, const std::string &spelling,
+                                     int dest, int argCount, int line,
+                                     int col);
   // Rejects an import graph that reaches the entry module again (SPEC
   // §bytecodes "technical specifications": import cycles are an error). Walks
   // the loaded images' import tables, so it stays correct once a library can
@@ -613,6 +622,11 @@ private:
   // is `let p = T(...)` / `const p = T(...)` / `p = T(...)` with T a manifest
   // type that has a constructor.
   void collectKnownReceivers();
+  // Recompute m_qlClassReceivers (class-export plan F4 P3b): single-write
+  // names whose initializer constructs a class imported from a loaded module.
+  // Runs after the imports resolve, since the initializer is matched through
+  // the import table.
+  void collectQlClassReceivers();
   // P4 argument-tag check shared by the method and constructor sites: an
   // mismatch is reported only when inferType answers (literals); dynamic
   // arguments stay silent for the runtime binding. `what` names the entry.
@@ -846,6 +860,12 @@ private:
   // from reg 0. In an instance method body reg 0 is `self`; statics are
   // reached via `self.__statics__`.
   bool m_inStaticMethod = false;
+  // While compiling a TOP-LEVEL class's methods: the module-scope register map
+  // compileClass cleared, so a capture list naming a module-level cell resolves
+  // to its `-1 - slot` sentinel instead of the frame-relative default (the
+  // cleared map could not answer). Null elsewhere, including classes nested in
+  // a function (their enclosing frame is not the module table).
+  const std::unordered_map<std::string, int> *m_classOuterRegs = nullptr;
   // Register holding the current method's `__statics__` table (emits the
   // `self.__statics__` TABGET for instance methods; reg 0 for static methods).
   int staticsTableReg();
@@ -884,6 +904,12 @@ private:
   std::unordered_map<std::string, int> m_qlImports;
   // `import m as a`: alias -> the loaded module's own name.
   std::unordered_map<std::string, std::string> m_qlAliases;
+  // Names statically bound to an instance of an imported class (their only
+  // write constructs one; class-export plan F4 P3b). A member call on one of
+  // these prepends `self` the way a known local-class method does — the
+  // importer's m_classes has no record matching the method name. Recomputed
+  // per compile() by collectQlClassReceivers().
+  std::unordered_set<std::string> m_qlClassReceivers;
 };
 
 } // namespace qlang
