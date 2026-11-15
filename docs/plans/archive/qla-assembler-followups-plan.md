@@ -11,6 +11,10 @@ block, module name, native-slot names, untagged pool values). (a) and (c) are th
 back from is the plan's original promise: **full `.qlc` byte-equality** for
 `assemble(disassemble(P)) == P`.
 
+**Status 2026-11-15: all milestones landed** — M1 (Round 108), M3 (Round 109), M2 (Round 110,
+35/35 byte-identical, 0 DEFERRED), M4 (never-build decision recorded in the design record
+§12 item 7). Plan and build plan archived to `docs/plans/archive/`.
+
 ## M1 — machine sections: close the metadata losses (highest value, smallest delta)
 
 **LANDED 2026-11-15 (Round 108).** All five sections print in the level-1 listing and
@@ -20,7 +24,7 @@ serializes vars/constVars sorted so a compiled image and its rebuild encode iden
 `qla_roundtrip` is in whole-byte mode (29/34 byte-identical, the same 5 module scripts
 DEFERRED). The trigger check was moot: whole-byte equality makes `locs`/`sigs` print
 mandatory regardless of their run-time impact. M2–M4 below; concrete build plan for the
-remainder: `docs/plans/qla-assembler-followups/README.md`.
+remainder: `docs/plans/archive/qla-assembler-followups/README.md`.
 
 Makes non-linked scripts round-trip to **whole-file byte equality**, letting `qla_roundtrip`
 graduate from "compared set" to `cmp(1)`-style equality.
@@ -45,7 +49,7 @@ graduate from "compared set" to `cmp(1)`-style equality.
 ## M2 — module tables: assemble the entry module (unfreezes 4 DEFERRED scripts)
 
 **LANDED 2026-11-15 (Round 110).** Shipped per the concrete build plan
-(`docs/plans/qla-assembler-followups/README.md` M2): the `imports:` section prints/parses
+(`docs/plans/archive/qla-assembler-followups/README.md` M2): the `imports:` section prints/parses
 `<module> <name> <kind> <ref>` in table order and the entry's `-a` listing describes the
 entry image — 35/35 corpus scripts byte-identical, 0 DEFERRED.
 

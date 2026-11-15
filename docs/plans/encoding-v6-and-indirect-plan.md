@@ -657,6 +657,15 @@ build/qlang_run --output /tmp/t.qlc tests/scripts/hello.ql   # then round-trip /
    (Round 60):** removal *is* the point of that step, so the default was flipped — bare
    truthiness lowers to `tst` + `je`/`jne` at all 15 sites and the pair is gone. The +1 byte
    became +1 *instruction*, which is what `perf_stress` measures (+8.7 % in the A/B run, §5.4).
+7. **`--asm-level >1` assembler input symmetry** — should `--assemble` accept a level 2–5
+   listing (source interleaves, pseudo-mnemonics, register maps, merged module breakdowns)
+   as input, mirroring what the disassembler can print? **Decided 2026-11-15: never build
+   it** (qla-assembler-followups M4, `docs/plans/archive/qla-assembler-followups/`). The
+   machine contract is the level-1 print plus the explicit image sections (`module:`,
+   `globals:`, `natives:`, `exports:`, `imports:`, `locs:`, `sigs:`, tagged pool values) —
+   all round-tripped byte-identically by `qla_roundtrip` (35/35 corpus scripts). Levels 2–5
+   print human annotations and are never assembler input: building the symmetry would mean
+   parsing prose.
 
 ---
 

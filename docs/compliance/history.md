@@ -1,4 +1,17 @@
-## Round 110 — 2026-11-15 — the `.qla` v1 listing carries the import table and the entry listing describes the entry image: whole-`.qlc` byte equality for every script (qla-assembler-followups **M2**; plan `docs/plans/qla-assembler-followups/README.md`; spec `docs/spec/18-qlang-run.md` `--assemble`)
+## Round 111 — 2026-11-15 — `--asm-level >1` input symmetry closed as never-build; the `.qla` follow-ups plan is fully landed and archived (qla-assembler-followups **M4**; no code)
+
+- **Decision (record, not code):** `--assemble` accepts only the level-1 print plus the
+  explicit image sections (`module:`, `globals:`, `natives:`, `exports:`, `imports:`,
+  `locs:`, `sigs:`, tagged pool values) — the machine contract `qla_roundtrip` proves
+  byte-identical (35/35). Levels 2–5 print human annotations (source interleaves,
+  pseudo-mnemonics, register maps, merged breakdowns) and are never assembler input;
+  building the symmetry would mean parsing prose. Recorded as item 7 of the design
+  record's open-questions list (`docs/plans/encoding-v6-and-indirect-plan.md` §12).
+- **Archive:** with M1–M4 landed, `docs/plans/qla-assembler-followups-plan.md` and the
+  build-plan folder moved to `docs/plans/archive/`; live-doc references repointed.
+  Docs-only round: ctest stays **70/70**, no suite touched.
+
+## Round 110 — 2026-11-15 — the `.qla` v1 listing carries the import table and the entry listing describes the entry image: whole-`.qlc` byte equality for every script (qla-assembler-followups **M2**; plan `docs/plans/archive/qla-assembler-followups/README.md`; spec `docs/spec/18-qlang-run.md` `--assemble`)
 
 - **Why.** M1's byte-equality stopped at the module story: 5 corpus scripts were DEFERRED
   because `-a` listed the *merged* program while `-c` wrote the *entry* image (two artifacts,
@@ -23,7 +36,7 @@
   init-sequence section — closed without action); `--asm-level >1` input symmetry is M4
   (decide, never build).
 
-## Round 109 — 2026-11-15 — pool tag fidelity in the `.qla` v1 listing: every pool value reassembles with its tag (qla-assembler-followups **M3**; plan `docs/plans/qla-assembler-followups/README.md`; spec `docs/spec/18-qlang-run.md` `--assemble`)
+## Round 109 — 2026-11-15 — pool tag fidelity in the `.qla` v1 listing: every pool value reassembles with its tag (qla-assembler-followups **M3**; plan `docs/plans/archive/qla-assembler-followups/README.md`; spec `docs/spec/18-qlang-run.md` `--assemble`)
 
 - **Why.** M1 made `qla_roundtrip` byte-exact, but the pool print still lost tags a bare
   decimal cannot carry. Reproduced at HEAD before touching code: a table literal with an
@@ -52,7 +65,7 @@
 - **Not done (recorded):** import table (M2), table keys containing `#`/`: ` stay a
   declared limitation, `--asm-level >1` input symmetry (M4: never build it).
 
-## Round 108 — 2026-11-15 — the `.qla` v1 listing carries its metadata sections: whole-`.qlc` byte equality for non-linked scripts (qla-assembler-followups **M1**; plan `docs/plans/qla-assembler-followups-plan.md`; spec `docs/spec/18-qlang-run.md` `--assemble`; docs `docs/SERIALIZATION.md` §4.4)
+## Round 108 — 2026-11-15 — the `.qla` v1 listing carries its metadata sections: whole-`.qlc` byte equality for non-linked scripts (qla-assembler-followups **M1**; plan `docs/plans/archive/qla-assembler-followups-plan.md`; spec `docs/spec/18-qlang-run.md` `--assemble`; docs `docs/SERIALIZATION.md` §4.4)
 
 - **Why.** Round 103's assembler compared only what the level-1 listing printed: the loc
   table, the vars/constVars maps, the declared signatures, the module name, the native-slot

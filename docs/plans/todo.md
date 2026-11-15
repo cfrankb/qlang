@@ -323,7 +323,9 @@ closing the **Q#**s its item points at:
       closed with **M3** (Round 109): tagged integers, forced-`.0` floats, `set[...]`,
       hex blobs. The import table and entry pairing closed with **M2** (Round 110): the
       `imports:` section, `-a` lists the entry image — **35/35 byte-identical, 0
-      DEFERRED**; M4 (level >1 input symmetry) remains: a prose never-build decision
+      DEFERRED**; M4 closed the same day: the never-build decision is recorded in
+      `docs/plans/encoding-v6-and-indirect-plan.md` §12 item 7 — plan archived to
+      `docs/plans/archive/qla-assembler-followups*`
 
 ## 8. Housekeeping
 

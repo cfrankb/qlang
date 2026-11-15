@@ -1,6 +1,6 @@
 # Implementation plan: .qla assembler follow-ups — remaining milestones (M3 → M2 → M4)
 
-Derived: 2026-11-15 (post-Round 108) from `docs/plans/qla-assembler-followups-plan.md`.
+Derived: 2026-11-15 (post-Round 108) from `docs/plans/archive/qla-assembler-followups-plan.md`.
 M1 LANDED (Round 108): all machine sections print/parse, `writeQlc` sorts vars/constVars,
 `qla_roundtrip` is whole-byte — **29 byte-identical, 5 DEFERRED** (`class_export`, `neo`,
 `ql_module`, `ql_module_const`, `ql_star_import`). ctest baseline: **69**.
@@ -94,6 +94,12 @@ Two decisions, both pre-verified at HEAD:
 - Suggested commit: `feat(qlcc): .qla imports section + entry listing describes the entry image (qla-followups M2)`
 
 ## M4 — `--asm-level >1` input symmetry: decide, do not build
+
+**LANDED 2026-11-15.** The never-build decision is recorded in the design record
+(`docs/plans/encoding-v6-and-indirect-plan.md`, §12 item 7): the machine contract is the
+level-1 print plus the explicit image sections; levels 2–5 print human annotations and are
+never assembler input. With M1–M4 closed this plan is fully implemented — archived with its
+parent to `docs/plans/archive/`.
 
 - Resolution text into the design record `docs/plans/encoding-v6-and-indirect-plan.md`:
   *the machine contract is the level-1 print plus the M1/M2 sections; levels 2–5 print human
