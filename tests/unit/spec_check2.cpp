@@ -392,6 +392,28 @@ int main() {
   expectThrow("global undeclared var",
     "def test() { global z }\ntest()");
 
+  // -- NEW: statement-form ++/-- on names without a plain register (audit F5
+  // sibling, docs/bugs/module-export-import-audit.md): the guards report such
+  // names as themselves, and `global`/captured names write back through the
+  // capture cell instead of failing as "use of undeclared variable".
+  expectMsg("const ++ in def reports const",
+    "const C = 5\ndef f()\n  C++\nend\nr = f()",
+    "cannot increment/decrement to constant 'C'");
+  expectMsg("const -- in def reports const",
+    "const C = 5\ndef f()\n  C--\nend\nr = f()",
+    "increment/decrement to constant 'C'");
+  expectVal("global ++ writes through",
+    "m = 1\ndef f() { global m; m++ }\nf()\nlocal r = m;",
+    "r", 2);
+  expectVal("global -- writes through",
+    "m = 3\ndef f() { global m; m-- }\nf()\nlocal r = m;",
+    "r", 2);
+  expectVal("captured ++ writes through",
+    "def outer()\nlet n = 1\nlocal bump = ()[n] {\n  n++\n}\nbump()\nbump()\nreturn n\nend\nlocal r = outer();",
+    "r", 3);
+  expectMsg("inc target must still be declared", "zz++",
+    "use of undeclared variable 'zz'");
+
   // -- NEW: assert() builtin (spec §397) --
   expectRun("assert true", "assert(true, \"should not fail\")");
   expectThrow("assert false", "assert(false, \"assertion failed\")");

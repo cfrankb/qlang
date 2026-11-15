@@ -1,3 +1,29 @@
+## Round 95 — 2026-11-15 — statement-form `++`/`--` reports names as themselves and writes through cells (audit F5's deferred sibling, `docs/bugs/module-export-import-audit.md` F5; impl `QLangCompiler.cpp` `compileExprStmt` + `moduleNameError`, tests `spec_check2.cpp` 532 → 538, `module_search_test.cpp` 128 → 129)
+
+- **Why.** The deferred row "library-mode assignment to a module const" was stale: `C = 7`
+  and `C += 1` on a module const already reported `cannot assignment to constant 'C'` in
+  every scope probed. The surviving misreport was the **statement form**: a bare `C++` /
+  `C--` resolved its operand through plain local registers only, so
+  `use of undeclared variable 'C'` fired before the const guard — for a const reached
+  inside a def (every library const included), for a `global`-imported name, and for an
+  explicit `[capture]` closure name.
+- **Fix.** The name-only guards (`guardNotImported`, `guardNotConst`) moved before the
+  register lookup; a captured name (`global` import or closure capture) now takes the same
+  REFLOAD → INC/DEC → REFSTORE path `compileAssignment` uses (which is why `m++` hard-failed
+  where `m = 5` worked). `guardNotExportedFunc` stays after the lookup, preserving the
+  pinned top-level `f++` message. The module-name report block moved out of `loadVariable`
+  into `moduleNameError`, shared by the target path: `m++` on a module name reports
+  `'<m>' is a module, not a value` instead of undeclared.
+- **Left alone.** Round 68's silent no-op on member inc/dec (`t.n++`, postfix binds bare
+  variables only) stays deferred with the value-semantics round; a nested `def` referencing
+  an outer local without an explicit capture stays the F3-designed error.
+- **Verified.** `cmake -B build && cmake --build build`; `ctest --test-dir build` 67/67
+  (perf skipped). `spec_check2` 532 → 538 (const `++`/`--` reports inside a def, `global`
+  `++`/`--` write-through, captured `++` write-through, undeclared target unchanged);
+  `module_search` 128 → 129 (`testNotImportedModule` inc-target guard). Manual library
+  repros (`export const C` + `C++` in a def, `import m` + `m++`, `global m` + `m++`,
+  `()[n] { n++ }`) checked against `build/qlcc`.
+
 ## Round 92 — 2026-11-14 — runtime module registry: `run()` / `runProgram()` link imported modules at the run boundary (`docs/spec/07-api.md` `## running programs with modules`, `docs/spec/13-bytecodes.md` `## technical specifications` 1; impl `QLangContext.cpp` `linkImports`, tests `module_search_test.cpp` 117 → 128)
 
 - **Why.** Only the `qlcc` driver linked. `QLangContext::run()` executed a program

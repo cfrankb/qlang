@@ -1,7 +1,8 @@
 # Module export/import audit (2026-11-10)
 
 Status: **F1 fixed 2026-11-10 (Round 70, plan P0); F2 fixed 2026-11-10 (Round 71, plan P1);
-F3 fixed 2026-11-10 (Round 72, plan P2); F5 closed 2026-11-10 (Round 73, plan P3)** — findings
+F3 fixed 2026-11-10 (Round 72, plan P2); F5 closed 2026-11-10 (Round 73, plan P3); F5's
+deferred inc/dec sibling fixed 2026-11-15 (Round 95)** — findings
 record otherwise unchanged. F4 stays deferred (Q42); the deferred items live in
 [../plans/missing-features-plan.md](../plans/missing-features-plan.md). Found while
 auditing what is still missing
@@ -178,10 +179,15 @@ type has no answer in the spec. Plan Q42 (default: out of scope until the spec s
 - A `def` reading a module-level **var** without `global` reports `use of undeclared variable`,
   while the same read of a module-level **const** silently compiled to nil (F1). **Closed for
   library modules** with plan P0.3 (Round 70): a def capture that resolves to no cell is now
-  `def '<fn>' captures '<name>', which has no cell in module '<mod>'`. Assigning a module const
-  in library mode is the sibling that still misreports: `assignment to undeclared identifier 'C'` —
-  **deferred**, tracked in `../plans/missing-features-plan.md` §"Deferred from the module
-  export/import plan".
+  `def '<fn>' captures '<name>', which has no cell in module '<mod>'`. The deferred sibling —
+  re-probed Round 95: assigning a module const (`C = 7`, `C += 1`) already reports
+  `cannot assignment to constant 'C'` everywhere; the surviving misreport was the
+  **statement-form `C++`/`C--`**, whose register lookup ran before the const guard and threw
+  `use of undeclared variable 'C'`. **Fixed Round 95**: the name-only guards run before the
+  lookup; `++`/`--` on `global`/captured names now writes through the capture cell (previously
+  the same wrong error); a module name as `++` target gets the read path's `'<m>' is a module,
+  not a value` report (shared `moduleNameError`). Guards: the `spec_check2` inc/dec block +
+  `testNotImportedModule` (`module_search`).
 - The cross-module capture guard's message is good and *is* the shape F1 needs:
   `imported function 'outer' captures a local of its own module and cannot be called across a
   module boundary: its captures are seeded from the defining module's frame` — it fires for *local*

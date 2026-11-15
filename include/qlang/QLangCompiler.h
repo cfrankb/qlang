@@ -481,6 +481,9 @@ private:
   // holds its function index, so rebinding the name would silently detach the
   // export (SPEC §bytecodes "keyword export": functions "not modified").
   void guardNotExportedFunc(const std::string &name, const char *op) const;
+  // Reports a module name reached as a value (always throws): shared by the
+  // read path and the statement inc/dec target path.
+  void moduleNameError(const std::string &name) const;
   // Rejects writing through (or rebinding) a name imported from a loaded `.ql`
   // module: the defining module owns the cell, so a write here would either be
   // lost or silently detach the import (SPEC §bytecodes "technical

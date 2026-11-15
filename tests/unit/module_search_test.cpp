@@ -947,6 +947,17 @@ void testNotImportedModule() {
   check(berr.find("'leaf' is a module, not a value") != std::string::npos,
         "not imported: an imported module still says it is not a value (" +
             berr + ")");
+
+  // And as a ++/-- target it gets the same report, not the register-lookup
+  // error (audit F5 sibling: the statement inc/dec used to reach that first).
+  QLangContext tgt;
+  tgt.setModuleSearchPaths({libs});
+  CompiledProgram tm;
+  std::string terr;
+  buildLinked(tgt, "import leaf\nleaf++\n", tm, terr);
+  check(terr.find("'leaf' is a module, not a value") != std::string::npos,
+        "not imported: a module name as an inc target says it is no value (" +
+            terr + ")");
 }
 
 // A C++ module of the same name as a file on the path is not an ambiguity: the

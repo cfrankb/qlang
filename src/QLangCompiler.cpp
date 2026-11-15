@@ -1757,6 +1757,22 @@ void QLangCompiler::guardNotExportedFunc(const std::string &name,
                          name + "'");
 }
 
+// A module's name is no value: report it the same way wherever it is reached
+// as one (SPEC §modules "import statement"). Always throws.
+void QLangCompiler::moduleNameError(const std::string &name) const {
+  if (!m_moduleNs.count(name))
+    throw QLangError(
+        QLangErrorKind::Parse, 0, 0,
+        "module '" + name +
+            "' is not imported in this module: bind it with 'import " + name +
+            "' or 'from " + name + " import <name>'");
+  throw QLangError(
+      QLangErrorKind::Parse, 0, 0,
+      "'" + name + "' is a module, not a value: reach what it offers as '" +
+          name + ".<name>' (or bind a name into this module with 'from " +
+          name + " import <name>')");
+}
+
 // Compile a function body (def body or arrow-closure body) into its own
 // instruction stream and constant pool, append it as a new function, and return
 // its function index. The enclosing function's compilation state is saved and
@@ -2995,18 +3011,37 @@ void QLangCompiler::compileExprStmt(const StmtPtr &s) {
       (s->value->uop.text == "++" || s->value->uop.text == "--")) {
     const ExprPtr &opnd = s->value->operand;
     if (opnd && opnd->kind == ExprKind::Variable) {
-      // An imported name has no register (it is read through the import table),
-      // so this guard has to come before the register lookup: otherwise the
-      // undeclared-variable error fires first and says the opposite of the
-      // truth about a name the module did bind.
-      guardNotImported(opnd->name, "increment/decrement");
-      int r = regOf(opnd->name);
-      if (r < 0)
+      const std::string &name = opnd->name;
+      const Opcode step =
+          s->value->uop.text == "++" ? Opcode::INC : Opcode::DEC;
+      // The guards see only the name, so they run before the register lookup:
+      // imported names and module-level consts have no register in this scope,
+      // and the undeclared-variable error would say the opposite of the truth
+      // about a name the program did bind.
+      guardNotImported(name, "increment/decrement");
+      guardNotConst(name, "increment/decrement");
+      // A captured name (closure capture or `global` import) has no register:
+      // it is read and written through its capture cell, as in
+      // compileAssignment.
+      auto cit = m_captureRegs.find(name);
+      const bool captured = cit != m_captureRegs.end();
+      int r = captured ? -1 : regOf(name);
+      if (!captured && r < 0) {
+        // A module name reached as a target gets the read path's report.
+        if (cppModule(name) || qlModule(name)) moduleNameError(name);
         throw QLangError(QLangErrorKind::Parse, 0, 0,
-                         "use of undeclared variable '" + opnd->name + "'");
-      guardNotConst(opnd->name, "increment/decrement");
-      guardNotExportedFunc(opnd->name, "increment/decrement");
-      emit(s->value->uop.text == "++" ? Opcode::INC : Opcode::DEC, r, r);
+                         "use of undeclared variable '" + name + "'");
+      }
+      guardNotExportedFunc(name, "increment/decrement");
+      if (captured) {
+        int t = tmpRegister();
+        emit(Opcode::REFLOAD, t, cit->second, 0);
+        emit(step, t, t);
+        emit(Opcode::REFSTORE, t, cit->second, 0);
+        releaseTemp(t);
+        return;
+      }
+      emit(step, r, r);
       return;
     }
   }
@@ -4437,20 +4472,7 @@ void QLangCompiler::compileExpr(const ExprPtr &e, int dest) {
     // that is only loaded — pulled in transitively, never bound here — gets
     // its own report: the caller is often already reading `m.<name>`, and
     // advising exactly that was the audit F5 complaint.
-    if (cppModule(e->name) || qlModule(e->name)) {
-      if (!m_moduleNs.count(e->name))
-        throw QLangError(
-            QLangErrorKind::Parse, 0, 0,
-            "module '" + e->name +
-                "' is not imported in this module: bind it with 'import " +
-                e->name + "' or 'from " + e->name + " import <name>'");
-      throw QLangError(
-          QLangErrorKind::Parse, 0, 0,
-          "'" + e->name +
-              "' is a module, not a value: reach what it offers as '" +
-                  e->name + ".<name>' (or bind a name into this module"
-                  " with 'from " + e->name + " import <name>')");
-    }
+    if (cppModule(e->name) || qlModule(e->name)) moduleNameError(e->name);
     throw QLangError(QLangErrorKind::Parse, 0, 0,
                      "use of undeclared variable '" + e->name + "'");
     break;

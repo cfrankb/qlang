@@ -826,7 +826,10 @@ export a class?) stays open until the spec answers it.
 | **by-value arguments across a module boundary**, `m.x++` silent no-op | both recorded in `history.md` (Round 68) as value-semantics questions, orthogonal to what an `import` binds | the value-semantics round |
 | **Q36 warn on `MODULE_NAME` ≠ file stem** | nothing warns for `.qlc` either; a warning-only feature with no diagnostic channel | a warnings channel exists (C1 owns strict-typing levels) |
 | **a library's own directory in its dependency search** | documented limit (`--help`, `07-api.md` §module search paths); the search list belongs to the context, so a fix needs a resolver-side stack of current module dirs | a real project hits it (nested third-party libs outside the entry dir) |
-| **library-mode assignment to a module const** reports `assignment to undeclared identifier 'C'` (audit F5's sibling) | P0.3 closed the *read* path; the assign site resolves before the module-const lookup, so its message is merely wrong, not silent | someone hits the misleading message (same shape as F5's first bullet, which Round 73 fixed) |
+
+Round 95 closed the former "library-mode assignment to a module const" row: `C = 7` was
+already reported correctly; the real sibling was statement-form `C++`/`C--` misreporting
+`use of undeclared variable 'C'` — fixed (audit F5, `history.md` Round 95).
 
 ## Conventions (per AGENTS.md)
 
