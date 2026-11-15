@@ -1154,27 +1154,69 @@ extra byte (e):
     e = 0              => jmp16 (2 bytes) relative address
     e = 1              => jmp32 (4 bytes) relative address
 
-- if opCode is call (proposal / not finalized)
+- if opCode is call (proposal / not finalized — the "scatter call" variant)
   this encoding is intended for situations where parameters cannot be
   contigious or moving them in sequence would require swaping or aliasing.
 
-  bit 0-1 left operand (always a function)
-     value 0 function -128 to 127      (1 byte)
-     value 1 extended function         (2 bytes)
-     value 2 extended function         (4 bytes, future version)
-     value 3 reserved for future use
-  bit 2-3 left operand (base register)
+  the modifier follows the standard 2/2/4 layout below — nothing about it is
+  call-specific. the left operand is the base register (its operand-role `a`;
+  the return value lands there, as today). the right operand is the function
+  id (operand-role `b`): always an immediate (kind 0), signed (>= 0 builtin
+  id, negative native slot -1 - id), its width selected by the standard
+  kind-0 signed form rows:
+
+  bit 0-1 left operand (base register)   <- unchanged from the shipped call
      value 0 base register 0 to 255    (1 byte)
      value 1 extended base register    (2 bytes)
      value 2 extended base register    (4 bytes, future version)
-     value 3 reserved for future use
-     this is register contains the return value
-  bit 4-7
-    parameter count (0-15)
+     value 3 reserved                  (decode error)
+  bit 2-3 right operand kind
+     value 0 immediate (the function id)   <- unchanged from the shipped call
+     value 1-3 reserved for call       (decode error)
+  bit 4-7 right operand form (function id width; the standard kind-0 rows)
+     value 4 => 1 byte  (signed)  function -128 to 127     (new)
+     value 5 => 2 bytes (signed)  <- the shipped spelling (form fixed to 5)
+     value 6 => 4 bytes (signed, future version)
+     all other forms reserved for call (decode error)
 
-  for each parameter                   (1 byte per parameter)
+  operand order in the stream is unchanged: base, then function id, then the
+  payload byte that is today's 1-byte argument count, extended:
+
+    payload bit 7 clear => contiguous form, argc = byte (0-255)  <- shipped
+    payload bit 7 set   => scatter form, n = byte & 0x7f (0-127),
+                           followed by n parameter bytes
+
+  for each parameter (scatter form only)   (1 byte per parameter)
     encode delta index from base register for each subsequent parameter
     byte stores -128 to +127 (delta)
+
+  scatter is only legal when every parameter register is within
+  base -128 .. base +127 and n <= 127; otherwise the compiler MUST use the
+  contiguous form (staging into r[base+1 .. base+argc] as today). the
+  contiguous form is always available — it is only not always cheaper. the
+  discriminator is the payload bit 7, so no modifier can be ambiguous with a
+  shipped call: form 4 has never been emitted for call, and the reader takes
+  the modifier through the same generic kind/form validation as every other
+  opcode (the accepted-form set for call is {4, 5, 6}).
+
+  scope: CALL only. callfn / callimport / callclos / emit keep the
+  contiguous r[a+1 .. a+c] convention; extending this payload split to the
+  index-taking members of the call family is a separate, later decision.
+
+  example — f(x, y): f is builtin 18, x in r5, y in r9, result in r20, and
+  the contiguous window r21..r22 is busy (staging would require a rehome):
+
+    shipped   call   e=0x50, 20, 18i16, argc 2          # 6 bytes (+ staging mov)
+    scatter   call   e=0x40, 20, 18i8, 0x82, -15, -11   # 7 bytes, no staging
+
+  size: 4 + fn_width + n bytes vs the shipped 6 fixed. scatter pays +1 byte
+  from n = 2 up and saves the staging mov (2 bytes) plus the temp whenever
+  the window is busy — it wins on registers, not on bytes.
+
+  on adoption: the "call is the one documented exception" rule below is
+  rewritten (kind 0, form in {4, 5, 6}), the .qlc version bumps, and the
+  disassembler (`examples/qlcc.cpp`) prints the scatter deltas relative to
+  the base register.
 
 - otherwise (mov, add, sub, cmp, eqf/ltf/gtf/ltef/gtef, tst, ...) e is read as three fields:
 
@@ -1226,7 +1268,9 @@ extra byte (e):
   in-place form r[a] = r[a] op right (this is what addi / subi mean today).
 
   call is the one documented exception: always escaped, kind 0 with the form fixed to 5
-  (2-byte signed function id), followed by the 1-byte argument count.
+  (2-byte signed function id), followed by the 1-byte argument count. (the scatter-call
+  proposal above would widen that fixed form to {4, 5, 6} and split the payload byte on
+  bit 7 — until it is adopted, this line is the rule.)
 ```
 
 the base (unescaped) form is equivalent to a fixed `e` per class: register-right `e = 0x04`,
