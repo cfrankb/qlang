@@ -182,6 +182,10 @@ closing the **Q#**s its item points at:
       `SERIALIZATION.md` refreshed. *Remaining for `# external modules`:* a runtime module registry
       and name-based discovery — **C8** — ✓ **both landed** (C8a/C8b Rounds 67/69; the registry
       Round 92, `archive/runtime-module-registry-plan.md`)
+- [ ] **library-dir dependency search** (nested third-party libs outside the
+      entry dir) — **plan written 2026-11-15, not started**:
+      [library-dir-dependency-search-plan.md](library-dir-dependency-search-plan.md)
+      (resolver-side module-dir stack in `findModule`; no `.qlc`/opcode/driver change)
 - [ ] `missing-features-plan.md` itself drifted after Rounds 56/59/60: the A5 row still says
       "pipeline still emits v5", Phase 2 still says "`kOpcodeUsedCount` is 73 … A5 raises it to
       80", Conventions still say "`.qlc` v5 stays the only supported format", and Dependencies

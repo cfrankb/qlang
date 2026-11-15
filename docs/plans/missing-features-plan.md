@@ -828,7 +828,7 @@ and `docs/spec/13-bytecodes.md` now specify `export class`; the implementation
 | **cross-module captures** — an exported `def` whose sibling `def` has *local* captures is refused | refusal is correct and diagnosed; making it work means shipping the defining module's frame with the call | someone needs a module built around closures, and it should be its own design round |
 | **by-value arguments across a module boundary**, `m.x++` refused (`operator '++' can only be applied to a variable name` since Round 97; a silent no-op until Round 96) | both recorded in `history.md` (Round 68) as value-semantics questions, orthogonal to what an `import` binds | the value-semantics round |
 | **Q36 warn on `MODULE_NAME` ≠ file stem** | nothing warns for `.qlc` either; a warning-only feature with no diagnostic channel | a warnings channel exists (C1 owns strict-typing levels) |
-| **a library's own directory in its dependency search** | documented limit (`--help`, `07-api.md` §module search paths); the search list belongs to the context, so a fix needs a resolver-side stack of current module dirs | a real project hits it (nested third-party libs outside the entry dir) |
+| **a library's own directory in its dependency search** | documented limit (`--help`, `07-api.md` §module search paths); the search list belongs to the context, so a fix needs a resolver-side stack of current module dirs | **promoted 2026-11-15 — plan [library-dir-dependency-search-plan.md](library-dir-dependency-search-plan.md) (not started)** |
 
 Round 95 closed the former "library-mode assignment to a module const" row: `C = 7` was
 already reported correctly; the real sibling was statement-form `C++`/`C--` misreporting
