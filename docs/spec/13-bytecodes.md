@@ -675,9 +675,18 @@ suites still pin that a VM runs that form; no host path does.
 
 ## export table (lookup)
 
-includes all the global `functions`, `variables` and `constants` being exposed to other modules. these can be imported by other modules via `import` keyword.
+includes all the global `functions`, `variables`, `constants` and `classes` being exposed to other modules. these can be imported by other modules via `import` keyword.
 
 bytecode to reference the look up table.
+
+**Q42 resolved (plan [../plans/class-export-plan.md](../plans/class-export-plan.md) F4, F4 Phase 0)** —
+the kind domain gains `Class` (kind 3), and the `ExportEntry` record grows a fixed class meta:
+`initArity`, one int, the `__init__` arity of the class or `-1` when it declares none. The `ref`
+of a `Class` entry is the cell holding the class prototype table (the module global
+`__proto_<Name>`), so the linker rebases it like any non-`Func` entry. A class export exposes
+only the constructor: the importer constructs with `Name(args)` and the compiler keeps the
+compile-time arity check because the meta is in the image. `.qlc` bumps to **v11** — the record
+layout genuinely grows (clean-break precedent). See `## keyword export` for the syntax rules.
 
 **Implemented (Round 63, 2026-11-09)** — plan
 [../plans/archive/external-modules-plan-v4.md](../plans/archive/external-modules-plan-v4.md) Phase 3a.
@@ -816,13 +825,20 @@ const-pool operand against it.
 
 ## keyword export
 
-`export` keyword exposes functions, variables and constants to other modules.
+`export` keyword exposes functions, variables, constants and classes to other modules.
 
 - export keyword is only valid at global scope.
 - exported entities are `readonly`.
 - functions can be executed but they not modified.
 - variables can be read but not modified
 - entities are shared and passed by pointer or reference.
+- a class export (`export class Name`, or standalone `export NAME`) exposes the **constructor**
+  only — **Q42 resolved**, plan [../plans/class-export-plan.md](../plans/class-export-plan.md)
+  F4: `Name(args)` (also `m.Name(args)`) constructs in the importer exactly like locally
+  ([10-classes.md](10-classes.md) `## construction`, field defaults **shared by handle**);
+  the class name is **not a value** — reading it bare, passing it as an argument, or naming it
+  outside a call position is a compile error. Exporting a second class name twice behaves like
+  any duplicate export (`already exported`).
 
 ``` 
   # assume module global scope 

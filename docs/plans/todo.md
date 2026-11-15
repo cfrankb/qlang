@@ -284,7 +284,9 @@ closing the **Q#**s its item points at:
 - [x] `docs/plans/module-export-import-plan.md` (2026-11-10) — **all phases landed, archived**:
       **P0** Round 70 (F1 + the silent-nil half of F5), **P1** Round 71 (F2), **P2** Round 72
       (F3, per-name alias, `.qlc` stays v9 — **Q41** resolved), **P3** Round 73 (F5 closed: the
-      not-imported-module message); owned **Q39–Q43** (all resolved except Q42); F4 (class
+      not-imported-module message); owned **Q39–Q43** (all resolved; Q42 resolved by F4 Phase 0,
+      2026-11-15 — spec for `export class` in `09-modules.md`/`13-bytecodes.md`, implementation
+      in [class-export-plan.md](class-export-plan.md)); F4 (class
       export), the runtime module registry and the rest moved with the plan's deferred table to
       [missing-features-plan.md](missing-features-plan.md) §"Deferred from the module
       export/import plan" — audit **F1–F3, F5** closed

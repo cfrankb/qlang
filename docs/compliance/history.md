@@ -1,3 +1,23 @@
+## Round 104 — 2026-11-15 — Q42 resolved: the spec answers `export class` (F4 **Phase 0**, docs-only; plan `docs/plans/class-export-plan.md`; spec `docs/spec/09-modules.md`, `docs/spec/10-classes.md`, `docs/spec/13-bytecodes.md`)
+
+- **Why.** `export class Point` had no spec answer (audit F4 "unspecified", plan Q42 "out of
+  scope until the spec says otherwise"). The F4 plan settles the language question before any
+  code lands, so P3a/P3b can implement against fixed text.
+- **Decisions recorded.** `09-modules.md` + `13-bytecodes.md` (`## keyword export`,
+  `## export table (lookup)`): `export class Name` and standalone `export NAME` are legal; the
+  export table gains kind `Class` carrying a fixed `initArity` meta (−1 = no `__init__`) and a
+  `ref` to the prototype cell `__proto_<Name>`; `.qlc` bumps to **v11** (the record genuinely
+  grows — Round 60 clean-break precedent). A class export exposes **the constructor only**: the
+  class name stays a non-value — reading it bare or naming it outside a call position is a
+  compile error. `10-classes.md` `## construction`: an imported class constructs like a local
+  one — field defaults **shared by handle** (not deep-copied), `type()` names the class, and the
+  arity check stays compile-time because the meta ships in the image. Imported-class statics
+  explicitly out of scope.
+- **Tracking.** `todo.md` Q39–Q43 clause → all resolved; `missing-features-plan.md` deferred
+  row and `module-export-import-audit.md` F4 annotated with the resolution + plan pointer.
+  Implementation flips (F4 → fixed) wait for their rounds. Doc hashes re-recorded (3 spec
+  modules). `ctest` 68/68 (unchanged — docs-only).
+
 ## Round 103 — 2026-11-15 — the `.qla` v1 assembler: `qlcc --assemble` rebuilds an image from its own listing, and a round-trip guard makes the claim byte-exact (encoding-followups **Phase 5**, closing `todo.md` §7; plan `docs/plans/archive/encoding-codegen-followups-plan.md`; impl `examples/qlcc.cpp` `assembleQla`; new gate `qla_roundtrip`, ctest 67 → 68)
 
 - **Why.** `todo.md` §7's last open row: `ja`/`jae`/`jb`/`jbe` were spec/disassembly

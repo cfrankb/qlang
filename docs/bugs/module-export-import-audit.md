@@ -165,6 +165,9 @@ unspecified form — silently ignores its alias (recorded, Round 72).
 `export class Point { … }` → `export can only prefix def, const or a variable assignment`.
 `## keyword export` lists functions, variables and constants only, so a module that wants to offer a
 type has no answer in the spec. Plan Q42 (default: out of scope until the spec says otherwise).
+**Q42 resolved 2026-11-15 (F4 Phase 0):** the spec now allows `export class` — see
+`docs/spec/09-modules.md` `## QLang (.ql) modules` and `docs/plans/class-export-plan.md` for the
+implementation rounds that close this item.
 
 ## F5 — diagnostics that mislead  **(closed, Round 73)**
 

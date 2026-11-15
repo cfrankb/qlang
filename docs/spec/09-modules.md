@@ -147,10 +147,21 @@ needs ([13-bytecodes.md](13-bytecodes.md) `## keyword export`,
   **namable**: its own `MODULE_NAME`, or the name the host is compiling the file under (the
   driver passes the source file's stem), since a module no name reaches cannot be imported. Its
   top level then compiles as `<init>` instead of `main`.
-- **Exports** — `export` on a `def` / `const` / assignment / arrow closure, or standalone
-  `export NAME`. Global scope only. An exported variable is a **shared cell**: the defining
-  module writes it, importers read it; assigning through an import, `++`/`--` on it and
-  `delete` of it are compile errors.
+- **Exports** — `export` on a `def` / `const` / assignment / arrow closure / `class`, or
+  standalone `export NAME`. Global scope only. An exported variable is a **shared cell**: the
+  defining module writes it, importers read it; assigning through an import, `++`/`--` on it
+  and `delete` of it are compile errors.
+- **Class exports (Q42 resolved, plan
+  [../plans/class-export-plan.md](../plans/class-export-plan.md) F4)** — `export class Name`
+  and standalone `export Name` on a class are legal; the export table gains kind `Class`.
+  A class export exposes the **constructor** and nothing else: the importer may write
+  `Name(args)` (also via `m.Name(args)`), which constructs exactly like a local class
+  ([10-classes.md](10-classes.md) `## construction`). The class is **not a value** — reading
+  the bare name, passing it as an argument, or `m.Name` outside a call position is a compile
+  error (`class 'Name' must be constructed: Name(args)`). Construction across the boundary
+  uses the class meta carried by the export entry (its `__init__` arity), so the constructor
+  arity check stays **compile-time** and names the class. Imported-class **statics**
+  (`m.Name::counter`) are out of scope.
 - **Imports** — resolved against a loaded image's export table at compile time. The importer's
   instruction names its **own** import table, never the defining module's handle
   (`getimport` / `callimport`, [13-bytecodes.md](13-bytecodes.md)

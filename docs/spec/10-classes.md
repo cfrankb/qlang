@@ -110,6 +110,13 @@ v1 classes have no static members (see `## v1 restrictions`).
    (methods have fixed arity — the compiler knows it for source classes,
    and the binding table knows it for external types).
 
+An **exported class** constructed in an importing module (Q42 resolved, plan
+[../plans/class-export-plan.md](../plans/class-export-plan.md) F4) follows the same rules:
+the field defaults it carries are **shared by handle** — identical to what locally-constructed
+instances hold, *not* deep-copied — and `type()` of the result names the class. The constructor
+arity check (items 3–4) stays compile-time across the boundary: the class export entry carries
+the `__init__` arity.
+
 ## field access
 
 - `obj.field` reads the instance field. An undeclared field name is a
