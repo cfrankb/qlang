@@ -321,7 +321,9 @@ closing the **Q#**s its item points at:
       natives/exports/locs/sigs and the guard compares whole files (non-linked scripts
       rebuild byte-identical; the import table stays deferred with M2). Pool tag fidelity
       closed with **M3** (Round 109): tagged integers, forced-`.0` floats, `set[...]`,
-      hex blobs — 30/35 byte-identical + the tags fixture; M2 (import table) remains
+      hex blobs. The import table and entry pairing closed with **M2** (Round 110): the
+      `imports:` section, `-a` lists the entry image — **35/35 byte-identical, 0
+      DEFERRED**; M4 (level >1 input symmetry) remains: a prose never-build decision
 
 ## 8. Housekeeping
 

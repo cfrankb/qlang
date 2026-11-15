@@ -50,6 +50,13 @@ already lossless for pool contents (comments at ~l.2103–2109 record the rule; 
 
 ## M2 — module tables: pair the entry listing with the entry image (unfreezes 5 DEFERRED)
 
+**LANDED 2026-11-15 (Round 110).** Both decisions shipped as sketched: the entry-image
+snapshot is taken when `saveListing` alone is set and the entry's `.qla` disassembles
+`*entryImage` + `entryNativeIds`; the `imports:` section prints/parses
+`<module> <name> <kind> <ref>` in writer field order; the `parseCodeInstr` refusal is gone;
+both roundtrip deferral keys removed. **35/35 byte-identical, 0 DEFERRED** (corpus is 35
+since M3's `pool_constants`), ctest **70/70**, `qlcc_cli` 91 checks green unchanged.
+
 Two decisions, both pre-verified at HEAD:
 
 1. **Pairing (parent plan option 1 — confirmed safe).** `-a` currently disassembles the

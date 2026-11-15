@@ -50,7 +50,10 @@ mnemonics `ja`/`jae`/`jb`/`jbe` are accepted as aliases of `jg`/`jge`/`jl`/`jle`
 listing carries every image section — besides the constants block it prints
 `module: <name>`, `globals:` entries (`<name> r<reg> [const]`), `natives:`
 entries (`<slot> <name>`), `exports:` entries (`<kind> <name> <ref>
-[init-arity]`, kind one of `var` `const` `fn` `class`) and, per function, a
+[init-arity]`, kind one of `var` `const` `fn` `class`), `imports:` entries
+(`<module> <name> <kind> <ref>`, the §4.6 table order; `ref` is the defining
+module's own handle, never range-checked against the importing image) and, per
+function, a
 `locs:` list (parallel `<line>:<col>` decimals) and a `sigs:` line
 (`name:annotation` per parameter, ` -> annotation` return; an annotation is
 `-` for undeclared, a builtin type name, `@Class`, or `t<ordinal>`). Pool
@@ -59,13 +62,14 @@ decimal (a bare decimal out of the `int` range reads back as `qword`), every
 other integer type prints name-tagged (`byte=200`, `unsigned=4000000000`,
 `long=-4000000000`, `qword=`, `char=`, `word=`, `short=`), an integral float
 carries a forced decimal point (`3.0`), a set prints `set[...]` and a blob
-prints `<N: hexbytes>`. Assembling a compiler-written listing therefore rebuilds a byte-identical
-`.qlc` image for a program without an import table (the `qla_roundtrip` guard
-compares whole files). The sections are additive: a hand-written listing may
+prints `<N: hexbytes>`. Assembling a compiler-written listing therefore
+rebuilds a byte-identical `.qlc` image — for every program, module ones
+included: `-a` lists the **entry image**, the same artifact `-c` writes (a
+linked program's merged form is runnable but not serializable and is never a
+listing subject); the `qla_roundtrip` guard compares whole files. The
+sections are additive: a hand-written listing may
 omit them and assembles with the documented defaults (module `main`, `(0,0)`
-locations, undeclared signatures, empty maps). What v1 still does not print
-is the import table — a listing containing `getimport`/`callimport` is
-rejected. Parse
+locations, undeclared signatures, empty maps). Parse
 diagnostics are line-numbered; exit 1 usage, 2 unreadable listing, 3 parse
 error, 4 image could not be written. Without `-o` the image is written as
 `<stem>.qlc` beside the listing.

@@ -44,6 +44,11 @@ graduate from "compared set" to `cmp(1)`-style equality.
 
 ## M2 — module tables: assemble the entry module (unfreezes 4 DEFERRED scripts)
 
+**LANDED 2026-11-15 (Round 110).** Shipped per the concrete build plan
+(`docs/plans/qla-assembler-followups/README.md` M2): the `imports:` section prints/parses
+`<module> <name> <kind> <ref>` in table order and the entry's `-a` listing describes the
+entry image — 35/35 corpus scripts byte-identical, 0 DEFERRED.
+
 - Print `imports:` (module, exported name, native slot) and `exports:` (kind, name,
   module-local ref) for the **pre-link entry image** — the form `readQlc`/the linker contract
   already speaks; the assembler fills `prog.imports`/`prog.exports`.

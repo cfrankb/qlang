@@ -7,10 +7,10 @@
 // two .qlc files must be BYTE-IDENTICAL — the listing now carries every
 // image section (constant pool, instruction streams, module name,
 // vars/constVars, native slots, exports, per-instruction locations, declared
-// signatures). On a mismatch the loaded programs are compared field by field
-// to localize it. The only remaining deferral is the module story: a program
-// with an import table (the listing is the linked program, the image the
-// entry module) is reported as DEFERRED, never waved through silently.
+// signatures, and — since M2 — the module import table, with the entry's
+// listing describing the entry image itself, so module programs round-trip
+// like every other script. On a mismatch the loaded programs are compared
+// field by field to localize it.
 //
 // argv[1]: the built qlcc binary.
 
@@ -125,11 +125,6 @@ void runScript(const std::string &qlcc, const std::string &dir,
   const std::string rebuilt = dir + "/" + stem + ".asm.qlc";
   res = testcli::run(qlcc + " --assemble " + listing + " -o " + rebuilt);
   if (res.code != 0) {
-    // Only the documented v1 limit defers; anything else is a failure.
-    if (res.out.find("import table") != std::string::npos) {
-      std::printf("DEFERRED %s: %s", stem.c_str(), res.out.c_str());
-      return;
-    }
     std::printf("FAIL %s: --assemble exited %d\n%s\n", stem.c_str(), res.code,
                 res.out.c_str());
     gFailures++;
@@ -148,17 +143,6 @@ void runScript(const std::string &qlcc, const std::string &dir,
     std::printf("FAIL %s: the assembled image does not load back: %s\n",
                 stem.c_str(), err.c_str());
     gFailures++;
-    return;
-  }
-  if (!want.imports.empty()) {
-    // A module program: -a listed the LINKED program (which -c does not
-    // write — it is not serializable) while -c wrote the entry image, so the
-    // two artifacts describe different programs. Nothing to compare here;
-    // assembling linked images is deferred with the module story.
-    std::printf(
-        "DEFERRED %s: module program (the -a listing is the linked "
-        "program, the -c image the entry module)\n",
-        stem.c_str());
     return;
   }
 

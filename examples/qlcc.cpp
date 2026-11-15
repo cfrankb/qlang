@@ -1192,6 +1192,22 @@ namespace
     return "var";
   }
 
+  // Its inverse, shared by the `exports:` and `imports:` parse modes.
+  static bool parseExportKindText(const std::string &tok, ExportKind &k)
+  {
+    if (tok == "var")
+      k = ExportKind::Var;
+    else if (tok == "const")
+      k = ExportKind::Const;
+    else if (tok == "fn")
+      k = ExportKind::Func;
+    else if (tok == "class")
+      k = ExportKind::Class;
+    else
+      return false;
+    return true;
+  }
+
   // `libs` are the library images a linked program was merged from: level 5
   // prints one block per module of `prog.initSequence`, which needs each
   // image's own export table (its refs are module-local, the merged ones come
@@ -1252,6 +1268,18 @@ namespace
         for (const auto &e : prog.exports)
           ss << "    " << exportKindText(e.kind) << " " << e.name << " " << e.ref
              << (e.kind == ExportKind::Class ? " " + std::to_string(e.initArity) : "") << "\n";
+        ss << "\n";
+      }
+      // The module import table (§4.6) in table order (qla-followups M2):
+      // the writer's field order `module name kind ref`. `ref` is a handle
+      // into the DEFINING module's tables, printed as-is (the listing pairs
+      // with the entry image, which is what `-c` writes).
+      if (!prog.imports.empty())
+      {
+        ss << "imports:\n";
+        for (const auto &im : prog.imports)
+          ss << "    " << im.module << " " << im.name << " "
+             << exportKindText(im.kind) << " " << im.ref << "\n";
         ss << "\n";
       }
     }
@@ -2518,10 +2546,6 @@ namespace
       return fail("unknown mnemonic '" + toks[1] + "'");
     ins = DecodedInstruction();
     ins.op = it->second;
-    if (ins.op == Opcode::GETIMPORT || ins.op == Opcode::CALLIMPORT)
-      return fail(std::string(Bytecode::name(ins.op)) +
-                  " refers to the module import table, which a v1 listing "
-                  "does not carry (deferred with the module story)");
     std::vector<std::string> ops(toks.begin() + 2, toks.end());
     if (!ops.empty() && ops[0].rfind("e=0x", 0) == 0)
     {
@@ -2703,7 +2727,8 @@ namespace
       Code,
       Globals,
       Natives,
-      Exports
+      Exports,
+      Imports
     } mode = Top;
     bool sawHeader = false;
     int lineNo = 0;
@@ -2747,6 +2772,11 @@ namespace
       if (s == "exports:")
       {
         mode = Exports;
+        continue;
+      }
+      if (s == "imports:")
+      {
+        mode = Imports;
         continue;
       }
       if (s.rfind("module:", 0) == 0 && mode != Code && mode != Function)
@@ -2878,15 +2908,7 @@ namespace
         if (!(ws >> kindTok >> name >> refTok))
           return fail(lineNo, "exports entry is '<kind> <name> <ref> [init-arity]'");
         ExportEntry e;
-        if (kindTok == "var")
-          e.kind = ExportKind::Var;
-        else if (kindTok == "const")
-          e.kind = ExportKind::Const;
-        else if (kindTok == "fn")
-          e.kind = ExportKind::Func;
-        else if (kindTok == "class")
-          e.kind = ExportKind::Class;
-        else
+        if (!parseExportKindText(kindTok, e.kind))
           return fail(lineNo, "unknown export kind '" + kindTok + "'");
         char *end = nullptr;
         const long ref = std::strtol(refTok.c_str(), &end, 10);
@@ -2903,6 +2925,28 @@ namespace
           e.initArity = static_cast<int32_t>(ar);
         }
         prog.exports.push_back(std::move(e));
+        continue;
+      }
+      if (mode == Imports)
+      {
+        // `<module> <name> <kind> <ref>` (§4.6; qla-followups M2). `ref` is
+        // the defining module's own handle — never range-checked against
+        // this image (the linker turns it into a merged one).
+        std::istringstream ws(s);
+        std::string module, name, kindTok, refTok;
+        if (!(ws >> module >> name >> kindTok >> refTok))
+          return fail(lineNo, "imports entry is '<module> <name> <kind> <ref>'");
+        ImportEntry im;
+        if (!parseExportKindText(kindTok, im.kind))
+          return fail(lineNo, "unknown import kind '" + kindTok + "'");
+        char *end = nullptr;
+        const long ref = std::strtol(refTok.c_str(), &end, 10);
+        if (*end || end == refTok.c_str() || ref < 0)
+          return fail(lineNo, "import ref must be a non-negative decimal, got '" + refTok + "'");
+        im.module = module;
+        im.name = name;
+        im.ref = static_cast<int32_t>(ref);
+        prog.imports.push_back(std::move(im));
         continue;
       }
       if (s.rfind("sigs:", 0) == 0)
@@ -3788,9 +3832,11 @@ int main(int argc, char **argv)
   // below replaces `compiled` with the merged program, which is runnable but not
   // serializable (.qlc v9 has no section for the init sequence). A program that
   // imports nothing needs no link at all, so for it the snapshot is the program.
+  // -a snapshots too (qla-followups M2): the entry's `.qla` describes the
+  // entry image, the same artifact -c writes, so the two can be compared.
   std::optional<CompiledProgram> entryImage;
   std::map<std::string, int> entryNativeIds;
-  if (saveImage || !packageFile.empty())
+  if (saveImage || !packageFile.empty() || saveListing)
   {
     entryImage = compiled;
     entryNativeIds = nativeIds;
@@ -3917,9 +3963,15 @@ int main(int argc, char **argv)
       while (std::getline(ls, line))
         srcLines.push_back(line);
     }
+    // The listing describes the ENTRY image — the artifact `-c` writes —
+    // never the merged program (qla-followups M2). Unlinked programs have no
+    // snapshot difference; `.qlc`/`.qpm` input was never linked here either.
+    const CompiledProgram &listed = entryImage ? *entryImage : compiled;
+    const std::map<std::string, int> &listedNatives =
+        entryImage ? entryNativeIds : nativeIds;
     const std::string text =
-        disassemble(compiled, srcLines, asmLevel, report, moduleImports,
-                    ctx.loadedModules(), &nativeIds);
+        disassemble(listed, srcLines, asmLevel, report, moduleImports,
+                    ctx.loadedModules(), &listedNatives);
     std::string err;
     if (!writeBinaryFile(listingOut, text, err))
     {
@@ -3928,7 +3980,7 @@ int main(int argc, char **argv)
       return 5;
     }
     std::fprintf(stderr, "disassembly written: %s (%zu functions)\n",
-                 listingOut.c_str(), compiled.functions.size());
+                 listingOut.c_str(), listed.functions.size());
   }
 
   // --- Execute (--run) ---

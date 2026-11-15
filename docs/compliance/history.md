@@ -1,3 +1,28 @@
+## Round 110 — 2026-11-15 — the `.qla` v1 listing carries the import table and the entry listing describes the entry image: whole-`.qlc` byte equality for every script (qla-assembler-followups **M2**; plan `docs/plans/qla-assembler-followups/README.md`; spec `docs/spec/18-qlang-run.md` `--assemble`)
+
+- **Why.** M1's byte-equality stopped at the module story: 5 corpus scripts were DEFERRED
+  because `-a` listed the *merged* program while `-c` wrote the *entry* image (two artifacts,
+  nothing to compare) and the assembler refused `getimport`/`callimport` up front.
+- **Pairing (parent plan option 1).** The entry-image snapshot now also happens when only
+  `-a` is requested, and the entry's listing is assembled from `*entryImage` (+
+  `entryNativeIds`) instead of `compiled` — the listing describes the same artifact `-c`
+  writes. Non-importing programs see zero change (the snapshot *is* the program); module
+  listings shrink from the merged program to the entry module (`qlcc_cli` pins module
+  listings by existence only — all 91 checks green unchanged).
+- **Listing + parse.** An `imports:` section prints the §4.6 table in order, writer field
+  order `<module> <name> <kind> <ref>`; `assembleQla` grows the matching mode (`ref`
+  non-negative decimal, deliberately never range-checked against this image — it is the
+  defining module's handle; the linker turns it into a merged one). The kind-word map is
+  now shared with `exports:` (`parseExportKindText`). The `parseCodeInstr` refusal for
+  `GETIMPORT`/`CALLIMPORT` is deleted: with the table present the printed operands mean
+  what they always meant.
+- **Guard.** Both `qla_roundtrip` deferral paths (the stderr "import table" key, the
+  `!want.imports.empty()` key) are removed. Result: **35/35 scripts byte-identical,
+  0 DEFERRED**, plus the `tags` fixture. ctest **70/70**.
+- **Not done (recorded):** merged-program listings stay non-serializable (`.qlc` has no
+  init-sequence section — closed without action); `--asm-level >1` input symmetry is M4
+  (decide, never build).
+
 ## Round 109 — 2026-11-15 — pool tag fidelity in the `.qla` v1 listing: every pool value reassembles with its tag (qla-assembler-followups **M3**; plan `docs/plans/qla-assembler-followups/README.md`; spec `docs/spec/18-qlang-run.md` `--assemble`)
 
 - **Why.** M1 made `qla_roundtrip` byte-exact, but the pool print still lost tags a bare
