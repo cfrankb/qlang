@@ -142,13 +142,14 @@ The QLang API supplies the verbs; the engine supplies the wiring.
 — thin wrappers over `ObjectOps` (`get` reads a global by name; there is no
 `getVar`). They are generic; they know nothing about handlers, levels, or types.
 
-`hasMethod` / `callMethod` are **implemented** (2026-11-06, `c4ee131` —
-`EXTERNAL_TYPES.md` §9, `test_external` §19–§20). **Guard caveat while that
-lands:** `hasMethod` treats a field holding a `BoundMethod` as callable, but
-`callMethod` on a table/object requires a `Type::Function`, so a handler table
-field bound to another object's method passes the guard and then throws
-`member 'x' is not a function` — the §6 "miss is a silent no-op" contract holds
-for *absent* methods today, not for that one shape.
+`hasMethod` / `callMethod` are **implemented + verified** (2026-11-06,
+`c4ee131`; the `BoundMethod` guard mismatch closed 2026-11-14, Round 93 —
+`EXTERNAL_TYPES.md` §9, `test_external` §19–§20). A table field holding a
+`BoundMethod` (a handler bound to another object's method, e.g.
+`h.cb = e.translate`) passes the guard **and** `callMethod` now invokes it on
+the bound target — the same contract the VM's own dispatch gives `h.cb(...)`.
+The §6 "miss is a silent no-op" contract holds for absent methods; the guard
+protects the call it guards.
 
 **Engine wiring (this doc):** which level objects to hold, how to select a
 handler (by type tag or event name), and the policy of guarding + budgeting

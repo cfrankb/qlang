@@ -189,24 +189,32 @@ closing the **Q#**s its item points at:
 
 ## 6. Defects and drift with no plan of their own
 
-- [ ] **C3 guard defect (small, unblocks "verified")**: `hasMethod` accepts `BoundMethod`
+- [x] **C3 guard defect (small, unblocks "verified")**: `hasMethod` accepts `BoundMethod`
       (`src/QLangContext.cpp:635`) but the table `ObjectOps::callMethod` requires `Function`
       (`src/QLangObjects.cpp:187`) — `hasMethod` says yes, `callMethod` then throws
-      `member '…' is not a function`; fix the guard and add a case
-- [ ] **C3 tally drift**: `status.md`, `tests.md` and `harness.md` still record `external` at
+      `member '…' is not a function`; fix the guard and add a case. **Fixed 2026-11-14 (Round 93)**
+      on the call side — `table_ops::callMethod` invokes a stored `BoundMethod` on its bound target
+      (the `CALLCLOS` contract), guard unchanged; `test_external` §19 +4. `docs/bugs/resolved/`
+- [x] **C3 tally drift**: `status.md`, `tests.md` and `harness.md` still record `external` at
       **49** checks where HEAD has **66** (since `c4ee131`) — recorded as pending C3, so it needs
-      the fix above before it can be re-recorded
-- [ ] **codegen defect (pre-existing, found 2026-11-08)**: `compileForIn`'s runtime-bound path
+      the fix above before it can be re-recorded. **Re-recorded as measured 2026-11-14: 85**
+      (raw `CHECK(` count, repo convention; chain 49 → 66 → 81 → 85)
+- [x] **codegen defect (pre-existing, found 2026-11-08)**: `compileForIn`'s runtime-bound path
       emits a skip `JMP` after the backward guard that is never patched, so its target stays
       instruction 0 — a descending loop with non-constant bounds spins there and trips the step
       guard. Repro: `local n = 3` / `for i in range(5, n) step -1 { }` → "infinite loop (step
       limit)". Constant bounds take the other path and work. Marked with a `Defect` comment in
-      `src/QLangCompiler.cpp:2178`
-- [ ] **compiler defect (pre-existing, found 2026-11-09 while verifying Round 63)**: a top-level
+      `src/QLangCompiler.cpp:2178`. **Fixed 2026-11-14 (Round 93)**: index captured before emit,
+      `patchJump(backSkipIdx, bodyStart)` beside the exit patches; +3 `range_check` cases (the
+      suite had no `step` case). `docs/bugs/resolved/for-in-runtime-descending-unpatched-jmp.md`
+- [x] **compiler defect (pre-existing, found 2026-11-09 while verifying Round 63)**: a top-level
       `const` interpolated inside an **f-string in a function body** evaluates to nil —
       `const G = "hello"` / `def a(n) { return f"{G}" }` / `println(a(1))` prints `nil`, while the
       plain (non-f-string) read of the same const works. Reproduced identically on a `HEAD`
-      worktree build, so it is not a Phase 3a regression; recorded in `history.md` Round 63
+      worktree build, so it is not a Phase 3a regression; recorded in `history.md` Round 63.
+      **Fixed 2026-11-14 (Round 93)**: `collectIds` gained the `FString`/`Cast` recursion cases;
+      +3 `spec_check2` cases (f-string, cast, f-string-over-cast in a def).
+      `docs/bugs/resolved/const-fstring-cast-capture-miss.md`
 - [ ] **perf**: `perf_stress` execute **10.974 ms** vs the committed baseline **10.382 ms**
       (+5.7 %, deliberately not re-baselined in Round 60). Either land the loop-direction hoist
       that recovers it (`archive/phase3-opcode-retirement-plan.md` §8: 8 → 7 instructions in the
@@ -228,7 +236,8 @@ closing the **Q#**s its item points at:
       reuses the sentinel cell, and an unreachable def capture in a library module is a compile
       error. Guards: `testModuleConstOneIdentity` (`linker`) + the `ql_module_const` script.
       Audit closed: [../bugs/module-export-import-audit.md](../bugs/module-export-import-audit.md) F1.
-      The same family (f-string const, script mode) remains open one row above.
+      The same family (f-string const, script mode) landed 2026-11-14 (Round 93) — see the
+      `const-fstring-cast-capture-miss` row in §6.
 - [x] **module defect (found 2026-11-10): FIXED Round 71 (plan P1)** — `from a import *` +
       `from b import *` always collided on `MODULE_NAME`; the star-expansion now skips it
       (identity, not an entity — **Q40** resolved), explicit and qualified reads unchanged,

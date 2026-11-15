@@ -1798,6 +1798,14 @@ static void collectStmtIds(const StmtPtr &s, std::unordered_set<std::string> &id
 static void collectIds(const ExprPtr &e, std::unordered_set<std::string> &ids,
                        const std::unordered_set<std::string> *skip = nullptr) {
   if (!e) return;
+  if (e->kind == ExprKind::FString) {
+    for (auto &part : e->exprParts) collectIds(part, ids, skip);
+    return;
+  }
+  if (e->kind == ExprKind::Cast) {
+    collectIds(e->castOperand, ids, skip);
+    return;
+  }
   if (e->kind == ExprKind::Variable) {
     if (!skip || !skip->count(e->name))
       ids.insert(e->name);
@@ -2822,9 +2830,11 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
       // it (patched to guardExit below).
       emitCmpJumpFalse(Opcode::GE, x, endReg); // backward guard (x >= end)
       int backExitIdx = static_cast<int>(m_emitter.size()) - 1;
-      // Defect (pre-existing, unchanged here): this skip JMP is never
-      // patched, so its target stays instruction 0 — a descending loop with
-      // non-constant bounds spins there. Tracked in docs/plans/todo.md.
+      // Descending + in range (the GE guard above fell through): enter the
+      // body. This JMP must be patched to bodyStart (docs/bugs/resolved/
+      // for-in-runtime-descending-unpatched-jmp.md) — unpatched it jumped to
+      // instruction 0 and the step-limit watchdog fired.
+      int backSkipIdx = static_cast<int>(m_emitter.size());
       emit(Opcode::JMP, 0);
       // The direction test above jumps here, to the forward guard's CMP.
       m_emitter.patchJump(fwdGuardIdx, static_cast<int>(m_emitter.size()));
@@ -2844,6 +2854,8 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
       }
       m_emitter.patchJump(backExitIdx, guardExit);
       m_emitter.patchJump(fwdExitIdx, guardExit);
+      // descending + in-range fell through the GE guard: enter the body
+      m_emitter.patchJump(backSkipIdx, bodyStart);
       m_emitter.patchJump(zeroJumpIdx, infBodyStart);
       m_emitter.patchJump(ssJumpIdx, guardInit);
       m_emitter.patchJump(runOnceExitJmpIdx, guardExit);

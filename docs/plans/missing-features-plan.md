@@ -349,10 +349,12 @@ than deleted, since the landing cites them.
 - **Q20 unknown-method failure** — **resolved: throw `QLangError`**, mirroring
   `emitSignal`. A value without `ObjectOps` and a non-callable/missing member
   each throw; errors raised inside the method propagate.
-- **New open detail (not a spec question)** — what "callable" means per kind:
-  today `hasMethod` says yes to `Function` **or** `BoundMethod`, but the table
-  ops only invoke `Function` (see §D, C3). The guard and the dispatch must agree
-  before this item can be flipped to verified in `status.md`.
+- **New open detail (not a spec question)** — **resolved (2026-11-14, Round
+  93)**: what "callable" means per kind — `hasMethod` says yes to `Function`
+  **or** `BoundMethod`, and the table ops now invoke **both** (`table_ops::callMethod`
+  invokes a stored `BoundMethod` on its bound target, the `CALLCLOS` contract;
+  `docs/bugs/resolved/c3-hasmethod-callmethod-boundmethod-mismatch.md`). The
+  guard and the dispatch agree; `status.md` flipped to verified.
 
 ### C5 — inheritance (`ObjectOps::base`)
 

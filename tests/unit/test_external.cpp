@@ -310,6 +310,17 @@ int main() {
       threw = true;
     }
     CHECK(threw);                               // non-object value throws
+    // A table field holding a BoundMethod (docs/bugs/resolved/
+    // c3-hasmethod-callmethod-boundmethod-mismatch.md): the guard and the
+    // call must agree — callMethod invokes it on the bound target, exactly
+    // as the VM's CALLCLOS does for `h.cb(3, 4)` in script.
+    ctx.set("e", ext);
+    CHECK(!runThrows(ctx, "h.cb = e.translate"));
+    QValue cb = handlers.asTable()->at("cb");
+    CHECK(std::string(cb.typeName()) == "bound method");  // the shape stored
+    CHECK(ctx.hasMethod(handlers, "cb"));
+    ctx.callMethod(handlers, "cb", {QValue::Int(3), QValue::Int(4)});
+    CHECK(p->x == 4 && p->y == 6);              // invoked on the target, no self anchor
   }
 
   // 20. callMethod on an external object dispatches ops->callMethod (zero

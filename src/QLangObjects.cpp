@@ -26,6 +26,16 @@ static const char* kConstFieldMetaKey = "__const_fields__";
 // that violate the type inferred from the field's default value.
 static const char* kFieldTypeMetaKey = "__field_types__";
 // Static members (new extension beyond v1): `__statics__` is the shared
+// Reroute C++ exceptions from a member binding into QLang runtime errors.
+#define QL_EXTERNAL_CALL(expr)                                    \
+  try {                                                           \
+    return (expr);                                                \
+  } catch (const QLangError&) {                                   \
+    throw;                                                        \
+  } catch (const std::exception& e) {                             \
+    throw QLangError(QLangErrorKind::Runtime, 0, 0, e.what());    \
+  }
+
 // class-level table (prototype + every instance point at the same map).
 // `__static_const__` (a set inside `__statics__`) marks read-only statics.
 static const char* kStaticMetaKey = "__statics__";
@@ -185,6 +195,14 @@ QLangValue callMethod(const QLangValue& obj, const std::string& name,
                        QLangContext& ctx) {
   // Get the method (closure) from the table.
   QLangValue method = getField(obj, name, ctx);
+  if (method.type() == QLangValue::Type::BoundMethod) {
+    // A stored external method (`t.cb = e.translate`): invoke on the bound
+    // target — same contract as the VM's CALLCLOS BoundMethod handler. No
+    // self anchor is prepended; invoke's target is the external object.
+    const auto& bm = method.asBoundMethod();
+    ExternalRef target = bm.target;  // copy: selfMut() is non-const
+    QL_EXTERNAL_CALL(bm.member->invoke(target.selfMut(), ctx, args))
+  }
   if (method.type() != QLangValue::Type::Function) {
     throw QLangError(QLangErrorKind::Type, 0, 0,
                      "member '" + name + "' is not a function");
@@ -267,16 +285,6 @@ static const Member* findMember(const TypeDescriptor& t, const std::string& name
     if (m.name == name) return &m;
   return nullptr;
 }
-
-// Reroute C++ exceptions from a member binding into QLang runtime errors.
-#define QL_EXTERNAL_CALL(expr)                                    \
-  try {                                                           \
-    return (expr);                                                \
-  } catch (const QLangError&) {                                   \
-    throw;                                                        \
-  } catch (const std::exception& e) {                             \
-    throw QLangError(QLangErrorKind::Runtime, 0, 0, e.what());    \
-  }
 
 QLangValue getField(const QLangValue& obj, const std::string& name,
                     QLangContext&) {

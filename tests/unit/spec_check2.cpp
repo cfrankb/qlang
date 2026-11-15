@@ -106,6 +106,12 @@ int main() {
   expectVal("const read", "const year = 2026;\nlocal sz = year;", "sz", 2026);
   expectThrow("const immutable", "const year = 2026;\nyear = 5");
   expectRun("const typed byte", "const month:byte = 10");
+  // const read through an f-string / cast inside a function body: the
+  // capture scan must recurse into exprParts/castOperand
+  // (docs/bugs/resolved/const-fstring-cast-capture-miss.md).
+  expectStr("const via f-string in def", "const G = \"hello\"\ndef f(n)\n  return f\"[{G}]\"\nend\nr = f(1)", "r", "[hello]");
+  expectVal("const via cast in def", "const N = 7\ndef f(n)\n  return cast<int>(N) + 1\nend\nr = f(1)", "r", 8);
+  expectStr("const via f-string + cast", "const N = 7\ndef f(n)\n  return f\"v={cast<int>(N)}\"\nend\nr = f(1)", "r", "v=7");
 
   // -- nil + float (106, 107) --
   expectRun("local z valueless", "local z");

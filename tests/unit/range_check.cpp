@@ -29,6 +29,12 @@ int main() {
   expectVal("for range 0..1", "local s=0\nfor i in range(0,1){ s += i }\n", "s", 1);          // 0,1
   expectVal("for range 3..7 count", "local c=0\nfor i in range(3,7){ c += 1 }\n", "c", 5);    // 3,4,5,6,7
 
+  // ---- descending step with runtime bounds (docs/bugs/resolved/for-in-runtime-descending-unpatched-jmp.md) ----
+  // The backward-guard skip-JMP fix: runtime bounds must iterate, not spin.
+  expectVal("runtime desc 5..n(3) sum", "local n=3\nlocal s=0\nfor i in range(5,n) step -1{ s += i }\n", "s", 12); // 5+4+3
+  expectVal("runtime dir-mismatch run-once", "local n=9\nlocal c=0\nfor i in range(5,n) step -1{ c += 1 }\n", "c", 1); // run-once (matches the literal-bounds shape)
+  expectVal("runtime step expr",        "local st=-2\nlocal s=0\nfor i in range(10,5) step st{ s += i }\n", "s", 24); // 10+8+6
+
   // ---- break / continue inside range loop ----
   expectVal("for range break at 5", "local s=0\nfor i in range(0,10){\n  if i>=5 { break }\n  s += i\n}\n", "s", 10); // 0+1+2+3+4
   expectVal("for range continue skip 5", "local s=0\nfor i in range(0,10){\n  if i==5 { continue }\n  s += i\n}\n", "s", 50); // 55-5
