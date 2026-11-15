@@ -489,11 +489,13 @@ static void testCompilerMov() {
     CompiledProgram p = compileSrc(src);
     check(!poolHasAnyInt(p.constants),
           "compiler-mov: no Type::Int in main pool (for + class)");
-    // The for-loop's compiler-generated constants are `mov` immediates.
+    // The for-loop's compiler-generated constants are immediates: bounds as
+    // `mov`, the hoisted step as in-place `add r, 1` (direction-hoist plan M1
+    // removed the old runtime step/zero/direction temporaries).
     check(hasImm(p.functions[0], Opcode::MOV, ImmForm::I8, 1) &&
-              hasImm(p.functions[0], Opcode::MOV, ImmForm::I8, 0) &&
-              hasImm(p.functions[0], Opcode::MOV, ImmForm::I8, -1),
-          "compiler-mov: for step/zero/direction emitted as immediates");
+              hasImm(p.functions[0], Opcode::MOV, ImmForm::I8, 3) &&
+              hasImm(p.functions[0], Opcode::ADD, ImmForm::I8, 1),
+          "compiler-mov: for bounds/step emitted as immediates");
   } catch (const QLangError &e) {
     check(false, std::string("compiler-mov: ") + e.what());
   }

@@ -548,12 +548,14 @@ Effort: S1 1 d, S2 0.25 d, S3 1 d, S4 0.5 d, S5 0.5 d, S6 0.5 d, S7 0.25 d ≈ *
 ## 8. Follow-ups recorded (deliberately not Phase 3)
 
 - **Hoist the `for` loop's direction re-test out of the back-edge** (recovers
-  S1's +8.7 %). `compileFor`/`compileForIn` end the loop with a jump back to the test
+  S1's +8.7 %) — **closed Round 113** (2026-11-15,
+  `docs/plans/archive/for-direction-hoist-plan.md`): measured 8 → **6**
+  instructions in `perf_stress`'s inner loop (below the pre-S1 7), execute
+  −10 %. `compileFor`/`compileForIn` end the loop with a jump back to the test
   that picks the bound comparison (`jl` when the step is positive, `jg` when negative).
   That test reads `step_init > 0`, computed once in the prologue and never written in
   the body, so the loop can branch to one of two specialized back-edges before entering
-  and drop the test from the iteration entirely (8 → 7 instructions in `perf_stress`'s
-  inner loop, i.e. below the pre-S1 count). Independent of `tst`: the same saving
+  and drop the test from the iteration entirely. Independent of `tst`: the same saving
   applies to the old `jmptrue` spelling, so it is a codegen improvement, not a Phase 3
   obligation.
 - **Offset-table plan bumps v6 → 7 too** (`offset-table-elimination-plan.md` §10). If its §9

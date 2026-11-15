@@ -72,10 +72,11 @@ struct Budget {
 };
 
 static const Budget kBudgets[] = {
-    {"hello.ql", 214},   // P3 (Round 101): 217 -> 214, literal RHSs ride in-place ALU
+    {"hello.ql", 183},   // P3 (Round 113): 214 -> 183, for-direction hoist
     {"money.ql", 151},
     {"cast.ql", 189},
-    {"perf_stress.ql", 563},  // P3 (Round 101): 565 -> 563
+    {"perf_stress.ql", 185},  // P3 (Round 113): 563 -> 185, foldable-bounds
+                              // loops lose the step/zero/direction machinery
 };
 
 static std::string readScript(const std::string &path) {

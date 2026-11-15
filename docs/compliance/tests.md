@@ -200,6 +200,14 @@ gate or `./update-doc-hashes.sh --check` directly (Round 49).
 - `--update-baseline` regenerates `tests/perf/baseline.json` (a deliberate act,
   always a separate commit). `baseline.json` is the immutable reference
   (calibrated g++/Linux Release).
+- **Re-baselined Round 113 (2026-11-15)** — the loop-direction hoist landed
+  (`docs/plans/archive/for-direction-hoist-plan.md`): `perf_stress` execute
+  **11.171 → 10.057 ms (−10 %)**, compile **0.164 → 0.085 ms**; the inner
+  `for j = 1 to 200` is 6 dispatches/iteration (was 8; the direction `tst`
+  left the back-edge), entry-function budgets `hello` 214 → 183,
+  `perf_stress` 563 → 185. Only the three `perf_stress` medians re-recorded
+  (the eleven micro-medians kept from Round 93 — this host's micro-stage runs
+  were noise-dominated that day). Own commit.
 - **Re-recorded Round 93 (2026-11-14)** — the deliberate act the Round 60 item below
   left open (`docs/plans/todo.md`): `perf_stress` execute **10.382 → 11.171 ms
   (+7.6 %)**. Not codegen — the instruction stream is unchanged since Round 60
@@ -209,8 +217,8 @@ gate or `./update-doc-hashes.sh --check` directly (Round 49).
   11.21 / 11.35 ms (the old baseline measures **+7.1 % to +9.4 %**), so the drift is
   host/environment. The recorded recovery — the loop-direction hoist out of the
   back-edge (`archive/phase3-opcode-retirement-plan.md` §8, 8 → 7 instructions in
-  that inner loop) — stays **parked**: it belongs in a codegen round of its own,
-  not in a baseline act. The other eleven medians re-recorded from the same run.
+  that inner loop) — landed Round 113 (see the item above; measured 8 → 6).
+  The other eleven medians re-recorded from the same run.
   Regenerated with `--update-baseline`, own commit.
 - **Measured, not re-recorded, Round 60 (2026-11-08)** after Phase 3: `perf_stress`
   execute 10.91–10.97 ms against the 10.382 ms baseline (**+5.0 % to +5.7 %** across

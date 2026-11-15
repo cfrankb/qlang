@@ -252,8 +252,9 @@ closing the **Q#**s its item points at:
       stream **unchanged** (565 instructions, `codegen_size` held), so `tests/perf/baseline.json`
       was re-recorded with `--update-baseline` (own commit); record in `docs/compliance/tests.md`.
       The loop-direction hoist (`archive/phase3-opcode-retirement-plan.md` §8: 8 → 7 instructions
-      in the inner loop) stays **parked** — land it as a codegen round of its own, not for a number
-      (**plan written 2026-11-15, not started**: [for-direction-hoist-plan.md](for-direction-hoist-plan.md))
+      in the inner loop) **landed Round 113** (2026-11-15, [for-direction-hoist-plan.md](archive/for-direction-hoist-plan.md)):
+      inner `for j = 1 to 200` is 4 dispatches/iteration, `perf_stress` execute
+      11.17 → 10.06 ms (−10 %), baseline re-recorded (own commit)
 - [ ] **`t.n++` / `a[i]++` on member/index targets** (Round 96/97 deferral to
       the value-semantics round) — **plan written 2026-11-15, not started**:
       [member-index-incdec-plan.md](member-index-incdec-plan.md)
@@ -303,11 +304,12 @@ closing the **Q#**s its item points at:
 
 ## 7. Codegen follow-ups recorded by M3 / Phase 3 (no plan yet)
 
-- [ ] Hoist the `for` loop's direction re-test out of the back-edge (see §6 perf; recovers the
-      Round 60 +8.7 % A/B cost) — **plan written 2026-11-15, not started**:
-      [for-direction-hoist-plan.md](for-direction-hoist-plan.md)
+- [x] Hoist the `for` loop's direction re-test out of the back-edge (see §6 perf; recovers the
+      Round 60 +8.7 % A/B cost) — **landed 2026-11-15 (Round 113)**:
+      [for-direction-hoist-plan.md](archive/for-direction-hoist-plan.md) M1–M3
       (direction-specialized loop copies replace the run-once + shared-guard pair —
-      no body-copy growth; no opcode/`.qlc` change)
+      body copies unchanged; no opcode/`.qlc` change; `perf_stress` execute −10 %,
+      codegen budgets hello 214→183, perf_stress 563→185)
 - [x] `switch` case checks (`EQ` + `JMPIFTRUE`, `src/QLangCompiler.cpp:2941`) and `compileGotoIf`
       (`:2208`) → `eqf` + `je` / `tst` + `je`; each frees a temp but changes corpus shapes
       (landed with encoding-followups **P1**, Round 99: non-`in` cases and `gotoIf` comparisons

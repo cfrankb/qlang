@@ -1,3 +1,49 @@
+## Round 113 — 2026-11-15 — the `for`/`for-in` direction test leaves the back-edge: direction-specialized loop copies (for-direction-hoist plan M1–M3; recovers the Round 60 +8.7 %; plan `docs/plans/archive/for-direction-hoist-plan.md`)
+
+- **Codegen (`compileFor`).** Three buckets replace the run-once +
+  shared-guarded-copy pair: (1) foldable bounds + compile-time-known step
+  (extended to the implicit step, whose value is the natural direction) fully
+  resolve at compile time — the tight shape is `cmp`+`j*` / body /
+  `add r, ±1` / `jmp` with **no `tst` anywhere**; (2) runtime bounds + known
+  step sign compute the natural direction once, test it **once at loop
+  entry** (`tst`+`j*`), and enter one of two direction-specialized bounded
+  copies (the mismatch copy is the run-once body); (3) runtime step keeps the
+  old in-loop re-test verbatim (plan Q52). `correctDir`-vs-`step`-sign,
+  `step 0` (foldable bounds → infinite; runtime bounds → natural ±1) and the
+  `end == start` ⇒ dir −1 asymmetries are pinned by the 48-row + 1-throw
+  equivalence matrix, hand-written green on `b247fbf` **before** the lowering
+  (plan Q54 freeze) and unchanged after.
+- **Codegen (`compileForIn`).** Same buckets over `range(...)` with its
+  quirks pinned as-is: the implicit step is always `+1` (a descending range
+  without `step` runs the body once — now decided at compile time for foldable
+  bounds, at loop entry otherwise), `step 0` is the infinite copy for both
+  constant and runtime bounds (no bounds test emitted), and the Round 70
+  runtime-descending `step -1` regression
+  (`docs/bugs/resolved/for-in-runtime-descending-unpatched-jmp.md`) stays
+  green. 28-row + 3-throw `for-in` matrix.
+- **Hot loop.** The inner `for j = 1 to 200` of `perf_stress` drops from 8 to
+  **6 dispatches per iteration** (the in-loop direction `tst`+`je` pair is
+  gone; pre-S1 was 7). `codegen_size` budgets: `hello.ql` **214 → 183**,
+  `perf_stress.ql` **563 → 185** (foldable-bounds loops lose the runtime
+  step/zero/direction machinery entirely); `money` 151 and `cast` 189
+  unchanged. `codec`'s for-loop immediate pin retargeted to the new shape
+  (`mov` bounds + in-place `add r, 1`; the old `mov 0`/`mov -1` temporaries no
+  longer exist — the pool stays Int-free).
+- **Perf.** `perf_stress` execute **11.171 → 10.057 ms (−10 %)**, compile
+  **0.164 → 0.085 ms (−48 %)** — recovers/exceeds the recorded Round 60
+  +8.7 % (A/B on this host: HEAD median 11.03 ms vs worktree 10.03 ms).
+  `tests/perf/baseline.json` re-recorded for the `perf_stress` stages only —
+  deliberate act, **own commit**.
+- **Guards.** `spec_check2` **616 → 668 → 702** (M1: 48-case `for`
+  equivalence matrix + the `step 0` infinite-loop pin + 3 `tst`-count shape
+  pins; M2: 28-case `for-in` matrix + 3 infinite pins + 3 shape pins — the
+  shape pins compile through the `qlcc` path and count `Opcode::TST` in the
+  decoded entry function). ctest **71/71** green.
+- **Filed, not fixed (plan Q54):** `docs/bugs/nested-loop-break-continue-hijack.md`
+  — an enclosing loop's BREAK/CONTINUE scan re-patches an inner loop's
+  already-patched jumps (nested `break` exits both loops); reproduces
+  identically on `b247fbf` and this tree.
+
 ## Round 112 — 2026-11-15 — `copy` parameter specifier: `def f(copy x)` deep-copies the argument at call entry (deferred-copy plan **Phase 2** — the last open phase, plan now fully landed and archived; spec `docs/spec/06-functions.md` `### copy parameters`)
 
 - **Language.** A contextual keyword in a parameter list — the identifier `copy` followed

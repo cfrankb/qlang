@@ -1,6 +1,8 @@
 # Plan: hoist the `for` loop direction test out of the back-edge (perf codegen round)
 
-Status: **plan written 2026-11-15 — not started.** Promoted from
+Status: **fully landed 2026-11-15 (Round 113)** — M1 (compileFor buckets),
+M2 (compileForIn), M3 (perf −10 % recovered, baseline re-recorded, budgets
+tightened, compliance recorded). Promoted from
 `docs/plans/todo.md` §7 ("Hoist the `for` loop's direction re-test out of the
 back-edge; recovers the Round 60 +8.7 % A/B cost") and the §6 Round 93 note
 ("the loop-direction hoist … stays **parked** — land it as a codegen round of

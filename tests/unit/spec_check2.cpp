@@ -2,6 +2,8 @@
 #include <initializer_list>
 #include <iostream>
 #include <string>
+#include <unordered_set>
+#include <vector>
 #include "qlang/QLangCompiler.h"
 #include "qlang/QLangContext.h"
 #include "qlang/QLangErrors.h"
@@ -100,6 +102,28 @@ static void expectMsgImpl(const std::string &name, const std::string &src,
       fails++;                                                             \
     }                                                                      \
   } while (0)
+
+// Compile `src` the way `qlcc` does and count the instruction stream of the
+// entry function carrying `op` (loop-shape pins, plan
+// docs/plans/archive/for-direction-hoist-plan.md M1: the `for` direction test must
+// leave the back-edge). Compile path mirrors codegen_size_check's measure().
+static int countEntryOpcode(const std::string &src, Opcode op) {
+  QLangContext ctx;
+  std::vector<StmtPtr> program = ctx.parse(src);
+  QLangCompiler compiler(std::move(program), &ctx);
+  compiler.addExternalConsts({});
+  std::unordered_set<std::string> nativeNames;
+  for (const auto &[name, f] : ctx.nativeFuncs()) nativeNames.insert(name);
+  compiler.addExternalFuncs(nativeNames);
+  compiler.addModules(ctx.modules());
+  CompiledProgram compiled = compiler.compile();
+  std::vector<RawInstr> raw;
+  decodeRawStream(compiled.functions[0], raw);
+  int n = 0;
+  for (const auto &r : raw)
+    if (r.op == op) n++;
+  return n;
+}
 
 int main() {
   // -- const (spec 53-58, 119-120) --
@@ -680,6 +704,262 @@ int main() {
   expectStr("for step continue",
     "local s = \"\"\nfor x = 0 to 8 step 2 { if x == 4 { continue } s = s + toStr(x) + \",\" }\nlocal r = s;",
     "r", "0,2,6,8,");
+
+  // -- for direction-hoist equivalence matrix (plan
+  // docs/plans/archive/for-direction-hoist-plan.md M1; Q54 semantics freeze) --
+  // Every shape the re-lowering touches: {const, runtime} bounds x
+  // {none, +k, -k, 0, runtime} step x {asc, desc, start == end}, plus
+  // break/continue in every body copy. All green on HEAD before the
+  // lowering and unchanged after it. The pinned asymmetries are spec'd
+  // semantics: literal `step 0` with foldable bounds is infinite, with
+  // runtime bounds it normalizes to the natural unit step; a no-step loop
+  // takes its step from the natural direction.
+  {
+    struct ForCase {
+      const char *name;
+      const char *pre;  // bindings for runtime bounds / runtime step
+      const char *loop; // the `for ...` header
+      const char *body; // body block + result line
+      const char *expect;
+    };
+    static const char kB1[] =
+        " { s = s + toStr(x) + \",\" }\nlocal r = s;";
+    static const char kBreak3[] =
+        " { if x == 3 { break } s = s + toStr(x) + \",\" }\nlocal r = s;";
+    static const char kCont3[] =
+        " { if x == 3 { continue } s = s + toStr(x) + \",\" }\nlocal r = s;";
+    static const char kCont1[] =
+        " { if x == 1 { continue } s = s + toStr(x) + \",\" }\nlocal r = s;";
+    static const char kBreak1[] =
+        " { if x == 1 { break } s = s + toStr(x) + \",\" }\nlocal r = s;";
+    static const char kAsc2[] = "local lo = 1\nlocal hi = 5\n";
+    static const char kDesc2[] = "local lo = 5\nlocal hi = 1\n";
+    static const char kEq2[] = "local lo = 3\nlocal hi = 3\n";
+    const ForCase kMatrix[] = {
+        // constant bounds, no step (step := natural direction)
+        {"for m const nostep asc", "", "for x = 1 to 5", kB1, "1,2,3,4,5,"},
+        {"for m const nostep desc", "", "for x = 5 to 1", kB1, "5,4,3,2,1,"},
+        {"for m const nostep eq", "", "for x = 3 to 3", kB1, "3,"},
+        // constant bounds, literal step
+        {"for m const step2 asc", "", "for x = 1 to 5 step 2", kB1, "1,3,5,"},
+        {"for m const step-2 desc", "", "for x = 5 to 1 step -2", kB1,
+         "5,3,1,"},
+        {"for m const step-2 asc once", "", "for x = 1 to 5 step -2", kB1,
+         "1,"},
+        {"for m const step2 desc once", "", "for x = 5 to 1 step 2", kB1,
+         "5,"},
+        {"for m const step2 eq once", "", "for x = 3 to 3 step 2", kB1, "3,"},
+        {"for m const step-2 eq", "", "for x = 3 to 3 step -2", kB1, "3,"},
+        // runtime bounds, no step
+        {"for m rt nostep asc", kAsc2, "for x = lo to hi", kB1,
+         "1,2,3,4,5,"},
+        {"for m rt nostep desc", kDesc2, "for x = lo to hi", kB1,
+         "5,4,3,2,1,"},
+        {"for m rt nostep eq", kEq2, "for x = lo to hi", kB1, "3,"},
+        // runtime bounds, literal step
+        {"for m rt step2 asc", kAsc2, "for x = lo to hi step 2", kB1,
+         "1,3,5,"},
+        {"for m rt step-2 desc", kDesc2, "for x = lo to hi step -2", kB1,
+         "5,3,1,"},
+        {"for m rt step-2 asc once", kAsc2, "for x = lo to hi step -2", kB1,
+         "1,"},
+        {"for m rt step2 desc once", kDesc2, "for x = lo to hi step 2", kB1,
+         "5,"},
+        {"for m rt step2 eq once", kEq2, "for x = lo to hi step 2", kB1, "3,"},
+        {"for m rt step-2 eq", kEq2, "for x = lo to hi step -2", kB1, "3,"},
+        // runtime bounds, literal step 0: normalizes to the natural unit step
+        {"for m rt step0 asc norm", kAsc2, "for x = lo to hi step 0", kB1,
+         "1,2,3,4,5,"},
+        {"for m rt step0 desc norm", kDesc2, "for x = lo to hi step 0", kB1,
+         "5,4,3,2,1,"},
+        {"for m rt step0 eq norm", kEq2, "for x = lo to hi step 0", kB1, "3,"},
+        // runtime bounds, runtime step (bucket 3: unchanged lowering, still
+        // frozen here)
+        {"for m rtvar step2 asc", "local k = 2\nlocal lo = 1\nlocal hi = 5\n",
+         "for x = lo to hi step k", kB1, "1,3,5,"},
+        {"for m rtvar step-2 desc",
+         "local k = -2\nlocal lo = 5\nlocal hi = 1\n",
+         "for x = lo to hi step k", kB1, "5,3,1,"},
+        {"for m rtvar step-2 asc once",
+         "local k = -2\nlocal lo = 1\nlocal hi = 5\n",
+         "for x = lo to hi step k", kB1, "1,"},
+        {"for m rtvar step2 desc once",
+         "local k = 2\nlocal lo = 5\nlocal hi = 1\n",
+         "for x = lo to hi step k", kB1, "5,"},
+        {"for m rtvar step0 asc norm",
+         "local k = 0\nlocal lo = 1\nlocal hi = 5\n",
+         "for x = lo to hi step k", kB1, "1,2,3,4,5,"},
+        {"for m rtvar step0 desc norm",
+         "local k = 0\nlocal lo = 5\nlocal hi = 1\n",
+         "for x = lo to hi step k", kB1, "5,4,3,2,1,"},
+        {"for m rtvar step0 eq norm",
+         "local k = 0\nlocal lo = 3\nlocal hi = 3\n",
+         "for x = lo to hi step k", kB1, "3,"},
+        {"for m rtvar step2 eq once",
+         "local k = 2\nlocal lo = 3\nlocal hi = 3\n",
+         "for x = lo to hi step k", kB1, "3,"},
+        {"for m rtvar step-2 eq",
+         "local k = -2\nlocal lo = 3\nlocal hi = 3\n",
+         "for x = lo to hi step k", kB1, "3,"},
+        // constant bounds, runtime step (runtime path with foldable bounds)
+        {"for m constrt step2 asc", "local k = 2\n", "for x = 1 to 5 step k",
+         kB1, "1,3,5,"},
+        {"for m constrt step-2 desc", "local k = -2\n",
+         "for x = 5 to 1 step k", kB1, "5,3,1,"},
+        {"for m constrt step0 norm asc", "local k = 0\n",
+         "for x = 1 to 5 step k", kB1, "1,2,3,4,5,"},
+        // break/continue in each body copy
+        {"for m const asc break", "", "for x = 1 to 5", kBreak3, "1,2,"},
+        {"for m const asc continue", "", "for x = 1 to 5", kCont3,
+         "1,2,4,5,"},
+        {"for m const desc break", "", "for x = 5 to 1", kBreak3, "5,4,"},
+        {"for m const desc continue", "", "for x = 5 to 1", kCont3,
+         "5,4,2,1,"},
+        {"for m const step2 continue", "", "for x = 1 to 5 step 2", kCont3,
+         "1,5,"},
+        {"for m const runonce continue", "", "for x = 1 to 5 step -2", kCont1,
+         ""},
+        {"for m const runonce break", "", "for x = 1 to 5 step -2", kBreak1,
+         ""},
+        {"for m rt asc break", kAsc2, "for x = lo to hi", kBreak3, "1,2,"},
+        {"for m rt asc continue", kAsc2, "for x = lo to hi", kCont3,
+         "1,2,4,5,"},
+        {"for m rt desc break", kDesc2, "for x = lo to hi", kBreak3, "5,4,"},
+        {"for m rt desc continue", kDesc2, "for x = lo to hi", kCont3,
+         "5,4,2,1,"},
+        {"for m rt runonce continue", kAsc2, "for x = lo to hi step -2",
+         kCont1, ""},
+        {"for m rt step0 desc break", kDesc2, "for x = lo to hi step 0",
+         kBreak3, "5,4,"},
+        {"for m rtvar step2 continue",
+         "local k = 2\nlocal lo = 1\nlocal hi = 5\n",
+         "for x = lo to hi step k", kCont3, "1,5,"},
+        {"for m rtvar step0 desc continue",
+         "local k = 0\nlocal lo = 5\nlocal hi = 1\n",
+         "for x = lo to hi step k", kCont3, "5,4,2,1,"},
+    };
+    for (const ForCase &c : kMatrix)
+      expectStrImpl(c.name,
+                    std::string(c.pre) + "local s = \"\"\n" + c.loop + c.body,
+                    "r", c.expect, __LINE__);
+    // literal `step 0` with foldable bounds stays the infinite loop the
+    // watchdog catches (asymmetric with the runtime-bounds normalization).
+    expectThrowImpl("for m const step0 eq infinite",
+                    "local s = \"\"\nfor x = 3 to 3 step 0 { s = s + \",\" }",
+                    __LINE__);
+
+    // -- for-in matrix (plan M2): the same freeze over `range(...)` forms.
+    // for-in quirks pinned as-is: the implicit step is always +1 (a
+    // descending range without `step` runs the body ONCE), and `step 0` is
+    // infinite for both constant and runtime bounds (unlike plain `for`).
+    static const char kInB[] =
+        " { s = s + toStr(x) + \",\" }\nlocal r = s;";
+    static const char kInBreak3[] =
+        " { if x == 3 { break } s = s + toStr(x) + \",\" }\nlocal r = s;";
+    static const char kInCont3[] =
+        " { if x == 3 { continue } s = s + toStr(x) + \",\" }\nlocal r = s;";
+    static const char kInCont1[] =
+        " { if x == 1 { continue } s = s + toStr(x) + \",\" }\nlocal r = s;";
+    const ForCase kInMatrix[] = {
+        {"for m in const nostep asc", "", "for x in range(1, 5)", kInB,
+         "1,2,3,4,5,"},
+        {"for m in const nostep desc", "", "for x in range(5, 1)", kInB, "5,"},
+        {"for m in const nostep eq", "", "for x in range(3, 3)", kInB, "3,"},
+        {"for m in const step2 asc", "", "for x in range(1, 5) step 2", kInB,
+         "1,3,5,"},
+        {"for m in const step-2 desc", "", "for x in range(5, 1) step -2",
+         kInB, "5,3,1,"},
+        {"for m in const step-2 asc once", "", "for x in range(1, 5) step -2",
+         kInB, "1,"},
+        {"for m in const step2 desc once", "", "for x in range(5, 1) step 2",
+         kInB, "5,"},
+        {"for m in const step2 eq once", "", "for x in range(3, 3) step 2",
+         kInB, "3,"},
+        {"for m in const step-2 eq", "", "for x in range(3, 3) step -2", kInB,
+         "3,"},
+        {"for m in rt nostep asc", kAsc2, "for x in range(lo, hi)", kInB,
+         "1,2,3,4,5,"},
+        {"for m in rt nostep desc", kDesc2, "for x in range(lo, hi)", kInB,
+         "5,"},
+        {"for m in rt nostep eq", kEq2, "for x in range(lo, hi)", kInB, "3,"},
+        {"for m in rt step2 asc", kAsc2, "for x in range(lo, hi) step 2", kInB,
+         "1,3,5,"},
+        {"for m in rt step-1 desc", kDesc2, "for x in range(lo, hi) step -1",
+         kInB, "5,4,3,2,1,"},
+        {"for m in rt step-2 desc", kDesc2, "for x in range(lo, hi) step -2",
+         kInB, "5,3,1,"},
+        {"for m in rt step-2 asc once", kAsc2, "for x in range(lo, hi) step -2",
+         kInB, "1,"},
+        {"for m in rt step2 desc once", kDesc2, "for x in range(lo, hi) step 2",
+         kInB, "5,"},
+        {"for m in rt step2 eq once", kEq2, "for x in range(lo, hi) step 2",
+         kInB, "3,"},
+        {"for m in rt step-2 eq", kEq2, "for x in range(lo, hi) step -2", kInB,
+         "3,"},
+        {"for m in const nostep break", "", "for x in range(1, 5)", kInBreak3,
+         "1,2,"},
+        {"for m in const step-2 desc continue", "", "for x in range(5, 1) step -2",
+         kInCont3, "5,1,"},
+        {"for m in rt step-1 desc continue", kDesc2,
+         "for x in range(lo, hi) step -1", kInCont3, "5,4,2,1,"},
+        {"for m in rt step-2 desc break", kDesc2,
+         "for x in range(lo, hi) step -2", kInBreak3, "5,"},
+        {"for m in rt step-2 asc continue", kAsc2,
+         "for x in range(lo, hi) step -2", kInCont1, ""},
+        {"for m in rtvar step2 asc", "local k = 2\nlocal lo = 1\nlocal hi = 5\n",
+         "for x in range(lo, hi) step k", kInB, "1,3,5,"},
+        {"for m in rtvar step-2 desc",
+         "local k = -2\nlocal lo = 5\nlocal hi = 1\n",
+         "for x in range(lo, hi) step k", kInB, "5,3,1,"},
+        {"for m in rtvar step2 continue",
+         "local k = 2\nlocal lo = 1\nlocal hi = 5\n",
+         "for x in range(lo, hi) step k", kInCont3, "1,5,"},
+        {"for m in const step0 break", "", "for x in range(1, 5) step 0",
+         " { break }\nlocal r = s;", ""},
+    };
+    for (const ForCase &c : kInMatrix)
+      expectStrImpl(c.name,
+                    std::string(c.pre) + "local s = \"\"\n" + c.loop + c.body,
+                    "r", c.expect, __LINE__);
+    // `step 0` is infinite for for-in with constant AND runtime bounds
+    // (no normalization to a natural step, unlike plain `for`).
+    expectThrowImpl("for m in const step0 infinite",
+                    "local s = \"\"\nfor x in range(3, 3) step 0 { s = s + \",\" }",
+                    __LINE__);
+    expectThrowImpl("for m in rt step0 infinite",
+                    std::string(kAsc2) + "local s = \"\"\n" +
+                    "for x in range(lo, hi) step 0 { s = s + \",\" }",
+                    __LINE__);
+    expectThrowImpl("for m in rtvar step0 infinite",
+                    "local k = 0\nlocal lo = 1\nlocal hi = 5\nlocal s = \"\"\n"
+                    "for x in range(lo, hi) step k { s = s + \",\" }",
+                    __LINE__);
+  }
+
+  // Shape pins (plan docs/plans/archive/for-direction-hoist-plan.md M1): the
+  // loop-invariant direction test must not live inside the loop. The
+  // constant-bounds no-step loop is the fully-resolved tight shape: no
+  // `tst` anywhere in the entry function. The runtime-bounds known-sign
+  // shapes test the direction exactly once at loop entry: one `tst` total.
+  expectTrue("for shape const nostep: no `tst` in the entry function",
+             countEntryOpcode("local s = \"\"\nfor x = 1 to 3 { s = s + toStr(x) }\nlocal r = s;",
+                              Opcode::TST) == 0);
+  expectTrue("for shape rt nostep: direction tested once (one `tst`)",
+             countEntryOpcode("local n = 3\nlocal s = \"\"\nfor x = 1 to n { s = s + toStr(x) }\nlocal r = s;",
+                              Opcode::TST) == 1);
+  expectTrue("for shape rt literal step: direction tested once (one `tst`)",
+             countEntryOpcode("local n = 5\nlocal s = \"\"\nfor x = 1 to n step 2 { s = s + toStr(x) }\nlocal r = s;",
+                              Opcode::TST) == 1);
+  // Same pins for `for ... in range(...)` (plan M2).
+  expectTrue("for-in shape const bounds: no `tst` in the entry function",
+             countEntryOpcode("local s = \"\"\nfor x in range(1, 3) { s = s + toStr(x) }\nlocal r = s;",
+                              Opcode::TST) == 0);
+  expectTrue("for-in shape rt nostep: direction tested once (one `tst`)",
+             countEntryOpcode("local n = 3\nlocal s = \"\"\nfor x in range(1, n) { s = s + toStr(x) }\nlocal r = s;",
+                              Opcode::TST) == 1);
+  expectTrue("for-in shape rt literal step: direction tested once (one `tst`)",
+             countEntryOpcode("local n = 5\nlocal s = \"\"\nfor x in range(1, n) step 2 { s = s + toStr(x) }\nlocal r = s;",
+                              Opcode::TST) == 1);
 
   // -- Phase 1.4: closed field set (class instances reject undeclared fields) --
   expectVal("class declared field set/get",

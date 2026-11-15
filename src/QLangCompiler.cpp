@@ -2728,9 +2728,17 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
                            ? ((endFold.value() > startFold.value()) ? 1 : -1)
                            : 0;
 
-  if (hasStep && stepVal && boundsFoldable) {
-    // Constant step + constant bounds: fully resolved at compile time.
-    int64_t sv = *stepVal;
+  // The step's sign is known at compile time for an explicit literal step
+  // and also for no step at all: a `for` without a step advances by its
+  // natural direction (the old runtime path's `stepReg = dirReg` rule), and
+  // on the runtime-bounds path even a literal `step 0` normalizes to it.
+  const bool knownStep = !hasStep || stepVal.has_value();
+
+  if (boundsFoldable && knownStep) {
+    // Constant bounds + compile-time step (or none): fully resolved at
+    // compile time. The implicit step is the natural direction itself:
+    // never 0, never the wrong sign.
+    int64_t sv = hasStep ? *stepVal : correctDir;
     if (sv == 0) {
       // step 0 -> infinite loop, x frozen at start.
       m_loops.push_back({0, 0});
@@ -2764,8 +2772,11 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
     } else {
       // Guard loop in the natural direction with the user's step.
       m_loops.push_back({0, 0});
-      int stepReg = tmpRegister();
-      compileExpr(s->stepExpr, stepReg);
+      int stepReg = -1;
+      if (hasStep) {
+        stepReg = tmpRegister();
+        compileExpr(s->stepExpr, stepReg);
+      }
       int guardLabel = static_cast<int>(m_emitter.size());
       // QLang ranges are always inclusive: forward LE (x <= end),
       // backward GE (x >= end). Int-vs-Int, so fused to cmp+j* (SPEC
@@ -2777,7 +2788,11 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
         compileStmt(body);
       int bodyEnd = static_cast<int>(m_emitter.size());
       int incLabel = bodyEnd;
-      emit(Opcode::ADD, x, x, stepReg);
+      if (hasStep)
+        emit(Opcode::ADD, x, x, stepReg);
+      else
+        emitImmI(Opcode::ADD, x,
+                 static_cast<int32_t>(sv)); // implicit step: ±1 in place
       emit(Opcode::JMP, guardLabel);
       int exitLabel = static_cast<int>(m_emitter.size());
       for (int j = bodyStart; j < bodyEnd; j++) {
@@ -2788,8 +2803,114 @@ void QLangCompiler::compileFor(const StmtPtr &s) {
       m_emitter.patchJump(jumpFalseIdx, exitLabel);
       m_loops.pop_back();
     }
+  } else if (knownStep) {
+    // Runtime bounds, step sign known at compile time (plan
+    // docs/plans/archive/for-direction-hoist-plan.md): the loop's natural direction
+    // is computed once, tested ONCE at loop entry, and the entry jump enters
+    // one of two direction-specialized copies. Each copy is the tight
+    // shape — fused CMP+j* guard, body, ADD, back-edge JMP — so the
+    // per-iteration direction `tst` is gone. The body-copy count is
+    // unchanged from the shared-guarded-copy + run-once pair this replaces:
+    // an implicit (or zero-normalized) step gets two bounded copies — its
+    // sign always matches the natural direction, so run-once is
+    // unreachable — and a literal non-zero step gets the bounded copy for
+    // the matching direction plus the run-once copy for the mismatch.
+    m_loops.push_back({0, 0});
+
+    const int64_t sv = hasStep ? *stepVal : 0; // 0: step := natural unit dir
+    int stepReg = -1;
+    if (sv != 0) {
+      stepReg = tmpRegister();
+      compileExpr(s->stepExpr, stepReg);
+    }
+    int zeroReg = tmpRegister();
+    emitImmI(Opcode::MOV, zeroReg, 0);
+    int subReg = tmpRegister();
+    emit(Opcode::SUB, subReg, endReg, startReg);
+    int posReg = tmpRegister(); // sign(end - start): the natural direction
+    emit(Opcode::GT, posReg, subReg, zeroReg);
+
+    // The single direction test: the entry jump enters the matching-
+    // direction copy, the mismatching copy is the fall-through.
+    int entryIdx =
+        (sv >= 0) ? emitJumpIfTrue(posReg) : emitJumpIfFalse(posReg);
+
+    // Fall-through copy: the run-once body (a literal non-zero step points
+    // the wrong way) or, for the natural unit step, the bounded backward
+    // copy (posReg false means a descending loop).
+    int runOnceJmp = -1, roStart = -1, roEnd = -1;
+    int backGuard = -1, backExitIdx = -1, backStart = -1, backEnd = -1;
+    if (sv != 0) {
+      emit(Opcode::MOV, x, startReg);
+      roStart = static_cast<int>(m_emitter.size());
+      for (auto &body : s->body)
+        compileStmt(body);
+      roEnd = static_cast<int>(m_emitter.size());
+      runOnceJmp = static_cast<int>(m_emitter.size());
+      emit(Opcode::JMP, 0); // patched to loopExit below
+    } else {
+      // Bounded backward copy: inclusive `to` bound -> GE guard, -1 step.
+      emit(Opcode::MOV, x, startReg);
+      backGuard = static_cast<int>(m_emitter.size());
+      // Guards are Int-vs-Int: fused to cmp+j* (SPEC §bytecodes: alternate
+      // conditional jump); the helper returns the jump's index.
+      backExitIdx = emitCmpJumpFalse(Opcode::GE, x, endReg);
+      backStart = static_cast<int>(m_emitter.size());
+      for (auto &body : s->body)
+        compileStmt(body);
+      backEnd = static_cast<int>(m_emitter.size());
+      emitImmI(Opcode::ADD, x, -1);
+      emit(Opcode::JMP, backGuard);
+    }
+
+    // The entry jump's target: the bounded copy in the tested direction
+    // (sv >= 0 picks the forward LE guard stepping +1 / sv, sv < 0 the
+    // backward GE guard stepping sv).
+    emit(Opcode::MOV, x, startReg);
+    int guardLabel = static_cast<int>(m_emitter.size());
+    int guardExitIdx =
+        emitCmpJumpFalse(sv < 0 ? Opcode::GE : Opcode::LE, x, endReg);
+    int bodyStart = static_cast<int>(m_emitter.size());
+    for (auto &body : s->body)
+      compileStmt(body);
+    int bodyEnd = static_cast<int>(m_emitter.size());
+    if (sv == 0)
+      emitImmI(Opcode::ADD, x, 1);
+    else
+      emit(Opcode::ADD, x, x, stepReg);
+    emit(Opcode::JMP, guardLabel);
+    int loopExit = static_cast<int>(m_emitter.size());
+
+    // Patch the copies. In a bounded copy `continue` still steps (the ADD
+    // sits at bodyEnd); in the run-once copy it leaves the loop.
+    m_emitter.patchJump(entryIdx, guardLabel);
+    m_emitter.patchJump(guardExitIdx, loopExit);
+    for (int j = bodyStart; j < bodyEnd; j++) {
+      auto &ci = m_emitter.raw[j];
+      if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, bodyEnd);
+      else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
+    }
+    if (backGuard >= 0) {
+      m_emitter.patchJump(backExitIdx, loopExit);
+      for (int j = backStart; j < backEnd; j++) {
+        auto &ci = m_emitter.raw[j];
+        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, backEnd);
+        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
+      }
+    }
+    if (runOnceJmp >= 0) {
+      m_emitter.patchJump(runOnceJmp, loopExit);
+      for (int j = roStart; j < roEnd; j++) {
+        auto &ci = m_emitter.raw[j];
+        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, loopExit);
+        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
+      }
+    }
+    m_loops.pop_back();
   } else {
-    // Runtime path: variable step and/or variable bounds. The loop's natural
+    // Runtime step (bounds foldable or not — plan
+    // docs/plans/archive/for-direction-hoist-plan.md Q52 keeps the in-loop
+    // re-test for the step-sign-unknown shape). The loop's natural
     // direction is sign(end - start), computed at runtime. A zero step is
     // normalized to that direction's unit step (so a `step 0` loop advances,
     // matching the spec's for-step semantics). The user step's sign then
@@ -2935,8 +3056,13 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
                              ? ((endFold.value() > startFold.value()) ? 1 : -1)
                              : 0;
 
-    if (hasStep && stepVal && boundsFoldable) {
-      int64_t sv = *stepVal;
+    // The step's sign is known at compile time for an explicit literal step
+    // and for no step at all (for-in's implicit step is always +1 — its
+    // quirk: a descending range without `step` runs the body once).
+    const bool knownStep = !hasStep || stepVal.has_value();
+
+    if (boundsFoldable && knownStep) {
+      int64_t sv = hasStep ? *stepVal : 1; // implicit step: always +1
       if (sv == 0) {
         m_loops.push_back({0, 0});
         int bodyStart = static_cast<int>(m_emitter.size());
@@ -2967,8 +3093,11 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
         m_loops.pop_back();
       } else {
         m_loops.push_back({0, 0});
-        int stepReg = tmpRegister();
-        compileExpr(s->stepExpr, stepReg);
+        int stepReg = -1;
+        if (hasStep) {
+          stepReg = tmpRegister();
+          compileExpr(s->stepExpr, stepReg);
+        }
         int guardLabel = static_cast<int>(m_emitter.size());
         // Int-vs-Int range guard: fused to cmp+j* (SPEC §bytecodes).
         int jumpFalseIdx =
@@ -2979,7 +3108,10 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
           compileStmt(body);
         int bodyEnd = static_cast<int>(m_emitter.size());
         int incLabel = bodyEnd;
-        emit(Opcode::ADD, x, x, stepReg);
+        if (hasStep)
+          emit(Opcode::ADD, x, x, stepReg);
+        else
+          emitImmI(Opcode::ADD, x, 1); // implicit step: +1 in place
         emit(Opcode::JMP, guardLabel);           // loop back to the guard
         int exitLabel = static_cast<int>(m_emitter.size());
         for (int j = bodyStart; j < bodyEnd; j++) {
@@ -2990,6 +3122,83 @@ void QLangCompiler::compileForIn(const StmtPtr &s) {
         m_emitter.patchJump(jumpFalseIdx, exitLabel);
         m_loops.pop_back();
       }
+    } else if (knownStep) {
+      // Runtime bounds, step sign known at compile time (plan
+      // docs/plans/archive/for-direction-hoist-plan.md M2): the natural direction is
+      // computed and tested ONCE at loop entry; the entry jump enters the
+      // direction-specialized bounded copy and the fall-through is the
+      // run-once copy (for-in's implicit +1 step makes the descending case
+      // run-once — the pinned quirk). The guarded loop's per-iteration
+      // direction `tst` is gone. Literal `step 0` stays the infinite copy
+      // (no bounds test at all), matching the old runtime path.
+      m_loops.push_back({0, 0});
+      const int64_t sv = hasStep ? *stepVal : 1; // implicit step: +1
+      int stepReg = tmpRegister();
+      if (hasStep)
+        compileExpr(s->stepExpr, stepReg);
+      else
+        emitImmI(Opcode::MOV, stepReg, 1);
+      if (sv == 0) {
+        // step == 0 -> infinite loop: x advances forever, no guard.
+        emit(Opcode::MOV, x, startReg);
+        int bodyStart = static_cast<int>(m_emitter.size());
+        for (auto &body : s->body)
+          compileStmt(body);
+        int bodyEnd = static_cast<int>(m_emitter.size());
+        emit(Opcode::ADD, x, x, stepReg);
+        emit(Opcode::JMP, bodyStart);
+        int exitLabel = static_cast<int>(m_emitter.size());
+        for (int j = bodyStart; j < bodyEnd; j++) {
+          auto &ci = m_emitter.raw[j];
+          if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, bodyEnd);
+          else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, exitLabel);
+        }
+        m_loops.pop_back();
+        popBlockScope();
+        return;
+      }
+      int zeroReg = tmpRegister();
+      emitImmI(Opcode::MOV, zeroReg, 0);
+      int subReg = tmpRegister();
+      emit(Opcode::SUB, subReg, endReg, startReg);
+      int posReg = tmpRegister(); // sign(end - start): the natural direction
+      emit(Opcode::GT, posReg, subReg, zeroReg);
+      // The single direction test: the entry jump enters the matching-
+      // direction bounded copy; the mismatch is the run-once fall-through.
+      int entryIdx =
+          (sv > 0) ? emitJumpIfTrue(posReg) : emitJumpIfFalse(posReg);
+      emit(Opcode::MOV, x, startReg);
+      int roStart = static_cast<int>(m_emitter.size());
+      for (auto &body : s->body)
+        compileStmt(body);
+      int roEnd = static_cast<int>(m_emitter.size());
+      int runOnceJmp = static_cast<int>(m_emitter.size());
+      emit(Opcode::JMP, 0); // patched to loopExit below
+      emit(Opcode::MOV, x, startReg);
+      int guardLabel = static_cast<int>(m_emitter.size());
+      int guardExitIdx =
+          emitCmpJumpFalse(sv < 0 ? Opcode::GE : Opcode::LE, x, endReg);
+      int bodyStart = static_cast<int>(m_emitter.size());
+      for (auto &body : s->body)
+        compileStmt(body);
+      int bodyEnd = static_cast<int>(m_emitter.size());
+      emit(Opcode::ADD, x, x, stepReg);
+      emit(Opcode::JMP, guardLabel);
+      int loopExit = static_cast<int>(m_emitter.size());
+      m_emitter.patchJump(entryIdx, guardLabel);
+      m_emitter.patchJump(guardExitIdx, loopExit);
+      for (int j = bodyStart; j < bodyEnd; j++) {
+        auto &ci = m_emitter.raw[j];
+        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, bodyEnd);
+        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
+      }
+      m_emitter.patchJump(runOnceJmp, loopExit);
+      for (int j = roStart; j < roEnd; j++) {
+        auto &ci = m_emitter.raw[j];
+        if (ci.op == Opcode::CONTINUE) m_emitter.patchJump(j, loopExit);
+        else if (ci.op == Opcode::BREAK) m_emitter.patchJump(j, loopExit);
+      }
+      m_loops.pop_back();
     } else {
       m_loops.push_back({0, 0});
       int stepReg = tmpRegister();
