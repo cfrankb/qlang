@@ -39,7 +39,17 @@ scripts behind `QLANG_WITH_QT`, spec draft `../spec/19-Qt6_integration.md` autho
       `CMakeLists.txt`, `include/qlang/QLangBytecode.h`, the three `tests/unit` headers).
       `docs/compliance/history.md` was **not** rewritten (append-only record).
 
-## 2. M4 — `$$` indirect access (A3) — next milestone
+## 2. C8 remainder — runtime module registry + name-based discovery — NEXT MILESTONE
+
+Plan exists: [runtime-module-registry-plan.md](runtime-module-registry-plan.md) — written
+2026-11-14, **not started**; ~2–3 days. The registry, discovery and the linker all landed
+(C8a/C8b Round 67/69, merge Round 64/65); only the run boundary is missing: `qlcc` is the
+sole driver that links, so `QLangContext::run()` executes an imported program **unlinked** —
+reproduced 2026-11-14 against `build/libqlang.a`: `callimport` aliases the defining module's
+function index into the entry's own table, so `f()` silently runs `g()`. M1 = auto-link in
+`run()` + `QLangContext::runProgram(const CompiledProgram&)` + the misfire repro as a pin.
+
+## 2b. M4 — `$$` indirect access (A3) — queued
 
 Design is settled by parent plan §7 (**Q6 closed**: the declaration bit is not encoded). The
 implementation plan now exists: [m4-indirect-plan.md](m4-indirect-plan.md) — written 2026-11-09,
