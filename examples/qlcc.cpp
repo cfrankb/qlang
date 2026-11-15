@@ -1030,41 +1030,65 @@ namespace
       return "eof";
     case T::Bool:
       return v.asInt() ? "true" : "false";
+    // Tagged integers (qla-followups M3): only `Int` prints bare — a bare
+    // decimal parses back as Int (or Qword when out of int32 range), so a
+    // folded enum member of a narrow base type, a Long or an in-range Qword
+    // must carry its type name (`byte=5`). `.qlc`-sourced pools can hold any
+    // tag, so the marker set covers the whole integer family.
     case T::Char:
-      return std::to_string(v.asChar());
+      return "char=" + std::to_string(v.asChar());
     case T::Byte:
-      return std::to_string(v.asByte());
+      return "byte=" + std::to_string(v.asByte());
     case T::Word:
-      return std::to_string(v.asWord());
+      return "word=" + std::to_string(v.asWord());
     case T::Short:
-      return std::to_string(v.asShort());
+      return "short=" + std::to_string(v.asShort());
     case T::Int:
       return std::to_string(v.asInt());
     case T::Unsigned:
-      return std::to_string(v.asUnsigned());
+      return "unsigned=" + std::to_string(v.asUnsigned());
     case T::Qword:
-      return std::to_string(v.asQword());
+      return "qword=" + std::to_string(v.asQword());
     case T::Long:
-      return std::to_string(v.asLong());
+      return "long=" + std::to_string(v.asLong());
     case T::Float:
     {
       char buf[32];
       std::snprintf(buf, sizeof buf, "%.17g", v.asFloat());
-      return buf;
+      std::string s = buf;
+      // An integral float prints without a decimal point ("3.0" -> "3"),
+      // which the parser would read back as an Int; force the point. inf
+      // and nan print as words and stay words.
+      if (s.find_first_of(".eEn") == std::string::npos &&
+          s.find_first_not_of("0123456789+-") == std::string::npos)
+        s += ".0";
+      return s;
     }
     case T::String:
       return quoteString(v.asString());
     case T::Blob:
-      return "<" + std::to_string(v.asBlob()->size()) + " bytes>";
+    {
+      // Bytes ride the listing as hex (M3): a size alone could never be
+      // reassembled, which is why the old `<N bytes>` print was refused.
+      static const char kHex[] = "0123456789abcdef";
+      std::string s = "<" + std::to_string(v.asBlob()->size()) + ": ";
+      for (const uint8_t b : *v.asBlob())
+      {
+        s += kHex[b >> 4];
+        s += kHex[b & 0xF];
+      }
+      return s + ">";
+    }
     case T::Array:
     case T::Set:
     {
       // No depth guard: a constant pool only ever holds compile-time
       // literals (and function closures), so no value here can contain
       // itself — and the .qla assembler needs nested containers printed in
-      // full to round-trip them.
-      std::string s = "[";
-      const auto &a = *v.asArray();
+      // full to round-trip them. Sets print `set[...]` so the tag survives.
+      const bool isSet = v.type() == T::Set;
+      std::string s = isSet ? "set[" : "[";
+      const auto &a = isSet ? *v.asSet() : *v.asArray();
       for (size_t i = 0; i < a.size(); i++)
       {
         if (i)
@@ -2101,12 +2125,12 @@ namespace
   }
 
   // One pool entry (or immediate value) as printed by valueText: nil / eof /
-  // true / false / decimal integer / %.17g float / quoted string / flat
-  // array / string-keyed table / function<N r...>. Integer tag follows the
-  // parser's own rule — int32-wide is Int, wider is Qword (after Phase 2 a
-  // literal Unsigned is an immediate form, never a pool entry; a Long or
-  // negative-below-int32 pool entry does not exist today, and printing has
-  // no tag to restore one with).
+  // true / false / decimal integer / tagged integer (`<type>=<dec>`, M3) /
+  // %.17g float (integral values carry a forced '.') / quoted string / nested
+  // array or `set[...]` / string-keyed table / `<N: hexbytes>` blob /
+  // function<N r...>. A bare decimal follows the parser's own rule —
+  // int32-wide is Int, wider is Qword — which is what makes the tags needed
+  // for every other integer tag a pool entry can carry.
   bool parsePoolValue(const std::string &s, size_t &pos, QLangValue &out,
                       std::string &err)
   {
@@ -2183,15 +2207,18 @@ namespace
       out = QLangValue::String(std::move(v));
       return true;
     }
-    if (c == '[')
+    // A Set pool entry prints `set[...]` (M3); elements parse like an Array's.
+    const bool isSet = s.compare(pos, 4, "set[") == 0;
+    if (isSet || c == '[')
     {
-      pos++;
+      pos += isSet ? 4 : 1;
       std::vector<QLangValue> elems;
       skip();
       if (pos < s.size() && s[pos] == ']')
       {
         pos++;
-        out = QLangValue::Array(std::move(elems));
+        out = isSet ? QLangValue::Set(std::move(elems))
+                    : QLangValue::Array(std::move(elems));
         return true;
       }
       for (;;)
@@ -2214,7 +2241,8 @@ namespace
         err = "expected ',' or ']' in array";
         return false;
       }
-      out = QLangValue::Array(std::move(elems));
+      out = isSet ? QLangValue::Set(std::move(elems))
+                  : QLangValue::Array(std::move(elems));
       return true;
     }
     if (c == '{')
@@ -2294,8 +2322,44 @@ namespace
     }
     if (c == '<')
     {
-      err = "a blob constant is printed as a size only; it cannot be reassembled";
-      return false;
+      // A blob prints `<N: hexbytes>` (M3): byte count, ": ", then 2*N hex
+      // digits. The old `<N bytes>` print is gone with the refusal it earned.
+      const size_t colon = s.find(": ", pos);
+      const size_t gt = s.find('>', pos);
+      char *end = nullptr;
+      if (colon == std::string::npos || gt == std::string::npos || gt < colon)
+      {
+        err = "malformed blob value";
+        return false;
+      }
+      const long n = std::strtol(s.c_str() + pos + 1, &end, 10);
+      if (n < 0 || end != s.c_str() + colon)
+      {
+        err = "bad blob byte count";
+        return false;
+      }
+      const std::string hex = s.substr(colon + 2, gt - colon - 2);
+      if (hex.size() != static_cast<size_t>(n) * 2)
+      {
+        err = "blob hex length does not match its byte count";
+        return false;
+      }
+      std::vector<uint8_t> bytes;
+      for (size_t i = 0; i < hex.size(); i += 2)
+      {
+        const std::string b = hex.substr(i, 2);
+        char *hend = nullptr;
+        const unsigned long x = std::strtoul(b.c_str(), &hend, 16);
+        if (hend != b.c_str() + 2)
+        {
+          err = "bad hex byte in blob";
+          return false;
+        }
+        bytes.push_back(static_cast<uint8_t>(x));
+      }
+      pos = gt + 1;
+      out = QLangValue::Blob(std::move(bytes));
+      return true;
     }
     if (s.compare(pos, 3, "nil") == 0)
     {
@@ -2321,8 +2385,68 @@ namespace
       out = QLangValue::Bool(0);
       return true;
     }
+    // A tagged integer `<type>=<dec>` (M3): the print side tags every integer
+    // type except Int, whose bare decimal this branch already restores (with
+    // the out-of-int32-decimal-is-Qword rule for hand-written listings).
+    {
+      size_t eq = pos;
+      while (eq < s.size() && s[eq] >= 'a' && s[eq] <= 'z')
+        eq++;
+      if (eq > pos && eq < s.size() && s[eq] == '=')
+      {
+        const std::string tag = s.substr(pos, eq - pos);
+        using T = QLangValue::Type;
+        static const std::pair<const char *, T> kInts[] = {
+            {"char", T::Char},     {"byte", T::Byte},
+            {"word", T::Word},     {"short", T::Short},
+            {"int", T::Int},       {"unsigned", T::Unsigned},
+            {"qword", T::Qword},   {"long", T::Long}};
+        const auto *it = kInts;
+        while (it != kInts + 8 && tag != it->first)
+          it++;
+        if (it == kInts + 8)
+        {
+          err = "unknown value tag '" + tag + "'";
+          return false;
+        }
+        char *end = nullptr;
+        pos = eq + 1;
+        out = QLangValue();
+        if (it->second == T::Unsigned || it->second == T::Qword)
+        {
+          const unsigned long long u = std::strtoull(s.c_str() + pos, &end, 10);
+          if (end == s.c_str() + pos)
+          {
+            err = "malformed '" + tag + "' value";
+            return false;
+          }
+          out = it->second == T::Unsigned ? QLangValue::Unsigned(static_cast<uint32_t>(u))
+                                          : QLangValue::Qword(static_cast<uint64_t>(u));
+        }
+        else
+        {
+          const long long n = std::strtoll(s.c_str() + pos, &end, 10);
+          if (end == s.c_str() + pos)
+          {
+            err = "malformed '" + tag + "' value";
+            return false;
+          }
+          switch (it->second)
+          {
+          case T::Char: out = QLangValue::Char(static_cast<int8_t>(n)); break;
+          case T::Byte: out = QLangValue::Byte(static_cast<uint8_t>(n)); break;
+          case T::Word: out = QLangValue::Word(static_cast<uint16_t>(n)); break;
+          case T::Short: out = QLangValue::Short(static_cast<int16_t>(n)); break;
+          case T::Int: out = QLangValue::Int(static_cast<int32_t>(n)); break;
+          default: out = QLangValue::Long(static_cast<int64_t>(n)); break;
+          }
+        }
+        pos = static_cast<size_t>(end - s.c_str());
+        return true;
+      }
+    }
     // A number: valueText prints decimals (%.17g floats carry a '.', 'e' or
-    // 'E'; inf/nan print as words).
+    // 'E'; inf/nan print as words; integral floats print with a forced '.0').
     const size_t start = pos;
     size_t p = pos;
     if (p < s.size() && (s[p] == '-' || s[p] == '+'))

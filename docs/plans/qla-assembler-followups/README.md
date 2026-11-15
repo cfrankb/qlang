@@ -10,6 +10,19 @@ plus the guard test and tracking docs. No new files in `src/` beyond test/corpus
 
 ## M3 — pool tag fidelity (small; empties the "cannot round-trip" list)
 
+**LANDED 2026-11-15 (Round 109).** Empirical probes before code: the parent's sketch
+(`L<dec>`) under-scoped the problem — folded `enum` members of narrow base types
+(`enum E:byte { A }` → `{A: 0}` pool entry) and an integral float in a table literal
+(`{x = 3.0}` → `{x: 3}`) reassemble with wrong tags as **ordinary-script byte differences**,
+and a `Set` pool entry from `readQlc` **crashed** the disassembler (`asArray()` on a Set).
+Shipped grammar: only `Int` prints bare; all other integer types print `<type>=<dec>`
+(one uniform `name=` rule for the whole family beats seven ad-hoc prefixes); integral
+floats force `.0`; `set[...]` (crash fix via `asSet()`); blobs `<N: hexbytes>` replace the
+`<N bytes>` refusal. Parser inverses keep the bare-decimal hand-written rule (int32-wide
+Int, wider Qword). Proof: corpus `pool_constants.ql` (ctest entry 70; corpus now 30/35
+byte-identical, same 5 DEFERRED) + the hand-written `tags` fixture in `qla_roundtrip`
+(Set/Blob/typed-integer pool — the tags no `.ql` producer reaches). ctest **70/70**.
+
 Ambiguities in `valueText` (examples/qlcc.cpp ~l.1022) vs `parsePoolValue` (~l.2110), verified
 at HEAD:
 

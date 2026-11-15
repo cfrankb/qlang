@@ -231,6 +231,69 @@ void runScript(const std::string &qlcc, const std::string &dir,
   }
 }
 
+// The Set and Blob pool tags have no .ql producer (both are runtime values),
+// so the corpus cannot prove them. A hand-written listing rides in instead:
+// assembling it must land the exact tags and payloads in the image (M3).
+void checkTaggedPoolFixture(const std::string &qlcc, const std::string &dir) {
+  const std::string listing = dir + "/tags.qla";
+  {
+    std::ofstream out(listing);
+    out << "QLang disassembly (v1)\n"
+        << "registers: 2\n"
+        << "module: tags\n\n"
+        << "constants:\n"
+        << "    [0] <3: 00ff7f>\n"
+        << "    [1] set[1, 2]\n"
+        << "    [2] 3.0\n"
+        << "    [3] byte=200\n"
+        << "    [4] long=-4000000000\n"
+        << "    [5] unsigned=4000000000\n\n"
+        << "function #0 'main'\n"
+        << "  params: 0  registers: 2\n"
+        << "  code:\n"
+        << "  0000  mov          e=0x08, 00, pool[00]\n"
+        << "  0004  return       00\n";
+  }
+  const std::string rebuilt = dir + "/tags.qlc";
+  auto res = testcli::run(qlcc + " --assemble " + listing + " -o " + rebuilt);
+  if (res.code != 0) {
+    std::printf("FAIL tags: --assemble exited %d\n%s\n", res.code,
+                res.out.c_str());
+    gFailures++;
+    return;
+  }
+  CompiledProgram got;
+  std::string err;
+  if (!loadImage(rebuilt, got, err)) {
+    std::printf("FAIL tags: %s\n", err.c_str());
+    gFailures++;
+    return;
+  }
+  using T = QLangValue::Type;
+  const std::vector<T> wantTypes = {T::Blob, T::Set,       T::Float,
+                                    T::Byte, T::Long,      T::Unsigned};
+  check(got.constants.size() == wantTypes.size(),
+        "fixture pool size " + std::to_string(got.constants.size()), "tags");
+  for (size_t i = 0; i < std::min(got.constants.size(), wantTypes.size()); i++)
+    check(got.constants[i].type() == wantTypes[i],
+          "fixture constant [" + std::to_string(i) + "] is " +
+              got.constants[i].typeName() + ", want " +
+              QLangValue(wantTypes[i]).typeName(),
+          "tags");
+  if (got.constants.size() == wantTypes.size()) {
+    check(got.constants[0].asBlob()->size() == 3 &&
+          (*got.constants[0].asBlob())[1] == 0xFF, "blob payload", "tags");
+    check(got.constants[1].asSet()->size() == 2, "set payload", "tags");
+    check(got.constants[2].asFloat() == 3.0, "float payload", "tags");
+    check(got.constants[3].asByte() == 200, "byte payload", "tags");
+    check(got.constants[4].asLong() == -4000000000LL, "long payload", "tags");
+    check(got.constants[5].asUnsigned() == 4000000000u, "unsigned payload",
+          "tags");
+  }
+  if (gFailures == 0)
+    std::printf("ok tags (hand-written Set/Blob/typed-integer pool fixture)\n");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -254,6 +317,7 @@ int main(int argc, char **argv) {
     return 1;
   }
   for (const auto &s : scripts) runScript(argv[1], scratch, s);
+  checkTaggedPoolFixture(argv[1], scratch);
   if (gFailures != 0) {
     std::printf("%d round-trip failure(s)\n", gFailures);
     return 1;

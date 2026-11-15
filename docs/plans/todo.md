@@ -319,7 +319,9 @@ closing the **Q#**s its item points at:
       deferred with the module story). The recorded print losses closed with
       qla-assembler-followups **M1** (Round 108): the listing carries module/globals/
       natives/exports/locs/sigs and the guard compares whole files (non-linked scripts
-      rebuild byte-identical; the import table stays deferred with M2)
+      rebuild byte-identical; the import table stays deferred with M2). Pool tag fidelity
+      closed with **M3** (Round 109): tagged integers, forced-`.0` floats, `set[...]`,
+      hex blobs — 30/35 byte-identical + the tags fixture; M2 (import table) remains
 
 ## 8. Housekeeping
 

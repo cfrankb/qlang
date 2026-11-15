@@ -53,8 +53,13 @@ entries (`<slot> <name>`), `exports:` entries (`<kind> <name> <ref>
 [init-arity]`, kind one of `var` `const` `fn` `class`) and, per function, a
 `locs:` list (parallel `<line>:<col>` decimals) and a `sigs:` line
 (`name:annotation` per parameter, ` -> annotation` return; an annotation is
-`-` for undeclared, a builtin type name, `@Class`, or `t<ordinal>`).
-Assembling a compiler-written listing therefore rebuilds a byte-identical
+`-` for undeclared, a builtin type name, `@Class`, or `t<ordinal>`). Pool
+values carry their tags in the print: only an `int` integer prints as a bare
+decimal (a bare decimal out of the `int` range reads back as `qword`), every
+other integer type prints name-tagged (`byte=200`, `unsigned=4000000000`,
+`long=-4000000000`, `qword=`, `char=`, `word=`, `short=`), an integral float
+carries a forced decimal point (`3.0`), a set prints `set[...]` and a blob
+prints `<N: hexbytes>`. Assembling a compiler-written listing therefore rebuilds a byte-identical
 `.qlc` image for a program without an import table (the `qla_roundtrip` guard
 compares whole files). The sections are additive: a hand-written listing may
 omit them and assembles with the documented defaults (module `main`, `(0,0)`

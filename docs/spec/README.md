@@ -28,7 +28,7 @@ defined against C++20.
 | [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
 | [16-strict_typing.md](16-strict_typing.md) | strict typing | `81084dcccd977ebcdd7bdad5c3b815971fb25852f3f1bc2808f88a0dbfac4324` |
 | [17-signals.md](17-signals.md) | signals | `ede443b5ab88d73af308203e90444a56c0593e66459d8ed60d07f6fef0815e1d` |
-| [18-qlang-run.md](18-qlang-run.md) | qlcc driver | `3296e9af27cd760742b95431e10e5b838d6ef23413140b7795a051951fcfb691` |
+| [18-qlang-run.md](18-qlang-run.md) | qlcc driver | `356ba2f288a697da68f3a5c3209bf20a0bf637bf3396cbd159be882d4b87badc` |
 | [19-qt6_integration.md](19-qt6_integration.md) | Qt6 integration (**draft 2026-11-13, unimplemented** — `QLANG_WITH_QT`: meta-driven Q_OBJECT class imports, dialogs/widgets, QFile + `:/` resources, Qt signal/slot bridge, GUI-thread contract; plan `docs/plans/qt-bridge-plan.md`) | `81849ea558dc0211da72219b77b578b40fdcc7cfa711f32869e28871ceefc518` |
 
 Compliance: see [../compliance/README.md](../compliance/README.md).

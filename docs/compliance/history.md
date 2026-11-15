@@ -1,3 +1,32 @@
+## Round 109 — 2026-11-15 — pool tag fidelity in the `.qla` v1 listing: every pool value reassembles with its tag (qla-assembler-followups **M3**; plan `docs/plans/qla-assembler-followups/README.md`; spec `docs/spec/18-qlang-run.md` `--assemble`)
+
+- **Why.** M1 made `qla_roundtrip` byte-exact, but the pool print still lost tags a bare
+  decimal cannot carry. Reproduced at HEAD before touching code: a table literal with an
+  integral float (`{x = 3.0}` printed `{x: 3}`) and folded `enum` members of narrow base
+  types (`enum E:byte { A }` printed `{A: 0}`) reassembled with the wrong tags — whole-file
+  byte differences from ordinary two-line scripts; a `Set` pool entry arriving through
+  `readQlc` crashed the disassembler outright (`asArray()` on a Set), and a `Blob` printed
+  `<N bytes>` and was refused by the assembler.
+- **Print (`valueText`).** Only `Int` prints as a bare decimal; every other integer type is
+  name-tagged `<type>=<dec>` (`char=` `byte=` `word=` `short=` `unsigned=` `qword=` `long=`
+  — the plan sketch said `L<dec>`; the empirical producer set — folded enum base types —
+  needs the whole integer family, and one uniform `name=` rule is the smaller grammar).
+  An integral float carries a forced `.0` (`%.17g` + append; `inf`/`nan` stay words). Sets
+  print `set[...]` through `asSet()` (the crash fix); blobs print `<N: hexbytes>`.
+- **Parse (`parsePoolValue`).** Inverses: the tag table maps the name onto the typed
+  factory; `set[` parses like an array with the Set tag; the blob branch replaces the
+  refusal (`<N: hex>` with count/hex agreement checks); a bare decimal keeps the
+  hand-written-listing rule (int32-wide `Int`, wider `Qword`).
+- **Producers + guard.** New corpus script `tests/scripts/pool_constants.ql` (folded enum
+  members of `byte`/`unsigned`/`long`/`qword` bases, integral float in a table) — the tags
+  no `.ql` script can reach (Set, Blob) ride into `qla_roundtrip` as a hand-written
+  `tags` listing fixture asserting the assembled image's tags and payloads. Result:
+  **30/35 scripts byte-identical**, the same 5 module scripts DEFERRED (M2 scope), plus the
+  fixture. ctest **70/70** (the new script is entry 70; one `perf` flake on the first pass,
+  green on rerun — a timing gate, not behavior).
+- **Not done (recorded):** import table (M2), table keys containing `#`/`: ` stay a
+  declared limitation, `--asm-level >1` input symmetry (M4: never build it).
+
 ## Round 108 — 2026-11-15 — the `.qla` v1 listing carries its metadata sections: whole-`.qlc` byte equality for non-linked scripts (qla-assembler-followups **M1**; plan `docs/plans/qla-assembler-followups-plan.md`; spec `docs/spec/18-qlang-run.md` `--assemble`; docs `docs/SERIALIZATION.md` §4.4)
 
 - **Why.** Round 103's assembler compared only what the level-1 listing printed: the loc

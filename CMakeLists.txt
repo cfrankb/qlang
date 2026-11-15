@@ -429,6 +429,7 @@ set(QL_SCRIPTS
   ql_module_const.ql
   ql_star_import.ql
   perf_stress.ql
+  pool_constants.ql
   table_subscript.ql
   test_assert.ql
   test_assert2.ql
