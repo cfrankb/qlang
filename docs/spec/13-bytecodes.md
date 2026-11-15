@@ -103,6 +103,7 @@ Conventions:
 | JL | — | — | — | pc target | jump when LT only (`a < b`) |
 | JLE | — | — | — | pc target | jump when LT or EQ (`a <= b`) |
 | DEEPCOPY | dest reg | src reg | — | | `r[a] = deepcopy(r[b])` |
+| SHALLOWCOPY | dest reg | src reg | — | | `r[a] = shallowcopy(r[b])` |
 | INDEXGET | dest reg | base reg | key reg | | `r[a] = r[b][r[c]]`; array/table/object subscript |
 | INDEXPUT | base reg | key reg | value reg | | `r[a][r[b]] = r[c]`; array/table/object subscript |
 | EQF | left reg | right reg | — | | identity 66; `flags = (r[a] == right) ? EQ : none`; general types; right may be immediate/register/const |
@@ -513,6 +514,27 @@ the copy semantics (what is copied, what stays shared, how cycles behave) are
 defined in [06-functions.md](06-functions.md) `### deepcopy`.
 
 
+## OpCode shallowcopy
+
+Implemented 2026-11-15 (Phase 1 of
+[../plans/deferred-copy-semantics-and-class-export-plan.md](../plans/deferred-copy-semantics-and-class-export-plan.md),
+the F4 clone round).
+
+`shallowcopy a, b` — `r[a] = top-level copy of r[b]`. two register operands,
+no i32 slot — the same shape as `deepcopy` and `mov`. appended last in the
+opcode enum (identity 74) so existing `.qlc` opcode numbers stay valid; the
+`.qlc` format version is unchanged (v10) because no encoding rule moved.
+
+the compiler lowers a `shallowcopy(x)` call **directly** to this opcode, the
+same shape as `deepcopy`: argument into a temp compiled into `b`, result
+written straight into the destination register, no `call`, no argument
+staging.
+
+the copy semantics — top level fresh, elements / field values inserted
+as-is (shared by handle), `__deepcopy__` not consulted, blob shallow ≡ deep
+— are defined in [06-functions.md](06-functions.md) `### shallowcopy`.
+
+
 
 ## OpCode indexget
 
@@ -771,7 +793,7 @@ the merged program.
 one look up table is created from the `qlang` build in functions, in the library
 (`k_builtin_names[]` in `src/QLangBytecode.cpp`, declared in
 `include/qlang/QLangBytecode.h`). it is indexed by the `Builtin` enum order
-(`toStr` = 0 … `deepcopy` = 21), one name per id; a `static_assert` fails the
+(`toStr` = 0 … `shallowcopy` = 22), one name per id; a `static_assert` fails the
 build when the enum and the table drift apart.
 
 | api | answer |

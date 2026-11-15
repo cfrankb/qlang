@@ -688,6 +688,9 @@ namespace
     case Opcode::DEEPCOPY:
       ss << rn(ins.a) << " = deepcopy(" << right() << ")";
       break;
+    case Opcode::SHALLOWCOPY:
+      ss << rn(ins.a) << " = shallowcopy(" << right() << ")";
+      break;
     case Opcode::CONV:
       ss << rn(ins.a) << " = convert(" << right() << ", " << type(ins.c) << ")";
       break;

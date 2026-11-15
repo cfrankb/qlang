@@ -196,6 +196,13 @@ public:
   QLangValue deepCopyValue(const QLangValue &v,
                            std::unordered_map<const void *, QLangValue> &seen);
 
+  // Top-level copy of `v`: a new top container / instance / blob whose
+  // elements, field values and class meta are inserted as-is (shared by
+  // handle); primitives, strings and the live-state types return `v`. No
+  // cycle map (there is no recursion) and no `__deepcopy__` dispatch —
+  // the hook is the deep-copy contract (SPEC §functions "shallowcopy").
+  QLangValue shallowCopyValue(const QLangValue &v);
+
   // EQ/NE with object dispatch (spec §operator == and !=): a string compared
   // with an object (a table carrying `__str__` or the `__class__` meta key)
   // is equal only when the object's `__str__` value matches the string; all

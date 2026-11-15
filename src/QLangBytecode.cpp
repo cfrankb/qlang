@@ -12,7 +12,7 @@ namespace qlang {
 // ---------------------------------------------------------------------------
 
 // One entry per `Builtin` id, in enum order: index 0 is Builtin::ToStr, the
-// last is Builtin::Deepcopy. The static_assert is the drift guard — appending an
+// last is Builtin::Shallowcopy. The static_assert is the drift guard — appending an
 // enumerator without its name fails the build instead of silently returning
 // nullptr from the disassembler. The canonical spellings are the ones the
 // language accepts (tests/unit/builtin_table_test.cpp pins id -> name and the
@@ -39,11 +39,12 @@ static const char *const k_builtin_names[] = {
     "get_max_steps", // 18
     "set",           // 19
     "release",       // 20
-    "deepcopy"       // 21
+    "deepcopy",      // 21
+    "shallowcopy"    // 22
 };
 
 static_assert(sizeof(k_builtin_names) / sizeof(k_builtin_names[0]) ==
-                  static_cast<size_t>(Builtin::Deepcopy) + 1,
+                  static_cast<size_t>(Builtin::Shallowcopy) + 1,
               "k_builtin_names must carry exactly one name per Builtin id");
 
 int builtinCount() {
@@ -208,6 +209,7 @@ size_t baseOperandCount(Opcode op) {
   case Opcode::NOT:
   case Opcode::EVALKEY:
   case Opcode::DEEPCOPY:
+  case Opcode::SHALLOWCOPY:
   case Opcode::GETIMPORT:
     return 2;
   }
@@ -446,6 +448,7 @@ uint8_t permittedKinds(Opcode op) {
   case Opcode::CONV:
   case Opcode::NEG:
   case Opcode::DEEPCOPY:
+  case Opcode::SHALLOWCOPY:
     return kImm | kReg | kConst;
   default:
     break;
@@ -1298,6 +1301,7 @@ const char *Bytecode::name(Opcode op) {
   case Opcode::Nop: return "nop";
   case Opcode::EMIT: return "emit";
   case Opcode::DEEPCOPY: return "deepcopy";
+  case Opcode::SHALLOWCOPY: return "shallowcopy";
   case Opcode::INDEXGET: return "indexget";
   case Opcode::INDEXPUT: return "indexput";
   case Opcode::EQF: return "eqf";

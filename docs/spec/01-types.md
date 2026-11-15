@@ -56,8 +56,9 @@ types are either **primitives** (fixed size, fit in a register pair) or
   copying an immutable value has no observable effect.
 - a deep copy is always **explicit**. there is no implicit deep copy anywhere,
   not on assignment, not on call, not on return.
-- `deepcopy(x)` returns an independent recursive copy, see
-  [06-functions.md](06-functions.md) `### deepcopy`.
+- `deepcopy(x)` returns an independent recursive copy; `shallowcopy(x)`
+  returns a top-level copy whose elements / field values stay shared, see
+  [06-functions.md](06-functions.md) `### deepcopy` and `### shallowcopy`.
 - **implementation status**: fully implemented (Phase 1 + Phase 2,
   2026-11-05). `table`, class instances, closures and external references
   share; `array`, `set` and `blob` are pointer-backed payloads, so they share

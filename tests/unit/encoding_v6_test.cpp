@@ -424,6 +424,7 @@ int main() {
       {Opcode::MAKEFUNC, 0x4}, {Opcode::MAKEGEN, 0x4},
       {Opcode::MOV, 0x7},   {Opcode::CONV, 0x7},
       {Opcode::NEG, 0x7},   {Opcode::DEEPCOPY, 0x7},
+      {Opcode::SHALLOWCOPY, 0x7},
       {Opcode::ADD, 0x7},   {Opcode::SUB, 0x7},
       {Opcode::POW, 0x7},   {Opcode::INx, 0x7},
       {Opcode::CMP, 0x7},   {Opcode::EQ, 0x7},

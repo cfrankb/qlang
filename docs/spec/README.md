@@ -11,19 +11,19 @@ defined against C++20.
 
 | Module | Domain | SHA256 |
 |--------|--------|--------|
-| [01-types.md](01-types.md) | language intro, data types, value semantics, strings, sets, append | `4ed004cec48d9c1ec3626c48deb02919e9c3b6c6831b1eb7332fa11aa02b2c64` |
+| [01-types.md](01-types.md) | language intro, data types, value semantics, strings, sets, append | `d5c0fed809daaeb1071e1ddb6d7453fd76c68c0fd37ac2416aaf3b386014f532` |
 | [02-lexical.md](02-lexical.md) | reserved words, constants, enum, comments | `0e746264958922212c10368a5f8085f520c39e1712b46694f8ea92a8c218c46a` |
 | [03-declarations.md](03-declarations.md) | boolean evaluation, declarations and assignments | `b574e9fba63221df31582ba5ced416982d7438a66a5421f27b36df5a5b21741a` |
 | [04-control-flow.md](04-control-flow.md) | conditions, range, switch, loops, label/goto | `b531d6356ea43f7b470c3e22f4f58af887926b8987533b419ce91602c0e0d0e2` |
 | [05-operators.md](05-operators.md) | operators incl. `?`, `<`/`>`, `**`, cast, `==`/`!=`, `$`, `$$` | `2fe11c30cdd2d4b425ec2d7dce7008799d2db6b58d4972ad9f8eb43b4e539c8d` |
-| [06-functions.md](06-functions.md) | built-in functions incl. `deepcopy`, qlang native functions, C++ API | `8e7ac79a3f42b0e91bab2578551ef66d40b437e9a46683522f1e63cc1de3fe8c` |
+| [06-functions.md](06-functions.md) | built-in functions incl. `deepcopy`, qlang native functions, C++ API | `75517b33d6b33870e7ae0d5aef5bb5a3acf9db69483e3241a5bbe4a1d5425704` |
 | [07-api.md](07-api.md) | module registration, QLang import syntax, `ctx.clear()`, verbose level, step budget, threading contract, module search paths, external search callback, output callback (universal) | `0c49122c4c21b63bd2e77d1291de1fb302e1979b51e1251d73d9b97f43b35144` |
 | [08-generators.md](08-generators.md) | generators, PROTOTYPE 1, Syntax, EOF sentinel | `a99107445f3850d8b600e84cf5d0e5860babc4173cda0e2a183debab0123200d` |
 | [09-modules.md](09-modules.md) | internal modules, import statement, math module | `9cd07e43c1de84ab7fd4ef42001954c2cf4d92d7d2b8b54c5c8815d29bf1e901` |
 | [10-classes.md](10-classes.md) | user-defined classes, `static`, `::`, `deepcopy`, restrictions | `149fcf4d0b67636164a7f8c593aa54369e5a5bbd6d2c0047f3c49abaaa5670d7` |
 | [11-external-types.md](11-external-types.md) | conformance with external (C++) types | `380952dbb96bbe054adaf8ac948de683b4dbb778e28751bf49ce36135b12096e` |
 | [12-errors-trace.md](12-errors-trace.md) | error reporting, requirements, execution trace, format | `f0814e4811e60570546d4771c048ecb1e903e6737ad388ee752d9699b9e68ff8` |
-| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `07e6e715bad1ad61e96bd733292632ae6c4e12800d6cf475cee2252a46503681` |
+| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `aace9767c658a50f06a8421b02f0a990a25db2f2c106b6fcebce9cbb91b02df4` |
 | [14-scope.md](14-scope.md) | visibility scope. execution context | `ec1eadb21c4716b94590261fec12a16b1f11a715a5bfed53b5ca46232b6a0999` |
 | [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
 | [16-strict_typing.md](16-strict_typing.md) | strict typing | `81084dcccd977ebcdd7bdad5c3b815971fb25852f3f1bc2808f88a0dbfac4324` |

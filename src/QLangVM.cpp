@@ -1337,6 +1337,44 @@ QLangValue QLangVM::deepCopyValue(
   return v; // unreachable: every Type alternative is covered above
 }
 
+// SPEC §functions "shallowcopy": copy the TOP level only — a new array / set
+// / table / blob / instance whose elements and field values are inserted
+// as-is, so every nested payload stays shared by handle (scalars are already
+// independent). Blob is the documented exception where shallow ≡ deep: bytes
+// are not shared handles, so the copy is a new buffer. No `seen` map (the
+// copy never recurses, a self-referencing array clones to `[<original>]`),
+// no `__deepcopy__` dispatch (the hook is the deep-copy contract), and no
+// class-meta key special-casing (inserting the meta handles as-is IS the
+// shared-meta rule `deepCopyValue` states explicitly).
+QLangValue QLangVM::shallowCopyValue(const QLangValue &v) {
+  using Type = QLangValue::Type;
+  switch (v.type()) {
+  case Type::Blob: {
+    const auto &src = v.asBlob();
+    if (!src)
+      return v;
+    return QLangValue::Blob(std::make_shared<std::vector<uint8_t>>(*src));
+  }
+  case Type::Array:
+  case Type::Set: {
+    const auto &src = v.asArray();
+    if (!src)
+      return v;
+    auto out = std::make_shared<std::vector<QLangValue>>(*src); // as-is
+    return v.type() == Type::Set ? QLangValue::Set(out) : QLangValue::Array(out);
+  }
+  case Type::Table: {
+    const auto &src = v.asTable();
+    if (!src)
+      return v;
+    return QLangValue::Table(
+        std::make_shared<std::map<std::string, QLangValue>>(*src)); // as-is
+  }
+  default:
+    return v; // primitives, string, and the shared live-state types
+  }
+}
+
 // Deliver a signal (docs/spec/17-signals.md). The sender must be an external
 // object (v1: external types only); the signal is resolved against its type
 // descriptor; the argument count and types are checked against the declared
@@ -2240,6 +2278,15 @@ RunResult QLangVM::runFrames() {
       // (SPEC §classes "deepcopy"); attachFinalizer is a no-op without the
       // method, idempotent on a hook result the constructor already
       // registered, and never touches the original's registration.
+      attachFinalizer(frame.regs[i.a], m_scope);
+      break;
+    }
+    case Opcode::SHALLOWCOPY: {
+      // r[a] = top-level copy of r[b] (SPEC §functions "shallowcopy"). The
+      // copy is a new instance table sharing meta and field payloads, so it
+      // carries its own `__destroy__` finalization — same attachFinalizer
+      // treatment as DEEPCOPY, no-op for every other result type.
+      frame.regs[i.a] = shallowCopyValue(frame.regs[i.b]);
       attachFinalizer(frame.regs[i.a], m_scope);
       break;
     }

@@ -5262,26 +5262,31 @@ void QLangCompiler::compileCallExpr(const ExprPtr &e, int dest) {
   int argCount = static_cast<int>(e->args.size());
   trace(TRACE_FRAME, "[DBG-CALL] Entering call expr for '%s' with %d args\n", e->callee.c_str(), argCount);
   trace(TRACE_FULL, "[DBG-CALL] &m_emitter=%p m_emitter.size=%zu\n", (void*)&m_emitter, m_emitter.size());
-  // deepcopy(x) lowers directly to DEEPCOPY dest, src (SPEC §bytecodes
-  // "OpCode deepcopy"): the argument is compiled into a temp and the copy
+  // deepcopy(x) / shallowcopy(x) lower directly to DEEPCOPY / SHALLOWCOPY
+  // dest, src (SPEC §bytecodes "OpCode deepcopy", "OpCode shallowcopy"): the
+  // argument is compiled into a temp and the copy
   // lands straight in dest — no CALL, no arg staging in dest+1.. (encoding
   // guidelines: copy directly to the final register, avoid temporaries).
   // Arity is checked here: the spec makes deepcopy() / deepcopy(a, b)
   // compile errors (SPEC §functions "deepcopy"), and the compiler sees the
   // argument count on this path.
-  if (!e->calleeMember &&
-      findBuiltin(e->callee) == static_cast<int>(Builtin::Deepcopy)) {
-    if (e->args.size() != 1)
-      throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
-                       "deepcopy expects exactly one argument, got " +
-                           std::to_string(e->args.size()));
-    int srcR = tmpRegister();
-    compileExpr(e->args[0], srcR);
-    emit(Opcode::DEEPCOPY, dest, srcR, 0);
-    m_emitter.setLastLoc(static_cast<uint16_t>(e->callLine),
-                         static_cast<uint16_t>(e->callCol));
-    releaseTemp(srcR);
-    return;
+  if (!e->calleeMember) {
+    const int bid = findBuiltin(e->callee);
+    const bool isDeep = bid == static_cast<int>(Builtin::Deepcopy);
+    const bool isShallow = bid == static_cast<int>(Builtin::Shallowcopy);
+    if (isDeep || isShallow) {
+      if (e->args.size() != 1)
+        throw QLangError(QLangErrorKind::Parse, e->callLine, e->callCol,
+                         e->callee + " expects exactly one argument, got " +
+                             std::to_string(e->args.size()));
+      int srcR = tmpRegister();
+      compileExpr(e->args[0], srcR);
+      emit(isDeep ? Opcode::DEEPCOPY : Opcode::SHALLOWCOPY, dest, srcR, 0);
+      m_emitter.setLastLoc(static_cast<uint16_t>(e->callLine),
+                           static_cast<uint16_t>(e->callCol));
+      releaseTemp(srcR);
+      return;
+    }
   }
   // The CALL convention needs dest+1.. fresh (SPEC §bytecodes CALL layout).
   // An old dest (return/yield land on r0; `x = f(...)` lands on x's home)

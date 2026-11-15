@@ -68,7 +68,8 @@ static const Expected kExpected[] = {{0, "toStr"},
                                      {18, "get_max_steps"},
                                      {19, "set"},
                                      {20, "release"},
-                                     {21, "deepcopy"}};
+                                     {21, "deepcopy"},
+                                     {22, "shallowcopy"}};
 
 static constexpr size_t kExpectedCount =
     sizeof(kExpected) / sizeof(kExpected[0]);
@@ -132,7 +133,7 @@ static void testIdToName() {
   check(builtinCount() == static_cast<int>(kExpectedCount),
         "builtinCount() is " + std::to_string(kExpectedCount) + " (got " +
             std::to_string(builtinCount()) + ")");
-  check(builtinCount() == static_cast<int>(Builtin::Deepcopy) + 1,
+  check(builtinCount() == static_cast<int>(Builtin::Shallowcopy) + 1,
         "builtinCount() covers every Builtin id");
 
   std::unordered_set<std::string> seen;
@@ -360,6 +361,40 @@ static void testDeepcopyClassification() {
         "deepcopy(a, b) is still a compile error (got \"" + text + "\")");
 }
 
+// `shallowcopy` joins the same direct-lowering branch (the F4 clone round):
+// the guard classifies through the table, so id 22 must lower to
+// SHALLOWCOPY, keep nested payloads shared, and keep the arity error.
+static void testShallowcopyClassification() {
+  QLangContext ctx;
+  try {
+    ctx.run(
+        "local a = [1, [2, 3]]\nlocal b = shallowcopy(a)\n"
+        "b[0] = 7\nlocal inner = b[1]\ninner[0] = 99\n");
+    const QLangValue a = ctx.get("a");
+    check(a.type() == QLangValue::Type::Array, "shallowcopy result is an array");
+    check((*a.asArray())[0].asInt() == 1,
+          "shallowcopy shared the TOP payload (must be a new container)");
+    check((*a.asArray())[1].asArray() != nullptr &&
+              (*(*a.asArray())[1].asArray())[0].asInt() == 99,
+          "shallowcopy shared the nested array through the copy");
+  } catch (const QLangError &e) {
+    check(false, std::string("shallowcopy lowers (") + e.what() + ")");
+  }
+
+  QLangContext bad;
+  bool threw = false;
+  std::string text;
+  try {
+    bad.run("local a = [1]\nlocal b = shallowcopy(a, a)\n");
+  } catch (const QLangError &e) {
+    threw = true;
+    text = e.what();
+  }
+  check(threw && text.find("shallowcopy expects exactly one argument") !=
+                     std::string::npos,
+        "shallowcopy(a, b) is a compile error (got \"" + text + "\")");
+}
+
 int main() {
   testIdToName();
   testNameToId();
@@ -368,6 +403,7 @@ int main() {
   testUnknownCalleeKeepsCompilerError();
   testBuiltinsAreNotCaptured();
   testDeepcopyClassification();
+  testShallowcopyClassification();
 
   std::cout << (fails == 0 ? "ALL PASS" : "FAILURES") << ": " << passes
             << " passed, " << fails << " failed\n";

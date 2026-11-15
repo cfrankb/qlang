@@ -62,7 +62,7 @@ code. Three spec-module edits (re-hash after green):
    class meta keys are shared handles — already spec'd behavior. Imported-class **statics**
    (`m.Point::counter`) stay out of scope.
 
-## Phase 1 — `shallowcopy` (no language change; one round)
+## Phase 1 — `shallowcopy` (no language change; one round) — **LANDED Round 105, 2026-11-15**
 
 - `Opcode::SHALLOWCOPY` appended last (identity 74); `Builtin::Shallowcopy`; lower
   `shallowcopy(x)` directly to the opcode mirroring the `deepcopy` lowering, arity compile

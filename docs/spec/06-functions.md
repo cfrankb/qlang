@@ -20,6 +20,7 @@
 |join(separator, arr)| join the array element using separator
 |assert(bool, str)| if bool is false thrown an exception using text provided by str
 |deepcopy(var)| return an independent recursive copy of the variable|
+|shallowcopy(var)| return a top-level copy of the variable; elements / field values stay shared|
 
 
 ```python
@@ -83,6 +84,36 @@ println(str(v.tags))   # expected: ["a"]          (nested value copied, not shar
 - exactly one argument. `deepcopy()` and `deepcopy(a, b)` are compile errors.
 - primitives and strings are already copied, `deepcopy` of them is legal and
   returns an equal value.
+
+
+### shallowcopy
+
+Implemented 2026-11-15 (Phase 1 of
+[../plans/deferred-copy-semantics-and-class-export-plan.md](../plans/deferred-copy-semantics-and-class-export-plan.md),
+the F4 clone round).
+
+`shallowcopy(x)` copies the **top level only**: the result is a new array,
+set, table, blob, or instance, but its elements and field values are
+inserted as-is, so every nested payload stays shared by handle.
+
+|input|result|
+|-|-|
+|nil, bool, numbers|the value (already independent)|
+|string|the string (strings are always copied, never shared)|
+|array, set|a new container, every element inserted as-is|
+|table|a new table, every value inserted as-is|
+|class instance|a new instance of the same class; class meta shared, field values inserted as-is|
+|blob|a new buffer (bytes are not shared handles, so shallow ≡ deep here)|
+|closure, generator|the same handle (shared, never copied)|
+|external object, bound method, type reference|the same handle (shared, never copied)|
+
+- `__deepcopy__` is **not consulted**: the hook is the deep-copy contract
+  (see [10-classes.md](10-classes.md) `## deepcopy`).
+- there is no cycle map — the copy never recurses, so a self-referencing
+  array clones to `[<original>]`.
+- exactly one argument. `shallowcopy()` and `shallowcopy(a, b)` are compile
+  errors.
+- `shallowcopy` never mutates its argument.
 
 
 ## functions (qlang native)

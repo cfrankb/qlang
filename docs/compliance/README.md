@@ -18,10 +18,10 @@ below (spec hashes tracked in [../spec/README.md](../spec/README.md)); the
 |--------|---------|--------------------------|---------------|
 | [status.md](status.md) | current status, changes since audit, legend, working/missing/not-yet, extensions, open items | all (global audit) | `29f0a11c64f8fba6476e430142a4f91fc1b9c389fa030decf3d5a157e650089b` |
 | [coverage.md](coverage.md) | reserved-word coverage, value-type coverage | 02-lexical, 01-types | `789a0b58112961a6f32e98426923c17c88be737f0cfbc3a809ad771b11c898eb` |
-| [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `4c767b3f80efabc130fed45905e92b6ca9195860882de87adbfd087ded16d134` |
-| [history.md](history.md) | audit rounds 7–64 (append-only) | mixed (per round) | `98e1496ced19f0650906bcb3f42ea721dbe4c0b652bab34c50ddf860aaeaaaa6` |
+| [harness.md](harness.md) | test harness, C++ interface, fixes applied this round | 07-api (+ whole) | `420c3b344564c36255548338c7811f4c35ecce347346fad82829cc6498fda4da` |
+| [history.md](history.md) | audit rounds 7–64 (append-only) | mixed (per round) | `5753459c4a9bd82e7218e739adfb0a2e599b1832b8bcf0d9bbf8fd0c60b182f2` |
 | [classes.md](classes.md) | class implementation details, class spec conformance | 10-classes | `c95a835ae11f6e25c87facb30dd7210a18e928b56ab9b3592e25acf805e99b40` |
-| [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `e7b8f4defaca85b0051023995a1b8003a6869e9a9002417a69f6d15fbe318721` |
+| [tests.md](tests.md) | test suite layout, ctest matrix, perf baseline, CI matrix | 15-tests | `49642cf8b3a759c1999bdd754a01a728514cf279c097891325fc071114d4aa07` |
 | [migration-value-semantics.md](migration-value-semantics.md) | copy→share migration note for `array`/`set`/`blob` (Round 43) | 01-types | `3b38a16ad6e8f04386092ee2f588adb27d5f1bdfcada749135c7168066547e7d` |
 
 **New spec modules:** every new module in `docs/spec/` must get, at creation,

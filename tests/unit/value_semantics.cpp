@@ -455,6 +455,119 @@ int main() {
     }
   }
 
+  // --------------------------------------------------- SC (shallowcopy)
+  // F4 clone round (deferred-copy-semantics plan Phase 1): the TOP level is
+  // fresh, every nested payload stays shared by handle, and the
+  // `__deepcopy__` hook is NOT consulted (it is the deep-copy contract).
+  {
+    // SC1 array: new top, elements aliased.
+    QLangContext ctx;
+    try {
+      QLangValue sa = runGet(ctx,
+                             "local sa = [1, [2, 3]]\n"
+                             "local sc = shallowcopy(sa)\n"
+                             "sa[0] = 7\n"
+                             "let sn = sc[1]\n"
+                             "sn[0] = 99\n",
+                             "sa");
+      QLangValue sc = ctx.get("sc");
+      checkTrue("SC1 top level is a fresh payload",
+                sa.asArray().get() != sc.asArray().get(),
+                "shallowcopy shared the outer array");
+      checkInt("SC1 top-level write invisible through the copy",
+               elemInt(sc, 0), 1);
+      checkTrue("SC1 nested payload stays shared",
+                elems(sa)[1].asArray().get() == elems(sc)[1].asArray().get(),
+                "shallowcopy deep-copied the nested array");
+      checkInt("SC1 element write visible through both",
+               elemInt(elems(sc)[1], 0), 99);
+    } catch (const std::exception &e) {
+      failf("SC1", e.what());
+    }
+  }
+  {
+    // SC2 table: new top, values aliased.
+    QLangContext ctx;
+    try {
+      QLangValue ta = runGet(ctx,
+                             "local ta = {v = 1, inner = {n = 1}}\n"
+                             "local tc = shallowcopy(ta)\n"
+                             "tc.v = 7\n"
+                             "let ti = tc.inner\n"
+                             "ti.n = 99\n",
+                             "ta");
+      QLangValue tc = ctx.get("tc");
+      checkTrue("SC2 table top is a fresh payload",
+                ta.asTable().get() != tc.asTable().get(),
+                "shallowcopy shared the table");
+      checkInt("SC2 top-level key write invisible through the original",
+               asInt(tc.asTable()->at("v")), 7);
+      checkInt("SC2 original top-level key untouched",
+               asInt(ta.asTable()->at("v")), 1);
+      checkTrue("SC2 nested table value stays shared",
+                ta.asTable()->at("inner").asTable().get() ==
+                    tc.asTable()->at("inner").asTable().get(),
+                "shallowcopy deep-copied the nested table");
+      checkInt("SC2 nested write visible through both",
+               asInt(ta.asTable()->at("inner").asTable()->at("n")), 99);
+    } catch (const std::exception &e) {
+      failf("SC2", e.what());
+    }
+  }
+  {
+    // SC3 instance: new instance table, `type()` names the class, field
+    // payloads aliased, class meta shared. SC4: a `__deepcopy__` method is
+    // present but never runs.
+    QLangContext ctx;
+    try {
+      QLangValue p = runGet(ctx,
+                            "class Point {\n"
+                            "  tag = {n = 1}\n"
+                            "  __deepcopy__(self) [ ] {\n"
+                            "    local t = self.tag\n"
+                            "    t.n = -1\n"
+                            "    return self\n"
+                            "  }\n"
+                            "}\n"
+                            "local p = Point()\n"
+                            "local q = shallowcopy(p)\n"
+                            "local tn = type(q)\n",
+                            "p");
+      QLangValue q = ctx.get("q");
+      checkTrue("SC3 instance clone is a distinct table",
+                p.asTable().get() != q.asTable().get(),
+                "shallowcopy returned the same instance handle");
+      QLangValue tn = ctx.get("tn");
+      checkTrue("SC3 type() of the clone names the class",
+                tn.asString() == "Point", tn.asString().c_str());
+      checkTrue("SC3 class meta stays shared",
+                p.asTable()->at("__fields__").asTable().get() ==
+                    q.asTable()->at("__fields__").asTable().get(),
+                "shallowcopy copied the class meta");
+      checkTrue("SC3 field payload stays shared",
+                p.asTable()->at("tag").asTable().get() ==
+                    q.asTable()->at("tag").asTable().get(),
+                "shallowcopy deep-copied the field");
+      checkInt("SC4 __deepcopy__ hook was NOT consulted",
+               asInt(p.asTable()->at("tag").asTable()->at("n")), 1);
+    } catch (const std::exception &e) {
+      failf("SC3", e.what());
+    }
+  }
+  {
+    // SC5 blob: shallow ≡ deep (bytes are not shared handles).
+    QLangContext ctx;
+    QLangValue b = QLangValue::Blob(std::vector<uint8_t>{1, 2, 3});
+    const void *payload = b.asBlob().get();
+    ctx.set("b", b);
+    ctx.run("local c = shallowcopy(b)\n");
+    QLangValue c = ctx.get("c");
+    checkTrue("SC5 blob copy is a distinct payload",
+              c.asBlob().get() != payload, "shallowcopy shared the blob");
+    checkTrue("SC5 the copy carries the same bytes",
+              *c.asBlob() == *b.asBlob(), "shallowcopy lost bytes");
+  }
+
   if (g_failures) {
     fprintf(stderr, "%d FAILURES\n", g_failures);
     return 1;

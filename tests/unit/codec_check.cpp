@@ -1069,6 +1069,77 @@ static void testDeepcopy() {
 }
 
 // ---------------------------------------------------------------------------
+// SHALLOWCOPY (F4 clone round, deferred-copy-semantics plan Phase 1):
+// r[a] = top-level copy of r[b]. Same two-register shape as DEEPCOPY,
+// identity 74 (appended last). The compiler lowers `shallowcopy(x)` directly.
+// ---------------------------------------------------------------------------
+static void testShallowcopy() {
+  try {
+    check(static_cast<uint8_t>(Opcode::SHALLOWCOPY) == 74,
+          "shallowcopy: identity 74 (appended last)");
+    check(std::strcmp(Bytecode::name(Opcode::SHALLOWCOPY), "shallowcopy") == 0,
+          "shallowcopy: name");
+    check(isValidOpcode(Opcode::SHALLOWCOPY), "shallowcopy: valid opcode");
+    check(baseInstructionSize(Opcode::SHALLOWCOPY) == 3,
+          "shallowcopy: 3-byte base size (op + 2 reg operands)");
+
+    DecodedInstruction in;
+    in.op = Opcode::SHALLOWCOPY;
+    in.a = 3;
+    in.b = 5;
+    std::vector<uint8_t> buf;
+    encodeInstruction(buf, in);
+    check(buf.size() == 3 && buf[0] == 74 && buf[1] == 3 && buf[2] == 5,
+          "shallowcopy: encodes to 3 bytes");
+    DecodedInstruction out;
+    decodeInstruction(buf.data(), 0, buf.size(), out);
+    check(out.op == Opcode::SHALLOWCOPY && !out.escaped && out.size == 3 &&
+              out.a == 3 && out.b == 5,
+          "shallowcopy: decode round-trip");
+
+    // Direct lowering: no CALL, no arg staging (the deepcopy shape).
+    QLangContext ctx;
+    QLangCompiler compiler(
+        ctx.parse("local a = [1, 2]\nlocal b = shallowcopy(a);\n"), &ctx);
+    CompiledProgram p = compiler.compile();
+    const Function &fn = p.functions[0];
+    bool hasShallow = false, hasCall = false;
+    for (size_t off : fn.instrOffsets) {
+      DecodedInstruction d;
+      decodeInstruction(fn.code.data(), off, fn.code.size(), d);
+      if (d.op == Opcode::SHALLOWCOPY)
+        hasShallow = true;
+      if (d.op == Opcode::CALL)
+        hasCall = true;
+    }
+    check(hasShallow, "shallowcopy: compiler lowers the call to SHALLOWCOPY");
+    check(!hasCall, "shallowcopy: no CALL emitted for the builtin");
+
+    // Arity: shallowcopy() and shallowcopy(a, b) are compile errors.
+    bool zeroRejected = false, twoRejected = false;
+    try {
+      QLangContext c1;
+      QLangCompiler k(c1.parse("local b = shallowcopy();\n"), &c1);
+      k.compile();
+    } catch (const QLangError &) {
+      zeroRejected = true;
+    }
+    try {
+      QLangContext c2;
+      QLangCompiler k(c2.parse("local a = [1]\nlocal b = shallowcopy(a, a);\n"),
+                      &c2);
+      k.compile();
+    } catch (const QLangError &) {
+      twoRejected = true;
+    }
+    check(zeroRejected, "shallowcopy: zero-arg call rejected");
+    check(twoRejected, "shallowcopy: two-arg call rejected");
+  } catch (const QLangError &e) {
+    check(false, std::string("shallowcopy: ") + e.what());
+  }
+}
+
+// ---------------------------------------------------------------------------
 // deepcopy lowering + arity (SPEC §functions "deepcopy"): the compiler emits
 // DEEPCOPY directly (no CALL, no arg staging); wrong arity is a compile error.
 // ---------------------------------------------------------------------------
@@ -1529,7 +1600,7 @@ static void testMalformed() {
 // ---------------------------------------------------------------------------
 static void testIndexSubscript() {
   try {
-    check(kOpcodeUsedCount == 74, "index: kOpcodeUsedCount is 74");
+    check(kOpcodeUsedCount == 75, "index: kOpcodeUsedCount is 75");
     check(static_cast<uint8_t>(Opcode::INDEXGET) == 64,
           "indexget: identity 64 (after the S3 compaction)");
     check(static_cast<uint8_t>(Opcode::INDEXPUT) == 65,
@@ -2370,6 +2441,7 @@ int main() {
   testPoolDedup();
   testNop();
   testDeepcopy();
+  testShallowcopy();
   testDeepcopyLowering();
   testIndexSubscript();
   testIndexLowering();

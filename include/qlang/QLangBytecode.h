@@ -112,7 +112,8 @@ enum class Builtin : int {
   GetMaxSteps, // get_max_steps() -> int (current infinite-loop step limit)
   Set,         // set(...) -> set (unique-value collection constructor)
   Release,     // release(x) -> nil (drop an owned external's shared_ptr)
-  Deepcopy     // deepcopy(x) -> independent recursive copy (SPEC §functions "deepcopy")
+  Deepcopy,    // deepcopy(x) -> independent recursive copy (SPEC §functions "deepcopy")
+  Shallowcopy  // shallowcopy(x) -> top-level copy, elements/fields shared (SPEC §functions "shallowcopy")
 };
 
 // The builtin-function name table (SPEC §bytecodes
@@ -347,14 +348,24 @@ enum class Opcode : uint8_t {
   // runtime registry executes directly, which is why the VM implements both.
   GETIMPORT,  // r[a] = <import table[b]> (imported global var/const cell)
   CALLIMPORT, // r[a] = call import[b](r[a+1 .. a+c]); same shape as CALLFN
+
+  // Shallow copy of a register value: r[a] = top-level copy of r[b], with
+  // elements / fields inserted as-is (containers stay shared by handle).
+  // Two register operands, no i32 slot (same shape as DEEPCOPY / MOV). The
+  // compiler lowers a `shallowcopy(x)` call directly to this opcode.
+  // Copy semantics: SPEC §functions "shallowcopy"; plan
+  // docs/plans/deferred-copy-semantics-and-class-export-plan.md Phase 1.
+  // Appended last so existing .qlc opcode numbers stay valid.
+  SHALLOWCOPY, // r[a] = shallowcopy(r[b])
 };
 
 inline constexpr uint8_t kOpcodeEscape = 0x80;
 inline constexpr uint8_t kOpcodeMax = 128; // identities 0..127
+inline constexpr uint8_t kOpcodeUsedCount = 75; // defined identities 0..74
 // Q31 (external-modules plan v4): `getimport`/`callimport` took 72/73 in
-// Round 65, so `DECL` (M4, encoding-v6-and-indirect-plan.md §6.1) appends at
-// 74 when it lands. The rule is "append last, never renumber".
-inline constexpr uint8_t kOpcodeUsedCount = 74; // defined identities 0..73
+// Round 65. `shallowcopy` (deferred-copy-semantics plan Phase 1, the F4 clone
+// round) appended at 74. `DECL` (M4, encoding-v6-and-indirect-plan.md §6.1)
+// appends at 75 when it lands. The rule is "append last, never renumber".
 
 // ---------------------------------------------------------------------------
 // `.qlc` v6 modifier byte (docs/plans/encoding-v6-and-indirect-plan.md §2,

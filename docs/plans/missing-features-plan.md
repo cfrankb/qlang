@@ -134,8 +134,9 @@ C2 enum injection (Round 41), C3 `hasMethod`/`callMethod` (`c4ee131`,
   `array`/`set`/`blob` so assignment and call arguments share (Round 43,
   `fede1a4`, breaking — migration note `docs/compliance/migration-value-semantics.md`),
   Phase 3 `__deepcopy__` override (Round 44), Phase 4 tracking closure (Round 45).
-  Deferred by decision, not by omission: `shallowcopy` (open decision #5) and a
-  `copy` parameter specifier (#6).
+  Deferred by decision, not by omission: `shallowcopy` (open decision #5 — since
+  **landed**, Round 105, plan `deferred-copy-semantics-and-class-export-plan.md`
+  Phase 1) and a `copy` parameter specifier (#6, still deferred).
 - **Table subscript `t[key]`** — **implemented (Round 51, 2026-11-05,
   `2fc570b`)**. Found as a spec gap in Round 50 (`docs/spec/03-declarations.md`
   `t["age"] = 33` threw `cannot subscript non-array value`); fixed with

@@ -1,3 +1,39 @@
+## Round 105 — 2026-11-15 — `shallowcopy` builtin: top-level copy, elements shared (F4 **clone round**; plan `docs/plans/deferred-copy-semantics-and-class-export-plan.md` Phase 1, promoted by `docs/plans/class-export-plan.md` D2; spec `docs/spec/06-functions.md`, `docs/spec/01-types.md`, `docs/spec/13-bytecodes.md`)
+
+- **Why.** The clone class-export construction (P3b) needs `SHALLOWCOPY` + `GETIMPORT` for
+  imported-class construction, and `archive/deepcopy-plan.md` open decision #5 had deferred
+  `shallowcopy` as "cheap and useful; still deferred". Landed as its own round first so the
+  clone semantics are independently pinned before any module boundary rides on them.
+- **Language.** `shallowcopy(x)` (builtin id 22): a new top array / set / table / blob /
+  instance whose elements and field values are inserted **as-is** — nested payloads stay
+  shared by handle. Blob is the documented shallow ≡ deep case (bytes are not shared
+  handles). `__deepcopy__` is **not consulted** (the hook is the deep-copy contract); there
+  is no cycle map (the copy never recurses). Exactly one argument; wrong arity is a compile
+  error on the direct-lowering branch, mirroring `deepcopy`.
+- **Bytecode.** `Opcode::SHALLOWCOPY` appended last (identity **74**, `kOpcodeUsedCount`
+  74 → 75); two register operands, same shape as `DEEPCOPY`; the compiler lowers
+  `shallowcopy(x)` **directly** (shared branch with the `deepcopy` lowering in
+  `compileCallExpr` — one guard, both builtins). `.qlc` stays **v10** (appending an opcode
+  bumps no encoding rule — `indexget`/`indexput` precedent). `permittedKinds` joins the
+  copy family (`kImm|kReg|kConst`); qlcc disassembler prints the `shallowcopy(...)`
+  pseudo-mnemonic, the `.qla` assembler picks the mnemonic up from `Bytecode::name`
+  automatically.
+- **VM.** `QLangVM::shallowCopyValue`, a non-recursive sibling of `deepCopyValue`: blob →
+  new buffer, array/set/table → new top container with the payload copied as-is, everything
+  else returned as-is. `SHALLOWCOPY` executes with the same `attachFinalizer` treatment as
+  `DEEPCOPY` (an instance clone carries its own `__destroy__` finalization).
+- **Spec.** `06-functions.md` gains `### shallowcopy` (copy table + the four rules) + the
+  builtin-list row; `01-types.md` `## value semantics` names it next to `deepcopy`;
+  `13-bytecodes.md` gains the opcode-table row, `## OpCode shallowcopy`, and the builtin
+  range note (`shallowcopy` = 22).
+- **Guards.** `value_semantics` + SC1–SC5 (array/table top fresh + nested aliased, instance
+  clone `type()`s the class with meta and field payloads shared, `__deepcopy__` present but
+  never runs, blob fresh; 43 → 56 checks); `codec_check` `testShallowcopy` (identity 74,
+  name, 3-byte size, encode/decode, direct lowering with no `CALL`, zero/two-arg rejection)
+  + `kOpcodeUsedCount` 75; `builtin_table_test` id 22 round-trip + `testShallowcopyClassification`
+  (top fresh / nested shared / arity error); `encoding_v6_test` copy-family kind mask;
+  `flag_flow_test` count. `value_semantics` 40 → 56 checks. `ctest` 68/68 (no new suite).
+
 ## Round 104 — 2026-11-15 — Q42 resolved: the spec answers `export class` (F4 **Phase 0**, docs-only; plan `docs/plans/class-export-plan.md`; spec `docs/spec/09-modules.md`, `docs/spec/10-classes.md`, `docs/spec/13-bytecodes.md`)
 
 - **Why.** `export class Point` had no spec answer (audit F4 "unspecified", plan Q42 "out of
