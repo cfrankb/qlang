@@ -15,7 +15,7 @@ defined against C++20.
 | [02-lexical.md](02-lexical.md) | reserved words, constants, enum, comments | `0e746264958922212c10368a5f8085f520c39e1712b46694f8ea92a8c218c46a` |
 | [03-declarations.md](03-declarations.md) | boolean evaluation, declarations and assignments | `b574e9fba63221df31582ba5ced416982d7438a66a5421f27b36df5a5b21741a` |
 | [04-control-flow.md](04-control-flow.md) | conditions, range, switch, loops, label/goto | `b531d6356ea43f7b470c3e22f4f58af887926b8987533b419ce91602c0e0d0e2` |
-| [05-operators.md](05-operators.md) | operators incl. `?`, `<`/`>`, `**`, cast, `==`/`!=`, `$`, `$$` | `b16ac686b61309a6f9df7ffc31c4e121a4c6ea014658aec2041a3b6721874555` |
+| [05-operators.md](05-operators.md) | operators incl. `?`, `<`/`>`, `**`, cast, `==`/`!=`, `$`, `$$` | `3e5f6af9fe4bab4dcd275e2d9e1c8e0262371ffcda314cac0ea9a23746590e01` |
 | [06-functions.md](06-functions.md) | built-in functions incl. `deepcopy`, qlang native functions, C++ API | `8e7ac79a3f42b0e91bab2578551ef66d40b437e9a46683522f1e63cc1de3fe8c` |
 | [07-api.md](07-api.md) | module registration, QLang import syntax, `ctx.clear()`, verbose level, step budget, threading contract, module search paths, external search callback, output callback (universal) | `0c49122c4c21b63bd2e77d1291de1fb302e1979b51e1251d73d9b97f43b35144` |
 | [08-generators.md](08-generators.md) | generators, PROTOTYPE 1, Syntax, EOF sentinel | `a99107445f3850d8b600e84cf5d0e5860babc4173cda0e2a183debab0123200d` |
@@ -23,7 +23,7 @@ defined against C++20.
 | [10-classes.md](10-classes.md) | user-defined classes, `static`, `::`, `deepcopy`, restrictions | `6f2cacb5b2135951a9aa27b2d69aa9b898a3fa27aeeaa56559dd18522621c458` |
 | [11-external-types.md](11-external-types.md) | conformance with external (C++) types | `380952dbb96bbe054adaf8ac948de683b4dbb778e28751bf49ce36135b12096e` |
 | [12-errors-trace.md](12-errors-trace.md) | error reporting, requirements, execution trace, format | `f0814e4811e60570546d4771c048ecb1e903e6737ad388ee752d9699b9e68ff8` |
-| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `2a56ff6def982c23094fa27d4e359ba50b50e1fc196c68f375ccab7cb955f56b` |
+| [13-bytecodes.md](13-bytecodes.md) | bytecodes, MOVI/ADDI/SUBI opcodes, alternate conditional jump (cmp/cmpi + je/jne/jg/jge/jl/jle), escape-byte flat byte stream + loc side-table, `nop`, `deepcopy`, `indexget`/`indexput`, extended encoding (`.qlc` v6 modifier byte 2/2/4, immediate set, `eqf`…`gtef`/`tst`/`decl`) | `afc5b79ca1d9c2b842fc04f41a1f8b4bc743315d83c2245bf79ec713b6b3a738` |
 | [14-scope.md](14-scope.md) | visibility scope. execution context | `ec1eadb21c4716b94590261fec12a16b1f11a715a5bfed53b5ca46232b6a0999` |
 | [15-tests.md](15-tests.md) | tests | `dd9c8fe38cfe2167fb66ed032e63235ecc0a9a938934c225bdf83b7a381e6c23` |
 | [16-strict_typing.md](16-strict_typing.md) | strict typing | `81084dcccd977ebcdd7bdad5c3b815971fb25852f3f1bc2808f88a0dbfac4324` |

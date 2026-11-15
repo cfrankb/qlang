@@ -31,7 +31,7 @@
 //
 //   L4  Set literal freshness.
 //
-//   L5  Enum table still resolves after the MOVC clone (the enum hidden
+//   L5  Enum table still resolves after the pool-clone MOV (the enum hidden
 //       table is a pool constant too).
 //
 //   D1  deepcopy independence: mutating a nested array of the copy leaves
@@ -282,7 +282,8 @@ int main() {
   }
 
   // ---------------------------------------------------------------- L5
-  // The enum hidden table is a pool constant too: cloning it at MOVC must
+  // The enum hidden table is a pool constant too: cloning it at a pool-kind
+  // MOV must
   // not break member lookup.
   {
     QLangContext ctx;
@@ -295,7 +296,7 @@ int main() {
                             "local g = Color.GREEN\n"
                             "local n = len(Color)\n",
                             "g");
-      checkInt("L5 enum member after the MOVC clone", asInt(v), 8);
+      checkInt("L5 enum member after the pool-clone MOV", asInt(v), 8);
       checkInt("L5 enum table size", asInt(ctx.get("n")), 2);
     } catch (const std::exception &e) {
       failf("L5", e.what());

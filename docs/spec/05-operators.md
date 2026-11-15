@@ -367,11 +367,16 @@ declaration event has executed.
    `var`, `const`, `function`, `lambda`. The map covers every name directly
    declared in the frame; a `$$` target absent from the map (and not an exposed
    global) can only be reached through a dynamic name string and fails at stage 4.
-2. **declaration bit:** a flag on the existing store/init opcode, set once at the
-   name's unique declaration site (explicit `local`/`let` or first plain
-   assignment). No new opcode is required for declaration state.
-3. **new opcodes:** two — `OP_INDIRECT_READ nameReg → dstReg` and
-   `OP_INDIRECT_WRITE nameReg, srcReg`. Both run the pipeline above: string check,
+2. **declaration state:** *not* a flag on the store/init opcode — the
+   declaration bit is per-*event* state (whether a declaration has executed in
+   this frame), not per-instruction state, so no operand field can express it
+   (`13-bytecodes.md` `## encoding extended`, resolved 2026-11-06). It is a
+   per-frame bitset indexed by compile-time declaration-site id, set by a
+   `decl siteId` marker opcode executed where the declaration executes.
+3. **new opcodes:** two — `indget` (`INDGET`) and `indput` (`INDPUT`), the
+   placeholders already reserved in `13-bytecodes.md`
+   `## Instruction operand map`; ordinary register-class opcodes. Both run
+   the pipeline above: string check,
    identifier lexeme check, reserved-word check, map lookup (frame, then exposed
    globals for reads), declaration-bit test, binding-kind test, and (writes) the
    local-only test.

@@ -115,9 +115,10 @@ private:
     // Caller register to receive this frame's return value (>= 0), or -1 for
     // the top-level main frame / a bare call used only for side effects.
     int callDest = -1;
-    // Shared comparison flags set by CMP/CMPI (bitmask of CMP_GR/CMP_EQ/
-    // CMP_LT) and consumed by the JE/JNE/JG/JGE/JL/JLE jumps. Wiped on every
-    // CMP/CMPI. Lives in the frame (not the VM) so a nested call gets a clean
+    // Shared comparison flags set by CMP (register or immediate right
+    // operand; bitmask of CMP_GR/CMP_EQ/CMP_LT) and consumed by the
+    // JE/JNE/JG/JGE/JL/JLE jumps. Wiped on every CMP. Lives in the frame (not
+    // the VM) so a nested call gets a clean
     // flag state and the compiler's fused cmp+j* pair is the only writer.
     int flags = 0;
   };
@@ -131,7 +132,7 @@ private:
 
   // Comparison flag bits (SPEC §bytecodes: alternate conditional jump). The
   // three relations a>b, a==b, a<b are mutually exclusive and exhaustive, so
-  // CMP/CMPI set exactly one bit: a>b -> GR, a==b -> EQ, a<b -> LT. The JGE /
+  // CMP sets exactly one bit: a>b -> GR, a==b -> EQ, a<b -> LT. The JGE /
   // JLE jumps test for "that bit or EQ" (a>=b / a<=b), never a combined
   // pattern.
   static constexpr int CMP_GR = 1;
@@ -157,7 +158,8 @@ private:
   // docs/plans/encoding-v6-and-indirect-plan.md §2.2/§2.3): the modifier's kind
   // field says whether `b` names a register, a constant-pool index, or is
   // unused because the immediate is inline. `cloneContainers` is true only
-  // where the value is *stored* into a register (mov/movc), so a pool literal
+  // where the value is *stored* into a register (MOV, any right-operand kind),
+  // so a pool literal
   // cannot be aliased and mutated; ALU/compare operands are read-only and are
   // returned without copying (plan decision D6).
   static QLangValue operandValue(const DecodedInstruction &i, Frame &frame,

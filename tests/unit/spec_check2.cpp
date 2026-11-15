@@ -906,113 +906,116 @@ int main() {
             "at line 8 in a",
             "at line 10 in main");
 
-  // -- MOVI (SPEC §bytecodes: new opcode MOVI) --
-  // Int literals load via MOVI (no pool slot); values must run correctly.
-  expectVal("movi: zero", "local x = 0;", "x", 0);
-  expectVal("movi: one", "local x = 1;", "x", 1);
-  expectVal("movi: negative one", "local x = -1;", "x", -1);
-  expectVal("movi: int32 max", "local x = 2147483647;", "x", 2147483647);
-  expectVal("movi: int32 min (unary neg)", "local x = -2147483648;", "x",
+  // -- mov immediate kind (SPEC §bytecodes; the v7 kind selector, was movi) --
+  // Int literals load via mov's immediate kind (no pool slot); values must
+  // run correctly.
+  expectVal("mov-imm: zero", "local x = 0;", "x", 0);
+  expectVal("mov-imm: one", "local x = 1;", "x", 1);
+  expectVal("mov-imm: negative one", "local x = -1;", "x", -1);
+  expectVal("mov-imm: int32 max", "local x = 2147483647;", "x", 2147483647);
+  expectVal("mov-imm: int32 min (unary neg)", "local x = -2147483648;", "x",
             -2147483648);
   // Type-fidelity guard: `true` is Bool (not Int) and must stay in the pool.
-  expectStr("movi: bool literal stays bool", "local b = true; local t = type(b);",
+  expectStr("mov-imm: bool literal stays bool", "local b = true; local t = type(b);",
             "t", "bool");
   // 64-bit literals are Qword (not Int) and stay in the pool.
-  expectStr("movi: 64-bit literal stays qword",
+  expectStr("mov-imm: 64-bit literal stays qword",
             "local q = 9223372036854775807; local t = type(q);", "t", "qword");
   // Int literal inside a loop (VM dispatch in the loop paths).
-  expectVal("movi: literal in loop",
+  expectVal("mov-imm: literal in loop",
             "local s = 0\nfor x = 1 to 10 { s = s + 3 }",
             "s", 30);
   // Int literal inside a generator (generator dispatch path).
-  expectVal("movi: literal in generator",
+  expectVal("mov-imm: literal in generator",
             "def g() { yield 5; yield 7 }\n"
             "local gen = g()\nlocal a = gen()\nlocal b = gen()\n"
             "local s = a + b;",
             "s", 12);
-  // Typed declaration: MOVI into the target register + in-place CONV.
-  expectVal("movi: typed byte decl", "local a:byte = 0;", "a", 0);
-  expectVal("movi: typed short decl", "local a:short = -5;", "a", -5);
+  // Typed declaration: immediate mov into the target register + in-place CONV.
+  expectVal("mov-imm: typed byte decl", "local a:byte = 0;", "a", 0);
+  expectVal("mov-imm: typed short decl", "local a:short = -5;", "a", -5);
   // Plain assignment of an Int literal (not just declarations).
-  expectVal("movi: plain assignment", "local a = 9\na = 42;", "a", 42);
+  expectVal("mov-imm: plain assignment", "local a = 9\na = 42;", "a", 42);
 
-  // -- ADDI (SPEC §bytecodes: new OpCode addi) --
+  // -- add immediate kind (SPEC §bytecodes; the v7 kind selector, was addi) --
   // Compound `+=` with an Int-literal RHS adds in place (no temp, no pool).
-  expectVal("addi: basic", "local a = 10\na += 12;", "a", 22);
-  expectVal("addi: negative immediate", "local a = 10\na += -5;", "a", 5);
+  expectVal("add-imm: basic", "local a = 10\na += 12;", "a", 22);
+  expectVal("add-imm: negative immediate", "local a = 10\na += -5;", "a", 5);
   // Float promotion preserved (routes through the ADD binary path).
-  expectStr("addi: float promotion",
+  expectStr("add-imm: float promotion",
             "local f = 1.5\nf += 1\nlocal s = toStr(f);",
             "s", "2.5");
   // String RHS is not an Int literal: stays on the string concat path.
-  expectStr("addi: string += untouched", "local s = \"x\"\ns += \" y\";",
+  expectStr("add-imm: string += untouched", "local s = \"x\"\ns += \" y\";",
             "s", "x y");
-  // Index target (ARRGET temp + ADDI in place).
-  expectVal("addi: index target", "local a = [10, 20]\na[1] += 5\nlocal r = a[1];",
+  // Index target (ARRGET temp + in-place immediate add).
+  expectVal("add-imm: index target", "local a = [10, 20]\na[1] += 5\nlocal r = a[1];",
             "r", 25);
-  // Member target (TABGET temp + ADDI in place).
-  expectVal("addi: member target", "local t = {k=1}\nt.k += 4\nlocal r = t.k;",
+  // Member target (TABGET temp + in-place immediate add).
+  expectVal("add-imm: member target", "local t = {k=1}\nt.k += 4\nlocal r = t.k;",
             "r", 5);
   // Captured variable: `cap += 5` adds 5, not INC (regression for the
-  // pre-ADDI bug where any captured compound op compiled to INC/DEC).
-  expectVal("addi: closure var += n",
+  // pre-immediate-form bug where any captured compound op compiled to
+  // INC/DEC).
+  expectVal("add-imm: closure var += n",
             "local x = 1\nlocal f = (y)[x] { x += 5; return x }\nlocal r = f(0);\n",
             "r", 6);
-  // Loop: ADDI dispatch in the loop paths.
-  expectVal("addi: literal in loop", "local s = 0\nfor x = 1 to 10 { s += 3 }",
+  // Loop: immediate-add dispatch in the loop paths.
+  expectVal("add-imm: literal in loop", "local s = 0\nfor x = 1 to 10 { s += 3 }",
             "s", 30);
-  // Generator: ADDI across yields (generator dispatch path).
-  expectVal("addi: literal in generator",
+  // Generator: immediate-add across yields (generator dispatch path).
+  expectVal("add-imm: literal in generator",
             "def g() { local y = 10; yield y; y += 7; yield y }\n"
             "local gen = g()\nlocal a = gen()\nlocal b = gen()\n"
             "local s = a + b;",
             "s", 27);
   // int32 wrap-around, identical to ADD.
-  expectVal("addi: int32 wrap", "local a = 2147483647\na += 1;", "a",
+  expectVal("add-imm: int32 wrap", "local a = 2147483647\na += 1;", "a",
             -2147483648);
 
-  // -- SUBI (SPEC §bytecodes: new OpCode subi) --
+  // -- sub immediate kind (SPEC §bytecodes; the v7 kind selector, was subi) --
   // Compound `-=` with an Int-literal RHS subtracts in place (no temp, no
-  // pool). Mirrors the ADDI block.
-  expectVal("subi: basic", "local a = 10\na -= 12;", "a", -2);
-  expectVal("subi: negative immediate", "local a = 10\na -= -5;", "a", 15);
-  // Plain `n = n - 1` form (the spec's subi example) also fuses.
-  expectVal("subi: n = n - 1", "local n = 5\nn = n - 1;", "n", 4);
+  // pool). Mirrors the add-immediate block.
+  expectVal("sub-imm: basic", "local a = 10\na -= 12;", "a", -2);
+  expectVal("sub-imm: negative immediate", "local a = 10\na -= -5;", "a", 15);
+  // Plain `n = n - 1` form also fuses.
+  expectVal("sub-imm: n = n - 1", "local n = 5\nn = n - 1;", "n", 4);
   // Float promotion preserved (routes through the SUB binary path).
-  expectStr("subi: float promotion",
+  expectStr("sub-imm: float promotion",
             "local f = 1.5\nf -= 1\nlocal s = toStr(f);",
             "s", "0.5");
   // Non-Int (float) RHS is not an Int literal: stays on the pool + SUB path.
-  expectStr("subi: float RHS pooled",
+  expectStr("sub-imm: float RHS pooled",
             "local f = 5.5\nf -= 2.5\nlocal s = toStr(f);",
             "s", "3");
-  // Index target (ARRGET temp + SUBI in place).
-  expectVal("subi: index target",
+  // Index target (ARRGET temp + in-place immediate sub).
+  expectVal("sub-imm: index target",
             "local a = [10, 20]\na[1] -= 5\nlocal r = a[1];",
             "r", 15);
-  // Member target (TABGET temp + SUBI in place).
-  expectVal("subi: member target",
+  // Member target (TABGET temp + in-place immediate sub).
+  expectVal("sub-imm: member target",
             "local t = {k=1}\nt.k -= 4\nlocal r = t.k;",
             "r", -3);
   // Captured variable: `cap -= 5` subtracts 5 (not DEC).
-  expectVal("subi: closure var -= n",
+  expectVal("sub-imm: closure var -= n",
             "local x = 10\nlocal f = (y)[x] { x -= 5; return x }\nlocal r = f(0);\n",
             "r", 5);
-  // Loop: SUBI dispatch in the loop paths.
-  expectVal("subi: literal in loop", "local s = 30\nfor x = 1 to 10 { s -= 3 }",
+  // Loop: immediate-sub dispatch in the loop paths.
+  expectVal("sub-imm: literal in loop", "local s = 30\nfor x = 1 to 10 { s -= 3 }",
             "s", 0);
-  // Generator: SUBI across yields (generator dispatch path).
-  expectVal("subi: literal in generator",
+  // Generator: immediate-sub across yields (generator dispatch path).
+  expectVal("sub-imm: literal in generator",
             "def g() { local y = 10; yield y; y -= 7; yield y }\n"
             "local gen = g()\nlocal a = gen()\nlocal b = gen()\n"
             "local s = a - b;",
             "s", 7);
   // int32 wrap-around, identical to SUB.
-  expectVal("subi: int32 wrap", "local a = -2147483648\na -= 1;", "a",
+  expectVal("sub-imm: int32 wrap", "local a = -2147483648\na -= 1;", "a",
             2147483647);
 
-  // -- CMP/CMPI + j* (SPEC §bytecodes: alternate conditional jump) --
-  // Int-vs-Int (literal) comparisons in `if` fuse to cmp/cmpi + a
+  // -- cmp immediate + j* (SPEC §bytecodes: alternate conditional jump) --
+  // Int-vs-Int (literal) comparisons in `if` fuse to cmp (register or
+  // immediate right operand) + a
   // conditional jump. All six relations, both directions, and the boundary
   // (== vs +/- 1) so every j* is exercised.
   expectVal("cmp: if > true", "local r = 0\nif (5 > 3) { r = 1 }", "r", 1);

@@ -457,21 +457,23 @@ OpCode `jge` and `jle` work exactly like `jg` and `jl`; `jne` is the complement 
 
 ## opCode divi
 
+> **Superseded (`.qlc` v7).** `divi` was never an opcode — it was the movi-era
+> sketch of "divide by an inline immediate". Under `## encoding extended` an
+> immediate is an encoding property (right-operand kind), not an opcode
+> identity; `div` is in the ALU family so the immediate kind is permitted, but
+> the compiler does not yet fold a literal right operand into it. The current
+> spelling of the example:
+
 ```
-  L87:  local x = 1024 / 10
-  00b2  movi         0e, 1024i  ; r14 = 1024                       
-  00b3  movi         0f, 10i    ; r15 = 10                         
-  00b4  div          0d, 0e, 0f ; r13 = r14 / r15                  
-```
-```
-  L87:  local x = 1024 / 10
-  00b2  movi         0d, 1024i  ; r13 = 1024                       
-  00b3  divi         0d, 10i    ; r13 = r13 / 10
+  local x = 1024 / 10
+  0000  mov          e=0x50, 01, 1024  ; r1 = 1024 (immediate)
+  0005  mov          e=0x40, 02, 10    ; r2 = 10 (immediate)
+  0009  div          00, 01, 02        ; r0 = r1 / r2
 ```
 
 ## OpCode: swap
 
-this OpCode will swap register[Instruction.a] and register[Instruction.b]
+this OpCode will swap `r[a]` and `r[b]`
 
 purpose: compiler to use this opCode tp prevent/minimize fragmentation of the register pool.
 
@@ -582,6 +584,10 @@ subscript mnemonics: `r5 = r3[r4]`, `r3[r4] = r5`.
 
 DO NOT IMPLEMENT YET
 
+> Historical dump (pre-`.qlc` v7 stream): the `movc` loads are today `mov`
+> with the constant-pool right-operand kind (`movi` likewise is the `mov`
+> immediate kind).
+
 ```
 L 1:  local a = 1
 0000  movc         01, 00     ; r1 = pool[0]                           # 1
@@ -610,7 +616,7 @@ example
 
 ```
 
-line 0000    movc 01, 00     -->   movc r1, c0 
+line 0000    mov 01, 00      -->   mov r1, c0 
 line 0004    cast 02, 03, 0c -->   cast  r2, r3, <whatever 0c presents>
 
 ```
@@ -952,6 +958,11 @@ Status of each item as of Round 65 (2026-11-09) — plan
 ### egregious examples 
 
 here are some of the worse encodings in the current encoder.
+
+> Historical dumps (pre-`.qlc` v6): `movi`/`movc` are the `mov` immediate and
+> constant-pool kinds, and the immediate forms plus the Round 58 slot-
+> destination call handling resolved these shapes. The guidelines above are
+> what remain current.
 
 
 ```

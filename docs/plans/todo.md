@@ -223,11 +223,19 @@ closing the **Q#**s its item points at:
       in the inner loop) stays **parked** — land it as a codegen round of its own, not for a number
 - [ ] **Round 58 has no `history.md` entry** (Round 59 admits it: recorded in the `status.md`
       tally only) — the append-only record has a hole; backfill it
-- [ ] Spec-wording edits owed (each is a spec-module edit → rebuild, re-test, re-hash):
-      **Q28** `05-operators.md` dup-decl "compile warning" → the strict-typing level table;
-      **Q9** `13-bytecodes.md` `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE` → the implemented
-      `indget`/`indput` mnemonics; `## opCode divi` / `## OpCode: swap` still show `movi`-era
-      listings (Phase 3 §8)
+- [x] **Spec-wording edits owed — done Round 94 (2026-11-14, docs round, re-hashed):**
+      **Q28** was already fulfilled by the 2026-10 `$$` spec text (dup-decl is diagnosed "at the
+      configured strict typing level … see `16-strict_typing.md`" — verified, nothing to edit);
+      **Q9** the `OP_INDIRECT_READ`/`OP_INDIRECT_WRITE` names lived in `05-operators.md`
+      `### compiler and VM implementation notes` (not `13-bytecodes.md`) — notes 2–3 rewritten to
+      the shipped decisions: `decl siteId` marker + per-frame bitset (no per-instruction flag)
+      and the reserved `indget`/`indput` placeholders (still reserved — `$$` not implemented);
+      `13-bytecodes.md` `## opCode divi` superseded with a real v7 dump, `## OpCode: swap`
+      `Instruction.a`/`b` → `r[a]`/`r[b]`, and the two unlabelled pre-v7 dumps (`## decompiler
+      mnemonics`, `### egregious examples`) now carry historical banners; the S5 label tail
+      (Round 60 open) closed the same round — `spec_check2` case labels renamed
+      `mov-imm:`/`add-imm:`/`sub-imm:`, `value_semantics` "MOVC clone" and `QLangVM.h`
+      "CMP/CMPI"/"mov/movc" comments reworded (labels/comments only, counts unchanged)
 - [ ] `Opcode::Nop` casing (odd one out) — cosmetic, separate change
 
 - [x] **module defect (pre-existing, found 2026-11-10 auditing C8b): FIXED Round 70 (plan P0)** — a
