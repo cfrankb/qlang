@@ -82,9 +82,9 @@ Conventions:
 | INDGET | dest reg | table reg | key reg | | **reserved** (enum placeholder) — `$$` indirect read, not yet implemented |
 | INDPUT | table reg | key reg | value reg | | **reserved** (enum placeholder) — `$$` indirect write, not yet implemented |
 | EVALKEY | dest reg | value reg | — | | `$` dynamic key stringify |
-| JMP | — | — | — | pc target | |
-| CONTINUE | — | — | — | pc target | loop test label |
-| BREAK | — | — | — | pc target | loop exit label |
+| JMP | — | — | — | pc target | see `### jump-class aliasing` below |
+| CONTINUE | — | — | — | pc target | loop test label; runtime alias of `jmp` |
+| BREAK | — | — | — | pc target | loop exit label; runtime alias of `jmp` |
 | NOP | — | — | — | | no operands, no action (identity 61) |
 | CALLFN | dest reg | function index | arg count | | args in r[a+1..a+c] |
 | CALLCLOS | closure / dest reg | — | arg count | | b unused |
@@ -114,6 +114,51 @@ Conventions:
 | TST | test reg | — | — | | identity 71; `flags = truth(r[a]) ? EQ : none`; register operand only |
 | GETIMPORT | dest reg | import index | — | | identity 72; `r[a] = <imports[b].ref>`; 2-operand form — `b` names the import table, not a register |
 | CALLIMPORT | dest / arg base | import index | arg count | | identity 73; `r[a] = call imports[b](r[a+1 .. a+c])`; same shape as CALLFN, `b` names the import table |
+
+### jump-class aliasing (note, 2026-11-15)
+
+`BREAK` and `CONTINUE` are **runtime aliases** of `JMP`: all three execute
+`frame.pc += jumpOffset` (VM dispatch, `src/QLangVM.cpp`) and encode identically
+(jump class, offset-only operand, width chosen at `finish()`). They are kept as
+distinct opcodes for two compile-time/debug-time reasons:
+
+1. **The marker-claim protocol.** `break`/`continue` statements emit a marker
+   with a zero `jumpTarget` placeholder long before the target exists; the
+   enclosing loop's pass (`QLangCompiler::patchLoopMarkers`) later claims it by
+   **opcode identity** + unpatched-zero sentinel. Fused into `JMP` at emit time
+   the markers become indistinguishable from the compiler's own unpatched
+   structural jumps, so the fold first requires moving the claim mechanism to
+   explicit per-loop marker-index lists. (Nesting correctness of the current
+   protocol: `docs/bugs/resolved/nested-loop-break-continue-hijack.md`.)
+2. **Disassembly identity** — `break`/`continue` mnemonics keep loop intent
+   visible in `.qla` listings and opcode traces.
+
+Folding them away would save **zero instruction bytes** (same encoding class)
+and two enum slots, at the price of an image version bump plus the refactor
+above; revisit only if the opcode table needs the headroom, via the retirement
+process (`docs/plans/archive/phase3-opcode-retirement-plan.md` precedent —
+`JMPIFFALSE`/`JMPIFTRUE` and the truthiness jumps were already retired into
+`mov` kinds and `tst` + flag jumps).
+
+Other alias/overlap findings from the same survey, for future retirement
+rounds (not aliases in the fold-for-free sense unless marked):
+
+- **`ARRLEN` ≡ `LEN` — true runtime alias.** Byte-identical handlers, both
+  `lenOf(r[b])` with no array specialization; the array-only typing exists
+  only in the spec table and compiler emit sites. The cheapest real retirement
+  candidate in the table.
+- **`CALLIMPORT` is a link-time alias**: the linker rewrites every
+  `callimport` into `callfn`/`makegen`; the opcode survives only for
+  unlinked module images (see `## import table (lookup)`).
+- **Flag-compare overlap**: `EQF`/`LTF`/`GTF`/`LTEF`/`GTEF` compute flags that
+  `CMP` + the matching flag jump already produce; they exist to skip the
+  boolean temporary, so they are an intentional fusion, not a fold candidate.
+- **Subscript family**: `ARRGET`/`ARRPUT` (array fast path, hard bounds error),
+  `TABGET`/`TABPUT` (key-stringified member access), `SEQGET` (positional
+  array/table key), `INDEXGET`/`INDEXPUT` (generic `r[b][r[c]]`) overlap by
+  design; distinguished by operand typing and error semantics, not fold-free.
+- **`INC`/`DEC` vs the in-place 2-operand `ADD`/`SUB`** with immediate 1: same
+  effect, kept for the 1-operand narrow encoding.
 
 ## opcode: MOVI
 
